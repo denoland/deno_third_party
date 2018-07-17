@@ -1,0 +1,12 @@
+[package]
+name = "rust_usage_test"
+version = "0.1.0"
+authors = ["rw <me@rwinslow.com>"]
+
+[dependencies]
+flatbuffers = { path = "../../rust/flatbuffers" }
+quickcheck = "0.6"
+
+[profile.test]
+# run tests faster, while preserving debug asserts:
+#opt-level = 3
