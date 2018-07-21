@@ -1,0 +1,50 @@
+{
+  "name": "rollup-plugin-alias",
+  "version": "1.4.0",
+  "description": "Resolves aliases with Rollup",
+  "main": "dist/rollup-plugin-alias.js",
+  "module": "dist/rollup-plugin-alias.es2015.js",
+  "jsnext:main": "dist/rollup-plugin-alias.es2015.js",
+  "scripts": {
+    "prebuild": "rimraf dist",
+    "build": "rollup -c",
+    "prepublish": "npm run build",
+    "lint": "eslint .",
+    "pretest": "npm-run-all -p build lint",
+    "test": "ava test/index.js",
+    "coverage": "nyc npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/frostney/rollup-plugin-alias.git"
+  },
+  "keywords": [
+    "rollup",
+    "rollup-plugin",
+    "resolve",
+    "alias"
+  ],
+  "files": [
+    "dist",
+    "src"
+  ],
+  "author": "Johannes Stein",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/frostney/rollup-plugin-alias/issues"
+  },
+  "homepage": "https://github.com/frostney/rollup-plugin-aliar#readme",
+  "devDependencies": {
+    "ava": "^0.12.0",
+    "coveralls": "^2.11.8",
+    "eslint": "^2.2.0",
+    "eslint-config-airbnb": "^6.0.2",
+    "npm-run-all": "^1.5.1",
+    "nyc": "^5.6.0",
+    "rimraf": "^2.5.2",
+    "rollup": "^0.50.0"
+  },
+  "dependencies": {
+    "slash": "^1.0.0"
+  }
+}
