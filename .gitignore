@@ -1,0 +1,6 @@
+depot_tools/.cipd_bin/
+depot_tools/.cipd_client
+depot_tools/.cipd_client_cache/
+depot_tools/.versions/
+depot_tools/external_bin/
+depot_tools/subprocess2.pyc
