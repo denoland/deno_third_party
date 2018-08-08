@@ -1,0 +1,27 @@
+error[E0053]: method `foo` has an incompatible type for trait
+  --> $DIR/trait-impl-fn-incompatibility.rs:21:15
+   |
+LL |     fn foo(x: u16);
+   |               --- type in trait
+...
+LL |     fn foo(x: i16) { } //~ ERROR incompatible type
+   |               ^^^ expected u16, found i16
+   |
+   = note: expected type `fn(u16)`
+              found type `fn(i16)`
+
+error[E0053]: method `bar` has an incompatible type for trait
+  --> $DIR/trait-impl-fn-incompatibility.rs:22:28
+   |
+LL |     fn bar(&mut self, bar: &mut Bar);
+   |                            -------- type in trait
+...
+LL |     fn bar(&mut self, bar: &Bar) { } //~ ERROR incompatible type
+   |                            ^^^^ types differ in mutability
+   |
+   = note: expected type `fn(&mut Bar, &mut Bar)`
+              found type `fn(&mut Bar, &Bar)`
+
+error: aborting due to 2 previous errors
+
+For more information about this error, try `rustc --explain E0053`.

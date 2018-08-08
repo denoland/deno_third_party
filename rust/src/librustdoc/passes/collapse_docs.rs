@@ -1,0 +1,94 @@
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+use clean::{self, DocFragment, Item};
+use plugins;
+use fold;
+use fold::DocFolder;
+use std::mem::replace;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum DocFragmentKind {
+    Sugared,
+    Raw,
+    Include,
+}
+
+impl DocFragment {
+    fn kind(&self) -> DocFragmentKind {
+        match *self {
+            DocFragment::SugaredDoc(..) => DocFragmentKind::Sugared,
+            DocFragment::RawDoc(..) => DocFragmentKind::Raw,
+            DocFragment::Include(..) => DocFragmentKind::Include,
+        }
+    }
+}
+
+pub fn collapse_docs(krate: clean::Crate) -> plugins::PluginResult {
+    Collapser.fold_crate(krate)
+}
+
+struct Collapser;
+
+impl fold::DocFolder for Collapser {
+    fn fold_item(&mut self, mut i: Item) -> Option<Item> {
+        i.attrs.collapse_doc_comments();
+        self.fold_item_recur(i)
+    }
+}
+
+fn collapse(doc_strings: &mut Vec<DocFragment>) {
+    let mut docs = vec![];
+    let mut last_frag: Option<DocFragment> = None;
+
+    for frag in replace(doc_strings, vec![]) {
+        if let Some(mut curr_frag) = last_frag.take() {
+            let curr_kind = curr_frag.kind();
+            let new_kind = frag.kind();
+
+            if curr_kind == DocFragmentKind::Include || curr_kind != new_kind {
+                match curr_frag {
+                    DocFragment::SugaredDoc(_, _, ref mut doc_string)
+                        | DocFragment::RawDoc(_, _, ref mut doc_string) => {
+                            // add a newline for extra padding between segments
+                            doc_string.push('\n');
+                        }
+                    _ => {}
+                }
+                docs.push(curr_frag);
+                last_frag = Some(frag);
+            } else {
+                match curr_frag {
+                    DocFragment::SugaredDoc(_, ref mut span, ref mut doc_string)
+                        | DocFragment::RawDoc(_, ref mut span, ref mut doc_string) => {
+                            doc_string.push('\n');
+                            doc_string.push_str(frag.as_str());
+                            *span = span.to(frag.span());
+                        }
+                    _ => unreachable!(),
+                }
+                last_frag = Some(curr_frag);
+            }
+        } else {
+            last_frag = Some(frag);
+        }
+    }
+
+    if let Some(frag) = last_frag.take() {
+        docs.push(frag);
+    }
+    *doc_strings = docs;
+}
+
+impl clean::Attributes {
+    pub fn collapse_doc_comments(&mut self) {
+        collapse(&mut self.doc_strings);
+    }
+}

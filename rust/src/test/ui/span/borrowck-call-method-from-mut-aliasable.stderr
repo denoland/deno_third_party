@@ -1,0 +1,12 @@
+error[E0596]: cannot borrow immutable borrowed content `*x` as mutable
+  --> $DIR/borrowck-call-method-from-mut-aliasable.rs:27:5
+   |
+LL | fn b(x: &Foo) {
+   |         ---- use `&mut Foo` here to make mutable
+LL |     x.f();
+LL |     x.h(); //~ ERROR cannot borrow
+   |     ^ cannot borrow as mutable
+
+error: aborting due to previous error
+
+For more information about this error, try `rustc --explain E0596`.
