@@ -1,0 +1,22 @@
+[package]
+authors = ["The Rust Project Developers"]
+name = "rustc_save_analysis"
+version = "0.0.0"
+
+[lib]
+name = "rustc_save_analysis"
+path = "lib.rs"
+crate-type = ["dylib"]
+
+[dependencies]
+log = "0.4"
+rustc = { path = "../librustc" }
+rustc_data_structures = { path = "../librustc_data_structures" }
+rustc_target = { path = "../librustc_target" }
+rustc_typeck = { path = "../librustc_typeck" }
+syntax = { path = "../libsyntax" }
+syntax_pos = { path = "../libsyntax_pos" }
+rls-data = "0.16"
+rls-span = "0.4"
+# FIXME(#40527) should move rustc serialize out of tree
+rustc-serialize = "0.3"

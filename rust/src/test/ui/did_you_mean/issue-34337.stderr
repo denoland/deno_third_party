@@ -1,0 +1,12 @@
+error[E0596]: cannot borrow immutable local variable `key` as mutable
+  --> $DIR/issue-34337.rs:16:14
+   |
+LL |     get(&mut key); //~ ERROR cannot borrow
+   |              ^^^
+   |              |
+   |              cannot reborrow mutably
+   |              try removing `&mut` here
+
+error: aborting due to previous error
+
+For more information about this error, try `rustc --explain E0596`.

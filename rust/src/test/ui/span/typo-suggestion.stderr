@@ -1,0 +1,15 @@
+error[E0425]: cannot find value `bar` in this scope
+  --> $DIR/typo-suggestion.rs:15:26
+   |
+LL |     println!("Hello {}", bar); //~ ERROR cannot find value
+   |                          ^^^ not found in this scope
+
+error[E0425]: cannot find value `fob` in this scope
+  --> $DIR/typo-suggestion.rs:18:26
+   |
+LL |     println!("Hello {}", fob); //~ ERROR cannot find value
+   |                          ^^^ did you mean `foo`?
+
+error: aborting due to 2 previous errors
+
+For more information about this error, try `rustc --explain E0425`.
