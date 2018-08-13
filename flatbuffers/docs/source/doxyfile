@@ -751,11 +751,15 @@ INPUT = "FlatBuffers.md" \
         "Schemas.md" \
         "CppUsage.md" \
         "CUsage.md" \
+        "DartUsage.md" \
         "GoUsage.md" \
         "JavaCsharpUsage.md" \
         "JavaScriptUsage.md" \
+        "TypeScriptUsage.md" \
         "PHPUsage.md" \
         "PythonUsage.md" \
+        "LuaUsage.md" \
+        "LobsterUsage.md" \
         "Support.md" \
         "Benchmarks.md" \
         "WhitePaper.md" \

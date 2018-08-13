@@ -5,7 +5,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.google.flatbuffers</groupId>
   <artifactId>flatbuffers-java</artifactId>
-  <version>1.8.0</version>
+  <version>1.9.0</version>
   <packaging>bundle</packaging>
   <name>FlatBuffers Java API</name>
   <description>
@@ -47,8 +47,8 @@
       <plugin>
         <artifactId>maven-compiler-plugin</artifactId>
         <configuration>
-          <source>1.6</source>
-          <target>1.6</target>
+          <source>1.8</source>
+          <target>1.8</target>
         </configuration>
         <version>3.2</version>
       </plugin>

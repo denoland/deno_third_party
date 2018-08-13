@@ -7,6 +7,8 @@ authors = ["rw <me@rwinslow.com>"]
 flatbuffers = { path = "../../rust/flatbuffers" }
 quickcheck = "0.6"
 
-[profile.test]
-# run tests faster, while preserving debug asserts:
+#[profile.test]
 #opt-level = 3
+#debug = false
+#overflow-checks = false
+# run tests faster, while preserving debug asserts:

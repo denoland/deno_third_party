@@ -135,19 +135,6 @@ func TestAll(t *testing.T) {
 	}
 }
 
-func TestFoo(t *testing.T) {
-	b := flatbuffers.NewBuilder(0)
-
-	example.MonsterStart(b)
-	example.MonsterAddHp(b, 80)
-	mon := example.MonsterEnd(b)
-
-	b.Finish(mon)
-
-	buf := b.Bytes[b.Head():]
-	t.Fatalf("%v", buf)
-}
-
 // CheckReadBuffer checks that the given buffer is evaluated correctly
 // as the example Monster.
 func CheckReadBuffer(buf []byte, offset flatbuffers.UOffsetT, fail func(string, ...interface{})) {
@@ -1035,65 +1022,6 @@ func CheckByteLayout(fail func(string, ...interface{})) {
 
 		0, 0, 128, 63, // value 0
 	})
-
-	// test xx
-	b = flatbuffers.NewBuilder(0)
-	b.StartObject(3)
-	b.PrependInt8Slot(0, 1, 1)
-	b.PrependInt8Slot(1, 3, 2)
-	b.PrependInt8Slot(2, 3, 3)
-	b.EndObject()
-	check([]byte{
-		8, 0, // vtable size in bytes
-		8, 0, // object inline data in bytes
-		0, 0, // entry 1/3: 0 => default
-		7, 0, // entry 2/3: 7 => table start + 7 bytes
-		// entry 3/3: not present => default
-		8, 0, 0, 0,
-		0, 0, 0,
-		3,
-	})
-	// test xx
-	b = flatbuffers.NewBuilder(0)
-	b.StartObject(3)
-	b.PrependInt16Slot(0, 1, 1)
-	b.PrependInt16Slot(1, 3, 2)
-	b.PrependInt16Slot(2, 3, 3)
-	n := b.EndObject()
-	b.Finish(n)
-	check([]byte{
-		12, 0, 0, 0, // root
-
-		8, 0, // vtable size in bytes
-		8, 0, // object inline data in bytes
-		0, 0, // entry 1/3: 0 => default
-		6, 0, // entry 2/3: 6 => table start + 6 bytes
-		// entry 3/3: not present => default
-		8, 0, 0, 0, // size of table data in bytes
-		0, 0, // padding
-		3, 0, // value 2/3
-	})
-	b = flatbuffers.NewBuilder(0)
-	b.StartObject(3)
-	b.PrependInt16Slot(0, 1, 0)
-	b.PrependUint8Slot(1, 2, 0)
-	b.PrependFloat32Slot(2, 3.0, 0.0)
-	n = b.EndObject()
-	b.Finish(n)
-	check([]byte{
-		16, 0, 0, 0, // root
-		0, 0, // padding
-		10, 0, // vtable bytes
-		12, 0, // object inline data size
-		10, 0, // offset to value #1 (i16)
-		9, 0, // offset to value #2 (u8)
-		4, 0, // offset to value #3 (f32)
-		10, 0, // size of table data in bytes
-		0, 0, // padding
-		0, 0, 64, 64, // value #3 => 3.0 (float32)
-		0, 2, // value #1 => 2 (u8)
-		1, 0, // value #0 => 1 (int16)
-	})
 }
 
 // CheckManualBuild builds a Monster manually.
@@ -1191,14 +1119,6 @@ func CheckGetRootAsForNonRootTable(fail func(string, ...interface{})) {
 
 // CheckGeneratedBuild uses generated code to build the example Monster.
 func CheckGeneratedBuild(fail func(string, ...interface{})) ([]byte, flatbuffers.UOffsetT) {
-	{
-		b := flatbuffers.NewBuilder(0)
-		example.MonsterStart(b)
-		example.MonsterAddHp(b, 80)
-		mon := example.MonsterEnd(b)
-		b.Finish(mon)
-		panic(fmt.Sprintf("%v",  b.Bytes[b.Head():]))
-	}
 	b := flatbuffers.NewBuilder(0)
 	str := b.CreateString("MyMonster")
 	test1 := b.CreateString("test1")
@@ -1436,31 +1356,28 @@ func CheckFinishedBytesError(fail func(string, ...interface{})) {
 
 // CheckEnumNames checks that the generated enum names are correct.
 func CheckEnumNames(fail func(string, ...interface{})) {
-	type testEnumNames struct {
-		EnumNames map[int]string
-		Expected  map[int]string
+	{
+
+		want := map[example.Any]string{
+			example.AnyNONE:                    "NONE",
+			example.AnyMonster:                 "Monster",
+			example.AnyTestSimpleTableWithEnum: "TestSimpleTableWithEnum",
+			example.AnyMyGame_Example2_Monster: "MyGame_Example2_Monster",
+		}
+		got := example.EnumNamesAny
+		if !reflect.DeepEqual(got, want) {
+			fail("enum name is not equal")
+		}
 	}
-	data := [...]testEnumNames{
-		{example.EnumNamesAny,
-			map[int]string{
-				example.AnyNONE:                    "NONE",
-				example.AnyMonster:                 "Monster",
-				example.AnyTestSimpleTableWithEnum: "TestSimpleTableWithEnum",
-			},
-		},
-		{example.EnumNamesColor,
-			map[int]string{
-				example.ColorRed:   "Red",
-				example.ColorGreen: "Green",
-				example.ColorBlue:  "Blue",
-			},
-		},
-	}
-	for _, t := range data {
-		for val, name := range t.Expected {
-			if name != t.EnumNames[val] {
-				fail("enum name is not equal")
-			}
+	{
+		want := map[example.Color]string{
+			example.ColorRed:   "Red",
+			example.ColorGreen: "Green",
+			example.ColorBlue:  "Blue",
+		}
+		got := example.EnumNamesColor
+		if !reflect.DeepEqual(got, want) {
+			fail("enum name is not equal")
 		}
 	}
 }

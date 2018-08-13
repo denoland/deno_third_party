@@ -1,3 +1,5 @@
+licenses(["notice"])
+
 package(
     default_visibility = ["//visibility:public"],
     features = [
@@ -9,11 +11,6 @@ package(
 exports_files([
     "LICENSE",
 ])
-
-FLATBUFFERS_COPTS = [
-    "-Wno-implicit-fallthrough",
-    "-linclude",
-]
 
 # Public flatc library to compile flatbuffer files at runtime.
 cc_library(
@@ -28,7 +25,6 @@ cc_library(
         "src/util.cpp",
     ],
     hdrs = [":public_headers"],
-    copts = FLATBUFFERS_COPTS,
     includes = ["include/"],
     linkstatic = 1,
 )
@@ -43,6 +39,7 @@ filegroup(
         "include/flatbuffers/flexbuffers.h",
         "include/flatbuffers/hash.h",
         "include/flatbuffers/idl.h",
+        "include/flatbuffers/minireflect.h",
         "include/flatbuffers/reflection.h",
         "include/flatbuffers/reflection_generated.h",
         "include/flatbuffers/stl_emulation.h",
@@ -65,7 +62,6 @@ cc_library(
         "include/flatbuffers/flatc.h",
         ":public_headers",
     ],
-    copts = FLATBUFFERS_COPTS,
     includes = [
         "grpc/",
         "include/",
@@ -81,19 +77,23 @@ cc_binary(
         "grpc/src/compiler/cpp_generator.h",
         "grpc/src/compiler/go_generator.cc",
         "grpc/src/compiler/go_generator.h",
+        "grpc/src/compiler/java_generator.cc",
+        "grpc/src/compiler/java_generator.h",
         "grpc/src/compiler/schema_interface.h",
         "src/flatc_main.cpp",
         "src/idl_gen_cpp.cpp",
+        "src/idl_gen_dart.cpp",
         "src/idl_gen_general.cpp",
         "src/idl_gen_go.cpp",
         "src/idl_gen_grpc.cpp",
         "src/idl_gen_js.cpp",
         "src/idl_gen_json_schema.cpp",
+        "src/idl_gen_lua.cpp",
+        "src/idl_gen_lobster.cpp",
         "src/idl_gen_php.cpp",
         "src/idl_gen_python.cpp",
         "src/idl_gen_text.cpp",
     ],
-    copts = FLATBUFFERS_COPTS,
     includes = [
         "grpc/",
         "include/",
@@ -124,7 +124,7 @@ cc_test(
         "tests/union_vector/union_vector_generated.h",
         ":public_headers",
     ],
-    copts = FLATBUFFERS_COPTS + [
+    copts = [
         "-DFLATBUFFERS_TRACK_VERIFIER_BUFFER_SIZE",
     ],
     data = [
@@ -136,6 +136,7 @@ cc_test(
         ":tests/prototest/imported.proto",
         ":tests/prototest/test.golden",
         ":tests/prototest/test.proto",
+        ":tests/prototest/test_union.golden",
         ":tests/union_vector/union_vector.fbs",
     ],
     includes = ["include/"],

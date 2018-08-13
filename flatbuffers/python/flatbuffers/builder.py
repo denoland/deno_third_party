@@ -160,7 +160,6 @@ class Builder(object):
         # use 32-bit offsets so that arithmetic doesn't overflow.
         self.current_vtable = [0 for _ in range_func(numfields)]
         self.objectEnd = self.Offset()
-        self.minalign = 1
         self.nested = True
 
     def WriteVtable(self):
@@ -483,13 +482,31 @@ class Builder(object):
         self.current_vtable[slotnum] = self.Offset()
     ## @endcond
 
-    def Finish(self, rootTable):
+    def __Finish(self, rootTable, sizePrefix):
         """Finish finalizes a buffer, pointing to the given `rootTable`."""
         N.enforce_number(rootTable, N.UOffsetTFlags)
-        self.Prep(self.minalign, N.UOffsetTFlags.bytewidth)
+        prepSize = N.UOffsetTFlags.bytewidth
+        if sizePrefix:
+            prepSize += N.Int32Flags.bytewidth
+        self.Prep(self.minalign, prepSize)
         self.PrependUOffsetTRelative(rootTable)
+        if sizePrefix:
+            size = len(self.Bytes) - self.Head()
+            N.enforce_number(size, N.Int32Flags)
+            self.PrependInt32(size)
         self.finished = True
         return self.Head()
+
+    def Finish(self, rootTable):
+        """Finish finalizes a buffer, pointing to the given `rootTable`."""
+        return self.__Finish(rootTable, False)
+
+    def FinishSizePrefixed(self, rootTable):
+        """
+        Finish finalizes a buffer, pointing to the given `rootTable`,
+        with the size prefixed.
+        """
+        return self.__Finish(rootTable, True)
 
     ## @cond FLATBUFFERS_INTERNAL
     def Prepend(self, flags, off):

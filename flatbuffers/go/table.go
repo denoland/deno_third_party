@@ -1,5 +1,4 @@
 package flatbuffers
-//import "fmt"
 
 // Table wraps a byte slice and provides read access to its data.
 //
@@ -13,7 +12,6 @@ type Table struct {
 //
 // Fields which are deprecated are ignored by checking against the vtable's length.
 func (t *Table) Offset(vtableOffset VOffsetT) VOffsetT {
-	//fmt.Printf("\n", vtableOffset, t.Pos, t.GetSOffsetT(t.Pos))
 	vtable := UOffsetT(SOffsetT(t.Pos) - t.GetSOffsetT(t.Pos))
 	if vtableOffset < t.GetVOffsetT(vtable) {
 		return t.GetVOffsetT(vtable + UOffsetT(vtableOffset))
