@@ -19,6 +19,9 @@ pub trait GeneratedStruct  : Sized{
         bytes
     }
 }
+pub struct UnionMarker;
+
+
 pub trait ElementScalar : Sized + PartialEq + Copy + Clone {
     fn to_le(self) -> Self;
     fn from_le(self) -> Self;
@@ -114,7 +117,7 @@ pub fn field_index_to_field_offset(field_id: VOffsetT) -> VOffsetT {
     ((field_id + fixed_fields) * (SIZE_VOFFSET as VOffsetT)) as VOffsetT
 }
 pub fn field_offset_to_field_index(field_o: VOffsetT) -> VOffsetT {
-    assert!(field_o >= 2);
+    debug_assert!(field_o >= 2);
     //if field_o == 0 {
     //    return 0;
     //}
@@ -217,19 +220,9 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
 
         Offset::new(self.get_size() as UOffsetT)
     }
-    pub fn get_buf_slice(&self) -> &[u8] {
-        &self.owned_buf[..]
-    }
     pub fn get_active_buf_slice<'a>(&'a self) -> &'a [u8] {
         &self.owned_buf[self.cur_idx..]
     }
-    fn pad(&mut self, n: usize) {
-        self.dec_cur_idx(n);
-        for i in 0..n {
-            self.owned_buf[self.cur_idx + i] = 0;
-        }
-    }
-
     fn grow_owned_buf(&mut self) {
         let starting_active_size = self.get_size();
 
@@ -241,7 +234,7 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
 
         let diff = new_len - old_len;
         self.owned_buf.resize(new_len, 0);
-        self.inc_cur_idx(diff);
+        self.cur_idx += diff;
 
         let ending_active_size = self.get_size();
         assert_eq!(starting_active_size, ending_active_size);
@@ -266,7 +259,7 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     fn assert_nested(&self) {
         assert!(self.nested);
         // we don't assert that self.field_locs.len() >0 because the vtable
-        // could be empty (e.g. for all-default values).
+        // could be empty (e.g. for empty tables, or for all-default values).
     }
     fn assert_not_nested(&self) {
         assert!(!self.nested);
@@ -300,18 +293,10 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
         let s = self.get_size() as usize;
         self.fill(padding_bytes(s + len, alignment));
     }
-    #[inline]
-    pub fn inc_cur_idx(&mut self, diff: usize) {
-        self.cur_idx += diff;
-    }
-    #[inline]
-    pub fn dec_cur_idx(&mut self, diff: usize) {
-        self.cur_idx -= diff;
-    }
     pub fn get_size(&self) -> usize {
         let a = self.cur_idx;
         let b = self.owned_buf.len();
-        assert!(self.cur_idx <= self.owned_buf.len(), "{}, {}", a, b);
+        //assert!(self.cur_idx <= self.owned_buf.len(), "{}, {}", a, b);
         self.owned_buf.len() - self.cur_idx as usize
     }
     fn fill_big(&mut self, zero_pad_bytes: usize) {
@@ -412,7 +397,7 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
         { let s = self.max_voffset; self.fill_big(s as usize); }
         let table_object_size = vtableoffsetloc - start;
         // TODO: always true?
-        assert!(table_object_size < 0x10000);  // Vtable use 16bit offsets.
+        debug_assert!(table_object_size < 0x10000);  // Vtable use 16bit offsets.
         //WriteScalar<voffset_t>(buf_.data() + sizeof(voffset_t),
         //                       static_cast<voffset_t>(table_object_size));
         emplace_scalar::<VOffsetT>(&mut self.owned_buf[self.cur_idx + SIZE_VOFFSET..],
@@ -522,10 +507,6 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     //    self.finish(root)
     //}
 
-    pub fn release_buffer_pointer(&mut self) -> DetachedBuffer  {
-       DetachedBuffer{}
-    }
-
     fn align(&mut self, elem_size: usize) {
         self.track_min_align(elem_size);
         let s = self.get_size();
@@ -596,8 +577,8 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
         // Align to ensure GetSize() below is correct.
         self.align(SIZE_UOFFSET);
         // Offset must refer to something already in buffer.
-        assert!(off > 0);
-        assert!(off <= self.get_size() as UOffsetT);
+        debug_assert!(off > 0);
+        debug_assert!(off <= self.get_size() as UOffsetT);
         self.get_size() as UOffsetT - off + SIZE_UOFFSET as UOffsetT
     }
     pub fn push_slot_offset_relative<T>(&mut self, slotoff: VOffsetT, x: Offset<T>) {
@@ -642,7 +623,7 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
         want
     }
     fn unused_ready_space(&self) -> usize {
-        assert!(self.owned_buf.len() >= self.get_size());
+        debug_assert!(self.owned_buf.len() >= self.get_size());
         self.owned_buf.len() - self.get_size()
     }
     pub fn finished_bytes(&self) -> &[u8] {
@@ -670,7 +651,7 @@ impl<'a, T: 'a> Offset<T> {
     pub fn new(o: UOffsetT) -> Offset<T> {
         Offset { 0: o, 1: PhantomData}
     }
-    pub fn union(&self) -> Offset<UnionOffset> {
+    pub fn as_union_value(&self) -> Offset<UnionMarker> {
         Offset::new(self.0)
     }
     pub fn value(&self) -> UOffsetT {
@@ -731,7 +712,7 @@ impl<'a> Table<'a> {
         <BackwardsI32Offset<VTable<'a>>>::follow(self.buf, self.loc)
     }
     pub fn get<T: Follow<'a> + 'a>(&'a self, slot_byte_loc: VOffsetT, default: Option<T::Inner>) -> Option<T::Inner> {
-        assert!(slot_byte_loc as usize >= SIZE_VOFFSET + SIZE_VOFFSET);
+        //debug_assert!(slot_byte_loc as usize >= SIZE_VOFFSET + SIZE_VOFFSET);
         let o = self.vtable().get(slot_byte_loc) as usize;
         if o == 0 {
             return default;
@@ -773,7 +754,6 @@ impl<'a> VTable<'a> {
         read_scalar_at::<VOffsetT>(self.buf, self.loc + SIZE_VOFFSET + SIZE_VOFFSET + SIZE_VOFFSET * idx)
     }
     pub fn get(&self, byte_loc: VOffsetT) -> VOffsetT {
-        //println!("vtable get byte_loc = {}. num_bytes == {}", byte_loc, self.num_bytes());
         // TODO(rw): distinguish between None and 0?
         if byte_loc as usize >= self.num_bytes() {
             return 0;
@@ -861,16 +841,16 @@ impl<'a, T: Follow<'a>> Vector<'a, T> {
         read_scalar::<u32>(&self.0[self.1 as usize..]) as usize
     }
     pub fn get(&self, idx: usize) -> T::Inner {
-        assert!(idx < read_scalar::<u32>(&self.0[self.1 as usize..]) as usize);
+        debug_assert!(idx < read_scalar::<u32>(&self.0[self.1 as usize..]) as usize);
         //println!("entering get({}) with {:?}", idx, &self.0[self.1 as usize..]);
         let sz = std::mem::size_of::<T>();
-        assert!(sz > 0);
+        debug_assert!(sz > 0);
         T::follow(self.0, self.1 as usize + 4 + sz * idx)
     }
 
     pub fn as_slice_unfollowed(&'a self) -> &'a [T] {
         let sz = std::mem::size_of::<T>();
-        assert!(sz > 0);
+        debug_assert!(sz > 0);
         let len = self.len();
         let data_buf = &self.0[self.1 + SIZE_UOFFSET .. self.1 + SIZE_UOFFSET + len * sz];
         let ptr = data_buf.as_ptr() as *const T;
@@ -879,7 +859,7 @@ impl<'a, T: Follow<'a>> Vector<'a, T> {
     }
     pub fn into_slice_unfollowed(self) -> &'a [T] {
         let sz = std::mem::size_of::<T>();
-        assert!(sz > 0);
+        debug_assert!(sz > 0);
         let len = self.len();
         let data_buf = &self.0[self.1 + SIZE_UOFFSET .. self.1 + SIZE_UOFFSET + len * sz];
         let ptr = data_buf.as_ptr() as *const T;
@@ -952,18 +932,6 @@ pub struct Vector<'a, T: Sized + 'a>(&'a [u8], usize, PhantomData<T>);
 pub fn lifted_follow<'a, T: Follow<'a>>(buf: &'a [u8], loc: usize) -> T::Inner {
     T::follow(buf, loc)
 }
-//pub fn get_field<T: num_traits::Num>(_: isize, _: T) -> T {
-//    unimplemented!()
-//}
-//pub fn get_field_mut<T: num_traits::Num>(_: isize, _: T) -> T {
-//    unimplemented!()
-//}
-pub fn get_pointer<'a, T: 'a>(_: VOffsetT) -> &'a T {
-    unimplemented!()
-}
-pub fn get_pointer_mut<'a, T: 'a>(_: VOffsetT) -> &'a mut T {
-    unimplemented!()
-}
 pub fn get_root<'a, T: Follow<'a> + 'a>(data: &'a [u8]) -> T::Inner {
     <ForwardsU32Offset<T>>::follow(data, 0)
 }
@@ -981,11 +949,3 @@ pub fn buffer_has_identifier(data: &[u8], ident: &str, size_prefixed: bool) -> b
 
     ident.as_bytes() == got
 }
-pub struct DetachedBuffer {}
-pub mod flexbuffers {
-    pub struct Reference {}
-
-
-}
-
-
