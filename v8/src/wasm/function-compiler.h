@@ -6,9 +6,14 @@
 #define V8_WASM_FUNCTION_COMPILER_H_
 
 #include "src/wasm/function-body-decoder.h"
+#include "src/wasm/wasm-limits.h"
+#include "src/wasm/wasm-module.h"
+#include "src/wasm/wasm-tier.h"
 
 namespace v8 {
 namespace internal {
+
+class Counters;
 
 namespace compiler {
 class TurbofanWasmCompilationUnit;
@@ -20,6 +25,7 @@ class LiftoffCompilationUnit;
 struct ModuleWireBytes;
 class NativeModule;
 class WasmCode;
+class WasmEngine;
 struct WasmFunction;
 
 enum RuntimeExceptionSupport : bool {
@@ -28,6 +34,8 @@ enum RuntimeExceptionSupport : bool {
 };
 
 enum UseTrapHandler : bool { kUseTrapHandler = true, kNoTrapHandler = false };
+
+enum LowerSimd : bool { kLowerSimd = true, kNoLowerSimd = false };
 
 // The {ModuleEnv} encapsulates the module data that is used during compilation.
 // ModuleEnvs are shareable across multiple compilations.
@@ -44,63 +52,74 @@ struct ModuleEnv {
   // be generated differently.
   const RuntimeExceptionSupport runtime_exception_support;
 
+  // The smallest size of any memory that could be used with this module, in
+  // bytes.
+  const uint64_t min_memory_size;
+
+  // The largest size of any memory that could be used with this module, in
+  // bytes.
+  const uint64_t max_memory_size;
+
+  const LowerSimd lower_simd;
+
   constexpr ModuleEnv(const WasmModule* module, UseTrapHandler use_trap_handler,
-                      RuntimeExceptionSupport runtime_exception_support)
+                      RuntimeExceptionSupport runtime_exception_support,
+                      LowerSimd lower_simd = kNoLowerSimd)
       : module(module),
         use_trap_handler(use_trap_handler),
-        runtime_exception_support(runtime_exception_support) {}
+        runtime_exception_support(runtime_exception_support),
+        min_memory_size(module ? module->initial_pages * uint64_t{kWasmPageSize}
+                               : 0),
+        max_memory_size(module && module->has_maximum_pages
+                            ? (module->maximum_pages * uint64_t{kWasmPageSize})
+                            : kSpecMaxWasmMemoryBytes),
+        lower_simd(lower_simd) {}
 };
 
 class WasmCompilationUnit final {
  public:
-  enum class CompilationMode : uint8_t { kLiftoff, kTurbofan };
-  static CompilationMode GetDefaultCompilationMode();
+  static ExecutionTier GetDefaultExecutionTier();
 
   // If constructing from a background thread, pass in a Counters*, and ensure
   // that the Counters live at least as long as this compilation unit (which
   // typically means to hold a std::shared_ptr<Counters>).
-  // If no such pointer is passed, Isolate::counters() will be called. This is
-  // only allowed to happen on the foreground thread.
-  WasmCompilationUnit(Isolate*, ModuleEnv*, wasm::NativeModule*,
-                      wasm::FunctionBody, wasm::WasmName, int index,
-                      CompilationMode = GetDefaultCompilationMode(),
-                      Counters* = nullptr, bool lower_simd = false);
+  // If used exclusively from a foreground thread, Isolate::counters() may be
+  // used by callers to pass Counters.
+  WasmCompilationUnit(WasmEngine* wasm_engine, ModuleEnv*, NativeModule*,
+                      FunctionBody, WasmName, int index, Counters*,
+                      ExecutionTier = GetDefaultExecutionTier());
 
   ~WasmCompilationUnit();
 
   void ExecuteCompilation();
-  wasm::WasmCode* FinishCompilation(wasm::ErrorThrower* thrower);
+  WasmCode* FinishCompilation(ErrorThrower* thrower);
 
-  static wasm::WasmCode* CompileWasmFunction(
-      wasm::NativeModule* native_module, wasm::ErrorThrower* thrower,
-      Isolate* isolate, ModuleEnv* env, const wasm::WasmFunction* function,
-      CompilationMode = GetDefaultCompilationMode());
+  static WasmCode* CompileWasmFunction(
+      NativeModule* native_module, ErrorThrower* thrower, Isolate* isolate,
+      ModuleEnv* env, const WasmFunction* function,
+      ExecutionTier = GetDefaultExecutionTier());
 
-  size_t memory_cost() const { return memory_cost_; }
-  wasm::NativeModule* native_module() const { return native_module_; }
-  CompilationMode mode() const { return mode_; }
+  NativeModule* native_module() const { return native_module_; }
+  ExecutionTier mode() const { return mode_; }
 
  private:
   friend class LiftoffCompilationUnit;
   friend class compiler::TurbofanWasmCompilationUnit;
 
-  Isolate* isolate_;
   ModuleEnv* env_;
-  wasm::FunctionBody func_body_;
-  wasm::WasmName func_name_;
+  WasmEngine* wasm_engine_;
+  FunctionBody func_body_;
+  WasmName func_name_;
   Counters* counters_;
   int func_index_;
-  size_t memory_cost_ = 0;
-  wasm::NativeModule* native_module_;
-  // TODO(wasm): Put {lower_simd_} inside the {ModuleEnv}.
-  bool lower_simd_;
-  CompilationMode mode_;
+  NativeModule* native_module_;
+  ExecutionTier mode_;
   // LiftoffCompilationUnit, set if {mode_ == kLiftoff}.
   std::unique_ptr<LiftoffCompilationUnit> liftoff_unit_;
   // TurbofanWasmCompilationUnit, set if {mode_ == kTurbofan}.
   std::unique_ptr<compiler::TurbofanWasmCompilationUnit> turbofan_unit_;
 
-  void SwitchMode(CompilationMode new_mode);
+  void SwitchMode(ExecutionTier new_mode);
 
   DISALLOW_COPY_AND_ASSIGN(WasmCompilationUnit);
 };

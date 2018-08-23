@@ -65,7 +65,7 @@ void CompilationSubCache::Age() {
   }
 
   // Set the first generation as unborn.
-  tables_[0] = isolate()->heap()->undefined_value();
+  tables_[0] = ReadOnlyRoots(isolate()).undefined_value();
 }
 
 void CompilationSubCache::Iterate(RootVisitor* v) {
@@ -74,7 +74,8 @@ void CompilationSubCache::Iterate(RootVisitor* v) {
 }
 
 void CompilationSubCache::Clear() {
-  MemsetPointer(tables_, isolate()->heap()->undefined_value(), generations_);
+  MemsetPointer(tables_, ReadOnlyRoots(isolate()).undefined_value(),
+                generations_);
 }
 
 void CompilationSubCache::Remove(Handle<SharedFunctionInfo> function_info) {
@@ -247,7 +248,8 @@ void CompilationCacheRegExp::Put(Handle<String> source,
                                  Handle<FixedArray> data) {
   HandleScope scope(isolate());
   Handle<CompilationCacheTable> table = GetFirstTable();
-  SetFirstTable(CompilationCacheTable::PutRegExp(table, source, flags, data));
+  SetFirstTable(
+      CompilationCacheTable::PutRegExp(isolate(), table, source, flags, data));
 }
 
 void CompilationCache::Remove(Handle<SharedFunctionInfo> function_info) {

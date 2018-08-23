@@ -107,7 +107,6 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
     CASE_FLOAT_OP(CopySign, "copysign")
     CASE_REF_OP(Null, "null")
     CASE_REF_OP(IsNull, "is_null")
-    CASE_REF_OP(Eq, "eq")
     CASE_I32_OP(ConvertI64, "wrap/i64")
     CASE_CONVERT_OP(Convert, INT, F32, "f32", "trunc")
     CASE_CONVERT_OP(Convert, INT, F64, "f64", "trunc")
@@ -354,7 +353,6 @@ bool WasmOpcodes::IsAnyRefOpcode(WasmOpcode opcode) {
   switch (opcode) {
     case kExprRefNull:
     case kExprRefIsNull:
-    case kExprRefEq:
       return true;
     default:
       return false;
@@ -376,7 +374,7 @@ std::ostream& operator<<(std::ostream& os, const FunctionSig& sig) {
 
 bool IsJSCompatibleSignature(const FunctionSig* sig) {
   for (auto type : sig->all()) {
-    if (type == wasm::kWasmI64 || type == wasm::kWasmS128) return false;
+    if (type == kWasmI64 || type == kWasmS128) return false;
   }
   return sig->return_count() <= 1;
 }

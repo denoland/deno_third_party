@@ -5,14 +5,18 @@
 #ifndef V8_HEAP_FACTORY_H_
 #define V8_HEAP_FACTORY_H_
 
+// Clients of this interface shouldn't depend on lots of heap internals.
+// Do not include anything from src/heap here!
 #include "src/builtins/builtins.h"
 #include "src/globals.h"
 #include "src/handles.h"
 #include "src/heap/heap.h"
+#include "src/maybe-handles.h"
 #include "src/messages.h"
 #include "src/objects/code.h"
 #include "src/objects/dictionary.h"
 #include "src/objects/hash-table.h"
+#include "src/objects/js-array-buffer.h"
 #include "src/objects/js-array.h"
 #include "src/objects/js-regexp.h"
 #include "src/objects/ordered-hash-table.h"
@@ -23,23 +27,24 @@ namespace internal {
 
 // Forward declarations.
 class AliasedArgumentsEntry;
-class BoilerplateDescription;
+class ObjectBoilerplateDescription;
 class BreakPoint;
 class BreakPointInfo;
 class CallableTask;
 class CallbackTask;
 class CallHandlerInfo;
-class ConstantElementsPair;
 class Expression;
-class CompileTimeValue;
+class ArrayBoilerplateDescription;
 class CoverageInfo;
 class DebugInfo;
 class EnumCache;
 class FreshlyAllocatedBigInt;
 class Isolate;
+class JSGeneratorObject;
 class JSMap;
 class JSMapIterator;
 class JSModuleNamespace;
+class JSProxy;
 class JSSet;
 class JSSetIterator;
 class JSWeakMap;
@@ -52,6 +57,8 @@ class RegExpMatchInfo;
 class ScriptContextTable;
 class StoreHandler;
 class TemplateObjectDescription;
+class UncompiledDataWithoutPreParsedScope;
+class UncompiledDataWithPreParsedScope;
 class WasmExportedFunctionData;
 struct SourceRange;
 template <typename T>
@@ -145,10 +152,8 @@ class V8_EXPORT_PRIVATE Factory {
 
   // Allocates a fixed array for name-value pairs of boilerplate properties and
   // calculates the number of properties we need to store in the backing store.
-  Handle<BoilerplateDescription> NewBoilerplateDescription(int boilerplate,
-                                                           int all_properties,
-                                                           int index_keys,
-                                                           bool has_seen_proto);
+  Handle<ObjectBoilerplateDescription> NewObjectBoilerplateDescription(
+      int boilerplate, int all_properties, int index_keys, bool has_seen_proto);
 
   // Allocate a new uninitialized fixed double array.
   // The function returns a pre-allocated empty fixed array for length = 0,
@@ -192,12 +197,9 @@ class V8_EXPORT_PRIVATE Factory {
   Handle<Tuple3> NewTuple3(Handle<Object> value1, Handle<Object> value2,
                            Handle<Object> value3, PretenureFlag pretenure);
 
-  // Create a new ConstantElementsPair struct.
-  Handle<ConstantElementsPair> NewConstantElementsPair(
+  // Create a new ArrayBoilerplateDescription struct.
+  Handle<ArrayBoilerplateDescription> NewArrayBoilerplateDescription(
       ElementsKind elements_kind, Handle<FixedArrayBase> constant_values);
-
-  // Create a new CompileTimeValue struct.
-  Handle<CompileTimeValue> NewCompileTimeValue(Expression* expression);
 
   // Create a new TemplateObjectDescription struct.
   Handle<TemplateObjectDescription> NewTemplateObjectDescription(
@@ -396,6 +398,13 @@ class V8_EXPORT_PRIVATE Factory {
   Handle<Context> NewBlockContext(Handle<Context> previous,
                                   Handle<ScopeInfo> scope_info);
 
+  // Create a context that's used by builtin functions.
+  //
+  // These are similar to function context but don't have a previous
+  // context or any scope info. These are used to store spec defined
+  // context values.
+  Handle<Context> NewBuiltinContext(Handle<Context> native_context, int length);
+
   Handle<Struct> NewStruct(InstanceType type,
                            PretenureFlag pretenure = NOT_TENURED);
 
@@ -408,6 +417,7 @@ class V8_EXPORT_PRIVATE Factory {
                            PretenureFlag tenure = TENURED);
   Handle<Script> NewScriptWithId(Handle<String> source, int script_id,
                                  PretenureFlag tenure = TENURED);
+  Handle<Script> CloneScript(Handle<Script> script);
 
   Handle<BreakPointInfo> NewBreakPointInfo(int source_position);
   Handle<BreakPoint> NewBreakPoint(int id, Handle<String> condition);
@@ -449,9 +459,6 @@ class V8_EXPORT_PRIVATE Factory {
 
   Handle<PropertyCell> NewPropertyCell(Handle<Name> name,
                                        PretenureFlag pretenure = TENURED);
-
-  Handle<WeakCell> NewWeakCell(Handle<HeapObject> value,
-                               PretenureFlag pretenure = TENURED);
 
   Handle<FeedbackCell> NewNoClosuresCell(Handle<HeapObject> value);
   Handle<FeedbackCell> NewOneClosureCell(Handle<HeapObject> value);
@@ -720,7 +727,18 @@ class V8_EXPORT_PRIVATE Factory {
 
   Handle<ModuleInfo> NewModuleInfo();
 
-  Handle<PreParsedScopeData> NewPreParsedScopeData();
+  Handle<PreParsedScopeData> NewPreParsedScopeData(int length);
+
+  Handle<UncompiledDataWithoutPreParsedScope>
+  NewUncompiledDataWithoutPreParsedScope(Handle<String> inferred_name,
+                                         int32_t start_position,
+                                         int32_t end_position,
+                                         int32_t function_literal_id);
+
+  Handle<UncompiledDataWithPreParsedScope> NewUncompiledDataWithPreParsedScope(
+      Handle<String> inferred_name, int32_t start_position,
+      int32_t end_position, int32_t function_literal_id,
+      Handle<PreParsedScopeData>);
 
   // Create an External object for V8's external API.
   Handle<JSObject> NewExternal(void* value);
@@ -886,7 +904,7 @@ class V8_EXPORT_PRIVATE Factory {
                                              Handle<Object> argument,
                                              int start_position,
                                              int end_position,
-                                             Handle<Object> script,
+                                             Handle<Script> script,
                                              Handle<Object> stack_frames);
 
   Handle<DebugInfo> NewDebugInfo(Handle<SharedFunctionInfo> shared);

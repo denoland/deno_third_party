@@ -17,6 +17,7 @@
 #include "src/objects/scope-info.h"
 #include "src/parsing/parse-info.h"
 #include "src/parsing/preparsed-scope-data.h"
+#include "src/zone/zone-list-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -187,6 +188,13 @@ DeclarationScope::DeclarationScope(Zone* zone, Scope* outer_scope,
       params_(4, zone) {
   DCHECK_NE(scope_type, SCRIPT_SCOPE);
   SetDefaults();
+}
+
+bool DeclarationScope::IsDeclaredParameter(const AstRawString* name) {
+  // If IsSimpleParameterList is false, duplicate parameters are not allowed,
+  // however `arguments` may be allowed if function is not strict code. Thus,
+  // the assumptions explained above do not hold.
+  return params_.Contains(variables_.Lookup(name));
 }
 
 ModuleScope::ModuleScope(DeclarationScope* script_scope,
@@ -1334,7 +1342,7 @@ Declaration* Scope::CheckConflictingVarDeclarations() {
 }
 
 Declaration* Scope::CheckLexDeclarationsConflictingWith(
-    const ZoneList<const AstRawString*>& names) {
+    const ZonePtrList<const AstRawString>& names) {
   DCHECK(is_block_scope());
   for (int i = 0; i < names.length(); ++i) {
     Variable* var = LookupLocal(names.at(i));
@@ -2170,25 +2178,16 @@ void Scope::AllocateHeapSlot(Variable* var) {
 void DeclarationScope::AllocateParameterLocals() {
   DCHECK(is_function_scope());
 
-  bool uses_sloppy_arguments = false;
-
+  bool has_mapped_arguments = false;
   if (arguments_ != nullptr) {
     DCHECK(!is_arrow_scope());
-    // 'arguments' is used. Unless there is also a parameter called
-    // 'arguments', we must be conservative and allocate all parameters to
-    // the context assuming they will be captured by the arguments object.
-    // If we have a parameter named 'arguments', a (new) value is always
-    // assigned to it via the function invocation. Then 'arguments' denotes
-    // that specific parameter value and cannot be used to access the
-    // parameters, which is why we don't need to allocate an arguments
-    // object in that case.
     if (MustAllocate(arguments_) && !has_arguments_parameter_) {
-      // In strict mode 'arguments' does not alias formal parameters.
-      // Therefore in strict mode we allocate parameters as if 'arguments'
-      // were not used.
-      // If the parameter list is not simple, arguments isn't sloppy either.
-      uses_sloppy_arguments =
-          is_sloppy(language_mode()) && has_simple_parameters();
+      // 'arguments' is used and does not refer to a function
+      // parameter of the same name. If the arguments object
+      // aliases formal parameters, we conservatively allocate
+      // them specially in the loop below.
+      has_mapped_arguments =
+          GetArgumentsType() == CreateArgumentsType::kMappedArguments;
     } else {
       // 'arguments' is unused. Tell the code generator that it does not need to
       // allocate the arguments object by nulling out arguments_.
@@ -2204,7 +2203,7 @@ void DeclarationScope::AllocateParameterLocals() {
     Variable* var = params_[i];
     DCHECK(!has_rest_ || var != rest_parameter());
     DCHECK_EQ(this, var->scope());
-    if (uses_sloppy_arguments) {
+    if (has_mapped_arguments) {
       var->set_is_used();
       var->set_maybe_assigned();
       var->ForceContextAllocation();

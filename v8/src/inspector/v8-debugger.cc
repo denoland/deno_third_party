@@ -226,13 +226,15 @@ void V8Debugger::getCompiledScripts(
     v8::Local<v8::debug::Script> script = scripts.Get(i);
     if (!script->WasCompiled()) continue;
     if (script->IsEmbedded()) {
-      result.push_back(V8DebuggerScript::Create(m_isolate, script, false));
+      result.push_back(V8DebuggerScript::Create(m_isolate, script, false,
+                                                m_inspector->client()));
       continue;
     }
     int contextId;
     if (!script->ContextId().To(&contextId)) continue;
     if (m_inspector->contextGroupId(contextId) != contextGroupId) continue;
-    result.push_back(V8DebuggerScript::Create(m_isolate, script, false));
+    result.push_back(V8DebuggerScript::Create(m_isolate, script, false,
+                                              m_inspector->client()));
   }
 }
 
@@ -562,9 +564,8 @@ size_t V8Debugger::nearHeapLimitCallback(void* data, size_t current_heap_limit,
   thisPtr->m_originalHeapLimit = current_heap_limit;
   thisPtr->m_scheduledOOMBreak = true;
   v8::Local<v8::Context> context = thisPtr->m_isolate->GetEnteredContext();
-  DCHECK(!context.IsEmpty());
   thisPtr->m_targetContextGroupId =
-      thisPtr->m_inspector->contextGroupId(context);
+      context.IsEmpty() ? 0 : thisPtr->m_inspector->contextGroupId(context);
   thisPtr->m_isolate->RequestInterrupt(
       [](v8::Isolate* isolate, void*) { v8::debug::BreakRightNow(isolate); },
       nullptr);
@@ -586,13 +587,14 @@ void V8Debugger::ScriptCompiled(v8::Local<v8::debug::Script> script,
         });
   } else if (m_ignoreScriptParsedEventsCounter == 0) {
     v8::Isolate* isolate = m_isolate;
+    V8InspectorClient* client = m_inspector->client();
     m_inspector->forEachSession(
         m_inspector->contextGroupId(contextId),
-        [&isolate, &script, &has_compile_error,
-         &is_live_edited](V8InspectorSessionImpl* session) {
+        [&isolate, &script, &has_compile_error, &is_live_edited,
+         &client](V8InspectorSessionImpl* session) {
           if (!session->debuggerAgent()->enabled()) return;
           session->debuggerAgent()->didParseSource(
-              V8DebuggerScript::Create(isolate, script, is_live_edited),
+              V8DebuggerScript::Create(isolate, script, is_live_edited, client),
               !has_compile_error);
         });
   }
@@ -720,7 +722,7 @@ v8::MaybeLocal<v8::Value> V8Debugger::getTargetScopes(
     String16 name;
     v8::Local<v8::Value> maybe_name = iterator->GetFunctionDebugName();
     if (!maybe_name->IsUndefined()) {
-      name = toProtocolStringWithTypeCheck(maybe_name);
+      name = toProtocolStringWithTypeCheck(m_isolate, maybe_name);
     }
     v8::Local<v8::Object> object = iterator->GetObject();
     createDataProperty(context, scope,
@@ -1132,7 +1134,7 @@ std::shared_ptr<StackFrame> V8Debugger::symbolize(
   if (it != m_framesCache.end() && !it->second.expired()) {
     return std::shared_ptr<StackFrame>(it->second);
   }
-  std::shared_ptr<StackFrame> frame(new StackFrame(v8Frame));
+  std::shared_ptr<StackFrame> frame(new StackFrame(isolate(), v8Frame));
   // TODO(clemensh): Figure out a way to do this translation only right before
   // sending the stack trace over wire.
   if (v8Frame->IsWasm()) frame->translate(&m_wasmTranslation);

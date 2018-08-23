@@ -768,11 +768,11 @@ Script* StandardFrame::script() const {
 }
 
 Object* StandardFrame::receiver() const {
-  return isolate()->heap()->undefined_value();
+  return ReadOnlyRoots(isolate()).undefined_value();
 }
 
 Object* StandardFrame::context() const {
-  return isolate()->heap()->undefined_value();
+  return ReadOnlyRoots(isolate()).undefined_value();
 }
 
 int StandardFrame::position() const {
@@ -1077,7 +1077,7 @@ Object* JavaScriptFrame::unchecked_function() const {
   // materialize some closures on the stack. The arguments marker object
   // marks this case.
   DCHECK(function_slot_object()->IsJSFunction() ||
-         isolate()->heap()->arguments_marker() == function_slot_object());
+         ReadOnlyRoots(isolate()).arguments_marker() == function_slot_object());
   return function_slot_object();
 }
 
@@ -1251,7 +1251,7 @@ void JavaScriptBuiltinContinuationWithCatchFrame::SetException(
       kPointerSize;  // Skip over return value slot.
 
   // Only allow setting exception if previous value was the hole.
-  CHECK_EQ(isolate()->heap()->the_hole_value(),
+  CHECK_EQ(ReadOnlyRoots(isolate()).the_hole_value(),
            Memory::Object_at(exception_argument_slot));
   Memory::Object_at(exception_argument_slot) = exception;
 }
@@ -1759,23 +1759,27 @@ void WasmCompiledFrame::Print(StringStream* accumulator, PrintMode mode,
                               int index) const {
   PrintIndex(accumulator, mode, index);
   accumulator->Add("WASM [");
-  Script* script = this->script();
-  accumulator->PrintName(script->name());
+  accumulator->PrintName(script()->name());
   Address instruction_start = isolate()
                                   ->wasm_engine()
                                   ->code_manager()
                                   ->LookupCode(pc())
                                   ->instruction_start();
-  int pc = static_cast<int>(this->pc() - instruction_start);
   Vector<const uint8_t> raw_func_name =
-      module_object()->GetRawFunctionName(this->function_index());
+      module_object()->GetRawFunctionName(function_index());
   const int kMaxPrintedFunctionName = 64;
   char func_name[kMaxPrintedFunctionName + 1];
   int func_name_len = std::min(kMaxPrintedFunctionName, raw_func_name.length());
   memcpy(func_name, raw_func_name.start(), func_name_len);
   func_name[func_name_len] = '\0';
-  accumulator->Add("], function #%u ('%s'), pc=+0x%x, pos=%d\n",
-                   this->function_index(), func_name, pc, this->position());
+  int pos = position();
+  const wasm::WasmModule* module = wasm_instance()->module_object()->module();
+  int func_index = function_index();
+  int func_code_offset = module->functions[func_index].code.offset();
+  accumulator->Add("], function #%u ('%s'), pc=%p (+0x%x), pos=%d (+%d)\n",
+                   func_index, func_name, reinterpret_cast<void*>(pc()),
+                   static_cast<int>(pc() - instruction_start), pos,
+                   pos - func_code_offset);
   if (mode != OVERVIEW) accumulator->Add("\n");
 }
 
@@ -2149,47 +2153,5 @@ InnerPointerToCodeCache::InnerPointerToCodeCacheEntry*
   }
   return entry;
 }
-
-
-// -------------------------------------------------------------------------
-
-
-#define DEFINE_WRAPPER(type, field)                              \
-class field##_Wrapper : public ZoneObject {                      \
- public:  /* NOLINT */                                           \
-  field##_Wrapper(const field& original) : frame_(original) {    \
-  }                                                              \
-  field frame_;                                                  \
-};
-STACK_FRAME_TYPE_LIST(DEFINE_WRAPPER)
-#undef DEFINE_WRAPPER
-
-static StackFrame* AllocateFrameCopy(StackFrame* frame, Zone* zone) {
-#define FRAME_TYPE_CASE(type, field) \
-  case StackFrame::type: { \
-    field##_Wrapper* wrapper = \
-        new(zone) field##_Wrapper(*(reinterpret_cast<field*>(frame))); \
-    return &wrapper->frame_; \
-  }
-
-  switch (frame->type()) {
-    STACK_FRAME_TYPE_LIST(FRAME_TYPE_CASE)
-    default: UNREACHABLE();
-  }
-#undef FRAME_TYPE_CASE
-  return nullptr;
-}
-
-
-Vector<StackFrame*> CreateStackMap(Isolate* isolate, Zone* zone) {
-  ZoneVector<StackFrame*> frames(zone);
-  for (StackFrameIterator it(isolate); !it.done(); it.Advance()) {
-    StackFrame* frame = AllocateFrameCopy(it.frame(), zone);
-    frames.push_back(frame);
-  }
-  return Vector<StackFrame*>(frames.data(), frames.size());
-}
-
-
 }  // namespace internal
 }  // namespace v8

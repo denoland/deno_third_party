@@ -29,7 +29,8 @@ LookupIterator LookupIterator::PropertyOrElement(
   if (!*success) {
     DCHECK(isolate->has_pending_exception());
     // Return an unusable dummy.
-    return LookupIterator(receiver, isolate->factory()->empty_string());
+    return LookupIterator(isolate, receiver,
+                          isolate->factory()->empty_string());
   }
 
   if (name->AsArrayIndex(&index)) {
@@ -61,7 +62,8 @@ LookupIterator LookupIterator::PropertyOrElement(Isolate* isolate,
   if (!*success) {
     DCHECK(isolate->has_pending_exception());
     // Return an unusable dummy.
-    return LookupIterator(receiver, isolate->factory()->empty_string());
+    return LookupIterator(isolate, receiver,
+                          isolate->factory()->empty_string());
   }
 
   if (name->AsArrayIndex(&index)) {
@@ -72,7 +74,7 @@ LookupIterator LookupIterator::PropertyOrElement(Isolate* isolate,
     return it;
   }
 
-  return LookupIterator(receiver, name, configuration);
+  return LookupIterator(isolate, receiver, name, configuration);
 }
 
 // TODO(ishell): Consider removing this way of LookupIterator creation.
@@ -84,7 +86,7 @@ LookupIterator LookupIterator::ForTransitionHandler(
   if (!maybe_transition_map.ToHandle(&transition_map) ||
       !transition_map->IsPrototypeValidityCellValid()) {
     // This map is not a valid transition handler, so full lookup is required.
-    return LookupIterator(receiver, name);
+    return LookupIterator(isolate, receiver, name);
   }
 
   PropertyDetails details = PropertyDetails::Empty();
@@ -254,7 +256,7 @@ namespace {
 
 bool IsTypedArrayFunctionInAnyContext(Isolate* isolate, JSReceiver* holder) {
   static uint32_t context_slots[] = {
-#define TYPED_ARRAY_CONTEXT_SLOTS(Type, type, TYPE, ctype, size) \
+#define TYPED_ARRAY_CONTEXT_SLOTS(Type, type, TYPE, ctype) \
   Context::TYPE##_ARRAY_FUN_INDEX,
 
       TYPED_ARRAYS(TYPED_ARRAY_CONTEXT_SLOTS)
@@ -273,7 +275,8 @@ bool IsTypedArrayFunctionInAnyContext(Isolate* isolate, JSReceiver* holder) {
 void LookupIterator::InternalUpdateProtector() {
   if (isolate_->bootstrapper()->IsActive()) return;
 
-  if (*name_ == heap()->constructor_string()) {
+  ReadOnlyRoots roots(heap());
+  if (*name_ == roots.constructor_string()) {
     if (!isolate_->IsArraySpeciesLookupChainIntact() &&
         !isolate_->IsTypedArraySpeciesLookupChainIntact() &&
         !isolate_->IsPromiseSpeciesLookupChainIntact())
@@ -319,7 +322,7 @@ void LookupIterator::InternalUpdateProtector() {
         isolate_->InvalidateTypedArraySpeciesProtector();
       }
     }
-  } else if (*name_ == heap()->next_string()) {
+  } else if (*name_ == roots.next_string()) {
     if (!isolate_->IsArrayIteratorLookupChainIntact()) return;
     // Setting the next property of %ArrayIteratorPrototype% also needs to
     // invalidate the array iterator protector.
@@ -327,7 +330,7 @@ void LookupIterator::InternalUpdateProtector() {
             *holder_, Context::INITIAL_ARRAY_ITERATOR_PROTOTYPE_INDEX)) {
       isolate_->InvalidateArrayIteratorProtector();
     }
-  } else if (*name_ == heap()->species_symbol()) {
+  } else if (*name_ == roots.species_symbol()) {
     if (!isolate_->IsArraySpeciesLookupChainIntact() &&
         !isolate_->IsTypedArraySpeciesLookupChainIntact() &&
         !isolate_->IsPromiseSpeciesLookupChainIntact())
@@ -347,26 +350,33 @@ void LookupIterator::InternalUpdateProtector() {
       if (!isolate_->IsTypedArraySpeciesLookupChainIntact()) return;
       isolate_->InvalidateTypedArraySpeciesProtector();
     }
-  } else if (*name_ == heap()->is_concat_spreadable_symbol()) {
+  } else if (*name_ == roots.is_concat_spreadable_symbol()) {
     if (!isolate_->IsIsConcatSpreadableLookupChainIntact()) return;
     isolate_->InvalidateIsConcatSpreadableProtector();
-  } else if (*name_ == heap()->iterator_symbol()) {
+  } else if (*name_ == roots.iterator_symbol()) {
     if (!isolate_->IsArrayIteratorLookupChainIntact()) return;
     if (holder_->IsJSArray()) {
       isolate_->InvalidateArrayIteratorProtector();
     }
-  } else if (*name_ == heap()->resolve_string()) {
+  } else if (*name_ == roots.resolve_string()) {
     if (!isolate_->IsPromiseResolveLookupChainIntact()) return;
     // Setting the "resolve" property on any %Promise% intrinsic object
     // invalidates the Promise.resolve protector.
     if (isolate_->IsInAnyContext(*holder_, Context::PROMISE_FUNCTION_INDEX)) {
       isolate_->InvalidatePromiseResolveProtector();
     }
-  } else if (*name_ == heap()->then_string()) {
+  } else if (*name_ == roots.then_string()) {
     if (!isolate_->IsPromiseThenLookupChainIntact()) return;
     // Setting the "then" property on any JSPromise instance or on the
     // initial %PromisePrototype% invalidates the Promise#then protector.
+    // Also setting the "then" property on the initial %ObjectPrototype%
+    // invalidates the Promise#then protector, since we use this protector
+    // to guard the fast-path in AsyncGeneratorResolve, where we can skip
+    // the ResolvePromise step and go directly to FulfillPromise if we
+    // know that the Object.prototype doesn't contain a "then" method.
     if (holder_->IsJSPromise() ||
+        isolate_->IsInAnyContext(*holder_,
+                                 Context::INITIAL_OBJECT_PROTOTYPE_INDEX) ||
         isolate_->IsInAnyContext(*holder_, Context::PROMISE_PROTOTYPE_INDEX)) {
       isolate_->InvalidatePromiseThenProtector();
     }
@@ -388,7 +398,7 @@ void LookupIterator::PrepareForDataProperty(Handle<Object> value) {
   if (IsElement()) {
     ElementsKind kind = holder_obj->GetElementsKind();
     ElementsKind to = value->OptimalElementsKind();
-    if (IsHoleyOrDictionaryElementsKind(kind)) to = GetHoleyElementsKind(to);
+    if (IsHoleyElementsKind(kind)) to = GetHoleyElementsKind(to);
     to = GetMoreGeneralElementsKind(kind, to);
 
     if (kind != to) {
@@ -505,7 +515,8 @@ void LookupIterator::ReconfigureDataProperty(Handle<Object> value,
       int enumeration_index = original_details.dictionary_index();
       DCHECK_GT(enumeration_index, 0);
       details = details.set_index(enumeration_index);
-      dictionary->SetEntry(dictionary_entry(), *name(), *value, details);
+      dictionary->SetEntry(isolate(), dictionary_entry(), *name(), *value,
+                           details);
       property_details_ = details;
     }
     state_ = DATA;
@@ -631,7 +642,7 @@ void LookupIterator::ApplyTransitionToDataProperty(
     if (receiver->map()->is_prototype_map() && receiver->IsJSObject()) {
       JSObject::InvalidatePrototypeChains(receiver->map());
     }
-    dictionary = NameDictionary::Add(dictionary, name(),
+    dictionary = NameDictionary::Add(isolate(), dictionary, name(),
                                      isolate_->factory()->uninitialized_value(),
                                      property_details_, &entry);
     receiver->SetProperties(*dictionary);
@@ -728,7 +739,7 @@ void LookupIterator::TransitionToAccessorProperty(
         return;
       }
     } else {
-      pair = AccessorPair::Copy(pair);
+      pair = AccessorPair::Copy(isolate(), pair);
       pair->SetComponents(*getter, *setter);
     }
   } else {
@@ -758,15 +769,15 @@ void LookupIterator::TransitionToAccessorPair(Handle<Object> pair,
     isolate_->CountUsage(v8::Isolate::kIndexAccessor);
     Handle<NumberDictionary> dictionary = JSObject::NormalizeElements(receiver);
 
-    dictionary =
-        NumberDictionary::Set(dictionary, index_, pair, receiver, details);
+    dictionary = NumberDictionary::Set(isolate_, dictionary, index_, pair,
+                                       receiver, details);
     receiver->RequireSlowElements(*dictionary);
 
     if (receiver->HasSlowArgumentsElements()) {
       FixedArray* parameter_map = FixedArray::cast(receiver->elements());
       uint32_t length = parameter_map->length() - 2;
       if (number_ < length) {
-        parameter_map->set(number_ + 2, heap()->the_hole_value());
+        parameter_map->set(number_ + 2, ReadOnlyRoots(heap()).the_hole_value());
       }
       FixedArray::cast(receiver->elements())->set(1, *dictionary);
     } else {
@@ -1006,7 +1017,7 @@ bool LookupIterator::SkipInterceptor(JSObject* holder) {
 
 JSReceiver* LookupIterator::NextHolder(Map* map) {
   DisallowHeapAllocation no_gc;
-  if (map->prototype() == heap()->null_value()) return nullptr;
+  if (map->prototype() == ReadOnlyRoots(heap()).null_value()) return nullptr;
   if (!check_prototype_chain() && !map->has_hidden_prototype()) return nullptr;
   return JSReceiver::cast(map->prototype());
 }
@@ -1056,7 +1067,7 @@ LookupIterator::State LookupIterator::LookupInSpecialHolder(
       if (!is_element && map->IsJSGlobalObjectMap()) {
         GlobalDictionary* dict =
             JSGlobalObject::cast(holder)->global_dictionary();
-        int number = dict->FindEntry(name_);
+        int number = dict->FindEntry(isolate(), name_);
         if (number == GlobalDictionary::kNotFound) return NOT_FOUND;
         number_ = static_cast<uint32_t>(number);
         PropertyCell* cell = dict->CellAt(number_);
@@ -1109,7 +1120,7 @@ LookupIterator::State LookupIterator::LookupInRegularHolder(
   } else {
     DCHECK_IMPLIES(holder->IsJSProxy(), name()->IsPrivate());
     NameDictionary* dict = holder->property_dictionary();
-    int number = dict->FindEntry(name_);
+    int number = dict->FindEntry(isolate(), name_);
     if (number == NameDictionary::kNotFound) return NotFound(holder);
     number_ = static_cast<uint32_t>(number);
     property_details_ = dict->DetailsAt(number_);

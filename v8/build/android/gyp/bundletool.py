@@ -14,13 +14,17 @@ import sys
 
 # Assume this is stored under build/android/gyp/
 BUNDLETOOL_DIR = os.path.abspath(os.path.join(
-    sys.argv[0], '..', '..', '..', '..', 'third_party', 'android_build_tools',
+    __file__, '..', '..', '..', '..', 'third_party', 'android_build_tools',
     'bundletool'))
 
-BUNDLETOOL_VERSION = '0.4.2'
+BUNDLETOOL_VERSION = '0.5.0'
 
 BUNDLETOOL_JAR_PATH = os.path.join(
     BUNDLETOOL_DIR, 'bundletool-all-%s.jar' % BUNDLETOOL_VERSION)
 
-args = ['java', '-jar', BUNDLETOOL_JAR_PATH] + sys.argv[1:]
-subprocess.check_call(args)
+def RunBundleTool(args):
+  args = ['java', '-jar', BUNDLETOOL_JAR_PATH] + args
+  subprocess.check_call(args)
+
+if __name__ == '__main__':
+  RunBundleTool(sys.argv[1:])

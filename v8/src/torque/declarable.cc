@@ -34,6 +34,18 @@ std::ostream& operator<<(std::ostream& os, const RuntimeFunction& b) {
   return os;
 }
 
+std::string Variable::RValue() const {
+  if (!IsDefined()) {
+    ReportError("Reading uninitialized variable.");
+  }
+  if (type()->IsStructType()) {
+    return value();
+  }
+  std::string result = "(*" + value() + ")";
+  if (!IsConst()) result += ".value()";
+  return result;
+}
+
 void PrintLabel(std::ostream& os, const Label& l, bool with_names) {
   os << l.name();
   if (l.GetParameterCount() != 0) {
@@ -68,6 +80,8 @@ std::ostream& operator<<(std::ostream& os, const Generic& g) {
 
   return os;
 }
+
+size_t Label::next_id_ = 0;
 
 }  // namespace torque
 }  // namespace internal

@@ -233,7 +233,8 @@ Node* ConstructorBuiltinsAssembler::EmitFastNewFunctionContext(
   Node* size = GetFixedArrayAllocationSize(length, PACKED_ELEMENTS, mode);
 
   // Create a new closure from the given function info in new space
-  Node* function_context = AllocateInNewSpace(size);
+  TNode<Context> function_context =
+      UncheckedCast<Context>(AllocateInNewSpace(size));
 
   Heap::RootListIndex context_type;
   switch (scope_type) {
@@ -600,12 +601,12 @@ TF_BUILTIN(CreateShallowObjectLiteral, ConstructorBuiltinsAssembler) {
   Return(copy);
 
   BIND(&call_runtime);
-  Node* boilerplate_description =
-      Parameter(Descriptor::kBoilerplateDescription);
+  Node* object_boilerplate_description =
+      Parameter(Descriptor::kObjectBoilerplateDescription);
   Node* flags = Parameter(Descriptor::kFlags);
   Node* context = Parameter(Descriptor::kContext);
   TailCallRuntime(Runtime::kCreateObjectLiteral, context, feedback_vector,
-                  SmiTag(slot), boilerplate_description, flags);
+                  SmiTag(slot), object_boilerplate_description, flags);
 }
 
 // Used by the CreateEmptyObjectLiteral bytecode and the Object constructor.
@@ -728,6 +729,12 @@ TF_BUILTIN(NumberConstructor, ConstructorBuiltinsAssembler) {
       args.PopAndReturn(result);
     }
   }
+}
+
+TF_BUILTIN(GenericConstructorLazyDeoptContinuation,
+           ConstructorBuiltinsAssembler) {
+  Node* result = Parameter(Descriptor::kResult);
+  Return(result);
 }
 
 // https://tc39.github.io/ecma262/#sec-string-constructor

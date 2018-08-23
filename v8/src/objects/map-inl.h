@@ -6,11 +6,11 @@
 #define V8_OBJECTS_MAP_INL_H_
 
 #include "src/objects/map.h"
-
 #include "src/field-type.h"
 #include "src/objects-inl.h"
 #include "src/objects/api-callbacks-inl.h"
 #include "src/objects/descriptor-array.h"
+#include "src/objects/prototype-info-inl.h"
 #include "src/objects/shared-function-info.h"
 #include "src/objects/templates-inl.h"
 #include "src/property.h"
@@ -184,13 +184,13 @@ FixedArrayBase* Map::GetInitialElements() const {
   } else if (has_fast_sloppy_arguments_elements()) {
     result = GetReadOnlyRoots().empty_sloppy_arguments_elements();
   } else if (has_fixed_typed_array_elements()) {
-    result = GetHeap()->EmptyFixedTypedArrayForMap(this);
+    result = GetReadOnlyRoots().EmptyFixedTypedArrayForMap(this);
   } else if (has_dictionary_elements()) {
     result = GetReadOnlyRoots().empty_slow_element_dictionary();
   } else {
     UNREACHABLE();
   }
-  DCHECK(!GetHeap()->InNewSpace(result));
+  DCHECK(!Heap::InNewSpace(result));
   return result;
 }
 
@@ -297,6 +297,17 @@ int Map::UnusedPropertyFields() const {
   return unused;
 }
 
+int Map::UnusedInObjectProperties() const {
+  // Like Map::UnusedPropertyFields(), but returns 0 for out of object
+  // properties.
+  int value = used_or_unused_instance_size_in_words();
+  DCHECK_IMPLIES(!IsJSObjectMap(), value == 0);
+  if (value >= JSObject::kFieldsAdded) {
+    return instance_size_in_words() - value;
+  }
+  return 0;
+}
+
 int Map::used_or_unused_instance_size_in_words() const {
   return RELAXED_READ_BYTE_FIELD(this, kUsedOrUnusedInstanceSizeInWordsOffset);
 }
@@ -345,6 +356,17 @@ void Map::SetOutOfObjectUnusedPropertyFields(int value) {
 void Map::CopyUnusedPropertyFields(Map* map) {
   set_used_or_unused_instance_size_in_words(
       map->used_or_unused_instance_size_in_words());
+  DCHECK_EQ(UnusedPropertyFields(), map->UnusedPropertyFields());
+}
+
+void Map::CopyUnusedPropertyFieldsAdjustedForInstanceSize(Map* map) {
+  int value = map->used_or_unused_instance_size_in_words();
+  if (value >= JSValue::kFieldsAdded) {
+    // Unused in-object fields. Adjust the offset from the object’s start
+    // so it matches the distance to the object’s end.
+    value += instance_size_in_words() - map->instance_size_in_words();
+  }
+  set_used_or_unused_instance_size_in_words(value);
   DCHECK_EQ(UnusedPropertyFields(), map->UnusedPropertyFields());
 }
 
@@ -481,11 +503,11 @@ bool Map::CanBeDeprecated() const {
   return false;
 }
 
-void Map::NotifyLeafMapLayoutChange() {
+void Map::NotifyLeafMapLayoutChange(Isolate* isolate) {
   if (is_stable()) {
     mark_unstable();
     dependent_code()->DeoptimizeDependentCodeGroup(
-        GetIsolate(), DependentCode::kPrototypeCheckGroup);
+        isolate, DependentCode::kPrototypeCheckGroup);
   }
 }
 
@@ -502,6 +524,17 @@ bool Map::CanTransition() const {
 bool Map::IsBooleanMap() const {
   return this == GetReadOnlyRoots().boolean_map();
 }
+
+bool Map::IsNullMap() const { return this == GetReadOnlyRoots().null_map(); }
+
+bool Map::IsUndefinedMap() const {
+  return this == GetReadOnlyRoots().undefined_map();
+}
+
+bool Map::IsNullOrUndefinedMap() const {
+  return IsNullMap() || IsUndefinedMap();
+}
+
 bool Map::IsPrimitiveMap() const {
   return instance_type() <= LAST_PRIMITIVE_TYPE;
 }
@@ -535,7 +568,7 @@ Object* Map::prototype() const { return READ_FIELD(this, kPrototypeOffset); }
 void Map::set_prototype(Object* value, WriteBarrierMode mode) {
   DCHECK(value->IsNull() || value->IsJSReceiver());
   WRITE_FIELD(this, kPrototypeOffset, value);
-  CONDITIONAL_WRITE_BARRIER(GetHeap(), this, kPrototypeOffset, value, mode);
+  CONDITIONAL_WRITE_BARRIER(this, kPrototypeOffset, value, mode);
 }
 
 LayoutDescriptor* Map::layout_descriptor_gc_safe() const {
@@ -640,7 +673,10 @@ Object* Map::GetBackPointer() const {
 
 Map* Map::ElementsTransitionMap() {
   DisallowHeapAllocation no_gc;
-  return TransitionsAccessor(GetIsolate(), this, &no_gc)
+  // TODO(delphick): While it's safe to pass nullptr for Isolate* here as
+  // SearchSpecial doesn't need it, this is really ugly. Perhaps factor out a
+  // base class for methods not requiring an Isolate?
+  return TransitionsAccessor(nullptr, this, &no_gc)
       .SearchSpecial(GetReadOnlyRoots().elements_transition_symbol());
 }
 
@@ -652,21 +688,20 @@ Object* Map::prototype_info() const {
 void Map::set_prototype_info(Object* value, WriteBarrierMode mode) {
   CHECK(is_prototype_map());
   WRITE_FIELD(this, Map::kTransitionsOrPrototypeInfoOffset, value);
-  CONDITIONAL_WRITE_BARRIER(
-      GetHeap(), this, Map::kTransitionsOrPrototypeInfoOffset, value, mode);
+  CONDITIONAL_WRITE_BARRIER(this, Map::kTransitionsOrPrototypeInfoOffset, value,
+                            mode);
 }
 
 void Map::SetBackPointer(Object* value, WriteBarrierMode mode) {
   CHECK_GE(instance_type(), FIRST_JS_RECEIVER_TYPE);
   CHECK(value->IsMap());
-  CHECK(GetBackPointer()->IsUndefined(GetIsolate()));
+  CHECK(GetBackPointer()->IsUndefined());
   CHECK_IMPLIES(value->IsMap(), Map::cast(value)->GetConstructor() ==
                                     constructor_or_backpointer());
   set_constructor_or_backpointer(value, mode);
 }
 
 ACCESSORS(Map, dependent_code, DependentCode, kDependentCodeOffset)
-ACCESSORS(Map, weak_cell_cache, Object, kWeakCellCacheOffset)
 ACCESSORS(Map, prototype_validity_cell, Object, kPrototypeValidityCellOffset)
 ACCESSORS(Map, constructor_or_backpointer, Object,
           kConstructorOrBackPointerOffset)
@@ -739,16 +774,16 @@ int NormalizedMapCache::GetIndex(Handle<Map> map) {
   return map->Hash() % NormalizedMapCache::kEntries;
 }
 
-bool NormalizedMapCache::IsNormalizedMapCache(Isolate* isolate,
-                                              const HeapObject* obj) {
-  if (!obj->IsFixedArray()) return false;
-  if (FixedArray::cast(obj)->length() != NormalizedMapCache::kEntries) {
+bool NormalizedMapCache::IsNormalizedMapCache(const HeapObject* obj) {
+  if (!obj->IsWeakFixedArray()) return false;
+  if (WeakFixedArray::cast(obj)->length() != NormalizedMapCache::kEntries) {
     return false;
   }
 #ifdef VERIFY_HEAP
   if (FLAG_verify_heap) {
-    reinterpret_cast<NormalizedMapCache*>(const_cast<HeapObject*>(obj))
-        ->NormalizedMapCacheVerify(isolate);
+    NormalizedMapCache* cache =
+        reinterpret_cast<NormalizedMapCache*>(const_cast<HeapObject*>(obj));
+    cache->NormalizedMapCacheVerify(cache->GetIsolate());
   }
 #endif
   return true;

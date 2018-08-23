@@ -13,6 +13,7 @@
 #include "src/frame-constants.h"
 #include "src/heap/heap-inl.h"
 #include "src/optimized-compilation-info.h"
+#include "src/wasm/wasm-objects.h"
 
 namespace v8 {
 namespace internal {
@@ -1266,6 +1267,12 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kArm64Rbit32:
       __ Rbit(i.OutputRegister32(), i.InputRegister32(0));
       break;
+    case kArm64Rev:
+      __ Rev(i.OutputRegister64(), i.InputRegister64(0));
+      break;
+    case kArm64Rev32:
+      __ Rev(i.OutputRegister32(), i.InputRegister32(0));
+      break;
     case kArm64Cmp:
       __ Cmp(i.InputOrZeroRegister64(0), i.InputOperand2_64(1));
       break;
@@ -1414,35 +1421,29 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kArm64Float32ToInt64:
       __ Fcvtzs(i.OutputRegister64(), i.InputFloat32Register(0));
       if (i.OutputCount() > 1) {
-        __ Mov(i.OutputRegister(1), 1);
-        Label done;
-        __ Cmp(i.OutputRegister(0), 1);
-        __ Ccmp(i.OutputRegister(0), -1, VFlag, vc);
-        __ Fccmp(i.InputFloat32Register(0), i.InputFloat32Register(0), VFlag,
-                 vc);
-        __ B(vc, &done);
+        // Check for inputs below INT64_MIN and NaN.
         __ Fcmp(i.InputFloat32Register(0), static_cast<float>(INT64_MIN));
-        __ Cset(i.OutputRegister(1), eq);
-        __ Bind(&done);
+        // Check overflow.
+        // -1 value is used to indicate a possible overflow which will occur
+        // when subtracting (-1) from the provided INT64_MAX operand.
+        // OutputRegister(1) is set to 0 if the input was out of range or NaN.
+        __ Ccmp(i.OutputRegister(0), -1, VFlag, ge);
+        __ Cset(i.OutputRegister(1), vc);
       }
       break;
     case kArm64Float64ToInt64:
       __ Fcvtzs(i.OutputRegister(0), i.InputDoubleRegister(0));
       if (i.OutputCount() > 1) {
-        __ Mov(i.OutputRegister(1), 1);
-        Label done;
-        __ Cmp(i.OutputRegister(0), 1);
-        __ Ccmp(i.OutputRegister(0), -1, VFlag, vc);
-        __ Fccmp(i.InputDoubleRegister(0), i.InputDoubleRegister(0), VFlag, vc);
-        __ B(vc, &done);
+        // See kArm64Float32ToInt64 for a detailed description.
         __ Fcmp(i.InputDoubleRegister(0), static_cast<double>(INT64_MIN));
-        __ Cset(i.OutputRegister(1), eq);
-        __ Bind(&done);
+        __ Ccmp(i.OutputRegister(0), -1, VFlag, ge);
+        __ Cset(i.OutputRegister(1), vc);
       }
       break;
     case kArm64Float32ToUint64:
       __ Fcvtzu(i.OutputRegister64(), i.InputFloat32Register(0));
       if (i.OutputCount() > 1) {
+        // See kArm64Float32ToInt64 for a detailed description.
         __ Fcmp(i.InputFloat32Register(0), -1.0);
         __ Ccmp(i.OutputRegister(0), -1, ZFlag, gt);
         __ Cset(i.OutputRegister(1), ne);
@@ -1451,6 +1452,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kArm64Float64ToUint64:
       __ Fcvtzu(i.OutputRegister64(), i.InputDoubleRegister(0));
       if (i.OutputCount() > 1) {
+        // See kArm64Float32ToInt64 for a detailed description.
         __ Fcmp(i.InputDoubleRegister(0), -1.0);
         __ Ccmp(i.OutputRegister(0), -1, ZFlag, gt);
         __ Cset(i.OutputRegister(1), ne);
@@ -2418,23 +2420,17 @@ void CodeGenerator::AssembleConstructFrame() {
       if (shrink_slots * kPointerSize < FLAG_stack_size * 1024) {
         UseScratchRegisterScope scope(tasm());
         Register scratch = scope.AcquireX();
-        __ Mov(scratch, Operand(ExternalReference::address_of_real_stack_limit(
-                            __ isolate())));
+        __ Ldr(scratch, FieldMemOperand(
+                            kWasmInstanceRegister,
+                            WasmInstanceObject::kRealStackLimitAddressOffset));
         __ Ldr(scratch, MemOperand(scratch));
         __ Add(scratch, scratch, shrink_slots * kPointerSize);
         __ Cmp(sp, scratch);
         __ B(hs, &done);
       }
 
-      if (!frame_access_state()->has_frame()) {
-        __ set_has_frame(true);
-        // There is no need to leave the frame, we will not return from the
-        // runtime call.
-        __ EnterFrame(StackFrame::WASM_COMPILED);
-      } else {
+      {
         // Finish the frame that hasn't been fully built yet.
-        // TODO(mstarzinger): This is a work-around, deferred frame building is
-        // actually no longer supported, remove the associated code.
         UseScratchRegisterScope temps(tasm());
         __ Claim(2);  // Claim extra slots for marker + instance.
         Register scratch = temps.AcquireX();
@@ -2586,10 +2582,8 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
       if (IsMaterializableFromRoot(src_object, &index)) {
         __ LoadRoot(dst, index);
       } else {
-        __ Move(dst, src_object);
+        __ Mov(dst, src_object);
       }
-    } else if (src.type() == Constant::kExternalReference) {
-      __ Mov(dst, src.ToExternalReference());
     } else {
       __ Mov(dst, g.ToImmediate(source));
     }

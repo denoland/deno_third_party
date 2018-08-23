@@ -59,7 +59,7 @@ void ObjectDeserializer::
   DCHECK(deserializing_user_code());
   for (Code* code : new_code_objects()) {
     // Record all references to embedded objects in the new code object.
-    isolate()->heap()->RecordWritesIntoCode(code);
+    WriteBarrierForCode(code);
     Assembler::FlushICache(code->raw_instruction_start(),
                            code->raw_instruction_size());
   }
@@ -83,9 +83,11 @@ void ObjectDeserializer::CommitPostProcessedObjects() {
     script->set_id(isolate()->heap()->NextScriptId());
     LOG(isolate(),
         ScriptEvent(Logger::ScriptEventType::kDeserialize, script->id()));
+    LOG(isolate(), ScriptDetails(*script));
     // Add script to list.
-    Handle<Object> list =
-        FixedArrayOfWeakCells::Add(isolate(), factory->script_list(), script);
+    Handle<WeakArrayList> list = factory->script_list();
+    list = WeakArrayList::AddToEnd(isolate(), list,
+                                   MaybeObjectHandle::Weak(script));
     heap->SetRootScriptList(*list);
   }
 }

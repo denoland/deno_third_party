@@ -7,8 +7,8 @@
 #include <memory>
 #include <sstream>
 
-#include "src/api.h"
-#include "src/arguments.h"
+#include "src/api-inl.h"
+#include "src/arguments-inl.h"
 #include "src/assembler-inl.h"
 #include "src/compiler-dispatcher/optimizing-compile-dispatcher.h"
 #include "src/compiler.h"
@@ -551,7 +551,7 @@ RUNTIME_FUNCTION(Runtime_DebugPrint) {
       DCHECK(!weak);
       // If we have a string, assume it's a code "marker"
       // and print some interesting cpu debugging info.
-      object->Print(isolate, os);
+      object->Print(os);
       JavaScriptFrameIterator it(isolate);
       JavaScriptFrame* frame = it.frame();
       os << "fp = " << reinterpret_cast<void*>(frame->fp())
@@ -563,10 +563,10 @@ RUNTIME_FUNCTION(Runtime_DebugPrint) {
       if (weak) {
         os << "[weak] ";
       }
-      object->Print(isolate, os);
+      object->Print(os);
     }
     if (object->IsHeapObject()) {
-      HeapObject::cast(object)->map()->Print(isolate, os);
+      HeapObject::cast(object)->map()->Print(os);
     }
 #else
     if (weak) {
@@ -709,12 +709,6 @@ RUNTIME_FUNCTION(Runtime_AbortJS) {
 }
 
 
-RUNTIME_FUNCTION(Runtime_NativeScriptsCount) {
-  DCHECK_EQ(0, args.length());
-  return Smi::FromInt(Natives::GetBuiltinsCount());
-}
-
-
 RUNTIME_FUNCTION(Runtime_DisassembleFunction) {
   HandleScope scope(isolate);
 #ifdef DEBUG
@@ -726,7 +720,7 @@ RUNTIME_FUNCTION(Runtime_DisassembleFunction) {
     return ReadOnlyRoots(isolate).exception();
   }
   StdoutStream os;
-  func->code()->Print(isolate, os);
+  func->code()->Print(os);
   os << std::endl;
 #endif  // DEBUG
   return ReadOnlyRoots(isolate).undefined_value();
@@ -786,7 +780,7 @@ RUNTIME_FUNCTION(Runtime_InNewSpace) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_CHECKED(Object, obj, 0);
-  return isolate->heap()->ToBoolean(isolate->heap()->InNewSpace(obj));
+  return isolate->heap()->ToBoolean(Heap::InNewSpace(obj));
 }
 
 RUNTIME_FUNCTION(Runtime_IsAsmWasmCode) {
@@ -853,6 +847,23 @@ RUNTIME_FUNCTION(Runtime_GetWasmRecoveredTrapCount) {
   return *isolate->factory()->NewNumberFromSize(trap_count);
 }
 
+namespace {
+bool EnableWasmThreads(v8::Local<v8::Context> context) { return true; }
+
+bool DisableWasmThreads(v8::Local<v8::Context> context) { return false; }
+}  // namespace
+
+// This runtime function enables WebAssembly threads through an embedder
+// callback and thereby bypasses the value in FLAG_experimental_wasm_threads.
+RUNTIME_FUNCTION(Runtime_SetWasmThreadsEnabled) {
+  DCHECK_EQ(1, args.length());
+  CONVERT_BOOLEAN_ARG_CHECKED(flag, 0);
+  v8::Isolate* v8_isolate = reinterpret_cast<v8::Isolate*>(isolate);
+  v8_isolate->SetWasmThreadsEnabledCallback(flag ? EnableWasmThreads
+                                                 : DisableWasmThreads);
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
 #define ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(Name)       \
   RUNTIME_FUNCTION(Runtime_Has##Name) {                  \
     CONVERT_ARG_CHECKED(JSObject, obj, 0);               \
@@ -872,11 +883,10 @@ ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(FastProperties)
 
 #undef ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION
 
-
-#define FIXED_TYPED_ARRAYS_CHECK_RUNTIME_FUNCTION(Type, type, TYPE, ctype, s) \
-  RUNTIME_FUNCTION(Runtime_HasFixed##Type##Elements) {                        \
-    CONVERT_ARG_CHECKED(JSObject, obj, 0);                                    \
-    return isolate->heap()->ToBoolean(obj->HasFixed##Type##Elements());       \
+#define FIXED_TYPED_ARRAYS_CHECK_RUNTIME_FUNCTION(Type, type, TYPE, ctype) \
+  RUNTIME_FUNCTION(Runtime_HasFixed##Type##Elements) {                     \
+    CONVERT_ARG_CHECKED(JSObject, obj, 0);                                 \
+    return isolate->heap()->ToBoolean(obj->HasFixed##Type##Elements());    \
   }
 
 TYPED_ARRAYS(FIXED_TYPED_ARRAYS_CHECK_RUNTIME_FUNCTION)
@@ -911,14 +921,13 @@ RUNTIME_FUNCTION(Runtime_SerializeWasmModule) {
   CONVERT_ARG_HANDLE_CHECKED(WasmModuleObject, module_obj, 0);
 
   wasm::NativeModule* native_module = module_obj->native_module();
-  size_t compiled_size =
-      wasm::GetSerializedNativeModuleSize(isolate, native_module);
+  wasm::WasmSerializer wasm_serializer(isolate, native_module);
+  size_t compiled_size = wasm_serializer.GetSerializedNativeModuleSize();
   void* array_data = isolate->array_buffer_allocator()->Allocate(compiled_size);
   Handle<JSArrayBuffer> array_buffer = isolate->factory()->NewJSArrayBuffer();
   JSArrayBuffer::Setup(array_buffer, isolate, false, array_data, compiled_size);
   if (!array_data ||
-      !wasm::SerializeNativeModule(
-          isolate, native_module,
+      !wasm_serializer.SerializeNativeModule(
           {reinterpret_cast<uint8_t*>(array_data), compiled_size})) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
@@ -1011,7 +1020,7 @@ RUNTIME_FUNCTION(Runtime_RedirectToWasmInterpreter) {
 }
 
 RUNTIME_FUNCTION(Runtime_WasmTraceMemory) {
-  HandleScope hs(isolate);
+  HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_CHECKED(Smi, info_addr, 0);
 
@@ -1031,16 +1040,29 @@ RUNTIME_FUNCTION(Runtime_WasmTraceMemory) {
   // TODO(titzer): eliminate dependency on WasmModule definition here.
   int func_start =
       frame->wasm_instance()->module()->functions[func_index].code.offset();
-  wasm::ExecutionEngine eng = frame->wasm_code()->is_liftoff()
-                                  ? wasm::ExecutionEngine::kLiftoff
-                                  : wasm::ExecutionEngine::kTurbofan;
-  wasm::TraceMemoryOperation(eng, info, func_index, pos - func_start,
+  wasm::ExecutionTier tier = frame->wasm_code()->is_liftoff()
+                                 ? wasm::ExecutionTier::kBaseline
+                                 : wasm::ExecutionTier::kOptimized;
+  wasm::TraceMemoryOperation(tier, info, func_index, pos - func_start,
                              mem_start);
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
+RUNTIME_FUNCTION(Runtime_WasmTierUpFunction) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(2, args.length());
+  CONVERT_ARG_HANDLE_CHECKED(WasmInstanceObject, instance, 0);
+  CONVERT_SMI_ARG_CHECKED(function_index, 1);
+  if (!isolate->wasm_engine()->CompileFunction(
+          isolate, instance->module_object()->native_module(), function_index,
+          wasm::ExecutionTier::kOptimized)) {
+    return ReadOnlyRoots(isolate).exception();
+  }
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
 RUNTIME_FUNCTION(Runtime_IsLiftoffFunction) {
-  HandleScope shs(isolate);
+  HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
   CHECK(WasmExportedFunction::IsWasmExportedFunction(*function));

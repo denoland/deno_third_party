@@ -14,7 +14,9 @@
 #include "src/compiler/simplified-operator.h"
 #include "src/interpreter/bytecodes.h"
 #include "src/objects-inl.h"
-#include "src/objects/literal-objects.h"
+#include "src/objects/js-array-inl.h"
+#include "src/objects/js-generator.h"
+#include "src/objects/literal-objects-inl.h"
 #include "src/vector-slot-pair.h"
 
 namespace v8 {
@@ -1569,8 +1571,8 @@ void BytecodeGraphBuilder::VisitCreateRegExpLiteral() {
 }
 
 void BytecodeGraphBuilder::VisitCreateArrayLiteral() {
-  Handle<ConstantElementsPair> constant_elements(
-      ConstantElementsPair::cast(
+  Handle<ArrayBoilerplateDescription> array_boilerplate_description(
+      ArrayBoilerplateDescription::cast(
           bytecode_iterator().GetConstantForIndexOperand(0)),
       isolate());
   int const slot_id = bytecode_iterator().GetIndexOperand(1);
@@ -1585,9 +1587,10 @@ void BytecodeGraphBuilder::VisitCreateArrayLiteral() {
   literal_flags |= ArrayLiteral::kDisableMementos;
   // TODO(mstarzinger): Thread through number of elements. The below number is
   // only an estimate and does not match {ArrayLiteral::values::length}.
-  int number_of_elements = constant_elements->constant_values()->length();
+  int number_of_elements =
+      array_boilerplate_description->constant_elements()->length();
   Node* literal = NewNode(javascript()->CreateLiteralArray(
-      constant_elements, pair, literal_flags, number_of_elements));
+      array_boilerplate_description, pair, literal_flags, number_of_elements));
   environment()->BindAccumulator(literal, Environment::kAttachFrameState);
 }
 
@@ -1599,8 +1602,8 @@ void BytecodeGraphBuilder::VisitCreateEmptyArrayLiteral() {
 }
 
 void BytecodeGraphBuilder::VisitCreateObjectLiteral() {
-  Handle<BoilerplateDescription> constant_properties(
-      BoilerplateDescription::cast(
+  Handle<ObjectBoilerplateDescription> constant_properties(
+      ObjectBoilerplateDescription::cast(
           bytecode_iterator().GetConstantForIndexOperand(0)),
       isolate());
   int const slot_id = bytecode_iterator().GetIndexOperand(1);
@@ -1621,6 +1624,18 @@ void BytecodeGraphBuilder::VisitCreateEmptyObjectLiteral() {
   Node* literal =
       NewNode(javascript()->CreateEmptyLiteralObject(), GetFunctionClosure());
   environment()->BindAccumulator(literal);
+}
+
+void BytecodeGraphBuilder::VisitCloneObject() {
+  PrepareEagerCheckpoint();
+  Node* source =
+      environment()->LookupRegister(bytecode_iterator().GetRegisterOperand(0));
+  int flags = bytecode_iterator().GetFlagOperand(1);
+  int slot = bytecode_iterator().GetIndexOperand(2);
+  const Operator* op =
+      javascript()->CloneObject(CreateVectorSlotPair(slot), flags);
+  Node* value = NewNode(op, source);
+  environment()->BindAccumulator(value, Environment::kAttachFrameState);
 }
 
 void BytecodeGraphBuilder::VisitGetTemplateObject() {
@@ -2438,17 +2453,13 @@ void BytecodeGraphBuilder::VisitTestReferenceEqual() {
   environment()->BindAccumulator(result);
 }
 
-void BytecodeGraphBuilder::BuildTestingOp(const Operator* op) {
-  PrepareEagerCheckpoint();
-  Node* left =
-      environment()->LookupRegister(bytecode_iterator().GetRegisterOperand(0));
-  Node* right = environment()->LookupAccumulator();
-  Node* node = NewNode(op, left, right);
-  environment()->BindAccumulator(node, Environment::kAttachFrameState);
-}
-
 void BytecodeGraphBuilder::VisitTestIn() {
-  BuildTestingOp(javascript()->HasProperty());
+  PrepareEagerCheckpoint();
+  Node* object = environment()->LookupAccumulator();
+  Node* key =
+      environment()->LookupRegister(bytecode_iterator().GetRegisterOperand(0));
+  Node* node = NewNode(javascript()->HasProperty(), object, key);
+  environment()->BindAccumulator(node, Environment::kAttachFrameState);
 }
 
 void BytecodeGraphBuilder::VisitTestInstanceOf() {

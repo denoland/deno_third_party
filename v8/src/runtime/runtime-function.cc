@@ -2,13 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/runtime/runtime-utils.h"
-
 #include "src/accessors.h"
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/compiler.h"
 #include "src/isolate-inl.h"
 #include "src/messages.h"
+#include "src/runtime/runtime-utils.h"
 
 namespace v8 {
 namespace internal {
@@ -28,7 +27,7 @@ RUNTIME_FUNCTION(Runtime_FunctionGetName) {
 }
 
 // TODO(5530): Remove once uses in debug.js are gone.
-RUNTIME_FUNCTION(Runtime_FunctionGetScript) {
+RUNTIME_FUNCTION(Runtime_FunctionGetScriptSource) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_HANDLE_CHECKED(JSReceiver, function, 0);
@@ -36,9 +35,7 @@ RUNTIME_FUNCTION(Runtime_FunctionGetScript) {
   if (function->IsJSFunction()) {
     Handle<Object> script(
         Handle<JSFunction>::cast(function)->shared()->script(), isolate);
-    if (script->IsScript()) {
-      return *Script::GetWrapper(Handle<Script>::cast(script));
-    }
+    if (script->IsScript()) return Handle<Script>::cast(script)->source();
   }
   return ReadOnlyRoots(isolate).undefined_value();
 }
@@ -113,22 +110,20 @@ RUNTIME_FUNCTION(Runtime_SetCode) {
       source_shared->raw_outer_scope_info_or_feedback_metadata());
   target_shared->set_internal_formal_parameter_count(
       source_shared->internal_formal_parameter_count());
-  target_shared->set_raw_start_position_and_type(
-      source_shared->raw_start_position_and_type());
-  target_shared->set_raw_end_position(source_shared->raw_end_position());
   bool was_native = target_shared->native();
   target_shared->set_flags(source_shared->flags());
   target_shared->set_native(was_native);
-  target_shared->set_function_literal_id(source_shared->function_literal_id());
-
   target_shared->set_scope_info(source_shared->scope_info());
 
   Handle<Object> source_script(source_shared->script(), isolate);
+  int function_literal_id = source_shared->FunctionLiteralId(isolate);
   if (source_script->IsScript()) {
     SharedFunctionInfo::SetScript(source_shared,
-                                  isolate->factory()->undefined_value());
+                                  isolate->factory()->undefined_value(),
+                                  function_literal_id);
   }
-  SharedFunctionInfo::SetScript(target_shared, source_script);
+  SharedFunctionInfo::SetScript(target_shared, source_script,
+                                function_literal_id);
 
   // Set the code of the target function.
   target->set_code(source_shared->GetCode());

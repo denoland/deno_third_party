@@ -4,8 +4,8 @@
 
 #include "src/compiler/js-create-lowering.h"
 #include "src/code-factory.h"
-#include "src/compilation-dependencies.h"
 #include "src/compiler/access-builder.h"
+#include "src/compiler/compilation-dependencies.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/js-operator.h"
 #include "src/compiler/machine-operator.h"
@@ -30,7 +30,10 @@ namespace compiler {
 class JSCreateLoweringTest : public TypedGraphTest {
  public:
   JSCreateLoweringTest()
-      : TypedGraphTest(3), javascript_(zone()), deps_(isolate(), zone()) {}
+      : TypedGraphTest(3),
+        javascript_(zone()),
+        deps_(isolate(), zone()),
+        handle_scope_(isolate()) {}
   ~JSCreateLoweringTest() override {}
 
  protected:
@@ -63,6 +66,7 @@ class JSCreateLoweringTest : public TypedGraphTest {
  private:
   JSOperatorBuilder javascript_;
   CompilationDependencies deps_;
+  CanonicalHandleScope handle_scope_;
 };
 
 // -----------------------------------------------------------------------------
@@ -94,7 +98,7 @@ TEST_F(JSCreateLoweringTest, JSCreateArgumentsInlinedMapped) {
   Node* const closure = Parameter(Type::Any());
   Node* const context = UndefinedConstant();
   Node* const effect = graph()->start();
-  Handle<SharedFunctionInfo> shared(isolate()->script_function()->shared(),
+  Handle<SharedFunctionInfo> shared(isolate()->regexp_function()->shared(),
                                     isolate());
   Node* const frame_state_outer = FrameState(shared, graph()->start());
   Node* const frame_state_inner = FrameState(shared, frame_state_outer);
@@ -113,7 +117,7 @@ TEST_F(JSCreateLoweringTest, JSCreateArgumentsInlinedUnmapped) {
   Node* const closure = Parameter(Type::Any());
   Node* const context = UndefinedConstant();
   Node* const effect = graph()->start();
-  Handle<SharedFunctionInfo> shared(isolate()->script_function()->shared(),
+  Handle<SharedFunctionInfo> shared(isolate()->regexp_function()->shared(),
                                     isolate());
   Node* const frame_state_outer = FrameState(shared, graph()->start());
   Node* const frame_state_inner = FrameState(shared, frame_state_outer);
@@ -132,7 +136,7 @@ TEST_F(JSCreateLoweringTest, JSCreateArgumentsInlinedRestArray) {
   Node* const closure = Parameter(Type::Any());
   Node* const context = UndefinedConstant();
   Node* const effect = graph()->start();
-  Handle<SharedFunctionInfo> shared(isolate()->script_function()->shared(),
+  Handle<SharedFunctionInfo> shared(isolate()->regexp_function()->shared(),
                                     isolate());
   Node* const frame_state_outer = FrameState(shared, graph()->start());
   Node* const frame_state_inner = FrameState(shared, frame_state_outer);

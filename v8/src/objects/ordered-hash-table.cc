@@ -70,9 +70,8 @@ Handle<Derived> OrderedHashTable<Derived, entrysize>::Clear(
     Isolate* isolate, Handle<Derived> table) {
   DCHECK(!table->IsObsolete());
 
-  Handle<Derived> new_table =
-      Allocate(isolate, kMinCapacity,
-               isolate->heap()->InNewSpace(*table) ? NOT_TENURED : TENURED);
+  Handle<Derived> new_table = Allocate(
+      isolate, kMinCapacity, Heap::InNewSpace(*table) ? NOT_TENURED : TENURED);
 
   table->SetNextTable(*new_table);
   table->SetNumberOfDeletedElements(kClearedTableSentinel);
@@ -140,15 +139,15 @@ Handle<FixedArray> OrderedHashSet::ConvertToKeysArray(
     }
     result->set(i, key);
   }
-  return FixedArray::ShrinkOrEmpty(result, length);
+  return FixedArray::ShrinkOrEmpty(isolate, result, length);
 }
 
-HeapObject* OrderedHashSet::GetEmpty(Isolate* isolate) {
-  return ReadOnlyRoots(isolate).empty_ordered_hash_set();
+HeapObject* OrderedHashSet::GetEmpty(ReadOnlyRoots ro_roots) {
+  return ro_roots.empty_ordered_hash_set();
 }
 
-HeapObject* OrderedHashMap::GetEmpty(Isolate* isolate) {
-  return ReadOnlyRoots(isolate).empty_ordered_hash_map();
+HeapObject* OrderedHashMap::GetEmpty(ReadOnlyRoots ro_roots) {
+  return ro_roots.empty_ordered_hash_map();
 }
 
 template <class Derived, int entrysize>
@@ -156,9 +155,8 @@ Handle<Derived> OrderedHashTable<Derived, entrysize>::Rehash(
     Isolate* isolate, Handle<Derived> table, int new_capacity) {
   DCHECK(!table->IsObsolete());
 
-  Handle<Derived> new_table =
-      Allocate(isolate, new_capacity,
-               isolate->heap()->InNewSpace(*table) ? NOT_TENURED : TENURED);
+  Handle<Derived> new_table = Allocate(
+      isolate, new_capacity, Heap::InNewSpace(*table) ? NOT_TENURED : TENURED);
   int nof = table->NumberOfElements();
   int nod = table->NumberOfDeletedElements();
   int new_buckets = new_table->NumberOfBuckets();
@@ -336,7 +334,7 @@ void SmallOrderedHashTable<Derived>::Initialize(Isolate* isolate,
   memset(reinterpret_cast<byte*>(hashtable_start), kNotFound,
          num_buckets + num_chains);
 
-  if (isolate->heap()->InNewSpace(this)) {
+  if (Heap::InNewSpace(this)) {
     MemsetPointer(RawField(this, kDataTableStartOffset),
                   ReadOnlyRoots(isolate).the_hole_value(),
                   capacity * Derived::kEntrySize);
@@ -466,8 +464,7 @@ Handle<Derived> SmallOrderedHashTable<Derived>::Rehash(Isolate* isolate,
   DCHECK_GE(kMaxCapacity, new_capacity);
 
   Handle<Derived> new_table = SmallOrderedHashTable<Derived>::Allocate(
-      isolate, new_capacity,
-      isolate->heap()->InNewSpace(*table) ? NOT_TENURED : TENURED);
+      isolate, new_capacity, Heap::InNewSpace(*table) ? NOT_TENURED : TENURED);
   int nof = table->NumberOfElements();
   int nod = table->NumberOfDeletedElements();
   int new_entry = 0;
@@ -715,7 +712,7 @@ void OrderedHashTableIterator<Derived, TableType>::Transition() {
 template <class Derived, class TableType>
 bool OrderedHashTableIterator<Derived, TableType>::HasMore() {
   DisallowHeapAllocation no_allocation;
-  Isolate* isolate = this->GetIsolate();
+  ReadOnlyRoots ro_roots = GetReadOnlyRoots();
 
   Transition();
 
@@ -723,7 +720,7 @@ bool OrderedHashTableIterator<Derived, TableType>::HasMore() {
   int index = Smi::ToInt(this->index());
   int used_capacity = table->UsedCapacity();
 
-  while (index < used_capacity && table->KeyAt(index)->IsTheHole(isolate)) {
+  while (index < used_capacity && table->KeyAt(index)->IsTheHole(ro_roots)) {
     index++;
   }
 
@@ -731,7 +728,7 @@ bool OrderedHashTableIterator<Derived, TableType>::HasMore() {
 
   if (index < used_capacity) return true;
 
-  set_table(TableType::GetEmpty(isolate));
+  set_table(TableType::GetEmpty(ro_roots));
   return false;
 }
 

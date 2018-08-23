@@ -247,6 +247,8 @@ Node* PromiseBuiltinsAssembler::CreatePromiseResolvingFunctionsContext(
   Node* const context =
       CreatePromiseContext(native_context, kPromiseContextLength);
   StoreContextElementNoWriteBarrier(context, kPromiseSlot, promise);
+  StoreContextElementNoWriteBarrier(context, kAlreadyResolvedSlot,
+                                    FalseConstant());
   StoreContextElementNoWriteBarrier(context, kDebugEventSlot, debug_event);
   return context;
 }
@@ -707,9 +709,10 @@ void PromiseBuiltinsAssembler::SetForwardingHandlerIfTrue(
     Node* context, Node* condition, const NodeGenerator& object) {
   Label done(this);
   GotoIfNot(condition, &done);
-  CallRuntime(Runtime::kSetProperty, context, object(),
-              HeapConstant(factory()->promise_forwarding_handler_symbol()),
-              TrueConstant(), SmiConstant(LanguageMode::kStrict));
+  SetPropertyStrict(
+      CAST(context), CAST(object()),
+      HeapConstant(factory()->promise_forwarding_handler_symbol()),
+      TrueConstant());
   Goto(&done);
   BIND(&done);
 }
@@ -721,9 +724,9 @@ void PromiseBuiltinsAssembler::SetPromiseHandledByIfTrue(
   GotoIfNot(condition, &done);
   GotoIf(TaggedIsSmi(promise), &done);
   GotoIfNot(HasInstanceType(promise, JS_PROMISE_TYPE), &done);
-  CallRuntime(Runtime::kSetProperty, context, promise,
-              HeapConstant(factory()->promise_handled_by_symbol()),
-              handled_by(), SmiConstant(LanguageMode::kStrict));
+  SetPropertyStrict(CAST(context), CAST(promise),
+                    HeapConstant(factory()->promise_handled_by_symbol()),
+                    CAST(handled_by()));
   Goto(&done);
   BIND(&done);
 }
@@ -737,17 +740,27 @@ TF_BUILTIN(PromiseCapabilityDefaultReject, PromiseBuiltinsAssembler) {
   Node* const promise = LoadContextElement(context, kPromiseSlot);
 
   // 3. Let alreadyResolved be F.[[AlreadyResolved]].
+  Label if_already_resolved(this, Label::kDeferred);
+  Node* const already_resolved =
+      LoadContextElement(context, kAlreadyResolvedSlot);
+
   // 4. If alreadyResolved.[[Value]] is true, return undefined.
-  // We use undefined as a marker for the [[AlreadyResolved]] state.
-  ReturnIf(IsUndefined(promise), UndefinedConstant());
+  GotoIf(IsTrue(already_resolved), &if_already_resolved);
 
   // 5. Set alreadyResolved.[[Value]] to true.
-  StoreContextElementNoWriteBarrier(context, kPromiseSlot, UndefinedConstant());
+  StoreContextElementNoWriteBarrier(context, kAlreadyResolvedSlot,
+                                    TrueConstant());
 
   // 6. Return RejectPromise(promise, reason).
   Node* const debug_event = LoadContextElement(context, kDebugEventSlot);
   Return(CallBuiltin(Builtins::kRejectPromise, context, promise, reason,
                      debug_event));
+
+  BIND(&if_already_resolved);
+  {
+    Return(CallRuntime(Runtime::kPromiseRejectAfterResolved, context, promise,
+                       reason));
+  }
 }
 
 // ES #sec-promise-resolve-functions
@@ -759,16 +772,26 @@ TF_BUILTIN(PromiseCapabilityDefaultResolve, PromiseBuiltinsAssembler) {
   Node* const promise = LoadContextElement(context, kPromiseSlot);
 
   // 3. Let alreadyResolved be F.[[AlreadyResolved]].
+  Label if_already_resolved(this, Label::kDeferred);
+  Node* const already_resolved =
+      LoadContextElement(context, kAlreadyResolvedSlot);
+
   // 4. If alreadyResolved.[[Value]] is true, return undefined.
-  // We use undefined as a marker for the [[AlreadyResolved]] state.
-  ReturnIf(IsUndefined(promise), UndefinedConstant());
+  GotoIf(IsTrue(already_resolved), &if_already_resolved);
 
   // 5. Set alreadyResolved.[[Value]] to true.
-  StoreContextElementNoWriteBarrier(context, kPromiseSlot, UndefinedConstant());
+  StoreContextElementNoWriteBarrier(context, kAlreadyResolvedSlot,
+                                    TrueConstant());
 
   // The rest of the logic (and the catch prediction) is
   // encapsulated in the dedicated ResolvePromise builtin.
   Return(CallBuiltin(Builtins::kResolvePromise, context, promise, resolution));
+
+  BIND(&if_already_resolved);
+  {
+    Return(CallRuntime(Runtime::kPromiseResolveAfterResolved, context, promise,
+                       resolution));
+  }
 }
 
 TF_BUILTIN(PromiseConstructorLazyDeoptContinuation, PromiseBuiltinsAssembler) {
@@ -1724,27 +1747,45 @@ TF_BUILTIN(ResolvePromise, PromiseBuiltinsAssembler) {
 
   // 7. If Type(resolution) is not Object, then
   GotoIf(TaggedIsSmi(resolution), &if_fulfill);
-  Node* const result_map = LoadMap(resolution);
-  GotoIfNot(IsJSReceiverMap(result_map), &if_fulfill);
+  Node* const resolution_map = LoadMap(resolution);
+  GotoIfNot(IsJSReceiverMap(resolution_map), &if_fulfill);
 
   // We can skip the "then" lookup on {resolution} if its [[Prototype]]
   // is the (initial) Promise.prototype and the Promise#then protector
   // is intact, as that guards the lookup path for the "then" property
   // on JSPromise instances which have the (initial) %PromisePrototype%.
-  Label if_fast(this), if_slow(this, Label::kDeferred);
+  Label if_fast(this), if_receiver(this), if_slow(this, Label::kDeferred);
   Node* const native_context = LoadNativeContext(context);
-  BranchIfPromiseThenLookupChainIntact(native_context, result_map, &if_fast,
-                                       &if_slow);
+  GotoIfForceSlowPath(&if_slow);
+  GotoIf(IsPromiseThenProtectorCellInvalid(), &if_slow);
+  GotoIfNot(IsJSPromiseMap(resolution_map), &if_receiver);
+  Node* const promise_prototype =
+      LoadContextElement(native_context, Context::PROMISE_PROTOTYPE_INDEX);
+  Branch(WordEqual(LoadMapPrototype(resolution_map), promise_prototype),
+         &if_fast, &if_slow);
 
-  // Resolution is a native promise and if it's already resolved or
-  // rejected, shortcircuit the resolution procedure by directly
-  // reusing the value from the promise.
   BIND(&if_fast);
   {
+    // The {resolution} is a native Promise in this case.
     Node* const then =
         LoadContextElement(native_context, Context::PROMISE_THEN_INDEX);
     var_then.Bind(then);
     Goto(&do_enqueue);
+  }
+
+  BIND(&if_receiver);
+  {
+    // We can skip the lookup of "then" if the {resolution} is a (newly
+    // created) IterResultObject, as the Promise#then() protector also
+    // ensures that the intrinsic %ObjectPrototype% doesn't contain any
+    // "then" property. This helps to avoid negative lookups on iterator
+    // results from async generators.
+    CSA_ASSERT(this, IsJSReceiverMap(resolution_map));
+    CSA_ASSERT(this, Word32BinaryNot(IsPromiseThenProtectorCellInvalid()));
+    Node* const iterator_result_map =
+        LoadContextElement(native_context, Context::ITERATOR_RESULT_MAP_INDEX);
+    Branch(WordEqual(resolution_map, iterator_result_map), &if_fulfill,
+           &if_slow);
   }
 
   BIND(&if_slow);
@@ -2078,8 +2119,8 @@ TF_BUILTIN(PromiseAllResolveElementClosure, PromiseBuiltinsAssembler) {
       CSA_ASSERT(this, IntPtrLessThan(index, new_elements_length));
       CSA_ASSERT(this, IntPtrLessThan(elements_length, new_elements_length));
       TNode<FixedArray> new_elements =
-          AllocateFixedArray(PACKED_ELEMENTS, new_elements_length,
-                             AllocationFlag::kAllowLargeObjectAllocation);
+          CAST(AllocateFixedArray(PACKED_ELEMENTS, new_elements_length,
+                                  AllocationFlag::kAllowLargeObjectAllocation));
       CopyFixedArrayElements(PACKED_ELEMENTS, elements, PACKED_ELEMENTS,
                              new_elements, elements_length,
                              new_elements_length);

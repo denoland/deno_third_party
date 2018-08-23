@@ -6,6 +6,8 @@
 #define V8_HEAP_SCAVENGER_INL_H_
 
 #include "src/heap/scavenger.h"
+
+#include "src/heap/local-allocator-inl.h"
 #include "src/objects-inl.h"
 #include "src/objects/map.h"
 
@@ -146,11 +148,12 @@ void Scavenger::EvacuateThinString(Map* map, HeapObject** slot,
                                    ThinString* object, int object_size) {
   if (!is_incremental_marking_) {
     // Loading actual is fine in a parallel setting is there is no write.
-    HeapObject* actual = object->actual();
+    String* actual = object->actual();
+    object->set_length(0);
     *slot = actual;
     // ThinStrings always refer to internalized strings, which are
     // always in old space.
-    DCHECK(!heap()->InNewSpace(actual));
+    DCHECK(!Heap::InNewSpace(actual));
     base::AsAtomicPointer::Relaxed_Store(
         reinterpret_cast<Map**>(object->address()),
         MapWord::FromForwardingAddress(actual).ToMap());
@@ -165,12 +168,12 @@ void Scavenger::EvacuateShortcutCandidate(Map* map, HeapObject** slot,
                                           ConsString* object, int object_size) {
   DCHECK(IsShortcutCandidate(map->instance_type()));
   if (!is_incremental_marking_ &&
-      object->unchecked_second() == heap()->empty_string()) {
+      object->unchecked_second() == ReadOnlyRoots(heap()).empty_string()) {
     HeapObject* first = HeapObject::cast(object->unchecked_first());
 
     *slot = first;
 
-    if (!heap()->InNewSpace(first)) {
+    if (!Heap::InNewSpace(first)) {
       base::AsAtomicPointer::Relaxed_Store(
           reinterpret_cast<Map**>(object->address()),
           MapWord::FromForwardingAddress(first).ToMap());
@@ -248,7 +251,7 @@ void Scavenger::ScavengeObject(HeapObjectReference** p, HeapObject* object) {
 
   Map* map = first_word.ToMap();
   // AllocationMementos are unrooted and shouldn't survive a scavenge
-  DCHECK_NE(heap()->allocation_memento_map(), map);
+  DCHECK_NE(ReadOnlyRoots(heap()).allocation_memento_map(), map);
   // Call the slow part of scavenge object.
   EvacuateObject(p, map, object);
 }
@@ -289,7 +292,7 @@ void ScavengeVisitor::VisitPointers(HeapObject* host, Object** start,
                                     Object** end) {
   for (Object** p = start; p < end; p++) {
     Object* object = *p;
-    if (!heap_->InNewSpace(object)) continue;
+    if (!Heap::InNewSpace(object)) continue;
     scavenger_->ScavengeObject(reinterpret_cast<HeapObjectReference**>(p),
                                reinterpret_cast<HeapObject*>(object));
   }
@@ -299,7 +302,7 @@ void ScavengeVisitor::VisitPointers(HeapObject* host, MaybeObject** start,
                                     MaybeObject** end) {
   for (MaybeObject** p = start; p < end; p++) {
     MaybeObject* object = *p;
-    if (!heap_->InNewSpace(object)) continue;
+    if (!Heap::InNewSpace(object)) continue;
     // Treat the weak reference as strong.
     HeapObject* heap_object;
     if (object->ToStrongOrWeakHeapObject(&heap_object)) {

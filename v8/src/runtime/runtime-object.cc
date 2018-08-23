@@ -2,16 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/runtime/runtime-utils.h"
-
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/bootstrapper.h"
 #include "src/debug/debug.h"
 #include "src/isolate-inl.h"
 #include "src/messages.h"
 #include "src/objects/hash-table-inl.h"
+#include "src/objects/js-array-inl.h"
 #include "src/objects/property-descriptor-object.h"
 #include "src/property-descriptor.h"
+#include "src/runtime/runtime-utils.h"
 #include "src/runtime/runtime.h"
 
 namespace v8 {
@@ -82,7 +82,7 @@ static MaybeHandle<Object> KeyedGetObjectProperty(Isolate* isolate,
         // Attempt dictionary lookup.
         GlobalDictionary* dictionary =
             JSGlobalObject::cast(*receiver)->global_dictionary();
-        int entry = dictionary->FindEntry(key);
+        int entry = dictionary->FindEntry(isolate, key);
         if (entry != GlobalDictionary::kNotFound) {
           PropertyCell* cell = dictionary->CellAt(entry);
           if (cell->property_details().kind() == kData) {
@@ -96,7 +96,7 @@ static MaybeHandle<Object> KeyedGetObjectProperty(Isolate* isolate,
       } else if (!receiver->HasFastProperties()) {
         // Attempt dictionary lookup.
         NameDictionary* dictionary = receiver->property_dictionary();
-        int entry = dictionary->FindEntry(key);
+        int entry = dictionary->FindEntry(isolate, key);
         if ((entry != NameDictionary::kNotFound) &&
             (dictionary->DetailsAt(entry).kind() == kData)) {
           Object* value = dictionary->ValueAt(entry);
@@ -198,7 +198,7 @@ bool DeleteObjectPropertyFast(Isolate* isolate, Handle<JSReceiver> receiver,
   // that depends on the assumption that no object that reached this map
   // transitions away from it without triggering the "deoptimize dependent
   // code" mechanism.
-  map->NotifyLeafMapLayoutChange();
+  map->NotifyLeafMapLayoutChange(isolate);
   // Finally, perform the map rollback.
   receiver->synchronized_set_map(Map::cast(backpointer));
 #if VERIFY_HEAP
@@ -393,7 +393,8 @@ RUNTIME_FUNCTION(Runtime_AddDictionaryProperty) {
 
   Handle<NameDictionary> dictionary(receiver->property_dictionary(), isolate);
   PropertyDetails property_details(kData, NONE, PropertyCellType::kNoCell);
-  dictionary = NameDictionary::Add(dictionary, name, value, property_details);
+  dictionary =
+      NameDictionary::Add(isolate, dictionary, name, value, property_details);
   receiver->SetProperties(*dictionary);
   return *value;
 }
@@ -688,7 +689,8 @@ RUNTIME_FUNCTION(Runtime_ShrinkPropertyDictionary) {
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_HANDLE_CHECKED(JSReceiver, receiver, 0);
   Handle<NameDictionary> dictionary(receiver->property_dictionary(), isolate);
-  Handle<NameDictionary> new_properties = NameDictionary::Shrink(dictionary);
+  Handle<NameDictionary> new_properties =
+      NameDictionary::Shrink(isolate, dictionary);
   receiver->SetProperties(*new_properties);
   return Smi::kZero;
 }
@@ -1140,14 +1142,14 @@ RUNTIME_FUNCTION(Runtime_ToNumber) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_HANDLE_CHECKED(Object, input, 0);
-  RETURN_RESULT_OR_FAILURE(isolate, Object::ToNumber(input));
+  RETURN_RESULT_OR_FAILURE(isolate, Object::ToNumber(isolate, input));
 }
 
 RUNTIME_FUNCTION(Runtime_ToNumeric) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_HANDLE_CHECKED(Object, input, 0);
-  RETURN_RESULT_OR_FAILURE(isolate, Object::ToNumeric(input));
+  RETURN_RESULT_OR_FAILURE(isolate, Object::ToNumeric(isolate, input));
 }
 
 RUNTIME_FUNCTION(Runtime_ToInteger) {
@@ -1243,18 +1245,6 @@ RUNTIME_FUNCTION(Runtime_IterableToListCanBeElided) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_HANDLE_CHECKED(Object, obj, 0);
-
-  // If an iterator symbol is added to the Number prototype, we could see a Smi.
-  if (obj->IsSmi()) return isolate->heap()->ToBoolean(false);
-  if (!HeapObject::cast(*obj)->IsJSObject()) {
-    return isolate->heap()->ToBoolean(false);
-  }
-
-  // While iteration alone may not have observable side-effects, calling
-  // toNumber on an object will. Make sure the arg is not an array of objects.
-  ElementsKind kind = JSObject::cast(*obj)->GetElementsKind();
-  if (!IsFastNumberElementsKind(kind)) return isolate->heap()->ToBoolean(false);
-
   return isolate->heap()->ToBoolean(!obj->IterationHasObservableEffects());
 }
 

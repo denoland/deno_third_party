@@ -2,9 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/runtime/runtime-utils.h"
-
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/asmjs/asm-js.h"
 #include "src/compiler-dispatcher/optimizing-compile-dispatcher.h"
 #include "src/compiler.h"
@@ -12,6 +10,9 @@
 #include "src/frames-inl.h"
 #include "src/isolate-inl.h"
 #include "src/messages.h"
+#include "src/objects/js-array-buffer-inl.h"
+#include "src/objects/js-array-inl.h"
+#include "src/runtime/runtime-utils.h"
 #include "src/v8threads.h"
 #include "src/vm-state-inl.h"
 
@@ -130,9 +131,10 @@ RUNTIME_FUNCTION(Runtime_InstantiateAsmJs) {
     }
   }
   // Remove wasm data, mark as broken for asm->wasm, replace function code with
-  // CompileLazy, and return a smi 0 to indicate failure.
+  // UncompiledData, and return a smi 0 to indicate failure.
   if (function->shared()->HasAsmWasmData()) {
-    function->shared()->FlushCompiled();
+    SharedFunctionInfo::DiscardCompiled(isolate,
+                                        handle(function->shared(), isolate));
   }
   function->shared()->set_is_asm_wasm_broken(true);
   DCHECK(function->code() ==

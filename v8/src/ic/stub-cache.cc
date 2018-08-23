@@ -61,8 +61,8 @@ bool CommonStubCacheChecks(StubCache* stub_cache, Name* name, Map* map,
                            MaybeObject* handler) {
   // Validate that the name and handler do not move on scavenge, and that we
   // can use identity checks instead of structural equality checks.
-  DCHECK(!stub_cache->isolate()->heap()->InNewSpace(name));
-  DCHECK(!stub_cache->isolate()->heap()->InNewSpace(handler));
+  DCHECK(!Heap::InNewSpace(name));
+  DCHECK(!Heap::InNewSpace(handler));
   DCHECK(name->IsUniqueName());
   DCHECK(name->HasHashCode());
   if (handler) DCHECK(IC::IsHandler(handler));
@@ -118,13 +118,14 @@ MaybeObject* StubCache::Get(Name* name, Map* map) {
 void StubCache::Clear() {
   MaybeObject* empty = MaybeObject::FromObject(
       isolate_->builtins()->builtin(Builtins::kIllegal));
+  Name* empty_string = ReadOnlyRoots(isolate()).empty_string();
   for (int i = 0; i < kPrimaryTableSize; i++) {
-    primary_[i].key = isolate()->heap()->empty_string();
+    primary_[i].key = empty_string;
     primary_[i].map = nullptr;
     primary_[i].value = empty;
   }
   for (int j = 0; j < kSecondaryTableSize; j++) {
-    secondary_[j].key = isolate()->heap()->empty_string();
+    secondary_[j].key = empty_string;
     secondary_[j].map = nullptr;
     secondary_[j].value = empty;
   }

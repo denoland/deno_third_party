@@ -51,7 +51,8 @@ MaybeHandle<Object> RegExpUtils::SetLastIndex(Isolate* isolate,
     JSRegExp::cast(*recv)->set_last_index(*value_as_object, SKIP_WRITE_BARRIER);
     return recv;
   } else {
-    return Object::SetProperty(recv, isolate->factory()->lastIndex_string(),
+    return Object::SetProperty(isolate, recv,
+                               isolate->factory()->lastIndex_string(),
                                value_as_object, LanguageMode::kStrict);
   }
 }
@@ -61,7 +62,8 @@ MaybeHandle<Object> RegExpUtils::GetLastIndex(Isolate* isolate,
   if (HasInitialRegExpMap(isolate, recv)) {
     return handle(JSRegExp::cast(*recv)->last_index(), isolate);
   } else {
-    return Object::GetProperty(recv, isolate->factory()->lastIndex_string());
+    return Object::GetProperty(isolate, recv,
+                               isolate->factory()->lastIndex_string());
   }
 }
 
@@ -75,7 +77,8 @@ MaybeHandle<Object> RegExpUtils::RegExpExec(Isolate* isolate,
   if (exec->IsUndefined(isolate)) {
     ASSIGN_RETURN_ON_EXCEPTION(
         isolate, exec,
-        Object::GetProperty(regexp, isolate->factory()->exec_string()), Object);
+        Object::GetProperty(isolate, regexp, isolate->factory()->exec_string()),
+        Object);
   }
 
   if (exec->IsCallable()) {
@@ -163,8 +166,7 @@ bool RegExpUtils::IsUnmodifiedRegExp(Isolate* isolate, Handle<Object> obj) {
   return last_index->IsSmi() && Smi::ToInt(last_index) >= 0;
 }
 
-uint64_t RegExpUtils::AdvanceStringIndex(Isolate* isolate,
-                                         Handle<String> string, uint64_t index,
+uint64_t RegExpUtils::AdvanceStringIndex(Handle<String> string, uint64_t index,
                                          bool unicode) {
   DCHECK_LE(static_cast<double>(index), kMaxSafeInteger);
   const uint64_t string_length = static_cast<uint64_t>(string->length());
@@ -188,14 +190,15 @@ MaybeHandle<Object> RegExpUtils::SetAdvancedStringIndex(
   Handle<Object> last_index_obj;
   ASSIGN_RETURN_ON_EXCEPTION(
       isolate, last_index_obj,
-      Object::GetProperty(regexp, isolate->factory()->lastIndex_string()),
+      Object::GetProperty(isolate, regexp,
+                          isolate->factory()->lastIndex_string()),
       Object);
 
   ASSIGN_RETURN_ON_EXCEPTION(isolate, last_index_obj,
                              Object::ToLength(isolate, last_index_obj), Object);
   const uint64_t last_index = PositiveNumberToUint64(*last_index_obj);
   const uint64_t new_last_index =
-      AdvanceStringIndex(isolate, string, last_index, unicode);
+      AdvanceStringIndex(string, last_index, unicode);
 
   return SetLastIndex(isolate, regexp, new_last_index);
 }

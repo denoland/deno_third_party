@@ -43,6 +43,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kIA32Lzcnt:
     case kIA32Tzcnt:
     case kIA32Popcnt:
+    case kIA32Bswap:
     case kIA32Lea:
     case kSSEFloat32Cmp:
     case kSSEFloat32Add:
@@ -136,6 +137,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kIA32I32x4ExtractLane:
     case kSSEI32x4ReplaceLane:
     case kAVXI32x4ReplaceLane:
+    case kSSEI32x4SConvertF32x4:
+    case kAVXI32x4SConvertF32x4:
     case kIA32I32x4SConvertI16x8Low:
     case kIA32I32x4SConvertI16x8High:
     case kIA32I32x4Neg:
@@ -163,6 +166,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXI32x4GtS:
     case kSSEI32x4GeS:
     case kAVXI32x4GeS:
+    case kSSEI32x4UConvertF32x4:
+    case kAVXI32x4UConvertF32x4:
     case kIA32I32x4UConvertI16x8Low:
     case kIA32I32x4UConvertI16x8High:
     case kSSEI32x4ShrU:
@@ -239,8 +244,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kIA32I8x16Neg:
     case kSSEI8x16Shl:
     case kAVXI8x16Shl:
-    case kSSEI8x16ShrS:
-    case kAVXI8x16ShrS:
+    case kIA32I8x16ShrS:
     case kSSEI8x16Add:
     case kAVXI8x16Add:
     case kSSEI8x16AddSaturateS:
@@ -269,8 +273,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXI8x16AddSaturateU:
     case kSSEI8x16SubSaturateU:
     case kAVXI8x16SubSaturateU:
-    case kSSEI8x16ShrU:
-    case kAVXI8x16ShrU:
+    case kIA32I8x16ShrU:
     case kSSEI8x16MinU:
     case kAVXI8x16MinU:
     case kSSEI8x16MaxU:
@@ -297,6 +300,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kIA32S16x8HalfShuffle1:
     case kIA32S16x8HalfShuffle2:
     case kIA32S8x16Alignr:
+    case kIA32S16x8Dup:
+    case kIA32S8x16Dup:
     case kSSES16x8UnzipHigh:
     case kAVXS16x8UnzipHigh:
     case kSSES16x8UnzipLow:
@@ -317,6 +322,12 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXS8x16TransposeLow:
     case kSSES8x16TransposeHigh:
     case kAVXS8x16TransposeHigh:
+    case kSSES8x8Reverse:
+    case kAVXS8x8Reverse:
+    case kSSES8x4Reverse:
+    case kAVXS8x4Reverse:
+    case kSSES8x2Reverse:
+    case kAVXS8x2Reverse:
     case kIA32S1x4AnyTrue:
     case kIA32S1x4AllTrue:
     case kIA32S1x8AnyTrue:
@@ -356,6 +367,40 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kIA32PushSimd128:
     case kIA32Poke:
     case kLFence:
+      return kHasSideEffect;
+
+    case kIA32Word32AtomicPairLoad:
+      return kIsLoadOperation;
+
+    case kIA32Word32AtomicPairStore:
+    case kIA32Word32AtomicPairAdd:
+    case kIA32Word32AtomicPairSub:
+    case kIA32Word32AtomicPairAnd:
+    case kIA32Word32AtomicPairOr:
+    case kIA32Word32AtomicPairXor:
+    case kIA32Word32AtomicPairExchange:
+    case kIA32Word32AtomicPairCompareExchange:
+    case kIA32Word64AtomicNarrowAddUint8:
+    case kIA32Word64AtomicNarrowAddUint16:
+    case kIA32Word64AtomicNarrowAddUint32:
+    case kIA32Word64AtomicNarrowSubUint8:
+    case kIA32Word64AtomicNarrowSubUint16:
+    case kIA32Word64AtomicNarrowSubUint32:
+    case kIA32Word64AtomicNarrowAndUint8:
+    case kIA32Word64AtomicNarrowAndUint16:
+    case kIA32Word64AtomicNarrowAndUint32:
+    case kIA32Word64AtomicNarrowOrUint8:
+    case kIA32Word64AtomicNarrowOrUint16:
+    case kIA32Word64AtomicNarrowOrUint32:
+    case kIA32Word64AtomicNarrowXorUint8:
+    case kIA32Word64AtomicNarrowXorUint16:
+    case kIA32Word64AtomicNarrowXorUint32:
+    case kIA32Word64AtomicNarrowExchangeUint8:
+    case kIA32Word64AtomicNarrowExchangeUint16:
+    case kIA32Word64AtomicNarrowExchangeUint32:
+    case kIA32Word64AtomicNarrowCompareExchangeUint8:
+    case kIA32Word64AtomicNarrowCompareExchangeUint16:
+    case kIA32Word64AtomicNarrowCompareExchangeUint32:
       return kHasSideEffect;
 
 #define CASE(Name) case k##Name:
