@@ -4,3 +4,10 @@ depot_tools/.cipd_client_cache/
 depot_tools/.versions/
 depot_tools/external_bin/
 depot_tools/subprocess2.pyc
+v8/third_party/llvm-build/
+v8/buildtools/mac/gn
+v8/buildtools/mac/clang-format
+v8/buildtools/linux64/gn
+v8/buildtools/linux64/clang-format
+v8/buildtools/win/*.exe
+*.pyc
