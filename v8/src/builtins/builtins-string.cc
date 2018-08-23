@@ -2,13 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/builtins/builtins-utils.h"
+#include "src/builtins/builtins-utils-inl.h"
 #include "src/builtins/builtins.h"
 #include "src/conversions.h"
 #include "src/counters.h"
 #include "src/objects-inl.h"
+#ifdef V8_INTL_SUPPORT
+#include "src/objects/intl-objects.h"
+#endif
 #include "src/regexp/regexp-utils.h"
-#include "src/string-builder.h"
+#include "src/string-builder-inl.h"
 #include "src/string-case.h"
 #include "src/unicode-inl.h"
 #include "src/unicode.h"
@@ -19,7 +22,8 @@ namespace internal {
 namespace {  // for String.fromCodePoint
 
 bool IsValidCodePoint(Isolate* isolate, Handle<Object> value) {
-  if (!value->IsNumber() && !Object::ToNumber(value).ToHandle(&value)) {
+  if (!value->IsNumber() &&
+      !Object::ToNumber(isolate, value).ToHandle(&value)) {
     return false;
   }
 
@@ -37,7 +41,8 @@ bool IsValidCodePoint(Isolate* isolate, Handle<Object> value) {
 
 uc32 NextCodePoint(Isolate* isolate, BuiltinArguments args, int index) {
   Handle<Object> value = args.at(1 + index);
-  ASSIGN_RETURN_ON_EXCEPTION_VALUE(isolate, value, Object::ToNumber(value), -1);
+  ASSIGN_RETURN_ON_EXCEPTION_VALUE(isolate, value,
+                                   Object::ToNumber(isolate, value), -1);
   if (!IsValidCodePoint(isolate, value)) {
     isolate->Throw(*isolate->factory()->NewRangeError(
         MessageTemplate::kInvalidCodePoint, value));
@@ -188,10 +193,18 @@ BUILTIN(StringPrototypeLastIndexOf) {
 //
 // This function is implementation specific.  For now, we do not
 // do anything locale specific.
-// If internationalization is enabled, then intl.js will override this function
-// and provide the proper functionality, so this is just a fallback.
 BUILTIN(StringPrototypeLocaleCompare) {
   HandleScope handle_scope(isolate);
+#ifdef V8_INTL_SUPPORT
+  TO_THIS_STRING(str1, "String.prototype.localeCompare");
+  Handle<String> str2;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, str2, Object::ToString(isolate, args.atOrUndefined(isolate, 1)));
+  RETURN_RESULT_OR_FAILURE(
+      isolate, Intl::StringLocaleCompare(isolate, str1, str2,
+                                         args.atOrUndefined(isolate, 2),
+                                         args.atOrUndefined(isolate, 3)));
+#else
   DCHECK_EQ(2, args.length());
 
   TO_THIS_STRING(str1, "String.prototype.localeCompare");
@@ -233,6 +246,7 @@ BUILTIN(StringPrototypeLocaleCompare) {
   }
 
   return Smi::FromInt(str1_length - str2_length);
+#endif  // !V8_INTL_SUPPORT
 }
 
 #ifndef V8_INTL_SUPPORT
@@ -526,14 +540,14 @@ BUILTIN(StringRaw) {
                                      Object::ToObject(isolate, templ));
 
   Handle<Object> raw;
-  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, raw,
-                                     Object::GetProperty(cooked, raw_string));
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, raw, Object::GetProperty(isolate, cooked, raw_string));
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, raw,
                                      Object::ToObject(isolate, raw));
   Handle<Object> raw_len;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, raw_len,
-      Object::GetProperty(raw, isolate->factory()->length_string()));
+      Object::GetProperty(isolate, raw, isolate->factory()->length_string()));
 
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, raw_len,
                                      Object::ToLength(isolate, raw_len));

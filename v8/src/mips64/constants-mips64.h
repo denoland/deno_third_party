@@ -107,6 +107,9 @@ const uint32_t kLessSignificantWordInDoublewordOffset = 4;
 namespace v8 {
 namespace internal {
 
+// TODO(sigurds): Change this value once we use relative jumps.
+constexpr size_t kMaxPCRelativeCodeRangeInMB = 0;
+
 // -----------------------------------------------------------------------------
 // Registers and FPURegisters.
 
@@ -1275,11 +1278,12 @@ static constexpr uint64_t OpcodeToBitNumber(Opcode opcode) {
   return 1ULL << (static_cast<uint32_t>(opcode) >> kOpcodeShift);
 }
 
+constexpr uint8_t kInstrSize = 4;
+constexpr uint8_t kInstrSizeLog2 = 2;
+
 class InstructionBase {
  public:
   enum {
-    kInstrSize = 4,
-    kInstrSizeLog2 = 2,
     // On MIPS PC cannot actually be directly accessed. We behave as if PC was
     // always the value of the current instruction being executed.
     kPCReadOffset = 0
@@ -1764,10 +1768,10 @@ const int kCArgSlotCount = 0;
 
 // TODO(plind): below should be based on kPointerSize
 // TODO(plind): find all usages and remove the needless instructions for n64.
-const int kCArgsSlotsSize = kCArgSlotCount * Instruction::kInstrSize * 2;
+const int kCArgsSlotsSize = kCArgSlotCount * kInstrSize * 2;
 
 const int kInvalidStackOffset = -1;
-const int kBranchReturnOffset = 2 * Instruction::kInstrSize;
+const int kBranchReturnOffset = 2 * kInstrSize;
 
 static const int kNegOffset = 0x00008000;
 

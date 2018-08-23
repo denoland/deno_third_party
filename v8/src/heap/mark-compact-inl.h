@@ -92,31 +92,29 @@ int MarkingVisitor<fixed_array_mode, retaining_path_mode, MarkingState>::
     VisitEphemeronHashTable(Map* map, EphemeronHashTable* table) {
   collector_->AddEphemeronHashTable(table);
 
-  if (V8_LIKELY(FLAG_optimize_ephemerons)) {
-    for (int i = 0; i < table->Capacity(); i++) {
-      Object** key_slot =
-          table->RawFieldOfElementAt(EphemeronHashTable::EntryToIndex(i));
-      HeapObject* key = HeapObject::cast(table->KeyAt(i));
-      collector_->RecordSlot(table, key_slot, key);
+  for (int i = 0; i < table->Capacity(); i++) {
+    Object** key_slot =
+        table->RawFieldOfElementAt(EphemeronHashTable::EntryToIndex(i));
+    HeapObject* key = HeapObject::cast(table->KeyAt(i));
+    collector_->RecordSlot(table, key_slot, key);
 
-      Object** value_slot =
-          table->RawFieldOfElementAt(EphemeronHashTable::EntryToValueIndex(i));
+    Object** value_slot =
+        table->RawFieldOfElementAt(EphemeronHashTable::EntryToValueIndex(i));
 
-      if (marking_state()->IsBlackOrGrey(key)) {
-        VisitPointer(table, value_slot);
+    if (marking_state()->IsBlackOrGrey(key)) {
+      VisitPointer(table, value_slot);
 
-      } else {
-        Object* value_obj = *value_slot;
+    } else {
+      Object* value_obj = *value_slot;
 
-        if (value_obj->IsHeapObject()) {
-          HeapObject* value = HeapObject::cast(value_obj);
-          collector_->RecordSlot(table, value_slot, value);
+      if (value_obj->IsHeapObject()) {
+        HeapObject* value = HeapObject::cast(value_obj);
+        collector_->RecordSlot(table, value_slot, value);
 
-          // Revisit ephemerons with both key and value unreachable at end
-          // of concurrent marking cycle.
-          if (marking_state()->IsWhite(value)) {
-            collector_->AddEphemeron(key, value);
-          }
+        // Revisit ephemerons with both key and value unreachable at end
+        // of concurrent marking cycle.
+        if (marking_state()->IsWhite(value)) {
+          collector_->AddEphemeron(key, value);
         }
       }
     }
@@ -159,30 +157,6 @@ int MarkingVisitor<fixed_array_mode, retaining_path_mode,
   TransitionArray::BodyDescriptor::IterateBody(map, array, size, this);
   collector_->AddTransitionArray(array);
   return size;
-}
-
-template <FixedArrayVisitationMode fixed_array_mode,
-          TraceRetainingPathMode retaining_path_mode, typename MarkingState>
-int MarkingVisitor<fixed_array_mode, retaining_path_mode,
-                   MarkingState>::VisitWeakCell(Map* map, WeakCell* weak_cell) {
-  // Enqueue weak cell in linked list of encountered weak collections.
-  // We can ignore weak cells with cleared values because they will always
-  // contain smi zero.
-  if (!weak_cell->cleared()) {
-    HeapObject* value = HeapObject::cast(weak_cell->value());
-    if (marking_state()->IsBlackOrGrey(value)) {
-      // Weak cells with live values are directly processed here to reduce
-      // the processing time of weak cells during the main GC pause.
-      Object** slot = HeapObject::RawField(weak_cell, WeakCell::kValueOffset);
-      collector_->RecordSlot(weak_cell, slot, HeapObject::cast(*slot));
-    } else {
-      // If we do not know about liveness of values of weak cells, we have to
-      // process them when we know the liveness of the whole transitive
-      // closure.
-      collector_->AddWeakCell(weak_cell);
-    }
-  }
-  return WeakCell::BodyDescriptor::SizeOf(map, weak_cell);
 }
 
 template <FixedArrayVisitationMode fixed_array_mode,
@@ -262,7 +236,7 @@ template <FixedArrayVisitationMode fixed_array_mode,
 void MarkingVisitor<fixed_array_mode, retaining_path_mode,
                     MarkingState>::VisitCodeTarget(Code* host,
                                                    RelocInfo* rinfo) {
-  DCHECK(RelocInfo::IsCodeTarget(rinfo->rmode()));
+  DCHECK(RelocInfo::IsCodeTargetMode(rinfo->rmode()));
   Code* target = Code::GetCodeFromTargetAddress(rinfo->target_address());
   collector_->RecordRelocSlot(host, rinfo, target);
   MarkObject(host, target);
@@ -395,7 +369,7 @@ void MarkCompactCollector::MarkRootObject(Root root, HeapObject* obj) {
 #ifdef ENABLE_MINOR_MC
 
 void MinorMarkCompactCollector::MarkRootObject(HeapObject* obj) {
-  if (heap_->InNewSpace(obj) && non_atomic_marking_state_.WhiteToGrey(obj)) {
+  if (Heap::InNewSpace(obj) && non_atomic_marking_state_.WhiteToGrey(obj)) {
     worklist_->Push(kMainThread, obj);
   }
 }
@@ -421,8 +395,8 @@ void MarkCompactCollector::RecordSlot(HeapObject* object,
                                       HeapObject* target) {
   Page* target_page = Page::FromAddress(reinterpret_cast<Address>(target));
   Page* source_page = Page::FromAddress(reinterpret_cast<Address>(object));
-  if (target_page->IsEvacuationCandidate<AccessMode::ATOMIC>() &&
-      !source_page->ShouldSkipEvacuationSlotRecording<AccessMode::ATOMIC>()) {
+  if (target_page->IsEvacuationCandidate() &&
+      !source_page->ShouldSkipEvacuationSlotRecording()) {
     RememberedSet<OLD_TO_OLD>::Insert(source_page,
                                       reinterpret_cast<Address>(slot));
   }
@@ -432,9 +406,11 @@ template <LiveObjectIterationMode mode>
 LiveObjectRange<mode>::iterator::iterator(MemoryChunk* chunk, Bitmap* bitmap,
                                           Address start)
     : chunk_(chunk),
-      one_word_filler_map_(chunk->heap()->one_pointer_filler_map()),
-      two_word_filler_map_(chunk->heap()->two_pointer_filler_map()),
-      free_space_map_(chunk->heap()->free_space_map()),
+      one_word_filler_map_(
+          ReadOnlyRoots(chunk->heap()).one_pointer_filler_map()),
+      two_word_filler_map_(
+          ReadOnlyRoots(chunk->heap()).two_pointer_filler_map()),
+      free_space_map_(ReadOnlyRoots(chunk->heap()).free_space_map()),
       it_(chunk, bitmap) {
   it_.Advance(Bitmap::IndexToCell(
       Bitmap::CellAlignIndex(chunk_->AddressToMarkbitIndex(start))));
@@ -577,6 +553,8 @@ template <LiveObjectIterationMode mode>
 typename LiveObjectRange<mode>::iterator LiveObjectRange<mode>::end() {
   return iterator(chunk_, bitmap_, end_);
 }
+
+Isolate* MarkCompactCollectorBase::isolate() { return heap()->isolate(); }
 
 }  // namespace internal
 }  // namespace v8

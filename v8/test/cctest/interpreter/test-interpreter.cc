@@ -6,6 +6,7 @@
 
 #include "src/v8.h"
 
+#include "src/api-inl.h"
 #include "src/execution.h"
 #include "src/handles.h"
 #include "src/interpreter/bytecode-array-builder.h"
@@ -1054,7 +1055,8 @@ TEST(InterpreterStoreGlobal) {
   callable().ToHandleChecked();
   Handle<i::String> name = factory->InternalizeUtf8String("global");
   Handle<i::Object> global_obj =
-      Object::GetProperty(isolate->global_object(), name).ToHandleChecked();
+      Object::GetProperty(isolate, isolate->global_object(), name)
+          .ToHandleChecked();
   CHECK_EQ(Smi::cast(*global_obj), Smi::FromInt(999));
 }
 
@@ -1109,7 +1111,8 @@ TEST(InterpreterStoreUnallocated) {
   callable().ToHandleChecked();
   Handle<i::String> name = factory->InternalizeUtf8String("unallocated");
   Handle<i::Object> global_obj =
-      Object::GetProperty(isolate->global_object(), name).ToHandleChecked();
+      Object::GetProperty(isolate, isolate->global_object(), name)
+          .ToHandleChecked();
   CHECK_EQ(Smi::cast(*global_obj), Smi::FromInt(999));
 }
 

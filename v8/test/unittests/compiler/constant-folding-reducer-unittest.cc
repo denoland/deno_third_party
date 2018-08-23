@@ -4,8 +4,8 @@
 
 #include "src/compiler/constant-folding-reducer.h"
 #include "src/code-factory.h"
-#include "src/compilation-dependencies.h"
 #include "src/compiler/access-builder.h"
+#include "src/compiler/compilation-dependencies.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/js-operator.h"
 #include "src/compiler/machine-operator.h"
@@ -63,7 +63,7 @@ class ConstantFoldingReducerTest : public TypedGraphTest {
  public:
   ConstantFoldingReducerTest()
       : TypedGraphTest(3),
-        js_heap_broker_(isolate()),
+        js_heap_broker_(isolate(), zone()),
         simplified_(zone()),
         deps_(isolate(), zone()) {}
   ~ConstantFoldingReducerTest() override {}
@@ -76,12 +76,12 @@ class ConstantFoldingReducerTest : public TypedGraphTest {
                     &machine);
     // TODO(titzer): mock the GraphReducer here for better unit testing.
     GraphReducer graph_reducer(zone(), graph());
-    ConstantFoldingReducer reducer(&graph_reducer, &jsgraph);
+    ConstantFoldingReducer reducer(&graph_reducer, &jsgraph, js_heap_broker());
     return reducer.Reduce(node);
   }
 
   SimplifiedOperatorBuilder* simplified() { return &simplified_; }
-  const JSHeapBroker* js_heap_broker() const { return &js_heap_broker_; }
+  JSHeapBroker* js_heap_broker() { return &js_heap_broker_; }
 
  private:
   JSHeapBroker js_heap_broker_;

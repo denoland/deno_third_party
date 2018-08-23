@@ -12,6 +12,7 @@
 #include "src/frames-inl.h"
 #include "src/globals.h"
 #include "src/isolate-inl.h"
+#include "src/objects/js-generator-inl.h"
 #include "src/objects/module.h"
 #include "src/parsing/parse-info.h"
 #include "src/parsing/parsing.h"
@@ -448,17 +449,17 @@ void ScopeIterator::DebugPrint() {
   switch (Type()) {
     case ScopeIterator::ScopeTypeGlobal:
       os << "Global:\n";
-      context_->Print(isolate_, os);
+      context_->Print(os);
       break;
 
     case ScopeIterator::ScopeTypeLocal: {
       os << "Local:\n";
       if (current_scope_->NeedsContext()) {
-        context_->Print(isolate_, os);
+        context_->Print(os);
         if (context_->has_extension()) {
           Handle<HeapObject> extension(context_->extension(), isolate_);
           DCHECK(extension->IsJSContextExtensionObject());
-          extension->Print(isolate_, os);
+          extension->Print(os);
         }
       }
       break;
@@ -466,22 +467,22 @@ void ScopeIterator::DebugPrint() {
 
     case ScopeIterator::ScopeTypeWith:
       os << "With:\n";
-      context_->extension()->Print(isolate_, os);
+      context_->extension()->Print(os);
       break;
 
     case ScopeIterator::ScopeTypeCatch:
       os << "Catch:\n";
-      context_->extension()->Print(isolate_, os);
-      context_->get(Context::THROWN_OBJECT_INDEX)->Print(isolate_, os);
+      context_->extension()->Print(os);
+      context_->get(Context::THROWN_OBJECT_INDEX)->Print(os);
       break;
 
     case ScopeIterator::ScopeTypeClosure:
       os << "Closure:\n";
-      context_->Print(isolate_, os);
+      context_->Print(os);
       if (context_->has_extension()) {
         Handle<HeapObject> extension(context_->extension(), isolate_);
         DCHECK(extension->IsJSContextExtensionObject());
-        extension->Print(isolate_, os);
+        extension->Print(os);
       }
       break;
 
@@ -490,7 +491,7 @@ void ScopeIterator::DebugPrint() {
       context_->global_object()
           ->native_context()
           ->script_context_table()
-          ->Print(isolate_, os);
+          ->Print(os);
       break;
 
     default:
@@ -545,8 +546,8 @@ void ScopeIterator::VisitScriptScope(const Visitor& visitor) const {
   // Skip the first script since that just declares 'this'.
   for (int context_index = 1; context_index < script_contexts->used();
        context_index++) {
-    Handle<Context> context =
-        ScriptContextTable::GetContext(script_contexts, context_index);
+    Handle<Context> context = ScriptContextTable::GetContext(
+        isolate_, script_contexts, context_index);
     Handle<ScopeInfo> scope_info(context->scope_info(), isolate_);
     if (VisitContextLocals(visitor, scope_info, context)) return;
   }
@@ -718,7 +719,7 @@ void ScopeIterator::VisitLocalScope(const Visitor& visitor, Mode mode) const {
       // but don't force |this| to be context-allocated. Otherwise we'd find the
       // wrong |this| value.
       if (!closure_scope_->has_this_declaration() &&
-          !non_locals_->Has(isolate_->factory()->this_string())) {
+          !non_locals_->Has(isolate_, isolate_->factory()->this_string())) {
         if (visitor(isolate_->factory()->this_string(),
                     isolate_->factory()->undefined_value()))
           return;
@@ -778,7 +779,7 @@ bool ScopeIterator::SetLocalVariableValue(Handle<String> variable_name,
         case VariableLocation::UNALLOCATED:
           // Drop assignments to unallocated locals.
           DCHECK(var->is_this() ||
-                 *variable_name == isolate_->heap()->arguments_string());
+                 *variable_name == ReadOnlyRoots(isolate_).arguments_string());
           return false;
 
         case VariableLocation::PARAMETER: {
@@ -843,7 +844,7 @@ bool ScopeIterator::SetContextExtensionValue(Handle<String> variable_name,
 
   DCHECK(context_->extension_object()->IsJSContextExtensionObject());
   Handle<JSObject> ext(context_->extension_object(), isolate_);
-  LookupIterator it(ext, variable_name, LookupIterator::OWN);
+  LookupIterator it(isolate_, ext, variable_name, LookupIterator::OWN);
   Maybe<bool> maybe = JSReceiver::HasOwnProperty(ext, variable_name);
   DCHECK(maybe.IsJust());
   if (!maybe.FromJust()) return false;
@@ -893,10 +894,10 @@ bool ScopeIterator::SetScriptVariableValue(Handle<String> variable_name,
       context_->global_object()->native_context()->script_context_table(),
       isolate_);
   ScriptContextTable::LookupResult lookup_result;
-  if (ScriptContextTable::Lookup(script_contexts, variable_name,
+  if (ScriptContextTable::Lookup(isolate_, script_contexts, variable_name,
                                  &lookup_result)) {
     Handle<Context> script_context = ScriptContextTable::GetContext(
-        script_contexts, lookup_result.context_index);
+        isolate_, script_contexts, lookup_result.context_index);
     script_context->set(lookup_result.slot_index, *new_value);
     return true;
   }

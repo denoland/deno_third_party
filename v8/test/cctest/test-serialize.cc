@@ -31,7 +31,7 @@
 
 #include "src/v8.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/assembler-inl.h"
 #include "src/bootstrapper.h"
 #include "src/compilation-cache.h"
@@ -40,6 +40,8 @@
 #include "src/heap/spaces.h"
 #include "src/macro-assembler-inl.h"
 #include "src/objects-inl.h"
+#include "src/objects/js-array-buffer-inl.h"
+#include "src/objects/js-array-inl.h"
 #include "src/runtime/runtime.h"
 #include "src/snapshot/builtin-deserializer.h"
 #include "src/snapshot/builtin-serializer.h"
@@ -299,9 +301,7 @@ static void SanityCheck(v8::Isolate* v8_isolate) {
   isolate->factory()->InternalizeOneByteString(STATIC_CHAR_VECTOR("Empty"));
 }
 
-UNINITIALIZED_TEST(StartupSerializerOnce) {
-  DisableLazyDeserialization();
-  DisableAlwaysOpt();
+void TestStartupSerializerOnceImpl() {
   v8::Isolate* isolate = TestIsolate::NewInitialized();
   StartupBlobs blobs = Serialize(isolate);
   isolate->Dispose();
@@ -319,6 +319,47 @@ UNINITIALIZED_TEST(StartupSerializerOnce) {
   blobs.Dispose();
 }
 
+UNINITIALIZED_TEST(StartupSerializerOnce) {
+  DisableLazyDeserialization();
+  DisableAlwaysOpt();
+  TestStartupSerializerOnceImpl();
+}
+
+UNINITIALIZED_TEST(StartupSerializerOnce1) {
+  DisableLazyDeserialization();
+  DisableAlwaysOpt();
+  FLAG_serialization_chunk_size = 1;
+  TestStartupSerializerOnceImpl();
+}
+
+UNINITIALIZED_TEST(StartupSerializerOnce32) {
+  DisableLazyDeserialization();
+  DisableAlwaysOpt();
+  FLAG_serialization_chunk_size = 32;
+  TestStartupSerializerOnceImpl();
+}
+
+UNINITIALIZED_TEST(StartupSerializerOnce1K) {
+  DisableLazyDeserialization();
+  DisableAlwaysOpt();
+  FLAG_serialization_chunk_size = 1 * KB;
+  TestStartupSerializerOnceImpl();
+}
+
+UNINITIALIZED_TEST(StartupSerializerOnce4K) {
+  DisableLazyDeserialization();
+  DisableAlwaysOpt();
+  FLAG_serialization_chunk_size = 4 * KB;
+  TestStartupSerializerOnceImpl();
+}
+
+UNINITIALIZED_TEST(StartupSerializerOnce32K) {
+  DisableLazyDeserialization();
+  DisableAlwaysOpt();
+  FLAG_serialization_chunk_size = 32 * KB;
+  TestStartupSerializerOnceImpl();
+}
+
 UNINITIALIZED_TEST(StartupSerializerRootMapDependencies) {
   DisableAlwaysOpt();
   v8::SnapshotCreator snapshot_creator;
@@ -333,16 +374,14 @@ UNINITIALIZED_TEST(StartupSerializerRootMapDependencies) {
     // - NullValue
     // - Internalized one byte string
     // - Map for Internalized one byte string
-    // - WeakCell
     // - TheHoleValue
     // - HeapNumber
     // HeapNumber objects require kDoubleUnaligned on 32-bit
     // platforms. So, without special measures we're risking to serialize
     // object, requiring alignment before FreeSpaceMap is fully serialized.
     v8::internal::Handle<Map> map(
-        internal_isolate->heap()->one_byte_internalized_string_map(),
+        ReadOnlyRoots(internal_isolate).one_byte_internalized_string_map(),
         internal_isolate);
-    Map::WeakCellForMap(internal_isolate, map);
     // Need to avoid DCHECKs inside SnapshotCreator.
     snapshot_creator.SetDefaultContext(v8::Context::New(isolate));
   }
@@ -1326,9 +1365,9 @@ static Handle<SharedFunctionInfo> CompileScript(
     Isolate* isolate, Handle<String> source, Handle<String> name,
     ScriptData* cached_data, v8::ScriptCompiler::CompileOptions options) {
   return Compiler::GetSharedFunctionInfoForScript(
-             source, Compiler::ScriptDetails(name), v8::ScriptOriginOptions(),
-             nullptr, cached_data, options, ScriptCompiler::kNoCacheNoReason,
-             NOT_NATIVES_CODE)
+             isolate, source, Compiler::ScriptDetails(name),
+             v8::ScriptOriginOptions(), nullptr, cached_data, options,
+             ScriptCompiler::kNoCacheNoReason, NOT_NATIVES_CODE)
       .ToHandleChecked();
 }
 
@@ -1337,9 +1376,9 @@ static Handle<SharedFunctionInfo> CompileScriptAndProduceCache(
     ScriptData** script_data, v8::ScriptCompiler::CompileOptions options) {
   Handle<SharedFunctionInfo> sfi =
       Compiler::GetSharedFunctionInfoForScript(
-          source, Compiler::ScriptDetails(name), v8::ScriptOriginOptions(),
-          nullptr, nullptr, options, ScriptCompiler::kNoCacheNoReason,
-          NOT_NATIVES_CODE)
+          isolate, source, Compiler::ScriptDetails(name),
+          v8::ScriptOriginOptions(), nullptr, nullptr, options,
+          ScriptCompiler::kNoCacheNoReason, NOT_NATIVES_CODE)
           .ToHandleChecked();
   std::unique_ptr<ScriptCompiler::CachedData> cached_data(
       ScriptCompiler::CreateCodeCache(ToApiHandle<UnboundScript>(sfi)));
@@ -1350,7 +1389,7 @@ static Handle<SharedFunctionInfo> CompileScriptAndProduceCache(
   return sfi;
 }
 
-TEST(CodeSerializerOnePlusOne) {
+void TestCodeSerializerOnePlusOneImpl() {
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
   isolate->compilation_cache()->Disable();  // Disable same-isolate code cache.
@@ -1397,6 +1436,30 @@ TEST(CodeSerializerOnePlusOne) {
   CHECK_EQ(builtins_count, CountBuiltins());
 
   delete cache;
+}
+
+TEST(CodeSerializerOnePlusOne) { TestCodeSerializerOnePlusOneImpl(); }
+
+TEST(CodeSerializerOnePlusOneWithDebugger) {
+  v8::HandleScope scope(CcTest::isolate());
+  static v8::debug::DebugDelegate dummy_delegate;
+  v8::debug::SetDebugDelegate(CcTest::isolate(), &dummy_delegate);
+  TestCodeSerializerOnePlusOneImpl();
+}
+
+TEST(CodeSerializerOnePlusOne1) {
+  FLAG_serialization_chunk_size = 1;
+  TestCodeSerializerOnePlusOneImpl();
+}
+
+TEST(CodeSerializerOnePlusOne32) {
+  FLAG_serialization_chunk_size = 32;
+  TestCodeSerializerOnePlusOneImpl();
+}
+
+TEST(CodeSerializerOnePlusOne4K) {
+  FLAG_serialization_chunk_size = 4 * KB;
+  TestCodeSerializerOnePlusOneImpl();
 }
 
 TEST(CodeSerializerPromotedToCompilationCache) {
@@ -1845,6 +1908,11 @@ TEST(CodeSerializerExternalString) {
 
   CHECK_EQ(15.0, copy_result->Number());
 
+  // This avoids the GC from trying to free stack allocated resources.
+  i::Handle<i::ExternalOneByteString>::cast(one_byte_string)
+      ->SetResource(isolate, nullptr);
+  i::Handle<i::ExternalTwoByteString>::cast(two_byte_string)
+      ->SetResource(isolate, nullptr);
   delete cache;
 }
 
@@ -1901,6 +1969,9 @@ TEST(CodeSerializerLargeExternalString) {
 
   CHECK_EQ(42.0, copy_result->Number());
 
+  // This avoids the GC from trying to free stack allocated resources.
+  i::Handle<i::ExternalOneByteString>::cast(name)->SetResource(isolate,
+                                                               nullptr);
   delete cache;
   string.Dispose();
 }
@@ -1950,6 +2021,9 @@ TEST(CodeSerializerExternalScriptName) {
 
   CHECK_EQ(10.0, copy_result->Number());
 
+  // This avoids the GC from trying to free stack allocated resources.
+  i::Handle<i::ExternalOneByteString>::cast(name)->SetResource(isolate,
+                                                               nullptr);
   delete cache;
 }
 
@@ -3402,7 +3476,8 @@ UNINITIALIZED_TEST(ReinitializeHashSeedNotRehashable) {
   v8::Isolate* isolate = v8::Isolate::New(create_params);
   {
     // Check that no rehashing has been performed.
-    CHECK_EQ(42, reinterpret_cast<i::Isolate*>(isolate)->heap()->HashSeed());
+    CHECK_EQ(static_cast<uint64_t>(42),
+             reinterpret_cast<i::Isolate*>(isolate)->heap()->HashSeed());
     v8::Isolate::Scope isolate_scope(isolate);
     v8::HandleScope handle_scope(isolate);
     v8::Local<v8::Context> context = v8::Context::New(isolate);
@@ -3464,7 +3539,8 @@ UNINITIALIZED_TEST(ReinitializeHashSeedRehashable) {
   v8::Isolate* isolate = v8::Isolate::New(create_params);
   {
     // Check that rehashing has been performed.
-    CHECK_EQ(1337, reinterpret_cast<i::Isolate*>(isolate)->heap()->HashSeed());
+    CHECK_EQ(static_cast<uint64_t>(1337),
+             reinterpret_cast<i::Isolate*>(isolate)->heap()->HashSeed());
     v8::Isolate::Scope isolate_scope(isolate);
     v8::HandleScope handle_scope(isolate);
     v8::Local<v8::Context> context = v8::Context::New(isolate);
@@ -3483,11 +3559,21 @@ UNINITIALIZED_TEST(ReinitializeHashSeedRehashable) {
   delete[] blob.data;
 }
 
-TEST(SerializationMemoryStats) {
+TEST(SerializationStats) {
   FLAG_profile_deserialization = true;
   FLAG_always_opt = false;
   v8::StartupData blob = CreateSnapshotDataBlob();
   delete[] blob.data;
+
+  // Track the embedded blob size as well.
+  {
+    int embedded_blob_size = 0;
+    if (FLAG_embedded_builtins) {
+      i::EmbeddedData d = i::EmbeddedData::FromBlob();
+      embedded_blob_size = static_cast<int>(d.size());
+    }
+    PrintF("Embedded blob is %d bytes\n", embedded_blob_size);
+  }
 }
 
 void CheckSFIsAreWeak(WeakFixedArray* sfis, Isolate* isolate) {

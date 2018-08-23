@@ -294,7 +294,7 @@ class GtestTestInstance(test_instance.TestInstance):
     self._shard_timeout = args.shard_timeout
     self._store_tombstones = args.store_tombstones
     self._suite = args.suite_name[0]
-    self._symbolizer = stack_symbolizer.Symbolizer(None, False)
+    self._symbolizer = stack_symbolizer.Symbolizer(None)
     self._total_external_shards = args.test_launcher_total_shards
     self._wait_for_java_debugger = args.wait_for_java_debugger
 
@@ -533,7 +533,9 @@ class GtestTestInstance(test_instance.TestInstance):
     disabled_filter_items = []
 
     if disabled_prefixes is None:
-      disabled_prefixes = ['FAILS_', 'PRE_', 'MANUAL_']
+      disabled_prefixes = ['FAILS_', 'PRE_']
+      if '--run-manual' not in self._flags:
+        disabled_prefixes += ['MANUAL_']
       if not self._run_disabled:
         disabled_prefixes += ['DISABLED_', 'FLAKY_']
 
@@ -555,4 +557,3 @@ class GtestTestInstance(test_instance.TestInstance):
   def TearDown(self):
     """Do nothing."""
     pass
-

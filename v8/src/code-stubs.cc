@@ -13,6 +13,7 @@
 #include "src/code-factory.h"
 #include "src/code-stub-assembler.h"
 #include "src/code-stubs-utils.h"
+#include "src/code-tracer.h"
 #include "src/counters.h"
 #include "src/gdb-jit.h"
 #include "src/heap/heap-inl.h"
@@ -96,9 +97,9 @@ void CodeStub::RecordCodeGeneration(Handle<Code> code) {
 void CodeStub::DeleteStubFromCacheForTesting() {
   Heap* heap = isolate_->heap();
   Handle<SimpleNumberDictionary> dict(heap->code_stubs(), isolate());
-  int entry = dict->FindEntry(GetKey());
+  int entry = dict->FindEntry(isolate(), GetKey());
   DCHECK_NE(SimpleNumberDictionary::kNotFound, entry);
-  dict = SimpleNumberDictionary::DeleteEntry(dict, entry);
+  dict = SimpleNumberDictionary::DeleteEntry(isolate(), dict, entry);
   heap->SetRootCodeStubs(*dict);
 }
 
@@ -107,7 +108,7 @@ Handle<Code> PlatformCodeStub::GenerateCode() {
 
   // Generate the new code.
   // TODO(yangguo): remove this once we can serialize IC stubs.
-  Assembler::Options options = Assembler::DefaultOptions(isolate(), true);
+  AssemblerOptions options = AssemblerOptions::Default(isolate(), true);
   MacroAssembler masm(isolate(), options, nullptr, 256,
                       CodeObjectRequired::kYes);
 
@@ -166,7 +167,7 @@ Handle<Code> CodeStub::GetCode() {
 
     // Update the dictionary and the root in Heap.
     Handle<SimpleNumberDictionary> dict = SimpleNumberDictionary::Set(
-        handle(heap->code_stubs(), isolate_), GetKey(), new_object);
+        isolate(), handle(heap->code_stubs(), isolate_), GetKey(), new_object);
     heap->SetRootCodeStubs(*dict);
     code = *new_object;
   }
@@ -263,7 +264,8 @@ Handle<Code> TurboFanCodeStub::GenerateCode() {
       isolate(), &zone, descriptor, Code::STUB, name,
       PoisoningMitigationLevel::kDontPoison, GetKey());
   GenerateAssembly(&state);
-  return compiler::CodeAssembler::GenerateCode(&state);
+  return compiler::CodeAssembler::GenerateCode(
+      &state, AssemblerOptions::Default(isolate()));
 }
 
 TF_STUB(ElementsTransitionAndStoreStub, CodeStubAssembler) {

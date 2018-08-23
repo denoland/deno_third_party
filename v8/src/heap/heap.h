@@ -40,134 +40,129 @@ class HeapTester;
 class TestMemoryAllocatorScope;
 }  // namespace heap
 
-class BoilerplateDescription;
+class ObjectBoilerplateDescription;
 class BytecodeArray;
 class CodeDataContainer;
 class DeoptimizationData;
 class HandlerTable;
 class IncrementalMarking;
 class JSArrayBuffer;
-
+class ExternalString;
 using v8::MemoryPressureLevel;
 
 // Heap roots that are known to be immortal immovable, for which we can safely
 // skip write barriers. This list is not complete and has omissions.
-#define IMMORTAL_IMMOVABLE_ROOT_LIST(V) \
-  V(ArgumentsMarker)                    \
-  V(ArgumentsMarkerMap)                 \
-  V(ArrayBufferNeuteringProtector)      \
-  V(ArrayIteratorProtector)             \
-  V(BigIntMap)                          \
-  V(BlockContextMap)                    \
-  V(BoilerplateDescriptionMap)          \
-  V(BooleanMap)                         \
-  V(ByteArrayMap)                       \
-  V(BytecodeArrayMap)                   \
-  V(CatchContextMap)                    \
-  V(CellMap)                            \
-  V(CodeMap)                            \
-  V(DebugEvaluateContextMap)            \
-  V(DescriptorArrayMap)                 \
-  V(EphemeronHashTableMap)              \
-  V(EmptyByteArray)                     \
-  V(EmptyDescriptorArray)               \
-  V(EmptyFixedArray)                    \
-  V(EmptyFixedFloat32Array)             \
-  V(EmptyFixedFloat64Array)             \
-  V(EmptyFixedInt16Array)               \
-  V(EmptyFixedInt32Array)               \
-  V(EmptyFixedInt8Array)                \
-  V(EmptyFixedUint16Array)              \
-  V(EmptyFixedUint32Array)              \
-  V(EmptyFixedUint8Array)               \
-  V(EmptyFixedUint8ClampedArray)        \
-  V(EmptyOrderedHashMap)                \
-  V(EmptyOrderedHashSet)                \
-  V(EmptyPropertyCell)                  \
-  V(EmptyScopeInfo)                     \
-  V(EmptyScript)                        \
-  V(EmptySloppyArgumentsElements)       \
-  V(EmptySlowElementDictionary)         \
-  V(EmptyWeakCell)                      \
-  V(EvalContextMap)                     \
-  V(Exception)                          \
-  V(FalseValue)                         \
-  V(FixedArrayMap)                      \
-  V(FixedCOWArrayMap)                   \
-  V(FixedDoubleArrayMap)                \
-  V(ForeignMap)                         \
-  V(FreeSpaceMap)                       \
-  V(FunctionContextMap)                 \
-  V(GlobalDictionaryMap)                \
-  V(GlobalPropertyCellMap)              \
-  V(HashTableMap)                       \
-  V(HeapNumberMap)                      \
-  V(HoleNanValue)                       \
-  V(InfinityValue)                      \
-  V(IsConcatSpreadableProtector)        \
-  V(JSMessageObjectMap)                 \
-  V(JsConstructEntryCode)               \
-  V(JsEntryCode)                        \
-  V(ManyClosuresCell)                   \
-  V(ManyClosuresCellMap)                \
-  V(MetaMap)                            \
-  V(MinusInfinityValue)                 \
-  V(MinusZeroValue)                     \
-  V(ModuleContextMap)                   \
-  V(ModuleInfoMap)                      \
-  V(MutableHeapNumberMap)               \
-  V(NameDictionaryMap)                  \
-  V(NanValue)                           \
-  V(NativeContextMap)                   \
-  V(NoClosuresCellMap)                  \
-  V(NoElementsProtector)                \
-  V(NullMap)                            \
-  V(NullValue)                          \
-  V(NumberDictionaryMap)                \
-  V(OneClosureCellMap)                  \
-  V(OnePointerFillerMap)                \
-  V(OptimizedOut)                       \
-  V(OrderedHashMapMap)                  \
-  V(OrderedHashSetMap)                  \
-  V(PropertyArrayMap)                   \
-  V(ScopeInfoMap)                       \
-  V(ScriptContextMap)                   \
-  V(ScriptContextTableMap)              \
-  V(SelfReferenceMarker)                \
-  V(SharedFunctionInfoMap)              \
-  V(SimpleNumberDictionaryMap)          \
-  V(SloppyArgumentsElementsMap)         \
-  V(SmallOrderedHashMapMap)             \
-  V(SmallOrderedHashSetMap)             \
-  V(ArraySpeciesProtector)              \
-  V(TypedArraySpeciesProtector)         \
-  V(PromiseSpeciesProtector)            \
-  V(StaleRegister)                      \
-  V(StringLengthProtector)              \
-  V(StringTableMap)                     \
-  V(SymbolMap)                          \
-  V(TerminationException)               \
-  V(TheHoleMap)                         \
-  V(TheHoleValue)                       \
-  V(TransitionArrayMap)                 \
-  V(TrueValue)                          \
-  V(TwoPointerFillerMap)                \
-  V(UndefinedMap)                       \
-  V(UndefinedValue)                     \
-  V(UninitializedMap)                   \
-  V(UninitializedValue)                 \
-  V(WeakCellMap)                        \
-  V(WeakFixedArrayMap)                  \
-  V(WeakArrayListMap)                   \
-  V(WithContextMap)                     \
-  V(empty_string)                       \
+#define IMMORTAL_IMMOVABLE_ROOT_LIST(V)     \
+  V(ArgumentsMarker)                        \
+  V(ArgumentsMarkerMap)                     \
+  V(ArrayBufferNeuteringProtector)          \
+  V(ArrayIteratorProtector)                 \
+  V(BigIntMap)                              \
+  V(BlockContextMap)                        \
+  V(ObjectBoilerplateDescriptionMap)        \
+  V(BooleanMap)                             \
+  V(ByteArrayMap)                           \
+  V(BytecodeArrayMap)                       \
+  V(CatchContextMap)                        \
+  V(CellMap)                                \
+  V(CodeMap)                                \
+  V(DebugEvaluateContextMap)                \
+  V(DescriptorArrayMap)                     \
+  V(EphemeronHashTableMap)                  \
+  V(EmptyByteArray)                         \
+  V(EmptyDescriptorArray)                   \
+  V(EmptyFixedArray)                        \
+  V(EmptyFixedFloat32Array)                 \
+  V(EmptyFixedFloat64Array)                 \
+  V(EmptyFixedInt16Array)                   \
+  V(EmptyFixedInt32Array)                   \
+  V(EmptyFixedInt8Array)                    \
+  V(EmptyFixedUint16Array)                  \
+  V(EmptyFixedUint32Array)                  \
+  V(EmptyFixedUint8Array)                   \
+  V(EmptyFixedUint8ClampedArray)            \
+  V(EmptyOrderedHashMap)                    \
+  V(EmptyOrderedHashSet)                    \
+  V(EmptyPropertyCell)                      \
+  V(EmptyScopeInfo)                         \
+  V(EmptyScript)                            \
+  V(EmptySloppyArgumentsElements)           \
+  V(EmptySlowElementDictionary)             \
+  V(EvalContextMap)                         \
+  V(Exception)                              \
+  V(FalseValue)                             \
+  V(FixedArrayMap)                          \
+  V(FixedCOWArrayMap)                       \
+  V(FixedDoubleArrayMap)                    \
+  V(ForeignMap)                             \
+  V(FreeSpaceMap)                           \
+  V(FunctionContextMap)                     \
+  V(GlobalDictionaryMap)                    \
+  V(GlobalPropertyCellMap)                  \
+  V(HashTableMap)                           \
+  V(HeapNumberMap)                          \
+  V(HoleNanValue)                           \
+  V(InfinityValue)                          \
+  V(IsConcatSpreadableProtector)            \
+  V(JSMessageObjectMap)                     \
+  V(JsConstructEntryCode)                   \
+  V(JsEntryCode)                            \
+  V(ManyClosuresCell)                       \
+  V(ManyClosuresCellMap)                    \
+  V(MetaMap)                                \
+  V(MinusInfinityValue)                     \
+  V(MinusZeroValue)                         \
+  V(ModuleContextMap)                       \
+  V(ModuleInfoMap)                          \
+  V(MutableHeapNumberMap)                   \
+  V(NameDictionaryMap)                      \
+  V(NanValue)                               \
+  V(NativeContextMap)                       \
+  V(NoClosuresCellMap)                      \
+  V(NoElementsProtector)                    \
+  V(NullMap)                                \
+  V(NullValue)                              \
+  V(NumberDictionaryMap)                    \
+  V(OneClosureCellMap)                      \
+  V(OnePointerFillerMap)                    \
+  V(OptimizedOut)                           \
+  V(OrderedHashMapMap)                      \
+  V(OrderedHashSetMap)                      \
+  V(PreParsedScopeDataMap)                  \
+  V(PropertyArrayMap)                       \
+  V(ScopeInfoMap)                           \
+  V(ScriptContextMap)                       \
+  V(ScriptContextTableMap)                  \
+  V(SelfReferenceMarker)                    \
+  V(SharedFunctionInfoMap)                  \
+  V(SimpleNumberDictionaryMap)              \
+  V(SloppyArgumentsElementsMap)             \
+  V(SmallOrderedHashMapMap)                 \
+  V(SmallOrderedHashSetMap)                 \
+  V(ArraySpeciesProtector)                  \
+  V(TypedArraySpeciesProtector)             \
+  V(PromiseSpeciesProtector)                \
+  V(StaleRegister)                          \
+  V(StringLengthProtector)                  \
+  V(StringTableMap)                         \
+  V(SymbolMap)                              \
+  V(TerminationException)                   \
+  V(TheHoleMap)                             \
+  V(TheHoleValue)                           \
+  V(TransitionArrayMap)                     \
+  V(TrueValue)                              \
+  V(TwoPointerFillerMap)                    \
+  V(UndefinedMap)                           \
+  V(UndefinedValue)                         \
+  V(UninitializedMap)                       \
+  V(UninitializedValue)                     \
+  V(UncompiledDataWithoutPreParsedScopeMap) \
+  V(UncompiledDataWithPreParsedScopeMap)    \
+  V(WeakFixedArrayMap)                      \
+  V(WeakArrayListMap)                       \
+  V(WithContextMap)                         \
+  V(empty_string)                           \
   PRIVATE_SYMBOL_LIST(V)
-
-#define FIXED_ARRAY_ELEMENTS_WRITE_BARRIER(heap, array, start, length) \
-  do {                                                                 \
-    heap->RecordFixedArrayElements(array, start, length);              \
-    heap->incremental_marking()->RecordWrites(array);                  \
-  } while (false)
 
 class AllocationObserver;
 class ArrayBufferCollector;
@@ -239,7 +234,8 @@ enum class GarbageCollectionReason {
   kRuntime = 18,
   kSamplingProfiler = 19,
   kSnapshotCreator = 20,
-  kTesting = 21
+  kTesting = 21,
+  kExternalFinalize = 22
   // If you add new items here, then update the incremental_marking_reason,
   // mark_compact_reason, and scavenge_reason counters in counters.h.
   // Also update src/tools/metrics/histograms/histograms.xml in chromium.
@@ -488,6 +484,24 @@ class Heap {
   // by pointer size.
   static inline void CopyBlock(Address dst, Address src, int byte_size);
 
+  V8_EXPORT_PRIVATE static void WriteBarrierForCodeSlow(Code* host);
+  V8_EXPORT_PRIVATE static void GenerationalBarrierSlow(HeapObject* object,
+                                                        Address slot,
+                                                        HeapObject* value);
+  V8_EXPORT_PRIVATE static void GenerationalBarrierForElementsSlow(
+      Heap* heap, FixedArray* array, int offset, int length);
+  V8_EXPORT_PRIVATE static void GenerationalBarrierForCodeSlow(
+      Code* host, RelocInfo* rinfo, HeapObject* value);
+  V8_EXPORT_PRIVATE static void MarkingBarrierSlow(HeapObject* object,
+                                                   Address slot,
+                                                   HeapObject* value);
+  V8_EXPORT_PRIVATE static void MarkingBarrierForElementsSlow(
+      Heap* heap, HeapObject* object);
+  V8_EXPORT_PRIVATE static void MarkingBarrierForCodeSlow(Code* host,
+                                                          RelocInfo* rinfo,
+                                                          HeapObject* value);
+  V8_EXPORT_PRIVATE static bool PageFlagsAreConsistent(HeapObject* object);
+
   // Notifies the heap that is ok to start marking or other activities that
   // should not happen during deserialization.
   void NotifyDeserializationComplete();
@@ -648,7 +662,7 @@ class Heap {
 
   void IncrementDeferredCount(v8::Isolate::UseCounterFeature feature);
 
-  inline uint32_t HashSeed();
+  inline uint64_t HashSeed();
 
   inline int NextScriptId();
   inline int NextDebuggingId();
@@ -674,7 +688,10 @@ class Heap {
     external_memory_concurrently_freed_ = 0;
   }
 
-  void CompactFixedArraysOfWeakCells();
+  void ProcessMovedExternalString(Page* old_page, Page* new_page,
+                                  ExternalString* string);
+
+  void CompactWeakArrayLists(PretenureFlag pretenure);
 
   void AddRetainedMap(Handle<Map> map);
 
@@ -700,7 +717,7 @@ class Heap {
   bool ShouldOptimizeForMemoryUsage();
 
   bool HighMemoryPressure() {
-    return memory_pressure_level_.Value() != MemoryPressureLevel::kNone;
+    return memory_pressure_level_ != MemoryPressureLevel::kNone;
   }
 
   void RestoreHeapLimit(size_t heap_limit) {
@@ -791,39 +808,18 @@ class Heap {
   // ===========================================================================
   // Root set access. ==========================================================
   // ===========================================================================
+  friend class ReadOnlyRoots;
 
-  // Heap root getters.
+ public:
+// Heap root getters.
 #define ROOT_ACCESSOR(type, name, camel_name) inline type* name();
-  ROOT_LIST(ROOT_ACCESSOR)
+  MUTABLE_ROOT_LIST(ROOT_ACCESSOR)
 #undef ROOT_ACCESSOR
-
-  // Utility type maps.
-#define STRUCT_MAP_ACCESSOR(NAME, Name, name) inline Map* name##_map();
-  STRUCT_LIST(STRUCT_MAP_ACCESSOR)
-#undef STRUCT_MAP_ACCESSOR
-
-#define ALLOCATION_SITE_MAP_ACCESSOR(NAME, Name, Size, name) \
-  inline Map* name##_map();
-  ALLOCATION_SITE_LIST(ALLOCATION_SITE_MAP_ACCESSOR)
-#undef ALLOCATION_SITE_MAP_ACCESSOR
 
 #define DATA_HANDLER_MAP_ACCESSOR(NAME, Name, Size, name) \
   inline Map* name##_map();
   DATA_HANDLER_LIST(DATA_HANDLER_MAP_ACCESSOR)
 #undef DATA_HANDLER_MAP_ACCESSOR
-
-#define STRING_ACCESSOR(name, str) inline String* name();
-  INTERNALIZED_STRING_LIST(STRING_ACCESSOR)
-#undef STRING_ACCESSOR
-
-#define SYMBOL_ACCESSOR(name) inline Symbol* name();
-  PRIVATE_SYMBOL_LIST(SYMBOL_ACCESSOR)
-#undef SYMBOL_ACCESSOR
-
-#define SYMBOL_ACCESSOR(name, description) inline Symbol* name();
-  PUBLIC_SYMBOL_LIST(SYMBOL_ACCESSOR)
-  WELL_KNOWN_SYMBOL_LIST(SYMBOL_ACCESSOR)
-#undef SYMBOL_ACCESSOR
 
 #define ACCESSOR_INFO_ACCESSOR(accessor_name, AccessorName) \
   inline AccessorInfo* accessor_name##_accessor();
@@ -857,6 +853,10 @@ class Heap {
 
   static constexpr int roots_to_builtins_offset() {
     return kRootsBuiltinsOffset;
+  }
+
+  static constexpr int root_register_addressable_end_offset() {
+    return kRootRegisterAddressableEndOffset;
   }
 
   Address root_register_addressable_end() {
@@ -931,14 +931,14 @@ class Heap {
   // Performs garbage collection operation.
   // Returns whether there is a chance that another major GC could
   // collect more garbage.
-  bool CollectGarbage(
+  V8_EXPORT_PRIVATE bool CollectGarbage(
       AllocationSpace space, GarbageCollectionReason gc_reason,
       const GCCallbackFlags gc_callback_flags = kNoGCCallbackFlags);
 
   // Performs a full garbage collection.  If (flags & kMakeHeapIterableMask) is
   // non-zero, then the slower precise sweeper is used, which leaves the heap
   // in a state where we can iterate over the heap visiting all objects.
-  void CollectAllGarbage(
+  V8_EXPORT_PRIVATE void CollectAllGarbage(
       int flags, GarbageCollectionReason gc_reason,
       const GCCallbackFlags gc_callback_flags = kNoGCCallbackFlags);
 
@@ -988,16 +988,6 @@ class Heap {
   // Store buffer API. =========================================================
   // ===========================================================================
 
-  // Write barrier support for object[offset] = o;
-  inline void RecordWrite(Object* object, MaybeObject** slot,
-                          MaybeObject* value);
-  inline void RecordWrite(Object* object, Object** slot, Object* value);
-  inline void RecordWriteIntoCode(Code* host, RelocInfo* rinfo, Object* target);
-  void RecordWriteIntoCodeSlow(Code* host, RelocInfo* rinfo, Object* target);
-  void RecordWritesIntoCode(Code* code);
-  inline void RecordFixedArrayElements(FixedArray* array, int offset,
-                                       int length);
-
   // Used for query incremental marking status in generated code.
   Address* IsMarkingFlagAddress() {
     return reinterpret_cast<Address*>(&is_marking_flag_);
@@ -1005,7 +995,9 @@ class Heap {
 
   void SetIsMarkingFlag(uint8_t flag) { is_marking_flag_ = flag; }
 
-  inline Address* store_buffer_top_address();
+  Address* store_buffer_top_address();
+  static intptr_t store_buffer_mask_constant();
+  static Address store_buffer_overflow_function_address();
 
   void ClearRecordedSlot(HeapObject* object, Object** slot);
   void ClearRecordedSlotRange(Address start, Address end);
@@ -1038,6 +1030,8 @@ class Heap {
       GCCallbackFlags gc_callback_flags = GCCallbackFlags::kNoGCCallbackFlags);
 
   void FinalizeIncrementalMarkingIfComplete(GarbageCollectionReason gc_reason);
+  // Synchronously finalizes incremental marking.
+  void FinalizeIncrementalMarkingAtomically(GarbageCollectionReason gc_reason);
 
   void RegisterDeserializedObjectsForBlackAllocation(
       Reservation* reservations, const std::vector<HeapObject*>& large_objects,
@@ -1096,6 +1090,8 @@ class Heap {
   void SetEmbedderHeapTracer(EmbedderHeapTracer* tracer);
   void TracePossibleWrapper(JSObject* js_object);
   void RegisterExternallyReferencedObject(Object** object);
+  void SetEmbedderStackStateForNextFinalizaton(
+      EmbedderHeapTracer::EmbedderStackState stack_state);
 
   // ===========================================================================
   // External string table API. ================================================
@@ -1103,6 +1099,11 @@ class Heap {
 
   // Registers an external string.
   inline void RegisterExternalString(String* string);
+
+  // Called when a string's resource is changed. The size of the payload is sent
+  // as argument of the method.
+  inline void UpdateExternalString(String* string, size_t old_payload,
+                                   size_t new_payload);
 
   // Finalizes an external string by deleting the associated external
   // data and clearing the resource pointer.
@@ -1113,9 +1114,9 @@ class Heap {
   // ===========================================================================
 
   // Returns whether the object resides in new space.
-  inline bool InNewSpace(Object* object);
-  inline bool InNewSpace(MaybeObject* object);
-  inline bool InNewSpace(HeapObject* heap_object);
+  static inline bool InNewSpace(Object* object);
+  static inline bool InNewSpace(MaybeObject* object);
+  static inline bool InNewSpace(HeapObject* heap_object);
   static inline bool InFromSpace(Object* object);
   static inline bool InFromSpace(MaybeObject* object);
   static inline bool InFromSpace(HeapObject* heap_object);
@@ -1496,6 +1497,7 @@ class Heap {
 
     // Registers an external string.
     inline void AddString(String* string);
+    bool Contains(HeapObject* obj);
 
     void IterateAll(RootVisitor* v);
     void IterateNewSpaceStrings(RootVisitor* v);
@@ -1516,6 +1518,7 @@ class Heap {
 
    private:
     void Verify();
+    void VerifyNewSpace();
 
     Heap* const heap_;
 
@@ -1630,8 +1633,6 @@ class Heap {
 
   int NumberOfScavengeTasks();
 
-  void PreprocessStackTraces();
-
   // Checks whether a global GC is necessary
   GarbageCollector SelectGarbageCollector(AllocationSpace space,
                                           const char** reason);
@@ -1739,7 +1740,8 @@ class Heap {
   // implicit references from global handles, but don't atomically complete
   // marking. If we continue to mark incrementally, we might have marked
   // objects that die later.
-  void FinalizeIncrementalMarking(GarbageCollectionReason gc_reason);
+  void FinalizeIncrementalMarkingIncrementally(
+      GarbageCollectionReason gc_reason);
 
   // Returns the timer used for a given GC type.
   // - GCScavenger: young generation GC
@@ -2019,7 +2021,7 @@ class Heap {
 
   // Stores the memory pressure level that set by MemoryPressureNotification
   // and reset by a mark-compact garbage collection.
-  base::AtomicValue<MemoryPressureLevel> memory_pressure_level_;
+  std::atomic<MemoryPressureLevel> memory_pressure_level_;
 
   std::vector<std::pair<v8::NearHeapLimitCallback, void*> >
       near_heap_limit_callbacks_;
@@ -2263,7 +2265,7 @@ class Heap {
   friend class EphemeronHashTableMarkingTask;
   friend class GCCallbacksScope;
   friend class GCTracer;
-  friend class HeapController;
+  friend class MemoryController;
   friend class HeapIterator;
   friend class IdleScavengeObserver;
   friend class IncrementalMarking;

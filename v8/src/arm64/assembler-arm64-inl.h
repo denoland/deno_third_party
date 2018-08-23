@@ -276,7 +276,7 @@ Operand::Operand(Register reg, Shift shift, unsigned shift_amount)
       shift_amount_(shift_amount) {
   DCHECK(reg.Is64Bits() || (shift_amount < kWRegSizeInBits));
   DCHECK(reg.Is32Bits() || (shift_amount < kXRegSizeInBits));
-  DCHECK(!reg.IsSP());
+  DCHECK_IMPLIES(reg.IsSP(), shift_amount == 0);
 }
 
 
@@ -549,11 +549,8 @@ Handle<Code> Assembler::code_target_object_handle_at(Address pc) {
         Assembler::target_address_at(pc, 0 /* unused */)));
   } else {
     DCHECK(instr->IsBranchAndLink() || instr->IsUnconditionalBranch());
-    DCHECK_GE(instr->ImmPCOffset(), 0);
-    DCHECK_EQ(instr->ImmPCOffset() % kInstructionSize, 0);
-    DCHECK_LT(instr->ImmPCOffset() >> kInstructionSizeLog2,
-              code_targets_.size());
-    return code_targets_[instr->ImmPCOffset() >> kInstructionSizeLog2];
+    DCHECK_EQ(instr->ImmPCOffset() % kInstrSize, 0);
+    return GetCodeTarget(instr->ImmPCOffset() >> kInstrSizeLog2);
   }
 }
 
@@ -573,7 +570,7 @@ Address Assembler::target_address_from_return_address(Address pc) {
   // Call sequence on ARM64 is:
   //  ldr ip0, #... @ load from literal pool
   //  blr ip0
-  Address candidate = pc - 2 * kInstructionSize;
+  Address candidate = pc - 2 * kInstrSize;
   Instruction* instr = reinterpret_cast<Instruction*>(candidate);
   USE(instr);
   DCHECK(instr->IsLdrLiteralX());
@@ -601,7 +598,7 @@ void Assembler::deserialization_set_special_target_at(Address location,
       target = location;
     }
     instr->SetBranchImmTarget(reinterpret_cast<Instruction*>(target));
-    Assembler::FlushICache(location, kInstructionSize);
+    Assembler::FlushICache(location, kInstrSize);
   } else {
     DCHECK_EQ(instr->InstructionBits(), 0);
     Memory::Address_at(location) = target;
@@ -638,7 +635,7 @@ void Assembler::set_target_address_at(Address pc, Address constant_pool,
     }
     instr->SetBranchImmTarget(reinterpret_cast<Instruction*>(target));
     if (icache_flush_mode != SKIP_ICACHE_FLUSH) {
-      Assembler::FlushICache(pc, kInstructionSize);
+      Assembler::FlushICache(pc, kInstrSize);
     }
   }
 }
@@ -714,8 +711,7 @@ void RelocInfo::set_target_object(Heap* heap, HeapObject* target,
                                    reinterpret_cast<Address>(target),
                                    icache_flush_mode);
   if (write_barrier_mode == UPDATE_WRITE_BARRIER && host() != nullptr) {
-    heap->incremental_marking()->RecordWriteIntoCode(host(), this, target);
-    heap->RecordWriteIntoCode(host(), this, target);
+    WriteBarrierForCode(host(), this, target);
   }
 }
 
@@ -765,7 +761,7 @@ Address RelocInfo::target_off_heap_target() {
 void RelocInfo::WipeOut() {
   DCHECK(IsEmbeddedObject(rmode_) || IsCodeTarget(rmode_) ||
          IsRuntimeEntry(rmode_) || IsExternalReference(rmode_) ||
-         IsInternalReference(rmode_));
+         IsInternalReference(rmode_) || IsOffHeapTarget(rmode_));
   if (IsInternalReference(rmode_)) {
     Memory::Address_at(pc_) = kNullAddress;
   } else {
@@ -778,7 +774,7 @@ void RelocInfo::Visit(ObjectVisitor* visitor) {
   RelocInfo::Mode mode = rmode();
   if (mode == RelocInfo::EMBEDDED_OBJECT) {
     visitor->VisitEmbeddedPointer(host(), this);
-  } else if (RelocInfo::IsCodeTarget(mode)) {
+  } else if (RelocInfo::IsCodeTargetMode(mode)) {
     visitor->VisitCodeTarget(host(), this);
   } else if (mode == RelocInfo::EXTERNAL_REFERENCE) {
     visitor->VisitExternalReference(host(), this);
@@ -877,8 +873,8 @@ LoadLiteralOp Assembler::LoadLiteralOpFor(const CPURegister& rt) {
 int Assembler::LinkAndGetInstructionOffsetTo(Label* label) {
   DCHECK_EQ(kStartOfLabelLinkChain, 0);
   int offset = LinkAndGetByteOffsetTo(label);
-  DCHECK(IsAligned(offset, kInstructionSize));
-  return offset >> kInstructionSizeLog2;
+  DCHECK(IsAligned(offset, kInstrSize));
+  return offset >> kInstrSizeLog2;
 }
 
 
@@ -1095,7 +1091,7 @@ Instr Assembler::ImmBarrierType(int imm2) {
 }
 
 unsigned Assembler::CalcLSDataSize(LoadStoreOp op) {
-  DCHECK((LSSize_offset + LSSize_width) == (kInstructionSize * 8));
+  DCHECK((LSSize_offset + LSSize_width) == (kInstrSize * 8));
   unsigned size = static_cast<Instr>(op >> LSSize_offset);
   if ((op & LSVector_mask) != 0) {
     // Vector register memory operations encode the access size in the "size"

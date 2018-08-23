@@ -11,12 +11,14 @@
 #include "src/allocation.h"
 #include "src/base/macros.h"
 #include "src/boxed-float.h"
+#include "src/code-tracer.h"
 #include "src/deoptimize-reason.h"
 #include "src/feedback-vector.h"
 #include "src/frame-constants.h"
 #include "src/globals.h"
 #include "src/isolate.h"
 #include "src/macro-assembler.h"
+#include "src/objects/shared-function-info.h"
 #include "src/source-position.h"
 #include "src/zone/zone-chunk-list.h"
 
@@ -32,8 +34,8 @@ class RegisterValues;
 class TranslatedValue {
  public:
   // Allocation-less getter of the value.
-  // Returns heap()->arguments_marker() if allocation would be
-  // necessary to get the value.
+  // Returns ReadOnlyRoots::arguments_marker() if allocation would be necessary
+  // to get the value.
   Object* GetRawValue() const;
 
   // Getter for the value, takes care of materializing the subgraph

@@ -148,8 +148,7 @@ void LiftoffAssembler::PatchPrepareStackFrame(int offset,
     return;
   }
 #endif
-  PatchingAssembler patching_assembler(Assembler::Options{}, buffer_ + offset,
-                                       1);
+  PatchingAssembler patching_assembler(AssemblerOptions{}, buffer_ + offset, 1);
   patching_assembler.PatchSubSp(bytes);
 }
 
@@ -280,17 +279,6 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
     default:
       UNREACHABLE();
   }
-}
-
-void LiftoffAssembler::ChangeEndiannessLoad(LiftoffRegister dst, LoadType type,
-                                            LiftoffRegList pinned) {
-  // Nop.
-}
-
-void LiftoffAssembler::ChangeEndiannessStore(LiftoffRegister src,
-                                             StoreType type,
-                                             LiftoffRegList pinned) {
-  // Nop.
 }
 
 void LiftoffAssembler::LoadCallerFrameSlot(LiftoffRegister dst,

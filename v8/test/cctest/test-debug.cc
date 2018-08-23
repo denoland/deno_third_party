@@ -29,13 +29,14 @@
 
 #include "src/v8.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/compilation-cache.h"
 #include "src/debug/debug-interface.h"
 #include "src/debug/debug.h"
 #include "src/deoptimizer.h"
 #include "src/frames.h"
 #include "src/objects-inl.h"
+#include "src/snapshot/natives.h"
 #include "src/snapshot/snapshot.h"
 #include "src/utils.h"
 #include "test/cctest/cctest.h"
@@ -156,7 +157,6 @@ Handle<FixedArray> GetDebuggedFunctions() {
 void CheckDebuggerUnloaded() {
   // Check that the debugger context is cleared and that there is no debug
   // information stored for the debugger.
-  CHECK(CcTest::i_isolate()->debug()->debug_context().is_null());
   CHECK(!CcTest::i_isolate()->debug()->debug_info_list_);
 
   // Collect garbage to ensure weak handles are cleared.
@@ -191,10 +191,6 @@ class DebugEventCounter : public v8::debug::DebugDelegate {
  public:
   void BreakProgramRequested(v8::Local<v8::Context>,
                              const std::vector<v8::debug::BreakpointId>&) {
-    v8::internal::Debug* debug = CcTest::i_isolate()->debug();
-    // When hitting a debug event listener there must be a break set.
-    CHECK_NE(debug->break_id(), 0);
-
     break_point_hit_count++;
     // Perform a full deoptimization when the specified number of
     // breaks have been hit.
@@ -217,10 +213,6 @@ class DebugEventBreakPointCollectGarbage : public v8::debug::DebugDelegate {
  public:
   void BreakProgramRequested(v8::Local<v8::Context>,
                              const std::vector<v8::debug::BreakpointId>&) {
-    v8::internal::Debug* debug = CcTest::i_isolate()->debug();
-    // When hitting a debug event listener there must be a break set.
-    CHECK_NE(debug->break_id(), 0);
-
     // Perform a garbage collection when break point is hit and continue. Based
     // on the number of break points hit either scavenge or mark compact
     // collector is used.
@@ -241,10 +233,6 @@ class DebugEventBreak : public v8::debug::DebugDelegate {
  public:
   void BreakProgramRequested(v8::Local<v8::Context>,
                              const std::vector<v8::debug::BreakpointId>&) {
-    v8::internal::Debug* debug = CcTest::i_isolate()->debug();
-    // When hitting a debug event listener there must be a break set.
-    CHECK_NE(debug->break_id(), 0);
-
     // Count the number of breaks.
     break_point_hit_count++;
 
@@ -271,9 +259,6 @@ class DebugEventBreakMax : public v8::debug::DebugDelegate {
                              const std::vector<v8::debug::BreakpointId>&) {
     v8::Isolate* v8_isolate = CcTest::isolate();
     v8::internal::Isolate* isolate = CcTest::i_isolate();
-    v8::internal::Debug* debug = isolate->debug();
-    // When hitting a debug event listener there must be a break set.
-    CHECK_NE(debug->break_id(), 0);
     if (break_point_hit_count < max_break_point_hit_count) {
       // Count the number of breaks.
       break_point_hit_count++;
@@ -2670,7 +2655,7 @@ TEST(PauseInScript) {
 
   // Register a debug event listener which counts.
   DebugEventCounter event_counter;
-  SetDebugDelegate(env->GetIsolate(), &event_counter);
+  v8::debug::SetDebugDelegate(env->GetIsolate(), &event_counter);
 
   v8::Local<v8::Context> context = env.local();
   // Create a script that returns a function.
@@ -3041,8 +3026,6 @@ TEST(DebugScriptLineEndsAreAscending) {
   Handle<v8::internal::FixedArray> instances;
   {
     v8::internal::Debug* debug = CcTest::i_isolate()->debug();
-    v8::internal::DebugScope debug_scope(debug);
-    CHECK(!debug_scope.failed());
     instances = debug->GetLoadedScripts();
   }
 
@@ -3632,35 +3615,6 @@ TEST(Regress131642) {
   v8::debug::SetDebugDelegate(env->GetIsolate(), nullptr);
 }
 
-
-// Import from test-heap.cc
-namespace v8 {
-namespace internal {
-namespace heap {
-int CountNativeContexts();
-}  // namespace heap
-}  // namespace internal
-}  // namespace v8
-
-class NopListener : public v8::debug::DebugDelegate {};
-
-TEST(DebuggerCreatesContextIffActive) {
-  LocalContext env;
-  v8::HandleScope scope(env->GetIsolate());
-  CHECK_EQ(1, v8::internal::heap::CountNativeContexts());
-
-  v8::debug::SetDebugDelegate(env->GetIsolate(), nullptr);
-  CompileRun("debugger;");
-  CHECK_EQ(1, v8::internal::heap::CountNativeContexts());
-
-  NopListener delegate;
-  v8::debug::SetDebugDelegate(env->GetIsolate(), &delegate);
-  CompileRun("debugger;");
-  CHECK_EQ(2, v8::internal::heap::CountNativeContexts());
-
-  v8::debug::SetDebugDelegate(env->GetIsolate(), nullptr);
-}
-
 class DebugBreakStackTraceListener : public v8::debug::DebugDelegate {
  public:
   void BreakProgramRequested(v8::Local<v8::Context> paused_context,
@@ -3746,6 +3700,133 @@ TEST(DebugBreakOffThreadTerminate) {
   env->GetIsolate()->RequestInterrupt(BreakRightNow, nullptr);
   CompileRun("while (true);");
   CHECK(try_catch.HasTerminated());
+}
+
+class ArchiveRestoreThread : public v8::base::Thread,
+                             public v8::debug::DebugDelegate {
+ public:
+  ArchiveRestoreThread(v8::Isolate* isolate, int spawn_count)
+      : Thread(Options("ArchiveRestoreThread")),
+        isolate_(isolate),
+        debug_(reinterpret_cast<i::Isolate*>(isolate_)->debug()),
+        spawn_count_(spawn_count),
+        break_count_(0) {}
+
+  virtual void Run() {
+    v8::Locker locker(isolate_);
+    isolate_->Enter();
+
+    v8::HandleScope scope(isolate_);
+    v8::Local<v8::Context> context = v8::Context::New(isolate_);
+    v8::Context::Scope context_scope(context);
+
+    v8::Local<v8::Function> test = CompileFunction(isolate_,
+                                                   "function test(n) {\n"
+                                                   "  debugger;\n"
+                                                   "  return n + 1;\n"
+                                                   "}\n",
+                                                   "test");
+
+    debug_->SetDebugDelegate(this);
+    v8::internal::DisableBreak enable_break(debug_, false);
+
+    v8::Local<v8::Value> args[1] = {v8::Integer::New(isolate_, spawn_count_)};
+
+    int result = test->Call(context, context->Global(), 1, args)
+                     .ToLocalChecked()
+                     ->Int32Value(context)
+                     .FromJust();
+
+    // Verify that test(spawn_count_) returned spawn_count_ + 1.
+    CHECK_EQ(spawn_count_ + 1, result);
+
+    isolate_->Exit();
+  }
+
+  void BreakProgramRequested(v8::Local<v8::Context> context,
+                             const std::vector<v8::debug::BreakpointId>&) {
+    auto stack_traces = v8::debug::StackTraceIterator::Create(isolate_);
+    if (!stack_traces->Done()) {
+      v8::debug::Location location = stack_traces->GetSourceLocation();
+
+      i::PrintF("ArchiveRestoreThread #%d hit breakpoint at line %d\n",
+                spawn_count_, location.GetLineNumber());
+
+      switch (location.GetLineNumber()) {
+        case 1:  // debugger;
+          CHECK_EQ(break_count_, 0);
+
+          // Attempt to stop on the next line after the first debugger
+          // statement. If debug->{Archive,Restore}Debug() improperly reset
+          // thread-local debug information, the debugger will fail to stop
+          // before the test function returns.
+          debug_->PrepareStep(StepNext);
+
+          // Spawning threads while handling the current breakpoint verifies
+          // that the parent thread correctly archived and restored the
+          // state necessary to stop on the next line. If not, then control
+          // will simply continue past the `return n + 1` statement.
+          MaybeSpawnChildThread();
+
+          break;
+
+        case 2:  // return n + 1;
+          CHECK_EQ(break_count_, 1);
+          break;
+
+        default:
+          CHECK(false);
+      }
+    }
+
+    ++break_count_;
+  }
+
+  void MaybeSpawnChildThread() {
+    if (spawn_count_ > 1) {
+      v8::Unlocker unlocker(isolate_);
+
+      // Spawn a thread that spawns a thread that spawns a thread (and so
+      // on) so that the ThreadManager is forced to archive and restore
+      // the current thread.
+      ArchiveRestoreThread child(isolate_, spawn_count_ - 1);
+      child.Start();
+      child.Join();
+
+      // The child thread sets itself as the debug delegate, so we need to
+      // usurp it after the child finishes, or else future breakpoints
+      // will be delegated to a destroyed ArchiveRestoreThread object.
+      debug_->SetDebugDelegate(this);
+
+      // This is the most important check in this test, since
+      // child.GetBreakCount() will return 1 if the debugger fails to stop
+      // on the `return n + 1` line after the grandchild thread returns.
+      CHECK_EQ(child.GetBreakCount(), 2);
+    }
+  }
+
+  int GetBreakCount() { return break_count_; }
+
+ private:
+  v8::Isolate* isolate_;
+  v8::internal::Debug* debug_;
+  const int spawn_count_;
+  int break_count_;
+};
+
+TEST(DebugArchiveRestore) {
+  v8::Isolate::CreateParams create_params;
+  create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
+  v8::Isolate* isolate = v8::Isolate::New(create_params);
+
+  ArchiveRestoreThread thread(isolate, 5);
+  // Instead of calling thread.Start() and thread.Join() here, we call
+  // thread.Run() directly, to make sure we exercise archive/restore
+  // logic on the *current* thread as well as other threads.
+  thread.Run();
+  CHECK_EQ(thread.GetBreakCount(), 2);
+
+  isolate->Dispose();
 }
 
 class DebugEventExpectNoException : public v8::debug::DebugDelegate {
@@ -4145,4 +4226,258 @@ TEST(DebugEvaluateNoSideEffect) {
     if (failed) isolate->clear_pending_exception();
   }
   DisableDebugger(env->GetIsolate());
+}
+
+namespace {
+i::MaybeHandle<i::Script> FindScript(
+    i::Isolate* isolate, const std::vector<i::Handle<i::Script>>& scripts,
+    const char* name) {
+  Handle<i::String> i_name =
+      isolate->factory()->NewStringFromAsciiChecked(name);
+  for (const auto& script : scripts) {
+    if (!script->name()->IsString()) continue;
+    if (i_name->Equals(i::String::cast(script->name()))) return script;
+  }
+  return i::MaybeHandle<i::Script>();
+}
+}  // anonymous namespace
+
+UNINITIALIZED_TEST(LoadedAtStartupScripts) {
+  i::FLAG_expose_gc = true;
+  i::FLAG_expose_natives_as = "natives";
+
+  v8::Isolate::CreateParams create_params;
+  create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
+  v8::Isolate* isolate = v8::Isolate::New(create_params);
+  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+  {
+    v8::Isolate::Scope i_scope(isolate);
+    v8::HandleScope scope(isolate);
+    LocalContext context(isolate);
+
+    std::vector<i::Handle<i::Script>> scripts;
+    CompileWithOrigin(v8_str("function foo(){}"), v8_str("normal.js"));
+    std::unordered_map<int, int> count_by_type;
+    {
+      i::DisallowHeapAllocation no_gc;
+      i::Script::Iterator iterator(i_isolate);
+      i::Script* script;
+      while ((script = iterator.Next()) != nullptr) {
+        if (script->type() == i::Script::TYPE_NATIVE &&
+            script->name()->IsUndefined(i_isolate)) {
+          continue;
+        }
+        ++count_by_type[script->type()];
+        scripts.emplace_back(script, i_isolate);
+      }
+    }
+    CHECK_EQ(count_by_type[i::Script::TYPE_NATIVE],
+             i::Natives::GetBuiltinsCount());
+    CHECK_EQ(count_by_type[i::Script::TYPE_EXTENSION], 2);
+    CHECK_EQ(count_by_type[i::Script::TYPE_NORMAL], 1);
+    CHECK_EQ(count_by_type[i::Script::TYPE_WASM], 0);
+    CHECK_EQ(count_by_type[i::Script::TYPE_INSPECTOR], 0);
+
+    i::Handle<i::Script> native_array_script =
+        FindScript(i_isolate, scripts, "native array.js").ToHandleChecked();
+    CHECK_EQ(native_array_script->type(), i::Script::TYPE_NATIVE);
+
+    i::Handle<i::Script> gc_script =
+        FindScript(i_isolate, scripts, "v8/gc").ToHandleChecked();
+    CHECK_EQ(gc_script->type(), i::Script::TYPE_EXTENSION);
+
+    i::Handle<i::Script> normal_script =
+        FindScript(i_isolate, scripts, "normal.js").ToHandleChecked();
+    CHECK_EQ(normal_script->type(), i::Script::TYPE_NORMAL);
+  }
+  isolate->Dispose();
+}
+
+TEST(SourceInfo) {
+  LocalContext env;
+  v8::HandleScope scope(env->GetIsolate());
+  const char* source =
+      "//\n"
+      "function a() { b(); };\n"
+      "function    b() {\n"
+      "  c(true);\n"
+      "};\n"
+      "  function c(x) {\n"
+      "    if (x) {\n"
+      "      return 1;\n"
+      "    } else {\n"
+      "      return 1;\n"
+      "    }\n"
+      "  };\n"
+      "function d(x) {\n"
+      "  x = 1 ;\n"
+      "  x = 2 ;\n"
+      "  x = 3 ;\n"
+      "  x = 4 ;\n"
+      "  x = 5 ;\n"
+      "  x = 6 ;\n"
+      "  x = 7 ;\n"
+      "  x = 8 ;\n"
+      "  x = 9 ;\n"
+      "  x = 10;\n"
+      "  x = 11;\n"
+      "  x = 12;\n"
+      "  x = 13;\n"
+      "  x = 14;\n"
+      "  x = 15;\n"
+      "}\n";
+  v8::Local<v8::Script> v8_script =
+      v8::Script::Compile(env.local(), v8_str(source)).ToLocalChecked();
+  i::Handle<i::Script> i_script(
+      i::Script::cast(v8::Utils::OpenHandle(*v8_script)->shared()->script()),
+      CcTest::i_isolate());
+  v8::Local<v8::debug::Script> script =
+      v8::ToApiHandle<v8::debug::Script>(i_script);
+
+  // Test that when running through source positions the position, line and
+  // column progresses as expected.
+  v8::debug::Location prev_location = script->GetSourceLocation(0);
+  CHECK_EQ(prev_location.GetLineNumber(), 0);
+  CHECK_EQ(prev_location.GetColumnNumber(), 0);
+  for (int offset = 1; offset < 100; ++offset) {
+    v8::debug::Location location = script->GetSourceLocation(offset);
+    if (prev_location.GetLineNumber() == location.GetLineNumber()) {
+      CHECK_EQ(location.GetColumnNumber(), prev_location.GetColumnNumber() + 1);
+    } else {
+      CHECK_EQ(location.GetLineNumber(), prev_location.GetLineNumber() + 1);
+      CHECK_EQ(location.GetColumnNumber(), 0);
+    }
+    prev_location = location;
+  }
+
+  // Every line of d() is the same length.  Verify we can loop through all
+  // positions and find the right line # for each.
+  // The position of the first line of d(), i.e. "x = 1 ;".
+  const int start_line_d = 13;
+  const int start_code_d =
+      static_cast<int>(strstr(source, "  x = 1 ;") - source);
+  const int num_lines_d = 15;
+  const int line_length_d = 10;
+  int p = start_code_d;
+  for (int line = 0; line < num_lines_d; ++line) {
+    for (int column = 0; column < line_length_d; ++column) {
+      v8::debug::Location location = script->GetSourceLocation(p);
+      CHECK_EQ(location.GetLineNumber(), start_line_d + line);
+      CHECK_EQ(location.GetColumnNumber(), column);
+      ++p;
+    }
+  }
+
+  // Test first positon.
+  CHECK_EQ(script->GetSourceLocation(0).GetLineNumber(), 0);
+  CHECK_EQ(script->GetSourceLocation(0).GetColumnNumber(), 0);
+
+  // Test second positon.
+  CHECK_EQ(script->GetSourceLocation(1).GetLineNumber(), 0);
+  CHECK_EQ(script->GetSourceLocation(1).GetColumnNumber(), 1);
+
+  // Test first positin in function a().
+  const int start_a =
+      static_cast<int>(strstr(source, "function a") - source) + 10;
+  CHECK_EQ(script->GetSourceLocation(start_a).GetLineNumber(), 1);
+  CHECK_EQ(script->GetSourceLocation(start_a).GetColumnNumber(), 10);
+
+  // Test first positin in function b().
+  const int start_b =
+      static_cast<int>(strstr(source, "function    b") - source) + 13;
+  CHECK_EQ(script->GetSourceLocation(start_b).GetLineNumber(), 2);
+  CHECK_EQ(script->GetSourceLocation(start_b).GetColumnNumber(), 13);
+
+  // Test first positin in function c().
+  const int start_c =
+      static_cast<int>(strstr(source, "function c") - source) + 10;
+  CHECK_EQ(script->GetSourceLocation(start_c).GetLineNumber(), 5);
+  CHECK_EQ(script->GetSourceLocation(start_c).GetColumnNumber(), 12);
+
+  // Test first positin in function d().
+  const int start_d =
+      static_cast<int>(strstr(source, "function d") - source) + 10;
+  CHECK_EQ(script->GetSourceLocation(start_d).GetLineNumber(), 12);
+  CHECK_EQ(script->GetSourceLocation(start_d).GetColumnNumber(), 10);
+
+  // Test offsets.
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(1, 10)), start_a);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(2, 13)), start_b);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(3, 0)), start_b + 5);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(3, 2)), start_b + 7);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(4, 0)), start_b + 16);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(5, 12)), start_c);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(6, 0)), start_c + 6);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(7, 0)), start_c + 19);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(8, 0)), start_c + 35);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(9, 0)), start_c + 48);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(10, 0)), start_c + 64);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(11, 0)), start_c + 70);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(12, 10)), start_d);
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(13, 0)), start_d + 6);
+  for (int i = 1; i <= num_lines_d; ++i) {
+    CHECK_EQ(script->GetSourceOffset(v8::debug::Location(start_line_d + i, 0)),
+             6 + (i * line_length_d) + start_d);
+  }
+  CHECK_EQ(script->GetSourceOffset(v8::debug::Location(start_line_d + 17, 0)),
+           start_d + 158);
+
+  // Make sure invalid inputs work properly.
+  const int last_position = static_cast<int>(strlen(source)) - 1;
+  CHECK_EQ(script->GetSourceLocation(-1).GetLineNumber(), 0);
+  CHECK_EQ(script->GetSourceLocation(last_position + 2).GetLineNumber(),
+           i::kNoSourcePosition);
+
+  // Test last position.
+  CHECK_EQ(script->GetSourceLocation(last_position).GetLineNumber(), 28);
+  CHECK_EQ(script->GetSourceLocation(last_position).GetColumnNumber(), 1);
+  CHECK_EQ(script->GetSourceLocation(last_position + 1).GetLineNumber(), 29);
+  CHECK_EQ(script->GetSourceLocation(last_position + 1).GetColumnNumber(), 0);
+}
+
+namespace {
+class SetBreakpointOnScriptCompiled : public v8::debug::DebugDelegate {
+ public:
+  void ScriptCompiled(v8::Local<v8::debug::Script> script, bool is_live_edited,
+                      bool has_compile_error) override {
+    v8::Local<v8::String> name;
+    if (!script->SourceURL().ToLocal(&name)) return;
+    v8::Local<v8::Context> context = CcTest::isolate()->GetCurrentContext();
+    if (!name->Equals(context, v8_str("test")).FromJust()) return;
+    CHECK(!has_compile_error);
+    v8::debug::Location loc(1, 2);
+    CHECK(script->SetBreakpoint(v8_str(""), &loc, &id_));
+    CHECK_EQ(loc.GetLineNumber(), 1);
+    CHECK_EQ(loc.GetColumnNumber(), 10);
+  }
+
+  void BreakProgramRequested(v8::Local<v8::Context> paused_context,
+                             const std::vector<v8::debug::BreakpointId>&
+                                 inspector_break_points_hit) override {
+    ++break_count_;
+    CHECK_EQ(inspector_break_points_hit[0], id_);
+  }
+
+  int break_count() const { return break_count_; }
+
+ private:
+  int break_count_ = 0;
+  v8::debug::BreakpointId id_;
+};
+}  // anonymous namespace
+
+TEST(Regress517592) {
+  LocalContext env;
+  v8::HandleScope handle_scope(env->GetIsolate());
+  SetBreakpointOnScriptCompiled delegate;
+  v8::debug::SetDebugDelegate(env->GetIsolate(), &delegate);
+  CompileRun(
+      v8_str("eval('var foo = function foo() {\\n' +\n"
+             "'  var a = 1;\\n' +\n"
+             "'}\\n' +\n"
+             "'//@ sourceURL=test')"));
+  CHECK_EQ(delegate.break_count(), 0);
+  CompileRun(v8_str("foo()"));
+  CHECK_EQ(delegate.break_count(), 1);
+  v8::debug::SetDebugDelegate(env->GetIsolate(), nullptr);
 }

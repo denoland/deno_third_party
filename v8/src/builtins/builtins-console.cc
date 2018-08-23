@@ -2,10 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/builtins/builtins-utils.h"
+#include "src/api-inl.h"
+#include "src/builtins/builtins-utils-inl.h"
 #include "src/builtins/builtins.h"
-
-#include "src/api.h"
 #include "src/debug/interface-types.h"
 #include "src/objects-inl.h"
 
@@ -111,7 +110,7 @@ void InstallContextFunction(Isolate* isolate, Handle<JSObject> target,
   Factory* const factory = isolate->factory();
 
   Handle<String> name_string =
-      Name::ToFunctionName(factory->InternalizeUtf8String(name))
+      Name::ToFunctionName(isolate, factory->InternalizeUtf8String(name))
           .ToHandleChecked();
   NewFunctionArgs args = NewFunctionArgs::ForBuiltinWithoutPrototype(
       name_string, builtin_id, i::LanguageMode::kSloppy);

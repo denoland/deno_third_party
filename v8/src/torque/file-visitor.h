@@ -13,8 +13,6 @@
 #include "src/torque/types.h"
 #include "src/torque/utils.h"
 
-#include "src/torque/TorqueBaseVisitor.h"
-
 namespace v8 {
 namespace internal {
 namespace torque {
@@ -66,6 +64,7 @@ class FileVisitor {
   }
 
   Signature MakeSignature(const CallableNodeSignature* signature);
+  Signature MakeSignatureFromReturnType(TypeExpression* return_type);
 
   struct PendingSpecialization {
     SpecializationKey key;

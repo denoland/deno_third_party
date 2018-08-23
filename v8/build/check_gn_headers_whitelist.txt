@@ -60,7 +60,6 @@ chrome/browser/media_galleries/media_file_system_context.h
 chrome/browser/notifications/displayed_notifications_dispatch_callback.h
 chrome/browser/permissions/permission_queue_controller.h
 chrome/browser/prefs/active_profile_pref_service.h
-chrome/browser/rlz/chrome_rlz_tracker_delegate.h
 chrome/browser/ui/android/content_settings/subresource_filter_infobar_delegate.h
 chrome/browser/ui/app_icon_loader_delegate.h
 chrome/browser/ui/app_list/app_list_syncable_service_factory.h
@@ -184,8 +183,8 @@ media/formats/mpeg/adts_stream_parser.h
 media/formats/mpeg/mpeg1_audio_stream_parser.h
 media/formats/mpeg/mpeg_audio_stream_parser_base.h
 media/gpu/media_gpu_export.h
-mojo/edk/system/broker_messages.h
-mojo/edk/system/system_impl_export.h
+mojo/core/broker_messages.h
+mojo/core/system_impl_export.h
 mojo/public/cpp/bindings/strong_associated_binding_set.h
 mojo/public/cpp/bindings/tests/mojo_test_blink_export.h
 mojo/public/cpp/test_support/test_support.h
@@ -345,7 +344,6 @@ third_party/woff2/src/port.h
 third_party/yasm/source/config/linux/config.h
 third_party/yasm/source/config/linux/libyasm-stdint.h
 third_party/zlib/contrib/minizip/crypt.h
-tools/battor_agent/battor_protocol_types.h
 tools/gn/ordered_set.h
 tools/ipc_fuzzer/message_lib/all_message_null_macros.h
 ui/app_list/app_list_export.h
@@ -361,7 +359,6 @@ ui/gl/GL/glextchromium.h
 ui/gl/gl_bindings_api_autogen_egl.h
 ui/gl/gl_bindings_api_autogen_gl.h
 ui/gl/gl_bindings_api_autogen_glx.h
-ui/gl/gl_bindings_api_autogen_osmesa.h
 ui/gl/gpu_preference.h
 ui/gl/gpu_switching_observer.h
 ui/ozone/ozone_base_export.h

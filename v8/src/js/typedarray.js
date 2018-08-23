@@ -53,20 +53,22 @@ utils.Import(function(from) {
 function ValidateTypedArray(array, methodName) {
   if (!IS_TYPEDARRAY(array)) throw %make_type_error(kNotTypedArray);
 
-  if (%_ArrayBufferViewWasNeutered(array))
+  if (%ArrayBufferViewWasNeutered(array))
     throw %make_type_error(kDetachedOperation, methodName);
 }
 
 
 // ES6 section 22.2.3.27
+// ecma402 #sup-array.prototype.tolocalestring
 DEFINE_METHOD(
   GlobalTypedArray.prototype,
   toLocaleString() {
     ValidateTypedArray(this, "%TypedArray%.prototype.toLocaleString");
 
-    var length = %_TypedArrayGetLength(this);
-
-    return InnerArrayToLocaleString(this, length);
+    var locales = arguments[0];
+    var options = arguments[1];
+    var length = %TypedArrayGetLength(this);
+    return InnerArrayToLocaleString(this, length, locales, options);
   }
 );
 
@@ -77,7 +79,7 @@ DEFINE_METHOD(
   join(separator) {
     ValidateTypedArray(this, "%TypedArray%.prototype.join");
 
-    var length = %_TypedArrayGetLength(this);
+    var length = %TypedArrayGetLength(this);
 
     return InnerArrayJoin(separator, this, length);
   }

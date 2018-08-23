@@ -31,11 +31,15 @@
 #else  // !MACOSX && !WIN && !AIX
 #define V8_ASM_MANGLE_LABEL ""
 #define V8_ASM_RODATA_SECTION ".section .rodata\n"
+#if defined(OS_CHROMEOS)  // ChromeOS
+#define V8_ASM_TEXT_SECTION ".section .text.hot.embedded\n"
+#else
 #define V8_ASM_TEXT_SECTION ".section .text\n"
+#endif
 #if defined(V8_TARGET_ARCH_MIPS) || defined(V8_TARGET_ARCH_MIPS64)
 #define V8_ASM_DECLARE(NAME) ".global " V8_ASM_MANGLE_LABEL NAME "\n"
 #else
-#define V8_ASM_DECLARE(NAME) ".local " V8_ASM_MANGLE_LABEL NAME "\n"
+#define V8_ASM_DECLARE(NAME) ".global " V8_ASM_MANGLE_LABEL NAME "\n"
 #endif
 #endif
 

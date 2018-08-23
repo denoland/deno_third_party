@@ -6,7 +6,7 @@
 #include <sstream>
 #include <utility>
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/objects-inl.h"
 #include "src/objects.h"
 #include "src/v8.h"
@@ -47,11 +47,12 @@ Handle<T> GetLexical(const char* name) {
       isolate->native_context()->script_context_table(), isolate);
 
   ScriptContextTable::LookupResult lookup_result;
-  if (ScriptContextTable::Lookup(script_contexts, str_name, &lookup_result)) {
-    Handle<Object> result =
-        FixedArray::get(*ScriptContextTable::GetContext(
-                            script_contexts, lookup_result.context_index),
-                        lookup_result.slot_index, isolate);
+  if (ScriptContextTable::Lookup(isolate, script_contexts, str_name,
+                                 &lookup_result)) {
+    Handle<Object> result = FixedArray::get(
+        *ScriptContextTable::GetContext(isolate, script_contexts,
+                                        lookup_result.context_index),
+        lookup_result.slot_index, isolate);
     return Handle<T>::cast(result);
   }
   return Handle<T>();
@@ -1147,7 +1148,7 @@ TEST(SubclassTypedArrayBuiltin) {
   CcTest::InitializeVM();
   v8::HandleScope scope(CcTest::isolate());
 
-#define TYPED_ARRAY_TEST(Type, type, TYPE, elementType, size) \
+#define TYPED_ARRAY_TEST(Type, type, TYPE, elementType) \
   TestSubclassBuiltin("A" #Type, JS_TYPED_ARRAY_TYPE, #Type "Array", "42");
 
   TYPED_ARRAYS(TYPED_ARRAY_TEST)

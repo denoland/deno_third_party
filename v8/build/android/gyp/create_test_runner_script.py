@@ -79,7 +79,6 @@ def main(args):
   group.add_argument('--android-manifest-path')
   group.add_argument('--resource-zips')
   group.add_argument('--robolectric-runtime-deps-dir')
-  group.add_argument('--non-native-packed-relocations')
   args, test_runner_args = parser.parse_known_args(
       build_utils.ExpandFileArgs(args))
 
@@ -92,8 +91,6 @@ def main(args):
   test_runner_path = RelativizePathToScript(test_runner_path)
 
   test_runner_path_args = []
-  if 'True' == args.non_native_packed_relocations:
-    test_runner_args.append('--non-native-packed-relocations')
   if args.additional_apk_list:
     args.additional_apks.extend(
         build_utils.ParseGnList(args.additional_apk_list))
@@ -153,7 +150,7 @@ def main(args):
         ('--robolectric-runtime-deps-dir',
          RelativizePathToScript(args.robolectric_runtime_deps_dir)))
 
-  with open(args.script_output_path, 'w') as script:
+  with build_utils.AtomicOutput(args.script_output_path) as script:
     script.write(SCRIPT_TEMPLATE.format(
         test_runner_path=str(test_runner_path),
         test_runner_args=str(test_runner_args),

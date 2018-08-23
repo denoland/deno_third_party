@@ -16,50 +16,52 @@
 namespace v8 {
 namespace internal {
 
-#define VISITOR_ID_LIST(V) \
-  V(AllocationSite)        \
-  V(BigInt)                \
-  V(ByteArray)             \
-  V(BytecodeArray)         \
-  V(Cell)                  \
-  V(Code)                  \
-  V(CodeDataContainer)     \
-  V(ConsString)            \
-  V(DataHandler)           \
-  V(DataObject)            \
-  V(EphemeronHashTable)    \
-  V(FeedbackCell)          \
-  V(FeedbackVector)        \
-  V(FixedArray)            \
-  V(FixedDoubleArray)      \
-  V(FixedFloat64Array)     \
-  V(FixedTypedArrayBase)   \
-  V(FreeSpace)             \
-  V(JSApiObject)           \
-  V(JSArrayBuffer)         \
-  V(JSFunction)            \
-  V(JSObject)              \
-  V(JSObjectFast)          \
-  V(JSWeakCollection)      \
-  V(Map)                   \
-  V(NativeContext)         \
-  V(Oddball)               \
-  V(PropertyArray)         \
-  V(PropertyCell)          \
-  V(PrototypeInfo)         \
-  V(SeqOneByteString)      \
-  V(SeqTwoByteString)      \
-  V(SharedFunctionInfo)    \
-  V(ShortcutCandidate)     \
-  V(SlicedString)          \
-  V(SmallOrderedHashMap)   \
-  V(SmallOrderedHashSet)   \
-  V(Struct)                \
-  V(Symbol)                \
-  V(ThinString)            \
-  V(TransitionArray)       \
-  V(WasmInstanceObject)    \
-  V(WeakCell)              \
+#define VISITOR_ID_LIST(V)               \
+  V(AllocationSite)                      \
+  V(BigInt)                              \
+  V(ByteArray)                           \
+  V(BytecodeArray)                       \
+  V(Cell)                                \
+  V(Code)                                \
+  V(CodeDataContainer)                   \
+  V(ConsString)                          \
+  V(DataHandler)                         \
+  V(DataObject)                          \
+  V(EphemeronHashTable)                  \
+  V(FeedbackCell)                        \
+  V(FeedbackVector)                      \
+  V(FixedArray)                          \
+  V(FixedDoubleArray)                    \
+  V(FixedFloat64Array)                   \
+  V(FixedTypedArrayBase)                 \
+  V(FreeSpace)                           \
+  V(JSApiObject)                         \
+  V(JSArrayBuffer)                       \
+  V(JSFunction)                          \
+  V(JSObject)                            \
+  V(JSObjectFast)                        \
+  V(JSWeakCollection)                    \
+  V(Map)                                 \
+  V(NativeContext)                       \
+  V(Oddball)                             \
+  V(PreParsedScopeData)                  \
+  V(PropertyArray)                       \
+  V(PropertyCell)                        \
+  V(PrototypeInfo)                       \
+  V(SeqOneByteString)                    \
+  V(SeqTwoByteString)                    \
+  V(SharedFunctionInfo)                  \
+  V(ShortcutCandidate)                   \
+  V(SlicedString)                        \
+  V(SmallOrderedHashMap)                 \
+  V(SmallOrderedHashSet)                 \
+  V(Struct)                              \
+  V(Symbol)                              \
+  V(ThinString)                          \
+  V(TransitionArray)                     \
+  V(UncompiledDataWithoutPreParsedScope) \
+  V(UncompiledDataWithPreParsedScope)    \
+  V(WasmInstanceObject)                  \
   V(WeakArray)
 
 // For data objects, JS objects and structs along with generic visitor which
@@ -164,8 +166,6 @@ typedef std::vector<Handle<Map>> MapHandles;
 // +*************************************************************+
 // | TaggedPointer | [dependent_code]                            |
 // +---------------+---------------------------------------------+
-// | TaggedPointer | [weak_cell_cache]                           |
-// +---------------+---------------------------------------------+
 
 class Map : public HeapObject {
  public:
@@ -211,11 +211,14 @@ class Map : public HeapObject {
   // Tells how many unused property fields (in-object or out-of object) are
   // available in the instance (only used for JSObject in fast mode).
   inline int UnusedPropertyFields() const;
+  // Tells how many unused in-object property words are present.
+  inline int UnusedInObjectProperties() const;
   // Updates the counters tracking unused fields in the object.
   inline void SetInObjectUnusedPropertyFields(int unused_property_fields);
   // Updates the counters tracking unused fields in the property array.
   inline void SetOutOfObjectUnusedPropertyFields(int unused_property_fields);
   inline void CopyUnusedPropertyFields(Map* map);
+  inline void CopyUnusedPropertyFieldsAdjustedForInstanceSize(Map* map);
   inline void AccountAddedPropertyField();
   inline void AccountAddedOutOfObjectPropertyField(
       int unused_in_property_array);
@@ -326,6 +329,11 @@ class Map : public HeapObject {
   // Does the tracking step.
   inline void InobjectSlackTrackingStep(Isolate* isolate);
 
+  // Computes inobject slack for the transition tree starting at this initial
+  // map.
+  int ComputeMinObjectSlack(Isolate* isolate);
+  inline int InstanceSizeFromSlack(int slack) const;
+
   // Completes inobject slack tracking for the transition tree starting at this
   // initial map.
   void CompleteInobjectSlackTracking(Isolate* isolate);
@@ -400,7 +408,7 @@ class Map : public HeapObject {
 
   // Returns true if the current map doesn't have DICTIONARY_ELEMENTS but if a
   // map with DICTIONARY_ELEMENTS was found in the prototype chain.
-  bool DictionaryElementsInPrototypeChainOnly();
+  bool DictionaryElementsInPrototypeChainOnly(Isolate* isolate);
 
   inline Map* ElementsTransitionMap();
 
@@ -438,11 +446,6 @@ class Map : public HeapObject {
 
   // Return the map of the root of object's prototype chain.
   Map* GetPrototypeChainRootMap(Isolate* isolate) const;
-
-  // Returns a WeakCell object containing given prototype. The cell is cached
-  // in PrototypeInfo which is created lazily.
-  static Handle<WeakCell> GetOrCreatePrototypeWeakCell(
-      Handle<JSReceiver> prototype, Isolate* isolate);
 
   Map* FindRootMap(Isolate* isolate) const;
   Map* FindFieldOwner(Isolate* isolate, int descriptor) const;
@@ -572,9 +575,6 @@ class Map : public HeapObject {
   // [dependent code]: list of optimized codes that weakly embed this map.
   DECL_ACCESSORS(dependent_code, DependentCode)
 
-  // [weak cell cache]: cache that stores a weak cell pointing to this map.
-  DECL_ACCESSORS(weak_cell_cache, Object)
-
   // [prototype_validity_cell]: Cell containing the validity bit for prototype
   // chains or Smi(0) if uninitialized.
   // The meaning of this validity cell is different for prototype maps and
@@ -654,7 +654,8 @@ class Map : public HeapObject {
                                           Descriptor* descriptor,
                                           TransitionFlag flag);
 
-  static MaybeObjectHandle WrapFieldType(Handle<FieldType> type);
+  static MaybeObjectHandle WrapFieldType(Isolate* isolate,
+                                         Handle<FieldType> type);
   static FieldType* UnwrapFieldType(MaybeObject* wrapped_type);
 
   V8_WARN_UNUSED_RESULT static MaybeHandle<Map> CopyWithField(
@@ -760,6 +761,9 @@ class Map : public HeapObject {
   inline bool CanTransition() const;
 
   inline bool IsBooleanMap() const;
+  inline bool IsNullMap() const;
+  inline bool IsUndefinedMap() const;
+  inline bool IsNullOrUndefinedMap() const;
   inline bool IsPrimitiveMap() const;
   inline bool IsJSReceiverMap() const;
   inline bool IsJSObjectMap() const;
@@ -778,10 +782,8 @@ class Map : public HeapObject {
 
   bool IsMapInArrayPrototypeChain(Isolate* isolate) const;
 
-  static Handle<WeakCell> WeakCellForMap(Isolate* isolate, Handle<Map> map);
-
   // Dispatched behavior.
-  DECL_PRINTER_WITH_ISOLATE(Map)
+  DECL_PRINTER(Map)
   DECL_VERIFIER(Map)
 
 #ifdef VERIFY_HEAP
@@ -818,7 +820,6 @@ class Map : public HeapObject {
   V(kDescriptorsOffset, kPointerSize)                                       \
   V(kLayoutDescriptorOffset, FLAG_unbox_double_fields ? kPointerSize : 0)   \
   V(kDependentCodeOffset, kPointerSize)                                     \
-  V(kWeakCellCacheOffset, kPointerSize)                                     \
   V(kPrototypeValidityCellOffset, kPointerSize)                             \
   V(kPointerFieldsEndOffset, 0)                                             \
   /* Total size. */                                                         \
@@ -841,7 +842,7 @@ class Map : public HeapObject {
   // Returns true if given field is unboxed double.
   inline bool IsUnboxedDoubleField(FieldIndex index) const;
 
-  void PrintMapDetails(Isolate* isolate, std::ostream& os);
+  void PrintMapDetails(std::ostream& os);
 
   static inline Handle<Map> AddMissingTransitionsForTesting(
       Isolate* isolate, Handle<Map> split_map,
@@ -851,7 +852,7 @@ class Map : public HeapObject {
   // Fires when the layout of an object with a leaf map changes.
   // This includes adding transitions to the leaf map or changing
   // the descriptor array.
-  inline void NotifyLeafMapLayoutChange();
+  inline void NotifyLeafMapLayoutChange(Isolate* isolate);
 
   static VisitorId GetVisitorId(Map* map);
 
@@ -922,10 +923,6 @@ class Map : public HeapObject {
                                            Handle<DescriptorArray> descriptors,
                                            Descriptor* descriptor, int index,
                                            TransitionFlag flag);
-  static V8_WARN_UNUSED_RESULT MaybeHandle<Map> TryReconfigureExistingProperty(
-      Handle<Map> map, int descriptor, PropertyKind kind,
-      PropertyAttributes attributes, const char** reason);
-
   static Handle<Map> CopyNormalized(Isolate* isolate, Handle<Map> map,
                                     PropertyNormalizationMode mode);
 
@@ -971,21 +968,21 @@ class Map : public HeapObject {
 // The cache for maps used by normalized (dictionary mode) objects.
 // Such maps do not have property descriptors, so a typical program
 // needs very limited number of distinct normalized maps.
-class NormalizedMapCache : public FixedArray {
+class NormalizedMapCache : public WeakFixedArray,
+                           public NeverReadOnlySpaceObject {
  public:
+  using NeverReadOnlySpaceObject::GetHeap;
+  using NeverReadOnlySpaceObject::GetIsolate;
+
   static Handle<NormalizedMapCache> New(Isolate* isolate);
 
   V8_WARN_UNUSED_RESULT MaybeHandle<Map> Get(Handle<Map> fast_map,
                                              PropertyNormalizationMode mode);
-  void Set(Handle<Map> fast_map, Handle<Map> normalized_map,
-           Handle<WeakCell> normalized_map_weak_cell);
-
-  void Clear();
+  void Set(Handle<Map> fast_map, Handle<Map> normalized_map);
 
   DECL_CAST(NormalizedMapCache)
 
-  static inline bool IsNormalizedMapCache(Isolate* isolate,
-                                          const HeapObject* obj);
+  static inline bool IsNormalizedMapCache(const HeapObject* obj);
 
   DECL_VERIFIER(NormalizedMapCache)
 

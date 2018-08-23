@@ -24,6 +24,20 @@ inline bool EqualImmutableValues(Object* obj1, Object* obj2) {
 
 }  // namespace
 
+MapUpdater::MapUpdater(Isolate* isolate, Handle<Map> old_map)
+    : isolate_(isolate),
+      old_map_(old_map),
+      old_descriptors_(old_map->instance_descriptors(), isolate_),
+      old_nof_(old_map_->NumberOfOwnDescriptors()),
+      new_elements_kind_(old_map_->elements_kind()),
+      is_transitionable_fast_elements_kind_(
+          IsTransitionableFastElementsKind(new_elements_kind_)) {
+  // We shouldn't try to update remote objects.
+  DCHECK(!old_map->FindRootMap(isolate)
+              ->GetConstructor()
+              ->IsFunctionTemplateInfo());
+}
+
 Name* MapUpdater::GetKey(int descriptor) const {
   return old_descriptors_->GetKey(descriptor);
 }
@@ -231,9 +245,7 @@ MapUpdater::State MapUpdater::FindRootMap() {
     state_ = kEnd;
     result_map_ = handle(
         JSFunction::cast(root_map_->GetConstructor())->initial_map(), isolate_);
-    if (from_kind != to_kind) {
-      result_map_ = Map::AsElementsKind(isolate_, result_map_, to_kind);
-    }
+    result_map_ = Map::AsElementsKind(isolate_, result_map_, to_kind);
     DCHECK(result_map_->is_dictionary_map());
     return state_;
   }
@@ -293,9 +305,7 @@ MapUpdater::State MapUpdater::FindRootMap() {
   }
 
   // From here on, use the map with correct elements kind as root map.
-  if (from_kind != to_kind) {
-    root_map_ = Map::AsElementsKind(isolate_, root_map_, to_kind);
-  }
+  root_map_ = Map::AsElementsKind(isolate_, root_map_, to_kind);
   state_ = kAtRootMap;
   return state_;  // Not done yet.
 }
@@ -383,7 +393,7 @@ MapUpdater::State MapUpdater::FindTargetMap() {
     }
 #endif
     if (*target_map_ != *old_map_) {
-      old_map_->NotifyLeafMapLayoutChange();
+      old_map_->NotifyLeafMapLayoutChange(isolate_);
     }
     result_map_ = target_map_;
     state_ = kEnd;
@@ -508,7 +518,8 @@ Handle<DescriptorArray> MapUpdater::BuildDescriptorArray() {
           isolate_, instance_type, &next_constness, &next_representation,
           &next_field_type);
 
-      MaybeObjectHandle wrapped_type(Map::WrapFieldType(next_field_type));
+      MaybeObjectHandle wrapped_type(
+          Map::WrapFieldType(isolate_, next_field_type));
       Descriptor d;
       if (next_kind == kData) {
         d = Descriptor::DataField(key, current_offset, next_attributes,
@@ -561,7 +572,8 @@ Handle<DescriptorArray> MapUpdater::BuildDescriptorArray() {
                     !Map::IsInplaceGeneralizableField(
                         next_constness, next_representation, *next_field_type));
 
-      MaybeObjectHandle wrapped_type(Map::WrapFieldType(next_field_type));
+      MaybeObjectHandle wrapped_type(
+          Map::WrapFieldType(isolate_, next_field_type));
       Descriptor d;
       if (next_kind == kData) {
         DCHECK_IMPLIES(!FLAG_track_constant_fields,
@@ -655,7 +667,7 @@ MapUpdater::State MapUpdater::ConstructNewMap() {
     return CopyGeneralizeAllFields("GenAll_CantHaveMoreTransitions");
   }
 
-  old_map_->NotifyLeafMapLayoutChange();
+  old_map_->NotifyLeafMapLayoutChange(isolate_);
 
   if (FLAG_trace_generalization && modified_descriptor_ >= 0) {
     PropertyDetails old_details =
@@ -689,7 +701,7 @@ MapUpdater::State MapUpdater::ConstructNewMap() {
   }
 
   Handle<LayoutDescriptor> new_layout_descriptor =
-      LayoutDescriptor::New(split_map, new_descriptors, old_nof_);
+      LayoutDescriptor::New(isolate_, split_map, new_descriptors, old_nof_);
 
   Handle<Map> new_map = Map::AddMissingTransitions(
       isolate_, split_map, new_descriptors, new_layout_descriptor);

@@ -128,7 +128,8 @@ class Logger : public CodeEventListener {
     kReserveId,
     kCreate,
     kDeserialize,
-    kBackgroundCompile
+    kBackgroundCompile,
+    kStreamingCompile
   };
 
   // The separator is used to write an unescaped "," into the log.
@@ -142,6 +143,8 @@ class Logger : public CodeEventListener {
                            JitCodeEventHandler event_handler);
 
   sampler::Sampler* sampler();
+
+  void StopProfilerThread();
 
   // Frees resources acquired in SetUp.
   // When a temporary file is used for the log, returns its stream descriptor,
@@ -221,7 +224,7 @@ class Logger : public CodeEventListener {
   // Emits a code create event for a RegExp.
   void RegExpCodeCreateEvent(AbstractCode* code, String* source);
   // Emits a code move event.
-  void CodeMoveEvent(AbstractCode* from, Address to);
+  void CodeMoveEvent(AbstractCode* from, AbstractCode* to);
   // Emits a code line info record event.
   void CodeLinePosInfoRecordEvent(Address code_start,
                                   ByteArray* source_position_table);
@@ -413,7 +416,7 @@ class TimerEventScope {
 
 class CodeEventLogger : public CodeEventListener {
  public:
-  CodeEventLogger();
+  explicit CodeEventLogger(Isolate* isolate);
   ~CodeEventLogger() override;
 
   void CodeCreateEvent(LogEventsAndTags tag, AbstractCode* code,
@@ -437,6 +440,9 @@ class CodeEventLogger : public CodeEventListener {
   void CodeDeoptEvent(Code* code, DeoptimizeKind kind, Address pc,
                       int fp_to_sp_delta) override {}
 
+ protected:
+  Isolate* isolate_;
+
  private:
   class NameBuffer;
 
@@ -449,6 +455,7 @@ class CodeEventLogger : public CodeEventListener {
 };
 
 struct CodeEvent {
+  Isolate* isolate_;
   uintptr_t code_start_address;
   size_t code_size;
   Handle<String> function_name;
@@ -481,7 +488,7 @@ class ExternalCodeEventListener : public CodeEventListener {
   void GetterCallbackEvent(Name* name, Address entry_point) override {}
   void SetterCallbackEvent(Name* name, Address entry_point) override {}
   void SharedFunctionInfoMoveEvent(Address from, Address to) override {}
-  void CodeMoveEvent(AbstractCode* from, Address to) override {}
+  void CodeMoveEvent(AbstractCode* from, AbstractCode* to) override {}
   void CodeDisableOptEvent(AbstractCode* code,
                            SharedFunctionInfo* shared) override {}
   void CodeMovingGCEvent() override {}

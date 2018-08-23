@@ -4,7 +4,7 @@
 
 #include <cmath>
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/base/utils/random-number-generator.h"
 #include "src/builtins/builtins-promise-gen.h"
 #include "src/builtins/builtins-string-gen.h"
@@ -13,9 +13,12 @@
 #include "src/code-stub-assembler.h"
 #include "src/compiler/node.h"
 #include "src/debug/debug.h"
+#include "src/heap/heap-inl.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
 #include "src/objects/hash-table-inl.h"
+#include "src/objects/js-array-buffer-inl.h"
+#include "src/objects/js-array-inl.h"
 #include "src/objects/promise-inl.h"
 #include "test/cctest/compiler/code-assembler-tester.h"
 #include "test/cctest/compiler/function-tester.h"
@@ -325,15 +328,21 @@ TEST(JSFunction) {
 
 TEST(ComputeIntegerHash) {
   Isolate* isolate(CcTest::InitIsolateOnce());
-  const int kNumParams = 2;
+  const int kNumParams = 1;
   CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
-  m.Return(m.SmiFromInt32(m.ComputeIntegerHash(m.SmiUntag(m.Parameter(0)),
-                                               m.SmiToInt32(m.Parameter(1)))));
+
+  TNode<Int32T> int32_seed;
+  if (m.Is64()) {
+    int32_seed = m.TruncateInt64ToInt32(m.HashSeed());
+  } else {
+    int32_seed = m.HashSeedLow();
+  }
+
+  m.Return(m.SmiFromInt32(
+      m.ComputeIntegerHash(m.SmiUntag(m.Parameter(0)), int32_seed)));
 
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
-
-  Handle<Smi> hash_seed = isolate->factory()->hash_seed();
 
   base::RandomNumberGenerator rand_gen(FLAG_random_seed);
 
@@ -341,9 +350,9 @@ TEST(ComputeIntegerHash) {
     int k = rand_gen.NextInt(Smi::kMaxValue);
 
     Handle<Smi> key(Smi::FromInt(k), isolate);
-    Handle<Object> result = ft.Call(key, hash_seed).ToHandleChecked();
+    Handle<Object> result = ft.Call(key).ToHandleChecked();
 
-    uint32_t hash = ComputeIntegerHash(k, hash_seed->value());
+    uint32_t hash = ComputeIntegerHash(k, isolate->heap()->HashSeed());
     Smi* expected = Smi::FromInt(hash & Smi::kMaxValue);
     CHECK_EQ(expected, Smi::cast(*result));
   }
@@ -379,7 +388,7 @@ TEST(ToString) {
   test_cases->set(2, *string_test);
 
   Handle<FixedArray> oddball_test = isolate->factory()->NewFixedArray(2);
-  oddball_test->set(0, isolate->heap()->undefined_value());
+  oddball_test->set(0, ReadOnlyRoots(isolate).undefined_value());
   str = isolate->factory()->InternalizeUtf8String("undefined");
   oddball_test->set(1, *str);
   test_cases->set(3, *oddball_test);
@@ -680,11 +689,12 @@ void TestNameDictionaryLookup() {
 
   for (size_t i = 0; i < arraysize(keys); i++) {
     Handle<Object> value = factory->NewPropertyCell(keys[i]);
-    dictionary = Dictionary::Add(dictionary, keys[i], value, fake_details);
+    dictionary =
+        Dictionary::Add(isolate, dictionary, keys[i], value, fake_details);
   }
 
   for (size_t i = 0; i < arraysize(keys); i++) {
-    int entry = dictionary->FindEntry(keys[i]);
+    int entry = dictionary->FindEntry(isolate, keys[i]);
     int name_index =
         Dictionary::EntryToIndex(entry) + Dictionary::kEntryKeyIndex;
     CHECK_NE(Dictionary::kNotFound, entry);
@@ -706,7 +716,7 @@ void TestNameDictionaryLookup() {
   };
 
   for (size_t i = 0; i < arraysize(non_existing_keys); i++) {
-    int entry = dictionary->FindEntry(non_existing_keys[i]);
+    int entry = dictionary->FindEntry(isolate, non_existing_keys[i]);
     CHECK_EQ(Dictionary::kNotFound, entry);
 
     ft.CheckTrue(dictionary, non_existing_keys[i], expect_not_found);
@@ -776,15 +786,16 @@ TEST(NumberDictionaryLookup) {
   for (int i = 0; i < kKeysCount; i++) {
     int random_key = rand_gen.NextInt(Smi::kMaxValue);
     keys[i] = static_cast<uint32_t>(random_key);
-    if (dictionary->FindEntry(keys[i]) != NumberDictionary::kNotFound) continue;
+    if (dictionary->FindEntry(isolate, keys[i]) != NumberDictionary::kNotFound)
+      continue;
 
-    dictionary =
-        NumberDictionary::Add(dictionary, keys[i], fake_value, fake_details);
+    dictionary = NumberDictionary::Add(isolate, dictionary, keys[i], fake_value,
+                                       fake_details);
   }
 
   // Now try querying existing keys.
   for (int i = 0; i < kKeysCount; i++) {
-    int entry = dictionary->FindEntry(keys[i]);
+    int entry = dictionary->FindEntry(isolate, keys[i]);
     CHECK_NE(NumberDictionary::kNotFound, entry);
 
     Handle<Object> key(Smi::FromInt(keys[i]), isolate);
@@ -795,7 +806,7 @@ TEST(NumberDictionaryLookup) {
   // Now try querying random keys which do not exist in the dictionary.
   for (int i = 0; i < kKeysCount;) {
     int random_key = rand_gen.NextInt(Smi::kMaxValue);
-    int entry = dictionary->FindEntry(random_key);
+    int entry = dictionary->FindEntry(isolate, random_key);
     if (entry != NumberDictionary::kNotFound) continue;
     i++;
 
@@ -908,7 +919,7 @@ TEST(TransitionLookup) {
   Handle<TransitionArray> transitions(
       TransitionArray::cast(root_map->raw_transitions()->ToStrongHeapObject()),
       isolate);
-  DCHECK(transitions->IsSortedNoDuplicates(isolate));
+  DCHECK(transitions->IsSortedNoDuplicates());
 
   // Ensure we didn't overflow transition array and therefore all the
   // combinations of cases are covered.
@@ -1385,7 +1396,7 @@ namespace {
 
 void AddElement(Handle<JSObject> object, uint32_t index, Handle<Object> value,
                 PropertyAttributes attributes = NONE) {
-  JSObject::AddDataElement(object, index, value, attributes).ToHandleChecked();
+  JSObject::AddDataElement(object, index, value, attributes);
 }
 
 }  // namespace
@@ -2047,7 +2058,7 @@ TEST(IsDebugActive) {
   CHECK(!isolate->debug()->is_active());
   Handle<Object> result =
       ft.Call(isolate->factory()->undefined_value()).ToHandleChecked();
-  CHECK_EQ(isolate->heap()->false_value(), *result);
+  CHECK_EQ(ReadOnlyRoots(isolate).false_value(), *result);
 
   bool* debug_is_active = reinterpret_cast<bool*>(
       ExternalReference::debug_is_active_address(isolate).address());
@@ -2056,7 +2067,7 @@ TEST(IsDebugActive) {
   *debug_is_active = true;
 
   result = ft.Call(isolate->factory()->undefined_value()).ToHandleChecked();
-  CHECK_EQ(isolate->heap()->true_value(), *result);
+  CHECK_EQ(ReadOnlyRoots(isolate).true_value(), *result);
 
   // Reset debug mode.
   *debug_is_active = false;
@@ -2103,13 +2114,14 @@ class AppendJSArrayCodeStubAssembler : public CodeStubAssembler {
     CHECK_EQ(result_size, Handle<Smi>::cast(result)->value());
     CHECK_EQ(result_size, Smi::ToInt(array->length()));
     Object* obj = *JSObject::GetElement(isolate, array, 2).ToHandleChecked();
-    CHECK_EQ(result_size < 3 ? isolate->heap()->undefined_value() : o1, obj);
+    HeapObject* undefined_value = ReadOnlyRoots(isolate).undefined_value();
+    CHECK_EQ(result_size < 3 ? undefined_value : o1, obj);
     obj = *JSObject::GetElement(isolate, array, 3).ToHandleChecked();
-    CHECK_EQ(result_size < 4 ? isolate->heap()->undefined_value() : o2, obj);
+    CHECK_EQ(result_size < 4 ? undefined_value : o2, obj);
     obj = *JSObject::GetElement(isolate, array, 4).ToHandleChecked();
-    CHECK_EQ(result_size < 5 ? isolate->heap()->undefined_value() : o3, obj);
+    CHECK_EQ(result_size < 5 ? undefined_value : o3, obj);
     obj = *JSObject::GetElement(isolate, array, 5).ToHandleChecked();
-    CHECK_EQ(result_size < 6 ? isolate->heap()->undefined_value() : o4, obj);
+    CHECK_EQ(result_size < 6 ? undefined_value : o4, obj);
   }
 
   static void TestAppendJSArray(Isolate* isolate, ElementsKind kind, Object* o1,
@@ -2158,14 +2170,14 @@ TEST(BuildAppendJSArrayFastSmiElementObject) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   AppendJSArrayCodeStubAssembler::TestAppendJSArray(
       isolate, PACKED_SMI_ELEMENTS, Smi::FromInt(3), Smi::FromInt(4),
-      isolate->heap()->undefined_value(), Smi::FromInt(6), 6, 4);
+      ReadOnlyRoots(isolate).undefined_value(), Smi::FromInt(6), 6, 4);
 }
 
 TEST(BuildAppendJSArrayFastSmiElementObjectGrow) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   AppendJSArrayCodeStubAssembler::TestAppendJSArray(
       isolate, PACKED_SMI_ELEMENTS, Smi::FromInt(3), Smi::FromInt(4),
-      isolate->heap()->undefined_value(), Smi::FromInt(6), 2, 4);
+      ReadOnlyRoots(isolate).undefined_value(), Smi::FromInt(6), 2, 4);
 }
 
 TEST(BuildAppendJSArrayFastDoubleElements) {
@@ -2186,7 +2198,7 @@ TEST(BuildAppendJSArrayFastDoubleElementsObject) {
   Isolate* isolate(CcTest::InitIsolateOnce());
   AppendJSArrayCodeStubAssembler::TestAppendJSArray(
       isolate, PACKED_DOUBLE_ELEMENTS, Smi::FromInt(3), Smi::FromInt(4),
-      isolate->heap()->undefined_value(), Smi::FromInt(6), 6, 4);
+      ReadOnlyRoots(isolate).undefined_value(), Smi::FromInt(6), 6, 4);
 }
 
 namespace {
@@ -2216,15 +2228,15 @@ TEST(IsPromiseHookEnabled) {
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
   Handle<Object> result =
       ft.Call(isolate->factory()->undefined_value()).ToHandleChecked();
-  CHECK_EQ(isolate->heap()->false_value(), *result);
+  CHECK_EQ(ReadOnlyRoots(isolate).false_value(), *result);
 
   isolate->SetPromiseHook(CustomPromiseHook);
   result = ft.Call(isolate->factory()->undefined_value()).ToHandleChecked();
-  CHECK_EQ(isolate->heap()->true_value(), *result);
+  CHECK_EQ(ReadOnlyRoots(isolate).true_value(), *result);
 
   isolate->SetPromiseHook(nullptr);
   result = ft.Call(isolate->factory()->undefined_value()).ToHandleChecked();
-  CHECK_EQ(isolate->heap()->false_value(), *result);
+  CHECK_EQ(ReadOnlyRoots(isolate).false_value(), *result);
 }
 
 TEST(AllocateAndInitJSPromise) {
@@ -2279,10 +2291,10 @@ TEST(IsSymbol) {
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
   Handle<Object> result =
       ft.Call(isolate->factory()->NewSymbol()).ToHandleChecked();
-  CHECK_EQ(isolate->heap()->true_value(), *result);
+  CHECK_EQ(ReadOnlyRoots(isolate).true_value(), *result);
 
   result = ft.Call(isolate->factory()->empty_string()).ToHandleChecked();
-  CHECK_EQ(isolate->heap()->false_value(), *result);
+  CHECK_EQ(ReadOnlyRoots(isolate).false_value(), *result);
 }
 
 TEST(IsPrivateSymbol) {
@@ -2298,13 +2310,13 @@ TEST(IsPrivateSymbol) {
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
   Handle<Object> result =
       ft.Call(isolate->factory()->NewSymbol()).ToHandleChecked();
-  CHECK_EQ(isolate->heap()->false_value(), *result);
+  CHECK_EQ(ReadOnlyRoots(isolate).false_value(), *result);
 
   result = ft.Call(isolate->factory()->empty_string()).ToHandleChecked();
-  CHECK_EQ(isolate->heap()->false_value(), *result);
+  CHECK_EQ(ReadOnlyRoots(isolate).false_value(), *result);
 
   result = ft.Call(isolate->factory()->NewPrivateSymbol()).ToHandleChecked();
-  CHECK_EQ(isolate->heap()->true_value(), *result);
+  CHECK_EQ(ReadOnlyRoots(isolate).true_value(), *result);
 }
 
 TEST(PromiseHasHandler) {
@@ -2322,7 +2334,7 @@ TEST(PromiseHasHandler) {
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
   Handle<Object> result =
       ft.Call(isolate->factory()->undefined_value()).ToHandleChecked();
-  CHECK_EQ(isolate->heap()->false_value(), *result);
+  CHECK_EQ(ReadOnlyRoots(isolate).false_value(), *result);
 }
 
 TEST(CreatePromiseResolvingFunctionsContext) {
@@ -2346,10 +2358,10 @@ TEST(CreatePromiseResolvingFunctionsContext) {
   CHECK(result->IsContext());
   Handle<Context> context_js = Handle<Context>::cast(result);
   CHECK_EQ(isolate->native_context()->scope_info(), context_js->scope_info());
-  CHECK_EQ(isolate->heap()->the_hole_value(), context_js->extension());
+  CHECK_EQ(ReadOnlyRoots(isolate).the_hole_value(), context_js->extension());
   CHECK_EQ(*isolate->native_context(), context_js->native_context());
   CHECK(context_js->get(PromiseBuiltinsAssembler::kPromiseSlot)->IsJSPromise());
-  CHECK_EQ(isolate->heap()->false_value(),
+  CHECK_EQ(ReadOnlyRoots(isolate).false_value(),
            context_js->get(PromiseBuiltinsAssembler::kDebugEventSlot));
 }
 
@@ -2368,7 +2380,8 @@ TEST(CreatePromiseResolvingFunctions) {
   std::tie(resolve, reject) = m.CreatePromiseResolvingFunctions(
       promise, m.BooleanConstant(false), native_context);
   Node* const kSize = m.IntPtrConstant(2);
-  Node* const arr = m.AllocateFixedArray(PACKED_ELEMENTS, kSize);
+  TNode<FixedArray> const arr =
+      m.Cast(m.AllocateFixedArray(PACKED_ELEMENTS, kSize));
   m.StoreFixedArrayElement(arr, 0, resolve);
   m.StoreFixedArrayElement(arr, 1, reject);
   m.Return(arr);
@@ -2469,8 +2482,9 @@ TEST(AllocateFunctionWithMapAndContext) {
       ft.Call(isolate->factory()->undefined_value()).ToHandleChecked();
   CHECK(result_obj->IsJSFunction());
   Handle<JSFunction> fun = Handle<JSFunction>::cast(result_obj);
-  CHECK_EQ(isolate->heap()->empty_property_array(), fun->property_array());
-  CHECK_EQ(isolate->heap()->empty_fixed_array(), fun->elements());
+  CHECK_EQ(ReadOnlyRoots(isolate).empty_property_array(),
+           fun->property_array());
+  CHECK_EQ(ReadOnlyRoots(isolate).empty_fixed_array(), fun->elements());
   CHECK_EQ(isolate->heap()->many_closures_cell(), fun->feedback_cell());
   CHECK(!fun->has_prototype_slot());
   CHECK_EQ(*isolate->promise_capability_default_resolve_shared_fun(),
@@ -2509,7 +2523,7 @@ TEST(CreatePromiseGetCapabilitiesExecutorContext) {
   CHECK_EQ(PromiseBuiltinsAssembler::kCapabilitiesContextLength,
            context_js->length());
   CHECK_EQ(isolate->native_context()->scope_info(), context_js->scope_info());
-  CHECK_EQ(isolate->heap()->the_hole_value(), context_js->extension());
+  CHECK_EQ(ReadOnlyRoots(isolate).the_hole_value(), context_js->extension());
   CHECK_EQ(*isolate->native_context(), context_js->native_context());
   CHECK(context_js->get(PromiseBuiltinsAssembler::kCapabilitySlot)
             ->IsPromiseCapability());
@@ -2557,7 +2571,7 @@ TEST(NewPromiseCapability) {
     for (auto&& callback : callbacks) {
       Handle<Context> context(Context::cast(callback->context()), isolate);
       CHECK_EQ(isolate->native_context()->scope_info(), context->scope_info());
-      CHECK_EQ(isolate->heap()->the_hole_value(), context->extension());
+      CHECK_EQ(ReadOnlyRoots(isolate).the_hole_value(), context->extension());
       CHECK_EQ(*isolate->native_context(), context->native_context());
       CHECK_EQ(PromiseBuiltinsAssembler::kPromiseContextLength,
                context->length());
@@ -2841,8 +2855,8 @@ TEST(AllocateStruct) {
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
 
   Handle<Map> maps[] = {
-      handle(isolate->heap()->tuple3_map(), isolate),
-      handle(isolate->heap()->tuple2_map(), isolate),
+      handle(ReadOnlyRoots(isolate).tuple3_map(), isolate),
+      handle(ReadOnlyRoots(isolate).tuple2_map(), isolate),
   };
 
   {
@@ -3117,7 +3131,7 @@ TEST(CloneFixedArrayCOW) {
 
   Handle<FixedArray> source(isolate->factory()->NewFixedArrayWithHoles(5));
   source->set(1, Smi::FromInt(1234));
-  source->set_map(isolate->heap()->fixed_cow_array_map());
+  source->set_map(ReadOnlyRoots(isolate).fixed_cow_array_map());
   Handle<Object> result_raw = ft.Call(source).ToHandleChecked();
   FixedArray* result(FixedArray::cast(*result_raw));
   CHECK_EQ(*source, result);
@@ -3139,7 +3153,7 @@ TEST(ExtractFixedArrayCOWForceCopy) {
 
   Handle<FixedArray> source(isolate->factory()->NewFixedArrayWithHoles(5));
   source->set(1, Smi::FromInt(1234));
-  source->set_map(isolate->heap()->fixed_cow_array_map());
+  source->set_map(ReadOnlyRoots(isolate).fixed_cow_array_map());
   Handle<Object> result_raw = ft.Call(source).ToHandleChecked();
   FixedArray* result(FixedArray::cast(*result_raw));
   CHECK_NE(*source, result);
@@ -3340,7 +3354,9 @@ TEST(SmallOrderedHashMapAllocate) {
     CHECK_EQ(0, actual->NumberOfDeletedElements());
     CHECK_EQ(capacity / SmallOrderedHashMap::kLoadFactor,
              actual->NumberOfBuckets());
-    CHECK(memcmp(*expected, *actual, SmallOrderedHashMap::SizeFor(capacity)));
+    CHECK_EQ(0, memcmp(reinterpret_cast<void*>(expected->address()),
+                       reinterpret_cast<void*>(actual->address()),
+                       SmallOrderedHashMap::SizeFor(capacity)));
 #ifdef VERIFY_HEAP
     actual->SmallOrderedHashTableVerify(isolate);
 #endif
@@ -3377,7 +3393,9 @@ TEST(SmallOrderedHashSetAllocate) {
     CHECK_EQ(0, actual->NumberOfDeletedElements());
     CHECK_EQ(capacity / SmallOrderedHashSet::kLoadFactor,
              actual->NumberOfBuckets());
-    CHECK(memcmp(*expected, *actual, SmallOrderedHashSet::SizeFor(capacity)));
+    CHECK_EQ(0, memcmp(reinterpret_cast<void*>(expected->address()),
+                       reinterpret_cast<void*>(actual->address()),
+                       SmallOrderedHashSet::SizeFor(capacity)));
 #ifdef VERIFY_HEAP
     actual->SmallOrderedHashTableVerify(isolate);
 #endif
@@ -3435,6 +3453,54 @@ TEST(IsDoubleElementsKind) {
                     .ToHandleChecked()))
                ->value(),
            0);
+}
+
+TEST(TestCallBuiltinInlineTrampoline) {
+  Isolate* isolate(CcTest::InitIsolateOnce());
+  const int kNumParams = 1;
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
+  CodeStubAssembler m(asm_tester.state());
+
+  const int kContextOffset = 2;
+  Node* str = m.Parameter(0);
+  Node* context = m.Parameter(kNumParams + kContextOffset);
+
+  Node* index = m.SmiConstant(2);
+
+  m.Return(m.CallStub(Builtins::CallableFor(isolate, Builtins::kStringRepeat),
+                      context, str, index));
+  AssemblerOptions options = AssemblerOptions::Default(isolate);
+  options.inline_offheap_trampolines = true;
+  options.use_pc_relative_calls_and_jumps = false;
+  options.isolate_independent_code = false;
+  FunctionTester ft(asm_tester.GenerateCode(options), kNumParams);
+  MaybeHandle<Object> result = ft.Call(MakeString("abcdef"));
+  CHECK(String::Equals(isolate, MakeString("abcdefabcdef"),
+                       Handle<String>::cast(result.ToHandleChecked())));
+}
+
+TEST(TestCallBuiltinIndirectLoad) {
+  Isolate* isolate(CcTest::InitIsolateOnce());
+  const int kNumParams = 1;
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
+  CodeStubAssembler m(asm_tester.state());
+
+  const int kContextOffset = 2;
+  Node* str = m.Parameter(0);
+  Node* context = m.Parameter(kNumParams + kContextOffset);
+
+  Node* index = m.SmiConstant(2);
+
+  m.Return(m.CallStub(Builtins::CallableFor(isolate, Builtins::kStringRepeat),
+                      context, str, index));
+  AssemblerOptions options = AssemblerOptions::Default(isolate);
+  options.inline_offheap_trampolines = false;
+  options.use_pc_relative_calls_and_jumps = false;
+  options.isolate_independent_code = true;
+  FunctionTester ft(asm_tester.GenerateCode(options), kNumParams);
+  MaybeHandle<Object> result = ft.Call(MakeString("abcdef"));
+  CHECK(String::Equals(isolate, MakeString("abcdefabcdef"),
+                       Handle<String>::cast(result.ToHandleChecked())));
 }
 
 }  // namespace compiler

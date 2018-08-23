@@ -1100,7 +1100,9 @@ void InstructionSelector::VisitWord32ReverseBits(Node* node) {
 
 void InstructionSelector::VisitWord64ReverseBytes(Node* node) { UNREACHABLE(); }
 
-void InstructionSelector::VisitWord32ReverseBytes(Node* node) { UNREACHABLE(); }
+void InstructionSelector::VisitWord32ReverseBytes(Node* node) {
+  VisitRR(this, kArmRev, node);
+}
 
 void InstructionSelector::VisitWord32Popcnt(Node* node) { UNREACHABLE(); }
 
@@ -2100,7 +2102,7 @@ void InstructionSelector::VisitWord32AtomicExchange(Node* node) {
   Node* index = node->InputAt(1);
   Node* value = node->InputAt(2);
   ArchOpcode opcode = kArchNop;
-  MachineType type = AtomicOpRepresentationOf(node->op());
+  MachineType type = AtomicOpType(node->op());
   if (type == MachineType::Int8()) {
     opcode = kWord32AtomicExchangeInt8;
   } else if (type == MachineType::Uint8()) {
@@ -2136,7 +2138,7 @@ void InstructionSelector::VisitWord32AtomicCompareExchange(Node* node) {
   Node* old_value = node->InputAt(2);
   Node* new_value = node->InputAt(3);
   ArchOpcode opcode = kArchNop;
-  MachineType type = AtomicOpRepresentationOf(node->op());
+  MachineType type = AtomicOpType(node->op());
   if (type == MachineType::Int8()) {
     opcode = kWord32AtomicCompareExchangeInt8;
   } else if (type == MachineType::Uint8()) {
@@ -2175,7 +2177,7 @@ void InstructionSelector::VisitWord32AtomicBinaryOperation(
   Node* index = node->InputAt(1);
   Node* value = node->InputAt(2);
   ArchOpcode opcode = kArchNop;
-  MachineType type = AtomicOpRepresentationOf(node->op());
+  MachineType type = AtomicOpType(node->op());
   if (type == MachineType::Int8()) {
     opcode = int8_op;
   } else if (type == MachineType::Uint8()) {
@@ -2488,28 +2490,31 @@ void InstructionSelector::VisitS8x16Shuffle(Node* node) {
   int index = 0;
   if (TryMatch32x4Shuffle(shuffle, shuffle32x4)) {
     if (TryMatchDup<4>(shuffle, &index)) {
-      InstructionOperand src =
-          index < 4 ? g.UseRegister(input0) : g.UseRegister(input1);
-      Emit(kArmS128Dup, g.DefineAsRegister(node), src, g.UseImmediate(Neon32),
-           g.UseImmediate(index % 4));
+      DCHECK_GT(4, index);
+      Emit(kArmS128Dup, g.DefineAsRegister(node), g.UseRegister(input0),
+           g.UseImmediate(Neon32), g.UseImmediate(index % 4));
+    } else if (TryMatchIdentity(shuffle)) {
+      EmitIdentity(node);
     } else {
-      Emit(kArmS32x4Shuffle, g.DefineAsRegister(node), g.UseRegister(input0),
-           g.UseRegister(input1), g.UseImmediate(Pack4Lanes(shuffle32x4)));
+      // 32x4 shuffles are implemented as s-register moves. To simplify these,
+      // make sure the destination is distinct from both sources.
+      InstructionOperand src0 = g.UseUniqueRegister(input0);
+      InstructionOperand src1 = is_swizzle ? src0 : g.UseUniqueRegister(input1);
+      Emit(kArmS32x4Shuffle, g.DefineAsRegister(node), src0, src1,
+           g.UseImmediate(Pack4Lanes(shuffle32x4)));
     }
     return;
   }
   if (TryMatchDup<8>(shuffle, &index)) {
-    InstructionOperand src =
-        index < 8 ? g.UseRegister(input0) : g.UseRegister(input1);
-    Emit(kArmS128Dup, g.DefineAsRegister(node), src, g.UseImmediate(Neon16),
-         g.UseImmediate(index % 8));
+    DCHECK_GT(8, index);
+    Emit(kArmS128Dup, g.DefineAsRegister(node), g.UseRegister(input0),
+         g.UseImmediate(Neon16), g.UseImmediate(index % 8));
     return;
   }
   if (TryMatchDup<16>(shuffle, &index)) {
-    InstructionOperand src =
-        index < 16 ? g.UseRegister(input0) : g.UseRegister(input1);
-    Emit(kArmS128Dup, g.DefineAsRegister(node), src, g.UseImmediate(Neon8),
-         g.UseImmediate(index % 16));
+    DCHECK_GT(16, index);
+    Emit(kArmS128Dup, g.DefineAsRegister(node), g.UseRegister(input0),
+         g.UseImmediate(Neon8), g.UseImmediate(index % 16));
     return;
   }
   ArchOpcode opcode;

@@ -19,8 +19,11 @@ class BytecodeArray;
 
 // The DebugInfo class holds additional information for a function being
 // debugged.
-class DebugInfo : public Struct {
+class DebugInfo : public Struct, public NeverReadOnlySpaceObject {
  public:
+  using NeverReadOnlySpaceObject::GetHeap;
+  using NeverReadOnlySpaceObject::GetIsolate;
+
   enum Flag {
     kNone = 0,
     kHasBreakInfo = 1 << 0,
@@ -42,8 +45,8 @@ class DebugInfo : public Struct {
   // Bit field containing various information collected for debugging.
   DECL_INT_ACCESSORS(debugger_hints)
 
-  // Function identifier field from shared function info.
-  DECL_ACCESSORS(function_identifier, Object)
+  // Script field from shared function info.
+  DECL_ACCESSORS(script, Object)
 
   // DebugInfo can be detached from the SharedFunctionInfo iff it is empty.
   bool IsEmpty() const;
@@ -165,10 +168,8 @@ class DebugInfo : public Struct {
   static const int kSharedFunctionInfoOffset = Struct::kHeaderSize;
   static const int kDebuggerHintsOffset =
       kSharedFunctionInfoOffset + kPointerSize;
-  static const int kFunctionIdentifierOffset =
-      kDebuggerHintsOffset + kPointerSize;
-  static const int kOriginalBytecodeArrayOffset =
-      kFunctionIdentifierOffset + kPointerSize;
+  static const int kScriptOffset = kDebuggerHintsOffset + kPointerSize;
+  static const int kOriginalBytecodeArrayOffset = kScriptOffset + kPointerSize;
   static const int kBreakPointsStateOffset =
       kOriginalBytecodeArrayOffset + kPointerSize;
   static const int kFlagsOffset = kBreakPointsStateOffset + kPointerSize;

@@ -27,7 +27,7 @@ import zipfile
 # Do NOT CHANGE this if you don't know what you're doing -- see
 # https://chromium.googlesource.com/chromium/src/+/master/docs/updating_clang.md
 # Reverting problematic clang rolls is safe, though.
-CLANG_REVISION = '335864'
+CLANG_REVISION = '338452'
 
 use_head_revision = bool(os.environ.get('LLVM_FORCE_HEAD_REVISION', '0')
                          in ('1', 'YES'))
@@ -392,7 +392,10 @@ def GetWinSDKDir():
   if bool(int(os.environ.get('DEPOT_TOOLS_WIN_TOOLCHAIN', '1'))):
     dia_path = os.path.join(win_sdk_dir, '..', 'DIA SDK', 'bin', 'amd64')
   else:
-    vs_path = vs_toolchain.DetectVisualStudioPath()
+    if 'GYP_MSVS_OVERRIDE_PATH' not in os.environ:
+      vs_path = vs_toolchain.DetectVisualStudioPath()
+    else:
+      vs_path = os.environ['GYP_MSVS_OVERRIDE_PATH']
     dia_path = os.path.join(vs_path, 'DIA SDK', 'bin', 'amd64')
 
   dia_dll = os.path.join(dia_path, DIA_DLL[msvs_version])
@@ -489,6 +492,14 @@ def UpdateClang(args):
     return 1
 
   print 'Locally building Clang %s...' % PACKAGE_VERSION
+
+  if use_head_revision:
+    # TODO(hans): Trunk version was updated; remove after the next roll.
+    # Remove the old lib dir.
+    old_lib_dir = os.path.join(LLVM_BUILD_DIR, 'lib', 'clang', '7.0.0')
+    if (os.path.isdir(old_lib_dir)):
+      print 'Removing old lib dir: %s' % old_lib_dir
+      RmTree(old_lib_dir)
 
   DownloadHostGcc(args)
   AddCMakeToPath(args)
@@ -747,26 +758,26 @@ def UpdateClang(args):
   else:
     assert sys.platform.startswith('linux')
     platform = 'linux'
-  asan_rt_lib_src_dir = os.path.join(COMPILER_RT_BUILD_DIR, 'lib', platform)
+  rt_lib_src_dir = os.path.join(COMPILER_RT_BUILD_DIR, 'lib', platform)
   if sys.platform == 'win32':
     # TODO(thakis): This too is due to compiler-rt being part of the checkout
     # on Windows, see TODO above COMPILER_RT_DIR.
-    asan_rt_lib_src_dir = os.path.join(COMPILER_RT_BUILD_DIR, 'lib', 'clang',
-                                       VERSION, 'lib', platform)
-  asan_rt_lib_dst_dir = os.path.join(LLVM_BUILD_DIR, 'lib', 'clang',
-                                     VERSION, 'lib', platform)
+    rt_lib_src_dir = os.path.join(COMPILER_RT_BUILD_DIR, 'lib', 'clang',
+                                  VERSION, 'lib', platform)
+  rt_lib_dst_dir = os.path.join(LLVM_BUILD_DIR, 'lib', 'clang', VERSION, 'lib',
+                                platform)
   # Blacklists:
-  CopyDirectoryContents(os.path.join(asan_rt_lib_src_dir, '..', '..', 'share'),
-                        os.path.join(asan_rt_lib_dst_dir, '..', '..', 'share'))
+  CopyDirectoryContents(os.path.join(rt_lib_src_dir, '..', '..', 'share'),
+                        os.path.join(rt_lib_dst_dir, '..', '..', 'share'))
   # Headers:
   if sys.platform != 'win32':
     CopyDirectoryContents(
         os.path.join(COMPILER_RT_BUILD_DIR, 'include/sanitizer'),
         os.path.join(LLVM_BUILD_DIR, 'lib/clang', VERSION, 'include/sanitizer'))
   # Static and dynamic libraries:
-  CopyDirectoryContents(asan_rt_lib_src_dir, asan_rt_lib_dst_dir)
+  CopyDirectoryContents(rt_lib_src_dir, rt_lib_dst_dir)
   if sys.platform == 'darwin':
-    for dylib in glob.glob(os.path.join(asan_rt_lib_dst_dir, '*.dylib')):
+    for dylib in glob.glob(os.path.join(rt_lib_dst_dir, '*.dylib')):
       # Fix LC_ID_DYLIB for the ASan dynamic libraries to be relative to
       # @executable_path.
       # TODO(glider): this is transitional. We'll need to fix the dylib
@@ -795,7 +806,7 @@ def UpdateClang(args):
               'i686': 'x86',
           }[target_arch]])
 
-      # Build sanitizer runtimes for Android in a separate build tree.
+      # Build compiler-rt runtimes needed for Android in a separate build tree.
       build_dir = os.path.join(LLVM_BUILD_DIR, 'android-' + target_arch)
       if not os.path.exists(build_dir):
         os.mkdir(os.path.join(build_dir))
@@ -822,11 +833,19 @@ def UpdateClang(args):
         '-DANDROID=1']
       RmCmakeCache('.')
       RunCommand(['cmake'] + android_args + [COMPILER_RT_DIR])
-      RunCommand(['ninja', 'asan', 'ubsan'])
+      RunCommand(['ninja', 'asan', 'ubsan', 'profile'])
 
       # And copy them into the main build tree.
-      for f in glob.glob(os.path.join(build_dir, 'lib/linux/*.so')):
-        shutil.copy(f, asan_rt_lib_dst_dir)
+      libs_want = [
+          'lib/linux/libclang_rt.asan-{0}-android.so',
+          'lib/linux/libclang_rt.ubsan_standalone-{0}-android.so',
+          'lib/linux/libclang_rt.profile-{0}-android.a',
+      ]
+      for arch in ['aarch64', 'arm']:
+        for p in libs_want:
+          lib_path = os.path.join(build_dir, p.format(arch))
+          if os.path.exists(lib_path):
+            shutil.copy(lib_path, rt_lib_dst_dir)
 
   # Run tests.
   if args.run_tests or use_head_revision:
@@ -894,6 +913,11 @@ def main():
   if (use_head_revision or args.llvm_force_head_revision or
       args.force_local_build):
     AddSvnToPathOnWin()
+
+  if use_head_revision:
+    # TODO(hans): Trunk version was updated; remove after the next roll.
+    global VERSION
+    VERSION = '8.0.0'
 
   if args.verify_version and args.verify_version != VERSION:
     print 'VERSION is %s but --verify-version argument was %s, exiting.' % (

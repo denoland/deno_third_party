@@ -10,7 +10,8 @@
 #include "src/v8.h"
 
 #include "src/compilation-cache.h"
-#include "src/compilation-dependencies.h"
+#include "src/compiler/compilation-dependencies.h"
+#include "src/compiler/js-heap-broker.h"
 #include "src/execution.h"
 #include "src/field-type.h"
 #include "src/global-handles.h"
@@ -24,6 +25,7 @@
 
 namespace v8 {
 namespace internal {
+namespace compiler {
 namespace test_field_type_tracking {
 
 // TODO(ishell): fix this once TransitionToPrototype stops generalizing
@@ -305,7 +307,7 @@ class Expectations {
       if (!Check(descriptors, i)) {
         Print();
 #ifdef OBJECT_PRINT
-        descriptors->Print(isolate_);
+        descriptors->Print();
 #endif
         Check(descriptors, i);
         return false;
@@ -557,7 +559,8 @@ TEST(ReconfigureAccessorToNonExistingDataFieldHeavy) {
   Handle<String> obj_name = factory->InternalizeUtf8String("o");
 
   Handle<Object> obj_value =
-      Object::GetProperty(isolate->global_object(), obj_name).ToHandleChecked();
+      Object::GetProperty(isolate, isolate->global_object(), obj_name)
+          .ToHandleChecked();
   CHECK(obj_value->IsJSObject());
   Handle<JSObject> obj = Handle<JSObject>::cast(obj_value);
 
@@ -651,11 +654,13 @@ static void TestGeneralizeField(int detach_property_at_index,
   }
 
   // Create new maps by generalizing representation of propX field.
+  CanonicalHandleScope canonical(isolate);
+  JSHeapBroker broker(isolate, &zone);
+  CompilationDependencies dependencies(isolate, &zone);
+  dependencies.DependOnFieldType(MapRef(&broker, map), property_index);
+
   Handle<Map> field_owner(map->FindFieldOwner(isolate, property_index),
                           isolate);
-  CompilationDependencies dependencies(isolate, &zone);
-  dependencies.DependOnFieldType(map, property_index);
-
   Handle<Map> new_map = Map::ReconfigureProperty(
       isolate, map, property_index, kData, NONE, to.representation, to.type);
 
@@ -1021,8 +1026,10 @@ static void TestReconfigureDataFieldAttribute_GeneralizeField(
   CHECK(expectations2.Check(*map2));
 
   Zone zone(isolate->allocator(), ZONE_NAME);
+  CanonicalHandleScope canonical(isolate);
+  JSHeapBroker broker(isolate, &zone);
   CompilationDependencies dependencies(isolate, &zone);
-  dependencies.DependOnFieldType(map, kSplitProp);
+  dependencies.DependOnFieldType(MapRef(&broker, map), kSplitProp);
 
   // Reconfigure attributes of property |kSplitProp| of |map2| to NONE, which
   // should generalize representations in |map1|.
@@ -1103,8 +1110,10 @@ static void TestReconfigureDataFieldAttribute_GeneralizeFieldTrivial(
   CHECK(expectations2.Check(*map2));
 
   Zone zone(isolate->allocator(), ZONE_NAME);
+  CanonicalHandleScope canonical(isolate);
+  JSHeapBroker broker(isolate, &zone);
   CompilationDependencies dependencies(isolate, &zone);
-  dependencies.DependOnFieldType(map, kSplitProp);
+  dependencies.DependOnFieldType(MapRef(&broker, map), kSplitProp);
 
   // Reconfigure attributes of property |kSplitProp| of |map2| to NONE, which
   // should generalize representations in |map1|.
@@ -1782,8 +1791,10 @@ static void TestReconfigureElementsKind_GeneralizeField(
   CHECK(expectations2.Check(*map2));
 
   Zone zone(isolate->allocator(), ZONE_NAME);
+  CanonicalHandleScope canonical(isolate);
+  JSHeapBroker broker(isolate, &zone);
   CompilationDependencies dependencies(isolate, &zone);
-  dependencies.DependOnFieldType(map, kDiffProp);
+  dependencies.DependOnFieldType(MapRef(&broker, map), kDiffProp);
 
   // Reconfigure elements kinds of |map2|, which should generalize
   // representations in |map|.
@@ -1875,8 +1886,10 @@ static void TestReconfigureElementsKind_GeneralizeFieldTrivial(
   CHECK(expectations2.Check(*map2));
 
   Zone zone(isolate->allocator(), ZONE_NAME);
+  CanonicalHandleScope canonical(isolate);
+  JSHeapBroker broker(isolate, &zone);
   CompilationDependencies dependencies(isolate, &zone);
-  dependencies.DependOnFieldType(map, kDiffProp);
+  dependencies.DependOnFieldType(MapRef(&broker, map), kDiffProp);
 
   // Reconfigure elements kinds of |map2|, which should generalize
   // representations in |map|.
@@ -2335,7 +2348,7 @@ TEST(ElementsKindTransitionFromMapOwningDescriptor) {
 
   struct TestConfig {
     Handle<Map> Transition(Handle<Map> map, Expectations& expectations) {
-      Handle<Symbol> frozen_symbol(map->GetHeap()->frozen_symbol(),
+      Handle<Symbol> frozen_symbol(map->GetReadOnlyRoots().frozen_symbol(),
                                    CcTest::i_isolate());
       expectations.SetElementsKind(DICTIONARY_ELEMENTS);
       return Map::CopyForPreventExtensions(CcTest::i_isolate(), map, NONE,
@@ -2377,7 +2390,8 @@ TEST(ElementsKindTransitionFromMapNotOwningDescriptor) {
           .ToHandleChecked();
       CHECK(!map->owns_descriptors());
 
-      Handle<Symbol> frozen_symbol(isolate->heap()->frozen_symbol(), isolate);
+      Handle<Symbol> frozen_symbol(ReadOnlyRoots(isolate).frozen_symbol(),
+                                   isolate);
       expectations.SetElementsKind(DICTIONARY_ELEMENTS);
       return Map::CopyForPreventExtensions(isolate, map, NONE, frozen_symbol,
                                            "CopyForPreventExtensions");
@@ -2622,8 +2636,7 @@ struct SameMapChecker {
 // Checks that both |map1| and |map2| should stays non-deprecated, this is
 // the case when property kind is change.
 struct PropertyKindReconfigurationChecker {
-  void Check(Isolate* isolate, Expectations& expectations, Handle<Map> map1,
-             Handle<Map> map2) {
+  void Check(Expectations& expectations, Handle<Map> map1, Handle<Map> map2) {
     CHECK(!map1->is_deprecated());
     CHECK(!map2->is_deprecated());
     CHECK_NE(*map1, *map2);
@@ -2813,5 +2826,6 @@ TEST(HoleyMutableHeapNumber) {
 }
 
 }  // namespace test_field_type_tracking
+}  // namespace compiler
 }  // namespace internal
 }  // namespace v8

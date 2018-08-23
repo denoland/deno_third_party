@@ -73,9 +73,9 @@ struct WasmDataSegment {
 };
 
 // Static representation of a wasm indirect call table.
-struct WasmIndirectFunctionTable {
-  MOVE_ONLY_WITH_DEFAULT_CONSTRUCTORS(WasmIndirectFunctionTable);
-
+struct WasmTable {
+  MOVE_ONLY_WITH_DEFAULT_CONSTRUCTORS(WasmTable);
+  ValueType type = kWasmStmt;     // table type.
   uint32_t initial_size = 0;      // initial table size.
   uint32_t maximum_size = 0;      // maximum table size.
   bool has_maximum_size = false;  // true if there is a maximum size.
@@ -114,9 +114,9 @@ struct WasmExport {
 
 enum ModuleOrigin : uint8_t { kWasmOrigin, kAsmJsOrigin };
 
-#define SELECT_WASM_COUNTER(counters, origin, prefix, suffix)           \
-  ((origin) == wasm::kWasmOrigin ? (counters)->prefix##_wasm_##suffix() \
-                                 : (counters)->prefix##_asm_##suffix())
+#define SELECT_WASM_COUNTER(counters, origin, prefix, suffix)     \
+  ((origin) == kWasmOrigin ? (counters)->prefix##_wasm_##suffix() \
+                           : (counters)->prefix##_asm_##suffix())
 
 struct ModuleWireBytes;
 
@@ -146,7 +146,7 @@ struct V8_EXPORT_PRIVATE WasmModule {
   std::vector<uint32_t> signature_ids;   // by signature index
   std::vector<WasmFunction> functions;
   std::vector<WasmDataSegment> data_segments;
-  std::vector<WasmIndirectFunctionTable> function_tables;
+  std::vector<WasmTable> tables;
   std::vector<WasmImport> import_table;
   std::vector<WasmExport> export_table;
   std::vector<WasmException> exceptions;
@@ -157,8 +157,7 @@ struct V8_EXPORT_PRIVATE WasmModule {
   mutable std::unique_ptr<std::unordered_map<uint32_t, WireBytesRef>>
       function_names;
 
-  WasmModule() : WasmModule(nullptr) {}
-  WasmModule(std::unique_ptr<Zone> owned);
+  explicit WasmModule(std::unique_ptr<Zone> owned = nullptr);
 
   WireBytesRef LookupFunctionName(const ModuleWireBytes& wire_bytes,
                                   uint32_t function_index) const;
