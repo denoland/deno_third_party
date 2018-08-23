@@ -27,7 +27,6 @@
 
 #include "src/ast/ast-value-factory.h"
 
-#include "src/api.h"
 #include "src/char-predicates-inl.h"
 #include "src/objects-inl.h"
 #include "src/objects.h"
@@ -182,7 +181,7 @@ std::forward_list<const AstRawString*> AstConsString::ToRawStrings() const {
   return result;
 }
 
-AstStringConstants::AstStringConstants(Isolate* isolate, uint32_t hash_seed)
+AstStringConstants::AstStringConstants(Isolate* isolate, uint64_t hash_seed)
     : zone_(isolate->allocator(), ZONE_NAME),
       string_table_(AstRawString::Compare),
       hash_seed_(hash_seed) {

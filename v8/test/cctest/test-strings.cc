@@ -34,7 +34,7 @@
 
 #include "src/v8.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/heap/factory.h"
 #include "src/messages.h"
 #include "src/objects-inl.h"
@@ -291,7 +291,7 @@ ConsStringGenerationData::ConsStringGenerationData(bool long_blocks) {
   rng_.init();
   InitializeBuildingBlocks(
       building_blocks_, kNumberOfBuildingBlocks, long_blocks, &rng_);
-  empty_string_ = CcTest::heap()->empty_string();
+  empty_string_ = ReadOnlyRoots(CcTest::heap()).empty_string();
   Reset();
 }
 
@@ -627,8 +627,8 @@ TEST(ConsStringWithEmptyFirstFlatten) {
   i::Handle<i::String> new_fst = isolate->factory()->empty_string();
   i::Handle<i::String> new_snd =
       isolate->factory()->NewStringFromAsciiChecked("snd012345012345678");
-  cons->set_first(*new_fst);
-  cons->set_second(*new_snd);
+  cons->set_first(isolate, *new_fst);
+  cons->set_second(isolate, *new_snd);
   CHECK(!cons->IsFlat());
   CHECK_EQ(initial_length, new_fst->length() + new_snd->length());
   CHECK_EQ(initial_length, cons->length());
@@ -923,7 +923,7 @@ TEST(Utf8Conversion) {
                                     v8::NewStringType::kNormal,
                                     StrLength(one_byte_string))
                 .ToLocalChecked()
-                ->Utf8Length();
+                ->Utf8Length(CcTest::isolate());
   CHECK_EQ(StrLength(one_byte_string), len);
   // A mixed one-byte and two-byte string
   // U+02E4 -> CB A4
@@ -942,7 +942,7 @@ TEST(Utf8Conversion) {
       v8::String::NewFromTwoByte(CcTest::isolate(), mixed_string,
                                  v8::NewStringType::kNormal, 5)
           .ToLocalChecked();
-  CHECK_EQ(10, mixed->Utf8Length());
+  CHECK_EQ(10, mixed->Utf8Length(CcTest::isolate()));
   // Try encoding the string with all capacities
   char buffer[11];
   const char kNoChar = static_cast<char>(-1);
@@ -951,7 +951,8 @@ TEST(Utf8Conversion) {
     for (int j = 0; j < 11; j++)
       buffer[j] = kNoChar;
     int chars_written;
-    int written = mixed->WriteUtf8(buffer, i, &chars_written);
+    int written =
+        mixed->WriteUtf8(CcTest::isolate(), buffer, i, &chars_written);
     CHECK_EQ(lengths[i], written);
     CHECK_EQ(char_lengths[i], chars_written);
     // Check that the contents are correct
@@ -1095,7 +1096,7 @@ TEST(JSONStringifySliceMadeExternal) {
 
   int length = underlying->Length();
   uc16* two_byte = NewArray<uc16>(length + 1);
-  underlying->Write(two_byte);
+  underlying->Write(CcTest::isolate(), two_byte);
   Resource* resource = new Resource(two_byte, length);
   CHECK(underlying->MakeExternal(resource));
   CHECK(v8::Utils::OpenHandle(*slice)->IsSlicedString());
@@ -1214,15 +1215,15 @@ TEST(InternalizeExternal) {
     Handle<String> string = v8::Utils::OpenHandle(*ext_string);
     CHECK(string->IsExternalString());
     CHECK(!string->IsInternalizedString());
-    CHECK(!isolate->heap()->InNewSpace(*string));
+    CHECK(!i::Heap::InNewSpace(*string));
     CHECK_EQ(
         isolate->factory()->string_table()->LookupStringIfExists_NoAllocate(
-            *string),
+            isolate, *string),
         Smi::FromInt(ResultSentinel::kNotFound));
     factory->InternalizeName(string);
     CHECK(string->IsExternalString());
     CHECK(string->IsInternalizedString());
-    CHECK(!isolate->heap()->InNewSpace(*string));
+    CHECK(!i::Heap::InNewSpace(*string));
   }
   CcTest::CollectGarbage(i::OLD_SPACE);
   CcTest::CollectGarbage(i::OLD_SPACE);
@@ -1244,6 +1245,9 @@ TEST(SliceFromExternal) {
   CHECK_EQ(SlicedString::cast(*slice)->parent(), *string);
   CHECK(SlicedString::cast(*slice)->parent()->IsExternalString());
   CHECK(slice->IsFlat());
+  // This avoids the GC from trying to free stack allocated resources.
+  i::Handle<i::ExternalOneByteString>::cast(string)->SetResource(
+      CcTest::i_isolate(), nullptr);
 }
 
 
@@ -1524,8 +1528,9 @@ TEST(FormatMessage) {
   Handle<String> arg1 = isolate->factory()->NewStringFromAsciiChecked("arg1");
   Handle<String> arg2 = isolate->factory()->NewStringFromAsciiChecked("arg2");
   Handle<String> result =
-      MessageTemplate::FormatMessage(MessageTemplate::kPropertyNotFunction,
-                                     arg0, arg1, arg2).ToHandleChecked();
+      MessageTemplate::FormatMessage(
+          isolate, MessageTemplate::kPropertyNotFunction, arg0, arg1, arg2)
+          .ToHandleChecked();
   Handle<String> expected = isolate->factory()->NewStringFromAsciiChecked(
       "'arg0' returned for property 'arg1' of object 'arg2' is not a function");
   CHECK(String::Equals(isolate, result, expected));
@@ -1594,7 +1599,6 @@ TEST(ExternalStringIndexOf) {
     LocalContext context;                                                      \
     v8::HandleScope scope(CcTest::isolate());                                  \
     Factory* factory = CcTest::i_isolate()->factory();                         \
-    Heap* heap = CcTest::i_isolate()->heap();                                  \
     /* Length must be bigger than the buffer size of the Utf8Decoder. */       \
     const char* buf = STRING;                                                  \
     size_t len = strlen(buf);                                                  \
@@ -1603,7 +1607,7 @@ TEST(ExternalStringIndexOf) {
             ->NewStringFromOneByte(Vector<const uint8_t>(                      \
                 reinterpret_cast<const uint8_t*>(buf), len))                   \
             .ToHandleChecked();                                                \
-    CHECK(heap->InNewSpace(*main_string));                                     \
+    CHECK(Heap::InNewSpace(*main_string));                                     \
     /* Next allocation will cause GC. */                                       \
     heap::SimulateFullSpace(CcTest::i_isolate()->heap()->new_space());         \
     /* Offset by two to check substring-ing. */                                \
@@ -1658,6 +1662,35 @@ TEST(HashArrayIndexStrings) {
   CHECK_EQ(StringHasher::MakeArrayIndexHash(1 /* value */, 1 /* length */) >>
                Name::kHashShift,
            isolate->factory()->one_string()->Hash());
+}
+
+TEST(StringEquals) {
+  v8::V8::Initialize();
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
+
+  auto foo_str =
+      v8::String::NewFromUtf8(isolate, "foo", v8::NewStringType::kNormal)
+          .ToLocalChecked();
+  auto bar_str =
+      v8::String::NewFromUtf8(isolate, "bar", v8::NewStringType::kNormal)
+          .ToLocalChecked();
+  auto foo_str2 =
+      v8::String::NewFromUtf8(isolate, "foo", v8::NewStringType::kNormal)
+          .ToLocalChecked();
+
+  uint16_t* two_byte_source = AsciiToTwoByteString("foo");
+  auto foo_two_byte_str =
+      v8::String::NewFromTwoByte(isolate, two_byte_source,
+                                 v8::NewStringType::kNormal)
+          .ToLocalChecked();
+  i::DeleteArray(two_byte_source);
+
+  CHECK(foo_str->StringEquals(foo_str));
+  CHECK(!foo_str->StringEquals(bar_str));
+  CHECK(foo_str->StringEquals(foo_str2));
+  CHECK(foo_str->StringEquals(foo_two_byte_str));
+  CHECK(!bar_str->StringEquals(foo_str2));
 }
 
 }  // namespace test_strings

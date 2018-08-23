@@ -255,7 +255,7 @@ class V8_EXPORT_PRIVATE Scope : public NON_EXPORTED_BASE(ZoneObject) {
   // which is an error even though the two 'e's are declared in different
   // scopes.
   Declaration* CheckLexDeclarationsConflictingWith(
-      const ZoneList<const AstRawString*>& names);
+      const ZonePtrList<const AstRawString>& names);
 
   // ---------------------------------------------------------------------------
   // Scope-specific info.
@@ -646,12 +646,7 @@ class V8_EXPORT_PRIVATE DeclarationScope : public Scope {
   // Creates a script scope.
   DeclarationScope(Zone* zone, AstValueFactory* ast_value_factory);
 
-  bool IsDeclaredParameter(const AstRawString* name) {
-    // If IsSimpleParameterList is false, duplicate parameters are not allowed,
-    // however `arguments` may be allowed if function is not strict code. Thus,
-    // the assumptions explained above do not hold.
-    return params_.Contains(variables_.Lookup(name));
-  }
+  bool IsDeclaredParameter(const AstRawString* name);
 
   FunctionKind function_kind() const { return function_kind_; }
 
@@ -809,6 +804,16 @@ class V8_EXPORT_PRIVATE DeclarationScope : public Scope {
     has_simple_parameters_ = false;
   }
 
+  // Returns whether the arguments object aliases formal parameters.
+  CreateArgumentsType GetArgumentsType() const {
+    DCHECK(is_function_scope());
+    DCHECK(!is_arrow_scope());
+    DCHECK_NOT_NULL(arguments_);
+    return is_sloppy(language_mode()) && has_simple_parameters()
+               ? CreateArgumentsType::kMappedArguments
+               : CreateArgumentsType::kUnmappedArguments;
+  }
+
   // The local variable 'arguments' if we need to allocate it; nullptr
   // otherwise.
   Variable* arguments() const {
@@ -963,7 +968,7 @@ class V8_EXPORT_PRIVATE DeclarationScope : public Scope {
   bool has_inferred_function_name_ : 1;
 
   // Parameter list in source order.
-  ZoneList<Variable*> params_;
+  ZonePtrList<Variable> params_;
   // Map of function names to lists of functions defined in sloppy blocks
   SloppyBlockFunctionMap* sloppy_block_function_map_;
   // Convenience variable.

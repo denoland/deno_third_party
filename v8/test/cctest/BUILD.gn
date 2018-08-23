@@ -50,9 +50,10 @@ v8_source_set("cctest_sources") {
     "$target_gen_dir/resources.cc",
 
     ### gcmole(all) ###
-    "../../test/common/wasm/flag-utils.h",
-    "../../test/common/wasm/test-signatures.h",
-    "../../test/common/wasm/wasm-macro-gen.h",
+    "../common/assembler-tester.h",
+    "../common/wasm/flag-utils.h",
+    "../common/wasm/test-signatures.h",
+    "../common/wasm/wasm-macro-gen.h",
     "cctest.cc",
     "cctest.h",
     "compiler/c-signature.h",
@@ -117,6 +118,7 @@ v8_source_set("cctest_sources") {
     "heap/test-compaction.cc",
     "heap/test-concurrent-marking.cc",
     "heap/test-embedder-tracing.cc",
+    "heap/test-external-string-tracker.cc",
     "heap/test-heap.cc",
     "heap/test-incremental-marking.cc",
     "heap/test-invalidated-slots.cc",
@@ -209,6 +211,7 @@ v8_source_set("cctest_sources") {
     "test-random-number-generator.cc",
     "test-regexp.cc",
     "test-representation.cc",
+    "test-roots.cc",
     "test-sampler-api.cc",
     "test-serialize.cc",
     "test-strings.cc",
@@ -236,6 +239,7 @@ v8_source_set("cctest_sources") {
     "types-fuzz.h",
     "unicode-helpers.h",
     "wasm/test-c-wasm-entry.cc",
+    "wasm/test-jump-table-assembler.cc",
     "wasm/test-run-wasm-64.cc",
     "wasm/test-run-wasm-asmjs.cc",
     "wasm/test-run-wasm-atomics.cc",
@@ -250,6 +254,7 @@ v8_source_set("cctest_sources") {
     "wasm/test-wasm-codegen.cc",
     "wasm/test-wasm-interpreter-entry.cc",
     "wasm/test-wasm-serialization.cc",
+    "wasm/test-wasm-shared-engine.cc",
     "wasm/test-wasm-stack.cc",
     "wasm/test-wasm-trap-position.cc",
     "wasm/wasm-atomics-utils.h",
@@ -304,6 +309,7 @@ v8_source_set("cctest_sources") {
       "test-code-stubs.h",
       "test-disasm-ia32.cc",
       "test-log-stack-tracer.cc",
+      "wasm/test-run-wasm-atomics64.cc",
     ]
   } else if (v8_current_cpu == "mips") {
     sources += [  ### gcmole(arch:mips) ###

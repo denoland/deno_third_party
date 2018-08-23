@@ -29,9 +29,11 @@
 #include "src/keys.h"
 #include "src/layout-descriptor-inl.h"
 #include "src/lookup-cache-inl.h"
-#include "src/lookup.h"
+#include "src/lookup-inl.h"
+#include "src/maybe-handles-inl.h"
 #include "src/objects/bigint.h"
 #include "src/objects/descriptor-array.h"
+#include "src/objects/js-proxy-inl.h"
 #include "src/objects/literal-objects.h"
 #include "src/objects/maybe-object-inl.h"
 #include "src/objects/regexp-match-info.h"
@@ -40,7 +42,7 @@
 #include "src/objects/templates.h"
 #include "src/property-details.h"
 #include "src/property.h"
-#include "src/prototype.h"
+#include "src/prototype-inl.h"
 #include "src/roots-inl.h"
 #include "src/transitions-inl.h"
 #include "src/v8memory.h"
@@ -71,115 +73,64 @@ int PropertyDetails::field_width_in_words() const {
   return representation().IsDouble() ? kDoubleSize / kPointerSize : 1;
 }
 
+namespace InstanceTypeChecker {
+
+// Define type checkers for classes with single instance type.
+INSTANCE_TYPE_CHECKERS_SINGLE(INSTANCE_TYPE_CHECKER);
+
+#define TYPED_ARRAY_INSTANCE_TYPE_CHECKER(Type, type, TYPE, ctype) \
+  INSTANCE_TYPE_CHECKER(Fixed##Type##Array, FIXED_##TYPE##_ARRAY_TYPE)
+TYPED_ARRAYS(TYPED_ARRAY_INSTANCE_TYPE_CHECKER)
+#undef TYPED_ARRAY_INSTANCE_TYPE_CHECKER
+
+#define STRUCT_INSTANCE_TYPE_CHECKER(NAME, Name, name) \
+  INSTANCE_TYPE_CHECKER(Name, NAME##_TYPE)
+STRUCT_LIST(STRUCT_INSTANCE_TYPE_CHECKER)
+#undef STRUCT_INSTANCE_TYPE_CHECKER
+
+// Define type checkers for classes with ranges of instance types.
+#define INSTANCE_TYPE_CHECKER_RANGE(type, first_instance_type, \
+                                    last_instance_type)        \
+  V8_INLINE bool Is##type(InstanceType instance_type) {        \
+    return instance_type >= first_instance_type &&             \
+           instance_type <= last_instance_type;                \
+  }
+INSTANCE_TYPE_CHECKERS_RANGE(INSTANCE_TYPE_CHECKER_RANGE);
+#undef INSTANCE_TYPE_CHECKER_RANGE
+
+V8_INLINE bool IsFixedArrayBase(InstanceType instance_type) {
+  return IsFixedArray(instance_type) || IsFixedDoubleArray(instance_type) ||
+         IsFixedTypedArrayBase(instance_type);
+}
+
+V8_INLINE bool IsHeapObject(InstanceType instance_type) { return true; }
+
+V8_INLINE bool IsInternalizedString(InstanceType instance_type) {
+  STATIC_ASSERT(kNotInternalizedTag != 0);
+  return (instance_type & (kIsNotStringMask | kIsNotInternalizedMask)) ==
+         (kStringTag | kInternalizedTag);
+}
+
+V8_INLINE bool IsJSObject(InstanceType instance_type) {
+  STATIC_ASSERT(LAST_TYPE == LAST_JS_OBJECT_TYPE);
+  return instance_type >= FIRST_JS_OBJECT_TYPE;
+}
+
+}  // namespace InstanceTypeChecker
+
 // TODO(v8:7786): For instance types that have a single map instance on the
 // roots, and when that map is a embedded in the binary, compare against the map
 // pointer rather than looking up the instance type.
-TYPE_CHECKER(AllocationSite, ALLOCATION_SITE_TYPE)
-TYPE_CHECKER(BigInt, BIGINT_TYPE)
-TYPE_CHECKER(BoilerplateDescription, BOILERPLATE_DESCRIPTION_TYPE)
-TYPE_CHECKER(BreakPoint, TUPLE2_TYPE)
-TYPE_CHECKER(BreakPointInfo, TUPLE2_TYPE)
-TYPE_CHECKER(ByteArray, BYTE_ARRAY_TYPE)
-TYPE_CHECKER(BytecodeArray, BYTECODE_ARRAY_TYPE)
-TYPE_CHECKER(CallHandlerInfo, CALL_HANDLER_INFO_TYPE)
-TYPE_CHECKER(Cell, CELL_TYPE)
-TYPE_CHECKER(Code, CODE_TYPE)
-TYPE_CHECKER(CodeDataContainer, CODE_DATA_CONTAINER_TYPE)
-TYPE_CHECKER(ConstantElementsPair, TUPLE2_TYPE)
-TYPE_CHECKER(CompileTimeValue, TUPLE2_TYPE)
-TYPE_CHECKER(CoverageInfo, FIXED_ARRAY_TYPE)
-TYPE_CHECKER(DescriptorArray, DESCRIPTOR_ARRAY_TYPE)
-TYPE_CHECKER(EphemeronHashTable, EPHEMERON_HASH_TABLE_TYPE)
-TYPE_CHECKER(FeedbackCell, FEEDBACK_CELL_TYPE)
-TYPE_CHECKER(FeedbackMetadata, FEEDBACK_METADATA_TYPE)
-TYPE_CHECKER(FeedbackVector, FEEDBACK_VECTOR_TYPE)
-TYPE_CHECKER(FixedArrayExact, FIXED_ARRAY_TYPE)
-TYPE_CHECKER(FixedArrayOfWeakCells, FIXED_ARRAY_TYPE)
-TYPE_CHECKER(FixedDoubleArray, FIXED_DOUBLE_ARRAY_TYPE)
-TYPE_CHECKER(Foreign, FOREIGN_TYPE)
-TYPE_CHECKER(FreeSpace, FREE_SPACE_TYPE)
-TYPE_CHECKER(GlobalDictionary, GLOBAL_DICTIONARY_TYPE)
-TYPE_CHECKER(HeapNumber, HEAP_NUMBER_TYPE)
-TYPE_CHECKER(JSArgumentsObject, JS_ARGUMENTS_TYPE)
-TYPE_CHECKER(JSArray, JS_ARRAY_TYPE)
-TYPE_CHECKER(JSArrayBuffer, JS_ARRAY_BUFFER_TYPE)
-TYPE_CHECKER(JSArrayIterator, JS_ARRAY_ITERATOR_TYPE)
-TYPE_CHECKER(JSAsyncFromSyncIterator, JS_ASYNC_FROM_SYNC_ITERATOR_TYPE)
-TYPE_CHECKER(JSAsyncGeneratorObject, JS_ASYNC_GENERATOR_OBJECT_TYPE)
-TYPE_CHECKER(JSBoundFunction, JS_BOUND_FUNCTION_TYPE)
-TYPE_CHECKER(JSContextExtensionObject, JS_CONTEXT_EXTENSION_OBJECT_TYPE)
-TYPE_CHECKER(JSDataView, JS_DATA_VIEW_TYPE)
-TYPE_CHECKER(JSDate, JS_DATE_TYPE)
-TYPE_CHECKER(JSError, JS_ERROR_TYPE)
-TYPE_CHECKER(JSFunction, JS_FUNCTION_TYPE)
-TYPE_CHECKER(JSGlobalObject, JS_GLOBAL_OBJECT_TYPE)
-TYPE_CHECKER(JSMap, JS_MAP_TYPE)
-TYPE_CHECKER(JSMessageObject, JS_MESSAGE_OBJECT_TYPE)
-TYPE_CHECKER(JSModuleNamespace, JS_MODULE_NAMESPACE_TYPE)
-TYPE_CHECKER(JSPromise, JS_PROMISE_TYPE)
-TYPE_CHECKER(JSRegExp, JS_REGEXP_TYPE)
-TYPE_CHECKER(JSRegExpStringIterator, JS_REGEXP_STRING_ITERATOR_TYPE)
-TYPE_CHECKER(JSSet, JS_SET_TYPE)
-TYPE_CHECKER(JSStringIterator, JS_STRING_ITERATOR_TYPE)
-TYPE_CHECKER(JSTypedArray, JS_TYPED_ARRAY_TYPE)
-TYPE_CHECKER(JSValue, JS_VALUE_TYPE)
-TYPE_CHECKER(JSWeakMap, JS_WEAK_MAP_TYPE)
-TYPE_CHECKER(JSWeakSet, JS_WEAK_SET_TYPE)
-TYPE_CHECKER(Map, MAP_TYPE)
-TYPE_CHECKER(MutableHeapNumber, MUTABLE_HEAP_NUMBER_TYPE)
-TYPE_CHECKER(NameDictionary, NAME_DICTIONARY_TYPE)
-TYPE_CHECKER(NativeContext, NATIVE_CONTEXT_TYPE)
-TYPE_CHECKER(NumberDictionary, NUMBER_DICTIONARY_TYPE)
-TYPE_CHECKER(Oddball, ODDBALL_TYPE)
-TYPE_CHECKER(OrderedHashMap, ORDERED_HASH_MAP_TYPE)
-TYPE_CHECKER(OrderedHashSet, ORDERED_HASH_SET_TYPE)
-TYPE_CHECKER(PreParsedScopeData, TUPLE2_TYPE)
-TYPE_CHECKER(PropertyArray, PROPERTY_ARRAY_TYPE)
-TYPE_CHECKER(PropertyCell, PROPERTY_CELL_TYPE)
-TYPE_CHECKER(PropertyDescriptorObject, FIXED_ARRAY_TYPE)
-TYPE_CHECKER(ScopeInfo, SCOPE_INFO_TYPE)
-TYPE_CHECKER(ScriptContextTable, SCRIPT_CONTEXT_TABLE_TYPE)
-TYPE_CHECKER(SharedFunctionInfo, SHARED_FUNCTION_INFO_TYPE)
-TYPE_CHECKER(SimpleNumberDictionary, SIMPLE_NUMBER_DICTIONARY_TYPE)
-TYPE_CHECKER(SmallOrderedHashMap, SMALL_ORDERED_HASH_MAP_TYPE)
-TYPE_CHECKER(SmallOrderedHashSet, SMALL_ORDERED_HASH_SET_TYPE)
-TYPE_CHECKER(SourcePositionTableWithFrameCache, TUPLE2_TYPE)
-TYPE_CHECKER(StringTable, STRING_TABLE_TYPE)
-TYPE_CHECKER(Symbol, SYMBOL_TYPE)
-TYPE_CHECKER(TemplateObjectDescription, TUPLE2_TYPE)
-TYPE_CHECKER(TransitionArray, TRANSITION_ARRAY_TYPE)
-TYPE_CHECKER(WasmGlobalObject, WASM_GLOBAL_TYPE)
-TYPE_CHECKER(WasmInstanceObject, WASM_INSTANCE_TYPE)
-TYPE_CHECKER(WasmMemoryObject, WASM_MEMORY_TYPE)
-TYPE_CHECKER(WasmModuleObject, WASM_MODULE_TYPE)
-TYPE_CHECKER(WasmTableObject, WASM_TABLE_TYPE)
-TYPE_CHECKER(WeakArrayList, WEAK_ARRAY_LIST_TYPE)
-TYPE_CHECKER(WeakCell, WEAK_CELL_TYPE)
+INSTANCE_TYPE_CHECKERS(TYPE_CHECKER);
 
-#ifdef V8_INTL_SUPPORT
-TYPE_CHECKER(JSLocale, JS_INTL_LOCALE_TYPE)
-#endif  // V8_INTL_SUPPORT
-
-#define TYPED_ARRAY_TYPE_CHECKER(Type, type, TYPE, ctype, size) \
-  TYPE_CHECKER(Fixed##Type##Array, FIXED_##TYPE##_ARRAY_TYPE)
+#define TYPED_ARRAY_TYPE_CHECKER(Type, type, TYPE, ctype) \
+  TYPE_CHECKER(Fixed##Type##Array)
 TYPED_ARRAYS(TYPED_ARRAY_TYPE_CHECKER)
 #undef TYPED_ARRAY_TYPE_CHECKER
 
-
-bool HeapObject::IsFixedArrayBase() const {
-  return IsFixedArray() || IsFixedDoubleArray() || IsFixedTypedArrayBase();
-}
-
-bool HeapObject::IsFixedArray() const {
-  InstanceType instance_type = map()->instance_type();
-  return instance_type >= FIRST_FIXED_ARRAY_TYPE &&
-         instance_type <= LAST_FIXED_ARRAY_TYPE;
-}
-
-bool HeapObject::IsWeakFixedArray() const {
-  InstanceType instance_type = map()->instance_type();
-  return instance_type >= FIRST_WEAK_FIXED_ARRAY_TYPE &&
-         instance_type <= LAST_WEAK_FIXED_ARRAY_TYPE;
+bool HeapObject::IsUncompiledData() const {
+  return IsUncompiledDataWithoutPreParsedScope() ||
+         IsUncompiledDataWithPreParsedScope();
 }
 
 bool HeapObject::IsSloppyArgumentsElements() const {
@@ -195,6 +146,10 @@ bool HeapObject::IsJSGeneratorObject() const {
          IsJSAsyncGeneratorObject();
 }
 
+bool HeapObject::IsDataHandler() const {
+  return IsLoadHandler() || IsStoreHandler();
+}
+
 bool HeapObject::IsClassBoilerplate() const { return IsFixedArrayExact(); }
 
 bool HeapObject::IsExternal(Isolate* isolate) const {
@@ -208,52 +163,48 @@ bool HeapObject::IsExternal(Isolate* isolate) const {
 HEAP_OBJECT_TYPE_LIST(IS_TYPE_FUNCTION_DEF)
 #undef IS_TYPE_FUNCTION_DEF
 
-#define IS_TYPE_FUNCTION_DEF(Type, Value)             \
-  bool Object::Is##Type(Isolate* isolate) const {     \
-    return this == ReadOnlyRoots(isolate).Value();    \
-  }                                                   \
-  bool HeapObject::Is##Type(Isolate* isolate) const { \
-    return this == ReadOnlyRoots(isolate).Value();    \
-  }
+#define IS_TYPE_FUNCTION_DEF(Type, Value)                        \
+  bool Object::Is##Type(Isolate* isolate) const {                \
+    return Is##Type(ReadOnlyRoots(isolate->heap()));             \
+  }                                                              \
+  bool Object::Is##Type(ReadOnlyRoots roots) const {             \
+    return this == roots.Value();                                \
+  }                                                              \
+  bool Object::Is##Type() const {                                \
+    return IsHeapObject() && HeapObject::cast(this)->Is##Type(); \
+  }                                                              \
+  bool HeapObject::Is##Type(Isolate* isolate) const {            \
+    return Object::Is##Type(isolate);                            \
+  }                                                              \
+  bool HeapObject::Is##Type(ReadOnlyRoots roots) const {         \
+    return Object::Is##Type(roots);                              \
+  }                                                              \
+  bool HeapObject::Is##Type() const { return Is##Type(GetReadOnlyRoots()); }
 ODDBALL_LIST(IS_TYPE_FUNCTION_DEF)
 #undef IS_TYPE_FUNCTION_DEF
 
 bool Object::IsNullOrUndefined(Isolate* isolate) const {
-  ReadOnlyRoots roots(isolate);
-  return this == roots.null_value() || this == roots.undefined_value();
+  return IsNullOrUndefined(ReadOnlyRoots(isolate));
+}
+
+bool Object::IsNullOrUndefined(ReadOnlyRoots roots) const {
+  return IsNull(roots) || IsUndefined(roots);
+}
+
+bool Object::IsNullOrUndefined() const {
+  return IsHeapObject() && HeapObject::cast(this)->IsNullOrUndefined();
 }
 
 bool HeapObject::IsNullOrUndefined(Isolate* isolate) const {
-  ReadOnlyRoots roots(isolate);
-  return this == roots.null_value() || this == roots.undefined_value();
+  return Object::IsNullOrUndefined(isolate);
 }
 
-#ifdef DEBUG
-#define IS_TYPE_FUNCTION_DEF(Type, Value)                                  \
-  bool Object::Is##Type() const {                                          \
-    return IsHeapObject() && HeapObject::cast(this)->Is##Type();           \
-  }                                                                        \
-  bool HeapObject::Is##Type() const {                                      \
-    return IsOddball() && Oddball::cast(this)->kind() == Oddball::k##Type; \
-  }
-ODDBALL_LIST(IS_TYPE_FUNCTION_DEF)
-#undef IS_TYPE_FUNCTION_DEF
-
-bool Object::IsNullOrUndefined() const {
-  return this->IsNull() || this->IsUndefined();
+bool HeapObject::IsNullOrUndefined(ReadOnlyRoots roots) const {
+  return Object::IsNullOrUndefined(roots);
 }
 
 bool HeapObject::IsNullOrUndefined() const {
-  return this->IsNull() || this->IsUndefined();
-}
-#endif
-
-bool HeapObject::IsString() const {
-  return map()->instance_type() < FIRST_NONSTRING_TYPE;
-}
-
-bool HeapObject::IsName() const {
-  return map()->instance_type() <= LAST_NAME_TYPE;
+  return IsNullOrUndefined(GetReadOnlyRoots());
 }
 
 bool HeapObject::IsUniqueName() const {
@@ -275,13 +226,6 @@ bool HeapObject::IsModuleInfo() const {
 
 bool HeapObject::IsTemplateInfo() const {
   return IsObjectTemplateInfo() || IsFunctionTemplateInfo();
-}
-
-bool HeapObject::IsInternalizedString() const {
-  uint32_t type = map()->instance_type();
-  STATIC_ASSERT(kNotInternalizedTag != 0);
-  return (type & (kIsNotStringMask | kIsNotInternalizedMask)) ==
-      (kStringTag | kInternalizedTag);
 }
 
 bool HeapObject::IsConsString() const {
@@ -342,50 +286,18 @@ bool HeapObject::IsFiller() const {
   return instance_type == FREE_SPACE_TYPE || instance_type == FILLER_TYPE;
 }
 
-bool HeapObject::IsFixedTypedArrayBase() const {
-  InstanceType instance_type = map()->instance_type();
-  return (instance_type >= FIRST_FIXED_TYPED_ARRAY_TYPE &&
-          instance_type <= LAST_FIXED_TYPED_ARRAY_TYPE);
-}
-
 bool HeapObject::IsJSReceiver() const {
   STATIC_ASSERT(LAST_JS_RECEIVER_TYPE == LAST_TYPE);
   return map()->instance_type() >= FIRST_JS_RECEIVER_TYPE;
 }
 
-bool HeapObject::IsJSObject() const {
-  STATIC_ASSERT(LAST_JS_OBJECT_TYPE == LAST_TYPE);
-  return map()->IsJSObjectMap();
-}
-
 bool HeapObject::IsJSProxy() const { return map()->IsJSProxyMap(); }
-
-bool HeapObject::IsJSMapIterator() const {
-  InstanceType instance_type = map()->instance_type();
-  STATIC_ASSERT(JS_MAP_KEY_ITERATOR_TYPE + 1 == JS_MAP_KEY_VALUE_ITERATOR_TYPE);
-  STATIC_ASSERT(JS_MAP_KEY_VALUE_ITERATOR_TYPE + 1 ==
-                JS_MAP_VALUE_ITERATOR_TYPE);
-  return (instance_type >= JS_MAP_KEY_ITERATOR_TYPE &&
-          instance_type <= JS_MAP_VALUE_ITERATOR_TYPE);
-}
-
-bool HeapObject::IsJSSetIterator() const {
-  InstanceType instance_type = map()->instance_type();
-  return (instance_type == JS_SET_VALUE_ITERATOR_TYPE ||
-          instance_type == JS_SET_KEY_VALUE_ITERATOR_TYPE);
-}
 
 bool HeapObject::IsJSWeakCollection() const {
   return IsJSWeakMap() || IsJSWeakSet();
 }
 
 bool HeapObject::IsJSCollection() const { return IsJSMap() || IsJSSet(); }
-
-bool HeapObject::IsMicrotask() const {
-  InstanceType instance_type = map()->instance_type();
-  return (instance_type >= FIRST_MICROTASK_TYPE &&
-          instance_type <= LAST_MICROTASK_TYPE);
-}
 
 bool HeapObject::IsPromiseReactionJobTask() const {
   return IsPromiseFulfillReactionJobTask() || IsPromiseRejectReactionJobTask();
@@ -435,21 +347,10 @@ bool HeapObject::IsTemplateList() const {
 }
 
 bool HeapObject::IsDependentCode() const {
-  if (!IsFixedArrayExact()) return false;
-  // There's actually no way to see the difference between a fixed array and
-  // a dependent codes array.
+  if (!IsWeakFixedArray()) return false;
+  // There's actually no way to see the difference between a weak fixed array
+  // and a dependent codes array.
   return true;
-}
-
-bool HeapObject::IsContext() const {
-  int instance_type = map()->instance_type();
-  return instance_type >= FIRST_CONTEXT_TYPE &&
-         instance_type <= LAST_CONTEXT_TYPE;
-}
-
-template <>
-inline bool Is<JSFunction>(Object* obj) {
-  return obj->IsJSFunction();
 }
 
 bool HeapObject::IsAbstractCode() const {
@@ -489,24 +390,12 @@ bool HeapObject::IsJSArrayBufferView() const {
   return IsJSDataView() || IsJSTypedArray();
 }
 
-bool HeapObject::IsHashTable() const {
-  int instance_type = map()->instance_type();
-  return instance_type >= FIRST_HASH_TABLE_TYPE &&
-         instance_type <= LAST_HASH_TABLE_TYPE;
-}
-
-bool HeapObject::IsDictionary() const {
-  int instance_type = map()->instance_type();
-  return instance_type >= FIRST_DICTIONARY_TYPE &&
-         instance_type <= LAST_DICTIONARY_TYPE;
-}
-
 bool HeapObject::IsStringSet() const { return IsHashTable(); }
 
 bool HeapObject::IsObjectHashSet() const { return IsHashTable(); }
 
 bool HeapObject::IsNormalizedMapCache() const {
-  return NormalizedMapCache::IsNormalizedMapCache(GetIsolate(), this);
+  return NormalizedMapCache::IsNormalizedMapCache(this);
 }
 
 bool HeapObject::IsCompilationCacheTable() const { return IsHashTable(); }
@@ -530,12 +419,6 @@ Maybe<bool> Object::IsArray(Handle<Object> object) {
   if (heap_object->IsJSArray()) return Just(true);
   if (!heap_object->IsJSProxy()) return Just(false);
   return JSProxy::IsArray(Handle<JSProxy>::cast(object));
-}
-
-bool HeapObject::IsJSGlobalProxy() const {
-  bool result = map()->instance_type() == JS_GLOBAL_PROXY_TYPE;
-  DCHECK(!result || map()->is_access_check_needed());
-  return result;
 }
 
 bool HeapObject::IsUndetectable() const { return map()->is_undetectable(); }
@@ -565,9 +448,7 @@ bool HeapObject::IsStruct() const {
   bool Object::Is##Name() const {                                \
     return IsHeapObject() && HeapObject::cast(this)->Is##Name(); \
   }                                                              \
-  bool HeapObject::Is##Name() const {                            \
-    return map()->instance_type() == NAME##_TYPE;                \
-  }
+  TYPE_CHECKER(Name)
 STRUCT_LIST(MAKE_STRUCT_PREDICATE)
 #undef MAKE_STRUCT_PREDICATE
 
@@ -595,10 +476,10 @@ CAST_ACCESSOR(AllocationMemento)
 CAST_ACCESSOR(AllocationSite)
 CAST_ACCESSOR(AsyncGeneratorRequest)
 CAST_ACCESSOR(BigInt)
-CAST_ACCESSOR(BoilerplateDescription)
+CAST_ACCESSOR(ObjectBoilerplateDescription)
 CAST_ACCESSOR(Cell)
-CAST_ACCESSOR(ConstantElementsPair)
-CAST_ACCESSOR(CompileTimeValue)
+CAST_ACCESSOR(ArrayBoilerplateDescription)
+CAST_ACCESSOR(DataHandler)
 CAST_ACCESSOR(DescriptorArray)
 CAST_ACCESSOR(EphemeronHashTable)
 CAST_ACCESSOR(EnumCache)
@@ -607,17 +488,14 @@ CAST_ACCESSOR(Foreign)
 CAST_ACCESSOR(GlobalDictionary)
 CAST_ACCESSOR(HeapObject)
 CAST_ACCESSOR(JSAsyncFromSyncIterator)
-CAST_ACCESSOR(JSAsyncGeneratorObject)
 CAST_ACCESSOR(JSBoundFunction)
 CAST_ACCESSOR(JSDataView)
 CAST_ACCESSOR(JSDate)
 CAST_ACCESSOR(JSFunction)
-CAST_ACCESSOR(JSGeneratorObject)
 CAST_ACCESSOR(JSGlobalObject)
 CAST_ACCESSOR(JSGlobalProxy)
 CAST_ACCESSOR(JSMessageObject)
 CAST_ACCESSOR(JSObject)
-CAST_ACCESSOR(JSProxy)
 CAST_ACCESSOR(JSReceiver)
 CAST_ACCESSOR(JSStringIterator)
 CAST_ACCESSOR(JSValue)
@@ -635,7 +513,6 @@ CAST_ACCESSOR(OrderedHashMap)
 CAST_ACCESSOR(OrderedHashSet)
 CAST_ACCESSOR(PropertyArray)
 CAST_ACCESSOR(PropertyCell)
-CAST_ACCESSOR(PrototypeInfo)
 CAST_ACCESSOR(RegExpMatchInfo)
 CAST_ACCESSOR(ScopeInfo)
 CAST_ACCESSOR(SimpleNumberDictionary)
@@ -650,7 +527,6 @@ CAST_ACCESSOR(Struct)
 CAST_ACCESSOR(TemplateObjectDescription)
 CAST_ACCESSOR(Tuple2)
 CAST_ACCESSOR(Tuple3)
-CAST_ACCESSOR(WeakCell)
 
 bool Object::HasValidElements() {
   // Dictionary is covered under FixedArray.
@@ -718,8 +594,7 @@ Representation Object::OptimalRepresentation() {
     return Representation::Smi();
   } else if (FLAG_track_double_fields && IsHeapNumber()) {
     return Representation::Double();
-  } else if (FLAG_track_computed_fields &&
-             IsUninitialized(HeapObject::cast(this)->GetIsolate())) {
+  } else if (FLAG_track_computed_fields && IsUninitialized()) {
     return Representation::None();
   } else if (FLAG_track_heap_object_fields) {
     DCHECK(IsHeapObject());
@@ -794,17 +669,15 @@ MaybeHandle<Object> Object::ToPrimitive(Handle<Object> input,
 }
 
 // static
-MaybeHandle<Object> Object::ToNumber(Handle<Object> input) {
+MaybeHandle<Object> Object::ToNumber(Isolate* isolate, Handle<Object> input) {
   if (input->IsNumber()) return input;  // Shortcut.
-  return ConvertToNumberOrNumeric(HeapObject::cast(*input)->GetIsolate(), input,
-                                  Conversion::kToNumber);
+  return ConvertToNumberOrNumeric(isolate, input, Conversion::kToNumber);
 }
 
 // static
-MaybeHandle<Object> Object::ToNumeric(Handle<Object> input) {
+MaybeHandle<Object> Object::ToNumeric(Isolate* isolate, Handle<Object> input) {
   if (input->IsNumber() || input->IsBigInt()) return input;  // Shortcut.
-  return ConvertToNumberOrNumeric(HeapObject::cast(*input)->GetIsolate(), input,
-                                  Conversion::kToNumeric);
+  return ConvertToNumberOrNumeric(isolate, input, Conversion::kToNumeric);
 }
 
 // static
@@ -847,9 +720,9 @@ MaybeHandle<Object> Object::ToIndex(Isolate* isolate, Handle<Object> input,
   return ConvertToIndex(isolate, input, error_index);
 }
 
-MaybeHandle<Object> Object::GetProperty(Handle<Object> object,
+MaybeHandle<Object> Object::GetProperty(Isolate* isolate, Handle<Object> object,
                                         Handle<Name> name) {
-  LookupIterator it(object, name);
+  LookupIterator it(isolate, object, name);
   if (!it.IsFound()) return it.factory()->undefined_value();
   return GetProperty(&it);
 }
@@ -976,12 +849,12 @@ HeapObject* MapWord::ToForwardingAddress() {
 
 
 #ifdef VERIFY_HEAP
-void HeapObject::VerifyObjectField(int offset) {
-  VerifyPointer(READ_FIELD(this, offset));
+void HeapObject::VerifyObjectField(Isolate* isolate, int offset) {
+  VerifyPointer(isolate, READ_FIELD(this, offset));
 }
 
-void HeapObject::VerifyMaybeObjectField(int offset) {
-  MaybeObject::VerifyMaybeObjectPointer(READ_WEAK_FIELD(this, offset));
+void HeapObject::VerifyMaybeObjectField(Isolate* isolate, int offset) {
+  MaybeObject::VerifyMaybeObjectPointer(isolate, READ_WEAK_FIELD(this, offset));
 }
 
 void HeapObject::VerifySmiField(int offset) {
@@ -993,19 +866,6 @@ ReadOnlyRoots HeapObject::GetReadOnlyRoots() const {
   // TODO(v8:7464): When RO_SPACE is embedded, this will access a global
   // variable instead.
   return ReadOnlyRoots(MemoryChunk::FromHeapObject(this)->heap());
-}
-
-Heap* HeapObject::GetHeap() const {
-  Heap* heap = MemoryChunk::FromAddress(
-                   reinterpret_cast<Address>(const_cast<HeapObject*>(this)))
-                   ->heap();
-  SLOW_DCHECK(heap != nullptr);
-  return heap;
-}
-
-
-Isolate* HeapObject::GetIsolate() const {
-  return GetHeap()->isolate();
 }
 
 Heap* NeverReadOnlySpaceObject::GetHeap() const {
@@ -1037,8 +897,7 @@ void HeapObject::set_map(Map* value) {
   if (value != nullptr) {
     // TODO(1600) We are passing nullptr as a slot because maps can never be on
     // evacuation candidate.
-    Heap::FromWritableHeapObject(this)->incremental_marking()->RecordWrite(
-        this, nullptr, value);
+    MarkingBarrier(this, nullptr, value);
   }
 }
 
@@ -1057,8 +916,7 @@ void HeapObject::synchronized_set_map(Map* value) {
   if (value != nullptr) {
     // TODO(1600) We are passing nullptr as a slot because maps can never be on
     // evacuation candidate.
-    Heap::FromWritableHeapObject(this)->incremental_marking()->RecordWrite(
-        this, nullptr, value);
+    MarkingBarrier(this, nullptr, value);
   }
 }
 
@@ -1079,8 +937,7 @@ void HeapObject::set_map_after_allocation(Map* value, WriteBarrierMode mode) {
     DCHECK_NOT_NULL(value);
     // TODO(1600) We are passing nullptr as a slot because maps can never be on
     // evacuation candidate.
-    Heap::FromWritableHeapObject(this)->incremental_marking()->RecordWrite(
-        this, nullptr, value);
+    MarkingBarrier(this, nullptr, value);
   }
 }
 
@@ -1156,7 +1013,7 @@ void AllocationSite::Initialize() {
   set_pretenure_data(0);
   set_pretenure_create_count(0);
   set_dependent_code(
-      DependentCode::cast(GetReadOnlyRoots().empty_fixed_array()),
+      DependentCode::cast(GetReadOnlyRoots().empty_weak_fixed_array()),
       SKIP_WRITE_BARRIER);
 }
 
@@ -1396,7 +1253,7 @@ void JSObject::SetMapAndElements(Handle<JSObject> object,
 
 void JSObject::set_elements(FixedArrayBase* value, WriteBarrierMode mode) {
   WRITE_FIELD(this, kElementsOffset, value);
-  CONDITIONAL_WRITE_BARRIER(GetHeap(), this, kElementsOffset, value, mode);
+  CONDITIONAL_WRITE_BARRIER(this, kElementsOffset, value, mode);
 }
 
 
@@ -1438,8 +1295,8 @@ void Oddball::set_kind(byte value) {
 
 
 // static
-Handle<Object> Oddball::ToNumber(Handle<Oddball> input) {
-  return handle(input->to_number(), input->GetIsolate());
+Handle<Object> Oddball::ToNumber(Isolate* isolate, Handle<Oddball> input) {
+  return handle(input->to_number(), isolate);
 }
 
 
@@ -1450,7 +1307,7 @@ ACCESSORS(PropertyCell, name, Name, kNameOffset)
 ACCESSORS(PropertyCell, value, Object, kValueOffset)
 ACCESSORS(PropertyCell, property_details_raw, Object, kDetailsOffset)
 
-PropertyDetails PropertyCell::property_details() {
+PropertyDetails PropertyCell::property_details() const {
   return PropertyDetails(Smi::cast(property_details_raw()));
 }
 
@@ -1458,34 +1315,6 @@ PropertyDetails PropertyCell::property_details() {
 void PropertyCell::set_property_details(PropertyDetails details) {
   set_property_details_raw(details.AsSmi());
 }
-
-
-Object* WeakCell::value() const { return READ_FIELD(this, kValueOffset); }
-
-
-void WeakCell::clear() {
-  // Either the garbage collector is clearing the cell or we are simply
-  // initializing the root empty weak cell.
-  DCHECK(Heap::FromWritableHeapObject(this)->gc_state() == Heap::MARK_COMPACT ||
-         this == GetReadOnlyRoots().empty_weak_cell());
-  WRITE_FIELD(this, kValueOffset, Smi::kZero);
-}
-
-
-void WeakCell::initialize(HeapObject* val) {
-  WRITE_FIELD(this, kValueOffset, val);
-  // We just have to execute the generational barrier here because we never
-  // mark through a weak cell and collect evacuation candidates when we process
-  // all weak cells.
-  Heap* heap = Heap::FromWritableHeapObject(this);
-  WriteBarrierMode mode =
-      heap->incremental_marking()->marking_state()->IsBlack(this)
-          ? UPDATE_WRITE_BARRIER
-          : UPDATE_WEAK_WRITE_BARRIER;
-  CONDITIONAL_WRITE_BARRIER(heap, this, kValueOffset, val, mode);
-}
-
-bool WeakCell::cleared() const { return value() == Smi::kZero; }
 
 int JSObject::GetHeaderSize() const { return GetHeaderSize(map()); }
 
@@ -1554,7 +1383,7 @@ void JSObject::SetEmbedderField(int index, Object* value) {
   // to adjust the index here.
   int offset = GetHeaderSize() + (kPointerSize * index);
   WRITE_FIELD(this, offset, value);
-  WRITE_BARRIER(GetHeap(), this, offset, value);
+  WRITE_BARRIER(this, offset, value);
 }
 
 void JSObject::SetEmbedderField(int index, Smi* value) {
@@ -1599,7 +1428,7 @@ void JSObject::RawFastPropertyAtPut(FieldIndex index, Object* value) {
   if (index.is_inobject()) {
     int offset = index.offset();
     WRITE_FIELD(this, offset, value);
-    WRITE_BARRIER(GetHeap(), this, offset, value);
+    WRITE_BARRIER(this, offset, value);
   } else {
     property_array()->set(index.outobject_array_index(), value);
   }
@@ -1633,7 +1462,7 @@ void JSObject::WriteToField(int descriptor, PropertyDetails details,
   FieldIndex index = FieldIndex::ForDescriptor(map(), descriptor);
   if (details.representation().IsDouble()) {
     // Nothing more to be done.
-    if (value->IsUninitialized(this->GetIsolate())) {
+    if (value->IsUninitialized()) {
       return;
     }
     // Manipulating the signaling NaN used for the hole and uninitialized
@@ -1675,7 +1504,7 @@ Object* JSObject::InObjectPropertyAtPut(int index,
   // Adjust for the number of properties stored in the object.
   int offset = GetInObjectPropertyOffset(index);
   WRITE_FIELD(this, offset, value);
-  CONDITIONAL_WRITE_BARRIER(GetHeap(), this, offset, value, mode);
+  CONDITIONAL_WRITE_BARRIER(this, offset, value, mode);
   return value;
 }
 
@@ -1683,10 +1512,9 @@ Object* JSObject::InObjectPropertyAtPut(int index,
 void JSObject::InitializeBody(Map* map, int start_offset,
                               Object* pre_allocated_value,
                               Object* filler_value) {
-  DCHECK(!filler_value->IsHeapObject() ||
-         !GetHeap()->InNewSpace(filler_value));
+  DCHECK(!filler_value->IsHeapObject() || !Heap::InNewSpace(filler_value));
   DCHECK(!pre_allocated_value->IsHeapObject() ||
-         !GetHeap()->InNewSpace(pre_allocated_value));
+         !Heap::InNewSpace(pre_allocated_value));
   int size = map->instance_size();
   int offset = start_offset;
   if (filler_value != pre_allocated_value) {
@@ -1724,10 +1552,8 @@ void Object::VerifyApiCallResultType() {
 #if DEBUG
   if (IsSmi()) return;
   DCHECK(IsHeapObject());
-  Isolate* isolate = HeapObject::cast(this)->GetIsolate();
   if (!(IsString() || IsSymbol() || IsJSReceiver() || IsHeapNumber() ||
-        IsBigInt() || IsUndefined(isolate) || IsTrue(isolate) ||
-        IsFalse(isolate) || IsNull(isolate))) {
+        IsBigInt() || IsUndefined() || IsTrue() || IsFalse() || IsNull())) {
     FATAL("API call returned invalid object");
   }
 #endif  // DEBUG
@@ -1745,7 +1571,7 @@ void PropertyArray::set(int index, Object* value) {
   DCHECK_LT(index, this->length());
   int offset = kHeaderSize + index * kPointerSize;
   RELAXED_WRITE_FIELD(this, offset, value);
-  WRITE_BARRIER(Heap::FromWritableHeapObject(this), this, offset, value);
+  WRITE_BARRIER(this, offset, value);
 }
 
 int RegExpMatchInfo::NumberOfCaptureRegisters() {
@@ -1795,7 +1621,7 @@ WriteBarrierMode HeapObject::GetWriteBarrierMode(
     const DisallowHeapAllocation& promise) {
   Heap* heap = Heap::FromWritableHeapObject(this);
   if (heap->incremental_marking()->IsMarking()) return UPDATE_WRITE_BARRIER;
-  if (heap->InNewSpace(this)) return SKIP_WRITE_BARRIER;
+  if (Heap::InNewSpace(this)) return SKIP_WRITE_BARRIER;
   return UPDATE_WRITE_BARRIER;
 }
 
@@ -1835,13 +1661,16 @@ bool HeapObject::NeedsRehashing() const {
   }
 }
 
+Address HeapObject::GetFieldAddress(int field_offset) const {
+  return FIELD_ADDR(this, field_offset);
+}
+
 void PropertyArray::set(int index, Object* value, WriteBarrierMode mode) {
   DCHECK_GE(index, 0);
   DCHECK_LT(index, this->length());
   int offset = kHeaderSize + index * kPointerSize;
   RELAXED_WRITE_FIELD(this, offset, value);
-  CONDITIONAL_WRITE_BARRIER(Heap::FromWritableHeapObject(this), this, offset,
-                            value, mode);
+  CONDITIONAL_WRITE_BARRIER(this, offset, value, mode);
 }
 
 Object** PropertyArray::data_start() {
@@ -1961,9 +1790,8 @@ int LinearSearch(T* array, Name* name, int valid_entries,
 }
 
 template <SearchMode search_mode, typename T>
-int Search(Isolate* isolate, T* array, Name* name, int valid_entries,
-           int* out_insertion_index) {
-  SLOW_DCHECK(array->IsSortedNoDuplicates(isolate));
+int Search(T* array, Name* name, int valid_entries, int* out_insertion_index) {
+  SLOW_DCHECK(array->IsSortedNoDuplicates());
 
   if (valid_entries == 0) {
     if (search_mode == ALL_ENTRIES && out_insertion_index != nullptr) {
@@ -1987,8 +1815,8 @@ int Search(Isolate* isolate, T* array, Name* name, int valid_entries,
 
 int DescriptorArray::Search(Name* name, int valid_descriptors) {
   DCHECK(name->IsUniqueName());
-  return internal::Search<VALID_ENTRIES>(GetIsolate(), this, name,
-                                         valid_descriptors, nullptr);
+  return internal::Search<VALID_ENTRIES>(this, name, valid_descriptors,
+                                         nullptr);
 }
 
 int DescriptorArray::Search(Name* name, Map* map) {
@@ -2093,12 +1921,6 @@ FieldType* DescriptorArray::GetFieldType(int descriptor_number) {
   DCHECK_EQ(GetDetails(descriptor_number).location(), kField);
   MaybeObject* wrapped_type = GetValue(descriptor_number);
   return Map::UnwrapFieldType(wrapped_type);
-}
-
-void DescriptorArray::Get(int descriptor_number, Descriptor* desc) {
-  desc->Init(handle(GetKey(descriptor_number), GetIsolate()),
-             MaybeObjectHandle(GetStrongValue(descriptor_number), GetIsolate()),
-             GetDetails(descriptor_number));
 }
 
 void DescriptorArray::Set(int descriptor_number, Name* key, MaybeObject* value,
@@ -2210,7 +2032,6 @@ DEFINE_DEOPT_ELEMENT_ACCESSORS(LiteralArray, FixedArray)
 DEFINE_DEOPT_ELEMENT_ACCESSORS(OsrBytecodeOffset, Smi)
 DEFINE_DEOPT_ELEMENT_ACCESSORS(OsrPcOffset, Smi)
 DEFINE_DEOPT_ELEMENT_ACCESSORS(OptimizationId, Smi)
-DEFINE_DEOPT_ELEMENT_ACCESSORS(WeakCellCache, Object)
 DEFINE_DEOPT_ELEMENT_ACCESSORS(InliningPositions, PodArray<InliningPosition>)
 
 DEFINE_DEOPT_ENTRY_ACCESSORS(BytecodeOffsetRaw, Smi)
@@ -2361,6 +2182,10 @@ int HeapObject::SizeFromMap(Map* map) const {
   if (instance_type == BIGINT_TYPE) {
     return BigInt::SizeFor(reinterpret_cast<const BigInt*>(this)->length());
   }
+  if (instance_type == PRE_PARSED_SCOPE_DATA_TYPE) {
+    return PreParsedScopeData::SizeFor(
+        reinterpret_cast<const PreParsedScopeData*>(this)->length());
+  }
   DCHECK(instance_type == CODE_TYPE);
   return reinterpret_cast<const Code*>(this)->CodeSize();
 }
@@ -2387,38 +2212,9 @@ SMI_ACCESSORS(AsyncGeneratorRequest, resume_mode, kResumeModeOffset)
 ACCESSORS(AsyncGeneratorRequest, value, Object, kValueOffset)
 ACCESSORS(AsyncGeneratorRequest, promise, Object, kPromiseOffset)
 
-Map* PrototypeInfo::ObjectCreateMap() {
-  return Map::cast(object_create_map()->ToWeakHeapObject());
-}
-
-// static
-void PrototypeInfo::SetObjectCreateMap(Handle<PrototypeInfo> info,
-                                       Handle<Map> map) {
-  info->set_object_create_map(HeapObjectReference::Weak(*map));
-}
-
-bool PrototypeInfo::HasObjectCreateMap() {
-  MaybeObject* cache = object_create_map();
-  return cache->IsWeakHeapObject();
-}
-
-ACCESSORS(PrototypeInfo, weak_cell, Object, kWeakCellOffset)
-ACCESSORS(PrototypeInfo, prototype_users, Object, kPrototypeUsersOffset)
-WEAK_ACCESSORS(PrototypeInfo, object_create_map, kObjectCreateMapOffset)
-SMI_ACCESSORS(PrototypeInfo, registry_slot, kRegistrySlotOffset)
-SMI_ACCESSORS(PrototypeInfo, bit_field, kBitFieldOffset)
-BOOL_ACCESSORS(PrototypeInfo, bit_field, should_be_fast_map, kShouldBeFastBit)
-
 ACCESSORS(Tuple2, value1, Object, kValue1Offset)
 ACCESSORS(Tuple2, value2, Object, kValue2Offset)
 ACCESSORS(Tuple3, value3, Object, kValue3Offset)
-
-SMI_ACCESSORS(ConstantElementsPair, elements_kind, kElementsKindOffset)
-ACCESSORS(ConstantElementsPair, constant_values, FixedArrayBase,
-          kConstantValuesOffset)
-bool ConstantElementsPair::is_empty() const {
-  return constant_values()->length() == 0;
-}
 
 ACCESSORS(TemplateObjectDescription, raw_strings, FixedArray, kRawStringsOffset)
 ACCESSORS(TemplateObjectDescription, cooked_strings, FixedArray,
@@ -2558,15 +2354,14 @@ AbstractCode* JSFunction::abstract_code() {
 Code* JSFunction::code() { return Code::cast(READ_FIELD(this, kCodeOffset)); }
 
 void JSFunction::set_code(Code* value) {
-  DCHECK(!GetHeap()->InNewSpace(value));
+  DCHECK(!Heap::InNewSpace(value));
   WRITE_FIELD(this, kCodeOffset, value);
-  GetHeap()->incremental_marking()->RecordWrite(
-      this, HeapObject::RawField(this, kCodeOffset), value);
+  MarkingBarrier(this, HeapObject::RawField(this, kCodeOffset), value);
 }
 
 
 void JSFunction::set_code_no_write_barrier(Code* value) {
-  DCHECK(!GetHeap()->InNewSpace(value));
+  DCHECK(!Heap::InNewSpace(value));
   WRITE_FIELD(this, kCodeOffset, value);
 }
 
@@ -2591,7 +2386,7 @@ void JSFunction::SetOptimizationMarker(OptimizationMarker marker) {
 }
 
 bool JSFunction::has_feedback_vector() const {
-  return !feedback_cell()->value()->IsUndefined(GetIsolate());
+  return !feedback_cell()->value()->IsUndefined();
 }
 
 Context* JSFunction::context() {
@@ -2602,10 +2397,7 @@ bool JSFunction::has_context() const {
   return READ_FIELD(this, kContextOffset)->IsContext();
 }
 
-JSObject* JSFunction::global_proxy() {
-  return context()->global_proxy();
-}
-
+JSGlobalProxy* JSFunction::global_proxy() { return context()->global_proxy(); }
 
 Context* JSFunction::native_context() { return context()->native_context(); }
 
@@ -2613,7 +2405,7 @@ Context* JSFunction::native_context() { return context()->native_context(); }
 void JSFunction::set_context(Object* value) {
   DCHECK(value->IsUndefined() || value->IsContext());
   WRITE_FIELD(this, kContextOffset, value);
-  WRITE_BARRIER(GetHeap(), this, kContextOffset, value);
+  WRITE_BARRIER(this, kContextOffset, value);
 }
 
 ACCESSORS_CHECKED(JSFunction, prototype_or_initial_map, Object,
@@ -2636,21 +2428,27 @@ bool JSFunction::has_initial_map() {
 
 bool JSFunction::has_instance_prototype() {
   DCHECK(has_prototype_slot());
-  return has_initial_map() ||
-         !prototype_or_initial_map()->IsTheHole(GetIsolate());
+  return has_initial_map() || !prototype_or_initial_map()->IsTheHole();
 }
-
 
 bool JSFunction::has_prototype() {
   DCHECK(has_prototype_slot());
   return map()->has_non_instance_prototype() || has_instance_prototype();
 }
 
+bool JSFunction::has_prototype_property() {
+  return (has_prototype_slot() && IsConstructor()) ||
+         IsGeneratorFunction(shared()->kind());
+}
+
+bool JSFunction::PrototypeRequiresRuntimeLookup() {
+  return !has_prototype_property() || map()->has_non_instance_prototype();
+}
 
 Object* JSFunction::instance_prototype() {
   DCHECK(has_instance_prototype());
   if (has_initial_map()) return initial_map()->prototype();
-  // When there is no initial map and the prototype is a JSObject, the
+  // When there is no initial map and the prototype is a JSReceiver, the
   // initial map field is used for the prototype field.
   return prototype_or_initial_map();
 }
@@ -2658,7 +2456,7 @@ Object* JSFunction::instance_prototype() {
 
 Object* JSFunction::prototype() {
   DCHECK(has_prototype());
-  // If the function's prototype property has been set to a non-JSObject
+  // If the function's prototype property has been set to a non-JSReceiver
   // value, that value is stored in the constructor field of the map.
   if (map()->has_non_instance_prototype()) {
     Object* prototype = map()->GetConstructor();
@@ -2674,11 +2472,6 @@ Object* JSFunction::prototype() {
 bool JSFunction::is_compiled() {
   return code()->builtin_index() != Builtins::kCompileLazy;
 }
-
-ACCESSORS(JSProxy, target, Object, kTargetOffset)
-ACCESSORS(JSProxy, handler, Object, kHandlerOffset)
-
-bool JSProxy::IsRevoked() const { return !handler()->IsJSReceiver(); }
 
 // static
 bool Foreign::IsNormalized(Object* value) {
@@ -2699,35 +2492,8 @@ void SmallOrderedHashTable<Derived>::SetDataEntry(int entry, int relative_index,
                                                   Object* value) {
   Address entry_offset = GetDataEntryOffset(entry, relative_index);
   RELAXED_WRITE_FIELD(this, entry_offset, value);
-  WRITE_BARRIER(Heap::FromWritableHeapObject(this), this,
-                static_cast<int>(entry_offset), value);
+  WRITE_BARRIER(this, static_cast<int>(entry_offset), value);
 }
-
-ACCESSORS(JSGeneratorObject, function, JSFunction, kFunctionOffset)
-ACCESSORS(JSGeneratorObject, context, Context, kContextOffset)
-ACCESSORS(JSGeneratorObject, receiver, Object, kReceiverOffset)
-ACCESSORS(JSGeneratorObject, input_or_debug_pos, Object, kInputOrDebugPosOffset)
-SMI_ACCESSORS(JSGeneratorObject, resume_mode, kResumeModeOffset)
-SMI_ACCESSORS(JSGeneratorObject, continuation, kContinuationOffset)
-ACCESSORS(JSGeneratorObject, parameters_and_registers, FixedArray,
-          kParametersAndRegistersOffset)
-
-bool JSGeneratorObject::is_suspended() const {
-  DCHECK_LT(kGeneratorExecuting, 0);
-  DCHECK_LT(kGeneratorClosed, 0);
-  return continuation() >= 0;
-}
-
-bool JSGeneratorObject::is_closed() const {
-  return continuation() == kGeneratorClosed;
-}
-
-bool JSGeneratorObject::is_executing() const {
-  return continuation() == kGeneratorExecuting;
-}
-
-ACCESSORS(JSAsyncGeneratorObject, queue, HeapObject, kQueueOffset)
-SMI_ACCESSORS(JSAsyncGeneratorObject, is_awaiting, kIsAwaitingOffset)
 
 ACCESSORS(JSValue, value, Object, kValueOffset)
 
@@ -2745,13 +2511,13 @@ ACCESSORS(JSDate, sec, Object, kSecOffset)
 
 SMI_ACCESSORS(JSMessageObject, type, kTypeOffset)
 ACCESSORS(JSMessageObject, argument, Object, kArgumentsOffset)
-ACCESSORS(JSMessageObject, script, Object, kScriptOffset)
+ACCESSORS(JSMessageObject, script, Script, kScriptOffset)
 ACCESSORS(JSMessageObject, stack_frames, Object, kStackFramesOffset)
 SMI_ACCESSORS(JSMessageObject, start_position, kStartPositionOffset)
 SMI_ACCESSORS(JSMessageObject, end_position, kEndPositionOffset)
 SMI_ACCESSORS(JSMessageObject, error_level, kErrorLevelOffset)
 
-ElementsKind JSObject::GetElementsKind() {
+ElementsKind JSObject::GetElementsKind() const {
   ElementsKind kind = map()->elements_kind();
 #if VERIFY_HEAP && DEBUG
   FixedArrayBase* fixed_array =
@@ -2843,7 +2609,7 @@ bool JSObject::HasFixedTypedArrayElements() {
   return map()->has_fixed_typed_array_elements();
 }
 
-#define FIXED_TYPED_ELEMENTS_CHECK(Type, type, TYPE, ctype, size)      \
+#define FIXED_TYPED_ELEMENTS_CHECK(Type, type, TYPE, ctype)            \
   bool JSObject::HasFixed##Type##Elements() {                          \
     HeapObject* array = elements();                                    \
     DCHECK_NOT_NULL(array);                                            \
@@ -2952,20 +2718,20 @@ Maybe<bool> Object::LessThanOrEqual(Isolate* isolate, Handle<Object> x,
   return Nothing<bool>();
 }
 
-MaybeHandle<Object> Object::GetPropertyOrElement(Handle<Object> object,
+MaybeHandle<Object> Object::GetPropertyOrElement(Isolate* isolate,
+                                                 Handle<Object> object,
                                                  Handle<Name> name) {
-  LookupIterator it =
-      LookupIterator::PropertyOrElement(name->GetIsolate(), object, name);
+  LookupIterator it = LookupIterator::PropertyOrElement(isolate, object, name);
   return GetProperty(&it);
 }
 
-MaybeHandle<Object> Object::SetPropertyOrElement(Handle<Object> object,
+MaybeHandle<Object> Object::SetPropertyOrElement(Isolate* isolate,
+                                                 Handle<Object> object,
                                                  Handle<Name> name,
                                                  Handle<Object> value,
                                                  LanguageMode language_mode,
                                                  StoreFromKeyed store_mode) {
-  LookupIterator it =
-      LookupIterator::PropertyOrElement(name->GetIsolate(), object, name);
+  LookupIterator it = LookupIterator::PropertyOrElement(isolate, object, name);
   MAYBE_RETURN_NULL(SetProperty(&it, value, language_mode, store_mode));
   return value;
 }
@@ -2982,8 +2748,8 @@ MaybeHandle<Object> Object::GetPropertyOrElement(Handle<Object> receiver,
 void JSReceiver::initialize_properties() {
   Heap* heap = GetHeap();
   ReadOnlyRoots roots(heap);
-  DCHECK(!heap->InNewSpace(roots.empty_fixed_array()));
-  DCHECK(!heap->InNewSpace(heap->empty_property_dictionary()));
+  DCHECK(!Heap::InNewSpace(roots.empty_fixed_array()));
+  DCHECK(!Heap::InNewSpace(heap->empty_property_dictionary()));
   if (map()->is_dictionary_map()) {
     WRITE_FIELD(this, kPropertiesOrHashOffset,
                 heap->empty_property_dictionary());
@@ -3123,11 +2889,9 @@ void AccessorPair::set(AccessorComponent component, Object* value) {
 
 
 void AccessorPair::SetComponents(Object* getter, Object* setter) {
-  Isolate* isolate = GetIsolate();
-  if (!getter->IsNull(isolate)) set_getter(getter);
-  if (!setter->IsNull(isolate)) set_setter(setter);
+  if (!getter->IsNull()) set_getter(getter);
+  if (!setter->IsNull()) set_setter(setter);
 }
-
 
 bool AccessorPair::Equals(AccessorPair* pair) {
   return (this == pair) || pair->Equals(getter(), setter());
@@ -3145,18 +2909,19 @@ bool AccessorPair::ContainsAccessor() {
 
 
 bool AccessorPair::IsJSAccessor(Object* obj) {
-  return obj->IsCallable() || obj->IsUndefined(GetIsolate());
+  return obj->IsCallable() || obj->IsUndefined();
 }
 
 template <typename Derived, typename Shape>
-void Dictionary<Derived, Shape>::ClearEntry(int entry) {
+void Dictionary<Derived, Shape>::ClearEntry(Isolate* isolate, int entry) {
   Object* the_hole = this->GetReadOnlyRoots().the_hole_value();
   PropertyDetails details = PropertyDetails::Empty();
-  Derived::cast(this)->SetEntry(entry, the_hole, the_hole, details);
+  Derived::cast(this)->SetEntry(isolate, entry, the_hole, the_hole, details);
 }
 
 template <typename Derived, typename Shape>
-void Dictionary<Derived, Shape>::SetEntry(int entry, Object* key, Object* value,
+void Dictionary<Derived, Shape>::SetEntry(Isolate* isolate, int entry,
+                                          Object* key, Object* value,
                                           PropertyDetails details) {
   DCHECK(Dictionary::kEntrySize == 2 || Dictionary::kEntrySize == 3);
   DCHECK(!key->IsName() || details.dictionary_index() > 0);
@@ -3165,7 +2930,7 @@ void Dictionary<Derived, Shape>::SetEntry(int entry, Object* key, Object* value,
   WriteBarrierMode mode = this->GetWriteBarrierMode(no_gc);
   this->set(index + Derived::kEntryKeyIndex, key, mode);
   this->set(index + Derived::kEntryValueIndex, value, mode);
-  if (Shape::kHasDetails) DetailsAtPut(entry, details);
+  if (Shape::kHasDetails) DetailsAtPut(isolate, entry, details);
 }
 
 Object* GlobalDictionaryShape::Unwrap(Object* object) {
@@ -3187,25 +2952,23 @@ PropertyCell* GlobalDictionary::CellAt(int entry) {
   return PropertyCell::cast(KeyAt(entry));
 }
 
-bool GlobalDictionaryShape::IsLive(Isolate* isolate, Object* k) {
-  ReadOnlyRoots roots(isolate);
+bool GlobalDictionaryShape::IsLive(ReadOnlyRoots roots, Object* k) {
   DCHECK_NE(roots.the_hole_value(), k);
   return k != roots.undefined_value();
 }
 
-bool GlobalDictionaryShape::IsKey(Isolate* isolate, Object* k) {
-  return IsLive(isolate, k) &&
-         !PropertyCell::cast(k)->value()->IsTheHole(isolate);
+bool GlobalDictionaryShape::IsKey(ReadOnlyRoots roots, Object* k) {
+  return IsLive(roots, k) && !PropertyCell::cast(k)->value()->IsTheHole(roots);
 }
 
 Name* GlobalDictionary::NameAt(int entry) { return CellAt(entry)->name(); }
 Object* GlobalDictionary::ValueAt(int entry) { return CellAt(entry)->value(); }
 
-void GlobalDictionary::SetEntry(int entry, Object* key, Object* value,
-                                PropertyDetails details) {
+void GlobalDictionary::SetEntry(Isolate* isolate, int entry, Object* key,
+                                Object* value, PropertyDetails details) {
   DCHECK_EQ(key, PropertyCell::cast(value)->name());
   set(EntryToIndex(entry) + kEntryKeyIndex, value);
-  DetailsAtPut(entry, details);
+  DetailsAtPut(isolate, entry, details);
 }
 
 void GlobalDictionary::ValueAtPut(int entry, Object* value) {
@@ -3277,15 +3040,14 @@ PropertyDetails GlobalDictionaryShape::DetailsAt(Dictionary* dict, int entry) {
   return dict->CellAt(entry)->property_details();
 }
 
-
 template <typename Dictionary>
-void GlobalDictionaryShape::DetailsAtPut(Dictionary* dict, int entry,
-                                         PropertyDetails value) {
+void GlobalDictionaryShape::DetailsAtPut(Isolate* isolate, Dictionary* dict,
+                                         int entry, PropertyDetails value) {
   DCHECK_LE(0, entry);  // Not found is -1, which is not caught by get().
   PropertyCell* cell = dict->CellAt(entry);
   if (cell->property_details().IsReadOnly() != value.IsReadOnly()) {
     cell->dependent_code()->DeoptimizeDependentCodeGroup(
-        cell->GetIsolate(), DependentCode::kPropertyCellChangedGroup);
+        isolate, DependentCode::kPropertyCellChangedGroup);
   }
   cell->set_property_details(value);
 }
@@ -3350,8 +3112,7 @@ Object* Object::GetHash() {
   return receiver->GetIdentityHash(isolate);
 }
 
-Handle<Object> ObjectHashTableShape::AsHandle(Isolate* isolate,
-                                              Handle<Object> key) {
+Handle<Object> ObjectHashTableShape::AsHandle(Handle<Object> key) {
   return key;
 }
 
@@ -3436,6 +3197,11 @@ bool ScopeInfo::HasSimpleParameters() const {
   }
 FOR_EACH_SCOPE_INFO_NUMERIC_FIELD(FIELD_ACCESSORS)
 #undef FIELD_ACCESSORS
+
+FreshlyAllocatedBigInt* FreshlyAllocatedBigInt::cast(Object* object) {
+  SLOW_DCHECK(object->IsBigInt());
+  return reinterpret_cast<FreshlyAllocatedBigInt*>(object);
+}
 
 }  // namespace internal
 }  // namespace v8

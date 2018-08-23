@@ -11,6 +11,7 @@
 #include "src/objects/dictionary.h"
 #include "src/objects/map-inl.h"
 #include "src/objects/regexp-match-info.h"
+#include "src/objects/scope-info.h"
 #include "src/objects/shared-function-info-inl.h"
 #include "src/objects/template-objects.h"
 
@@ -32,11 +33,12 @@ void ScriptContextTable::set_used(int used) {
 
 
 // static
-Handle<Context> ScriptContextTable::GetContext(Handle<ScriptContextTable> table,
+Handle<Context> ScriptContextTable::GetContext(Isolate* isolate,
+                                               Handle<ScriptContextTable> table,
                                                int i) {
   DCHECK(i < table->used());
   return Handle<Context>::cast(
-      FixedArray::get(*table, i + kFirstContextSlotIndex, table->GetIsolate()));
+      FixedArray::get(*table, i + kFirstContextSlotIndex, isolate));
 }
 
 // static
@@ -58,7 +60,7 @@ void Context::set_previous(Context* context) { set(PREVIOUS_INDEX, context); }
 
 Object* Context::next_context_link() { return get(Context::NEXT_CONTEXT_LINK); }
 
-bool Context::has_extension() { return !extension()->IsTheHole(GetIsolate()); }
+bool Context::has_extension() { return !extension()->IsTheHole(); }
 HeapObject* Context::extension() {
   return HeapObject::cast(get(EXTENSION_INDEX));
 }

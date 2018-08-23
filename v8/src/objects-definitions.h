@@ -111,6 +111,7 @@ namespace internal {
   V(STACK_FRAME_INFO_TYPE)                                      \
   V(TUPLE2_TYPE)                                                \
   V(TUPLE3_TYPE)                                                \
+  V(ARRAY_BOILERPLATE_DESCRIPTION_TYPE)                         \
   V(WASM_DEBUG_INFO_TYPE)                                       \
   V(WASM_EXPORTED_FUNCTION_DATA_TYPE)                           \
                                                                 \
@@ -123,7 +124,7 @@ namespace internal {
   V(ALLOCATION_SITE_TYPE)                                       \
                                                                 \
   V(FIXED_ARRAY_TYPE)                                           \
-  V(BOILERPLATE_DESCRIPTION_TYPE)                               \
+  V(OBJECT_BOILERPLATE_DESCRIPTION_TYPE)                        \
   V(HASH_TABLE_TYPE)                                            \
   V(ORDERED_HASH_MAP_TYPE)                                      \
   V(ORDERED_HASH_SET_TYPE)                                      \
@@ -156,13 +157,15 @@ namespace internal {
   V(FEEDBACK_CELL_TYPE)                                         \
   V(FEEDBACK_VECTOR_TYPE)                                       \
   V(LOAD_HANDLER_TYPE)                                          \
+  V(PRE_PARSED_SCOPE_DATA_TYPE)                                 \
   V(PROPERTY_ARRAY_TYPE)                                        \
   V(PROPERTY_CELL_TYPE)                                         \
   V(SHARED_FUNCTION_INFO_TYPE)                                  \
   V(SMALL_ORDERED_HASH_MAP_TYPE)                                \
   V(SMALL_ORDERED_HASH_SET_TYPE)                                \
   V(STORE_HANDLER_TYPE)                                         \
-  V(WEAK_CELL_TYPE)                                             \
+  V(UNCOMPILED_DATA_WITHOUT_PRE_PARSED_SCOPE_TYPE)              \
+  V(UNCOMPILED_DATA_WITH_PRE_PARSED_SCOPE_TYPE)                 \
   V(WEAK_ARRAY_LIST_TYPE)                                       \
                                                                 \
   V(JS_PROXY_TYPE)                                              \
@@ -211,9 +214,13 @@ namespace internal {
   V(JS_FUNCTION_TYPE)
 
 #ifdef V8_INTL_SUPPORT
-#define INSTANCE_TYPE_LIST(V)       \
-  INSTANCE_TYPE_LIST_BEFORE_INTL(V) \
-  V(JS_INTL_LOCALE_TYPE)            \
+#define INSTANCE_TYPE_LIST(V)          \
+  INSTANCE_TYPE_LIST_BEFORE_INTL(V)    \
+  V(JS_INTL_COLLATOR_TYPE)             \
+  V(JS_INTL_LIST_FORMAT_TYPE)          \
+  V(JS_INTL_LOCALE_TYPE)               \
+  V(JS_INTL_PLURAL_RULES_TYPE)         \
+  V(JS_INTL_RELATIVE_TIME_FORMAT_TYPE) \
   INSTANCE_TYPE_LIST_AFTER_INTL(V)
 #else
 #define INSTANCE_TYPE_LIST(V)       \
@@ -305,6 +312,8 @@ namespace internal {
   V(STACK_FRAME_INFO, StackFrameInfo, stack_frame_info)                      \
   V(TUPLE2, Tuple2, tuple2)                                                  \
   V(TUPLE3, Tuple3, tuple3)                                                  \
+  V(ARRAY_BOILERPLATE_DESCRIPTION, ArrayBoilerplateDescription,              \
+    array_boilerplate_description)                                           \
   V(WASM_DEBUG_INFO, WasmDebugInfo, wasm_debug_info)                         \
   V(WASM_EXPORTED_FUNCTION_DATA, WasmExportedFunctionData,                   \
     wasm_exported_function_data)                                             \

@@ -935,8 +935,14 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
     case IrOpcode::kLoadTypedElement:
       result = LowerLoadTypedElement(node);
       break;
+    case IrOpcode::kLoadDataViewElement:
+      result = LowerLoadDataViewElement(node);
+      break;
     case IrOpcode::kStoreTypedElement:
       LowerStoreTypedElement(node);
+      break;
+    case IrOpcode::kStoreDataViewElement:
+      LowerStoreDataViewElement(node);
       break;
     case IrOpcode::kStoreSignedSmallElement:
       LowerStoreSignedSmallElement(node);
@@ -1625,6 +1631,32 @@ Node* EffectControlLinearizer::LowerCheckedInt32Div(Node* node,
   return value;
 }
 
+Node* EffectControlLinearizer::BuildUint32Mod(Node* lhs, Node* rhs) {
+  auto if_rhs_power_of_two = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
+
+  // Compute the mask for the {rhs}.
+  Node* one = __ Int32Constant(1);
+  Node* msk = __ Int32Sub(rhs, one);
+
+  // Check if the {rhs} is a power of two.
+  __ GotoIf(__ Word32Equal(__ Word32And(rhs, msk), __ Int32Constant(0)),
+            &if_rhs_power_of_two);
+  {
+    // The {rhs} is not a power of two, do a generic Uint32Mod.
+    __ Goto(&done, __ Uint32Mod(lhs, rhs));
+  }
+
+  __ Bind(&if_rhs_power_of_two);
+  {
+    // The {rhs} is a power of two, just do a fast bit masking.
+    __ Goto(&done, __ Word32And(lhs, msk));
+  }
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
 Node* EffectControlLinearizer::LowerCheckedInt32Mod(Node* node,
                                                     Node* frame_state) {
   // General case for signed integer modulus, with optimization for (unknown)
@@ -1633,12 +1665,19 @@ Node* EffectControlLinearizer::LowerCheckedInt32Mod(Node* node,
   //   if rhs <= 0 then
   //     rhs = -rhs
   //     deopt if rhs == 0
+  //   let msk = rhs - 1 in
   //   if lhs < 0 then
-  //     let res = lhs % rhs in
-  //     deopt if res == 0
-  //     res
+  //     let lhs_abs = -lsh in
+  //     let res = if rhs & msk == 0 then
+  //                 lhs_abs & msk
+  //               else
+  //                 lhs_abs % rhs in
+  //     if lhs < 0 then
+  //       deopt if res == 0
+  //       -res
+  //     else
+  //       res
   //   else
-  //     let msk = rhs - 1 in
   //     if rhs & msk == 0 then
   //       lhs & msk
   //     else
@@ -1649,7 +1688,7 @@ Node* EffectControlLinearizer::LowerCheckedInt32Mod(Node* node,
 
   auto if_rhs_not_positive = __ MakeDeferredLabel();
   auto if_lhs_negative = __ MakeDeferredLabel();
-  auto if_power_of_two = __ MakeLabel();
+  auto if_rhs_power_of_two = __ MakeLabel();
   auto rhs_checked = __ MakeLabel(MachineRepresentation::kWord32);
   auto done = __ MakeLabel(MachineRepresentation::kWord32);
 
@@ -1667,45 +1706,29 @@ Node* EffectControlLinearizer::LowerCheckedInt32Mod(Node* node,
     Node* vtrue0 = __ Int32Sub(zero, rhs);
 
     // Ensure that {rhs} is not zero, otherwise we'd have to return NaN.
-    Node* check = __ Word32Equal(vtrue0, zero);
-    __ DeoptimizeIf(DeoptimizeReason::kDivisionByZero, VectorSlotPair(), check,
-                    frame_state);
+    __ DeoptimizeIf(DeoptimizeReason::kDivisionByZero, VectorSlotPair(),
+                    __ Word32Equal(vtrue0, zero), frame_state);
     __ Goto(&rhs_checked, vtrue0);
   }
 
   __ Bind(&rhs_checked);
   rhs = rhs_checked.PhiAt(0);
 
-  // Check if {lhs} is negative.
-  Node* check1 = __ Int32LessThan(lhs, zero);
-  __ GotoIf(check1, &if_lhs_negative);
-
-  // {lhs} non-negative.
+  __ GotoIf(__ Int32LessThan(lhs, zero), &if_lhs_negative);
   {
-    Node* one = __ Int32Constant(1);
-    Node* msk = __ Int32Sub(rhs, one);
-
-    // Check if {rhs} minus one is a valid mask.
-    Node* check2 = __ Word32Equal(__ Word32And(rhs, msk), zero);
-    __ GotoIf(check2, &if_power_of_two);
-    // Compute the remainder using the generic {lhs % rhs}.
-    __ Goto(&done, __ Int32Mod(lhs, rhs));
-
-    __ Bind(&if_power_of_two);
-    // Compute the remainder using {lhs & msk}.
-    __ Goto(&done, __ Word32And(lhs, msk));
+    // The {lhs} is a non-negative integer.
+    __ Goto(&done, BuildUint32Mod(lhs, rhs));
   }
 
   __ Bind(&if_lhs_negative);
   {
-    // Compute the remainder using {lhs % msk}.
-    Node* vtrue1 = __ Int32Mod(lhs, rhs);
+    // The {lhs} is a negative integer.
+    Node* res = BuildUint32Mod(__ Int32Sub(zero, lhs), rhs);
 
     // Check if we would have to return -0.
-    Node* check = __ Word32Equal(vtrue1, zero);
-    __ DeoptimizeIf(DeoptimizeReason::kMinusZero, VectorSlotPair(), check,
-                    frame_state);
-    __ Goto(&done, vtrue1);
+    __ DeoptimizeIf(DeoptimizeReason::kMinusZero, VectorSlotPair(),
+                    __ Word32Equal(res, zero), frame_state);
+    __ Goto(&done, __ Int32Sub(zero, res));
   }
 
   __ Bind(&done);
@@ -1747,7 +1770,7 @@ Node* EffectControlLinearizer::LowerCheckedUint32Mod(Node* node,
                   frame_state);
 
   // Perform the actual unsigned integer modulus.
-  return __ Uint32Mod(lhs, rhs);
+  return BuildUint32Mod(lhs, rhs);
 }
 
 Node* EffectControlLinearizer::LowerCheckedInt32Mul(Node* node,
@@ -3366,15 +3389,19 @@ void EffectControlLinearizer::LowerCheckEqualsInternalizedString(
           frame_state);
 
       // Try to find the {val} in the string table.
-      MachineSignature::Builder builder(graph()->zone(), 1, 1);
+      MachineSignature::Builder builder(graph()->zone(), 1, 2);
       builder.AddReturn(MachineType::AnyTagged());
+      builder.AddParam(MachineType::Pointer());
       builder.AddParam(MachineType::AnyTagged());
       Node* try_internalize_string_function = __ ExternalConstant(
           ExternalReference::try_internalize_string_function());
+      Node* const isolate_ptr =
+          __ ExternalConstant(ExternalReference::isolate_address(isolate()));
       auto call_descriptor =
           Linkage::GetSimplifiedCDescriptor(graph()->zone(), builder.Build());
-      Node* val_internalized = __ Call(common()->Call(call_descriptor),
-                                       try_internalize_string_function, val);
+      Node* val_internalized =
+          __ Call(common()->Call(call_descriptor),
+                  try_internalize_string_function, isolate_ptr, val);
 
       // Now see if the results match.
       __ DeoptimizeIfNot(DeoptimizeReason::kWrongName, VectorSlotPair(),
@@ -3740,6 +3767,153 @@ Node* EffectControlLinearizer::LowerLoadFieldByIndex(Node* node) {
 
   __ Bind(&done);
   return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::BuildReverseBytes(ExternalArrayType type,
+                                                 Node* value) {
+  switch (type) {
+    case kExternalInt8Array:
+    case kExternalUint8Array:
+    case kExternalUint8ClampedArray:
+      return value;
+
+    case kExternalInt16Array: {
+      Node* result = __ Word32ReverseBytes(value);
+      result = __ Word32Sar(result, __ Int32Constant(16));
+      return result;
+    }
+
+    case kExternalUint16Array: {
+      Node* result = __ Word32ReverseBytes(value);
+      result = __ Word32Shr(result, __ Int32Constant(16));
+      return result;
+    }
+
+    case kExternalInt32Array:  // Fall through.
+    case kExternalUint32Array:
+      return __ Word32ReverseBytes(value);
+
+    case kExternalFloat32Array: {
+      Node* result = __ BitcastFloat32ToInt32(value);
+      result = __ Word32ReverseBytes(result);
+      result = __ BitcastInt32ToFloat32(result);
+      return result;
+    }
+
+    case kExternalFloat64Array: {
+      if (machine()->Is64()) {
+        Node* result = __ BitcastFloat64ToInt64(value);
+        result = __ Word64ReverseBytes(result);
+        result = __ BitcastInt64ToFloat64(result);
+        return result;
+      } else {
+        Node* lo = __ Word32ReverseBytes(__ Float64ExtractLowWord32(value));
+        Node* hi = __ Word32ReverseBytes(__ Float64ExtractHighWord32(value));
+        Node* result = __ Float64Constant(0.0);
+        result = __ Float64InsertLowWord32(result, hi);
+        result = __ Float64InsertHighWord32(result, lo);
+        return result;
+      }
+    }
+
+    case kExternalBigInt64Array:
+    case kExternalBigUint64Array:
+      UNREACHABLE();
+  }
+}
+
+Node* EffectControlLinearizer::LowerLoadDataViewElement(Node* node) {
+  ExternalArrayType element_type = ExternalArrayTypeOf(node->op());
+  Node* buffer = node->InputAt(0);
+  Node* storage = node->InputAt(1);
+  Node* index = node->InputAt(2);
+  Node* is_little_endian = node->InputAt(3);
+
+  // On 64-bit platforms, we need to feed a Word64 index to the Load and
+  // Store operators.
+  if (machine()->Is64()) {
+    index = __ ChangeUint32ToUint64(index);
+  }
+
+  // We need to keep the {buffer} alive so that the GC will not release the
+  // ArrayBuffer (if there's any) as long as we are still operating on it.
+  __ Retain(buffer);
+
+  MachineType const machine_type =
+      AccessBuilder::ForTypedArrayElement(element_type, true).machine_type;
+
+  Node* value = __ LoadUnaligned(machine_type, storage, index);
+  auto big_endian = __ MakeLabel();
+  auto done = __ MakeLabel(machine_type.representation());
+
+  __ GotoIfNot(is_little_endian, &big_endian);
+  {  // Little-endian load.
+#if V8_TARGET_LITTLE_ENDIAN
+    __ Goto(&done, value);
+#else
+    __ Goto(&done, BuildReverseBytes(element_type, value));
+#endif  // V8_TARGET_LITTLE_ENDIAN
+  }
+
+  __ Bind(&big_endian);
+  {  // Big-endian load.
+#if V8_TARGET_LITTLE_ENDIAN
+    __ Goto(&done, BuildReverseBytes(element_type, value));
+#else
+    __ Goto(&done, value);
+#endif  // V8_TARGET_LITTLE_ENDIAN
+  }
+
+  // We're done, return {result}.
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+void EffectControlLinearizer::LowerStoreDataViewElement(Node* node) {
+  ExternalArrayType element_type = ExternalArrayTypeOf(node->op());
+  Node* buffer = node->InputAt(0);
+  Node* storage = node->InputAt(1);
+  Node* index = node->InputAt(2);
+  Node* value = node->InputAt(3);
+  Node* is_little_endian = node->InputAt(4);
+
+  // On 64-bit platforms, we need to feed a Word64 index to the Load and
+  // Store operators.
+  if (machine()->Is64()) {
+    index = __ ChangeUint32ToUint64(index);
+  }
+
+  // We need to keep the {buffer} alive so that the GC will not release the
+  // ArrayBuffer (if there's any) as long as we are still operating on it.
+  __ Retain(buffer);
+
+  MachineType const machine_type =
+      AccessBuilder::ForTypedArrayElement(element_type, true).machine_type;
+
+  auto big_endian = __ MakeLabel();
+  auto done = __ MakeLabel(machine_type.representation());
+
+  __ GotoIfNot(is_little_endian, &big_endian);
+  {  // Little-endian store.
+#if V8_TARGET_LITTLE_ENDIAN
+    __ Goto(&done, value);
+#else
+    __ Goto(&done, BuildReverseBytes(element_type, value));
+#endif  // V8_TARGET_LITTLE_ENDIAN
+  }
+
+  __ Bind(&big_endian);
+  {  // Big-endian store.
+#if V8_TARGET_LITTLE_ENDIAN
+    __ Goto(&done, BuildReverseBytes(element_type, value));
+#else
+    __ Goto(&done, value);
+#endif  // V8_TARGET_LITTLE_ENDIAN
+  }
+
+  __ Bind(&done);
+  __ StoreUnaligned(machine_type.representation(), storage, index,
+                    done.PhiAt(0));
 }
 
 Node* EffectControlLinearizer::LowerLoadTypedElement(Node* node) {

@@ -58,6 +58,9 @@ consts_misc = [
     { 'name': 'APIObjectType',          'value': 'JS_API_OBJECT_TYPE' },
     { 'name': 'SpecialAPIObjectType',   'value': 'JS_SPECIAL_API_OBJECT_TYPE' },
 
+    { 'name': 'FirstContextType',     'value': 'FIRST_CONTEXT_TYPE' },
+    { 'name': 'LastContextType',     'value': 'LAST_CONTEXT_TYPE' },
+
     { 'name': 'IsNotStringMask',        'value': 'kIsNotStringMask' },
     { 'name': 'StringTag',              'value': 'kStringTag' },
 
@@ -189,11 +192,6 @@ consts_misc = [
     { 'name': 'scopeinfo_idx_first_vars',
         'value': 'ScopeInfo::kVariablePartIndex' },
 
-    { 'name': 'sharedfunctioninfo_start_position_mask',
-        'value': 'SharedFunctionInfo::StartPositionBits::kMask' },
-    { 'name': 'sharedfunctioninfo_start_position_shift',
-        'value': 'SharedFunctionInfo::StartPositionBits::kShift' },
-
     { 'name': 'jsarray_buffer_was_neutered_mask',
         'value': 'JSArrayBuffer::WasNeutered::kMask' },
     { 'name': 'jsarray_buffer_was_neutered_shift',
@@ -209,6 +207,9 @@ consts_misc = [
         'value': 'Context::EXTENSION_INDEX' },
     { 'name': 'context_min_slots',
         'value': 'Context::MIN_CONTEXT_SLOTS' },
+    { 'name': 'context_idx_embedder_data',
+        'value': 'Internals::kContextEmbedderDataIndex' },
+
 
     { 'name': 'namedictionaryshape_prefix_size',
         'value': 'NameDictionaryShape::kPrefixSize' },
@@ -229,6 +230,8 @@ consts_misc = [
         'value': 'SimpleNumberDictionaryShape::kPrefixSize' },
     { 'name': 'simplenumberdictionaryshape_entry_size',
         'value': 'SimpleNumberDictionaryShape::kEntrySize' },
+
+    { 'name': 'type_JSError__JS_ERROR_TYPE', 'value': 'JS_ERROR_TYPE' },
 ];
 
 #
@@ -263,9 +266,9 @@ extras_accessors = [
     'ExternalString, resource, Object, kResourceOffset',
     'SeqOneByteString, chars, char, kHeaderSize',
     'SeqTwoByteString, chars, char, kHeaderSize',
-    'SharedFunctionInfo, function_token_position, int, kFunctionTokenPositionOffset',
-    'SharedFunctionInfo, start_position_and_type, int, kStartPositionAndTypeOffset',
-    'SharedFunctionInfo, end_position, int, kEndPositionOffset',
+    'UncompiledData, start_position, int32_t, kStartPositionOffset',
+    'UncompiledData, end_position, int32_t, kEndPositionOffset',
+    'SharedFunctionInfo, raw_function_token_offset, int16_t, kFunctionTokenOffsetOffset',
     'SharedFunctionInfo, internal_formal_parameter_count, uint16_t, kFormalParameterCountOffset',
     'SharedFunctionInfo, flags, int, kFlagsOffset',
     'SharedFunctionInfo, length, uint16_t, kLengthOffset',
@@ -282,7 +285,7 @@ extras_accessors = [
 expected_classes = [
     'ConsString', 'FixedArray', 'HeapNumber', 'JSArray', 'JSFunction',
     'JSObject', 'JSRegExp', 'JSValue', 'Map', 'Oddball', 'Script',
-    'SeqOneByteString', 'SharedFunctionInfo'
+    'SeqOneByteString', 'SharedFunctionInfo', 'ScopeInfo'
 ];
 
 

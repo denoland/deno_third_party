@@ -4,7 +4,7 @@
 
 #include "src/execution.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/bootstrapper.h"
 #include "src/compiler-dispatcher/optimizing-compile-dispatcher.h"
 #include "src/debug/debug.h"
@@ -244,7 +244,7 @@ MaybeHandle<Object> Execution::TryCall(
     if (maybe_result.is_null()) {
       DCHECK(isolate->has_pending_exception());
       if (isolate->pending_exception() ==
-          isolate->heap()->termination_exception()) {
+          ReadOnlyRoots(isolate).termination_exception()) {
         is_termination = true;
       } else {
         if (exception_out != nullptr) {
@@ -563,7 +563,7 @@ Object* StackGuard::HandleInterrupts() {
   isolate_->counters()->runtime_profiler_ticks()->Increment();
   isolate_->runtime_profiler()->MarkCandidatesForOptimization();
 
-  return isolate_->heap()->undefined_value();
+  return ReadOnlyRoots(isolate_).undefined_value();
 }
 
 }  // namespace internal

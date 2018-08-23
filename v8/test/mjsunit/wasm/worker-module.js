@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --no-wasm-disable-structured-cloning
+// Flags: --wasm-shared-engine --no-wasm-disable-structured-cloning
 
 load("test/mjsunit/wasm/wasm-constants.js");
 load("test/mjsunit/wasm/wasm-module-builder.js");
 
-function TestCloneModule() {
+(function TestPostModule() {
   let builder = new WasmModuleBuilder();
   builder.addFunction("add", kSig_i_ii)
     .addBody([kExprGetLocal, 0, kExprGetLocal, 1, kExprI32Add])
@@ -31,4 +31,4 @@ function TestCloneModule() {
   worker.postMessage(module);
   assertEquals(42, worker.getMessage());
   worker.terminate();
-}
+})();

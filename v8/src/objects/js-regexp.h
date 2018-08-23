@@ -55,7 +55,8 @@ class JSRegExp : public JSObject {
   DECL_ACCESSORS(last_index, Object)
   DECL_ACCESSORS(source, Object)
 
-  V8_EXPORT_PRIVATE static MaybeHandle<JSRegExp> New(Handle<String> source,
+  V8_EXPORT_PRIVATE static MaybeHandle<JSRegExp> New(Isolate* isolate,
+                                                     Handle<String> source,
                                                      Flags flags);
   static Handle<JSRegExp> Copy(Handle<JSRegExp> regexp);
 
@@ -86,7 +87,7 @@ class JSRegExp : public JSObject {
   DECL_CAST(JSRegExp)
 
   // Dispatched behavior.
-  DECL_PRINTER_WITH_ISOLATE(JSRegExp)
+  DECL_PRINTER(JSRegExp)
   DECL_VERIFIER(JSRegExp)
 
   static const int kDataOffset = JSObject::kHeaderSize;

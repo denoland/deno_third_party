@@ -17,32 +17,6 @@
 #include "src/base/logging.h"
 #include "src/base/macros.h"
 
-#ifdef V8_OS_WIN
-
-// Setup for Windows shared library export.
-#ifdef BUILDING_V8_SHARED
-#define V8_EXPORT_PRIVATE __declspec(dllexport)
-#elif USING_V8_SHARED
-#define V8_EXPORT_PRIVATE __declspec(dllimport)
-#else
-#define V8_EXPORT_PRIVATE
-#endif  // BUILDING_V8_SHARED
-
-#else  // V8_OS_WIN
-
-// Setup for Linux shared library export.
-#if V8_HAS_ATTRIBUTE_VISIBILITY
-#ifdef BUILDING_V8_SHARED
-#define V8_EXPORT_PRIVATE __attribute__((visibility("default")))
-#else
-#define V8_EXPORT_PRIVATE
-#endif
-#else
-#define V8_EXPORT_PRIVATE
-#endif
-
-#endif  // V8_OS_WIN
-
 #define V8_INFINITY std::numeric_limits<double>::infinity()
 
 namespace v8 {
@@ -183,7 +157,7 @@ constexpr int kDoubleSizeLog2 = 3;
 // ARM64 only supports direct calls within a 128 MB range.
 constexpr size_t kMaxWasmCodeMemory = 128 * MB;
 #else
-constexpr size_t kMaxWasmCodeMemory = 256 * MB;
+constexpr size_t kMaxWasmCodeMemory = 512 * MB;
 #endif
 
 #if V8_HOST_ARCH_64_BIT
@@ -250,6 +224,10 @@ constexpr int kExternalAllocationSoftLimit = 64 * MB;
 //
 // Current value: Page::kAllocatableMemory (on 32-bit arch) - 512 (slack).
 constexpr int kMaxRegularHeapObjectSize = 507136;
+
+// Objects smaller or equal kMaxNewSpaceHeapObjectSize are allocated in the
+// new large object space.
+constexpr int kMaxNewSpaceHeapObjectSize = 32 * KB;
 
 STATIC_ASSERT(kPointerSize == (1 << kPointerSizeLog2));
 
@@ -484,6 +462,9 @@ constexpr uint32_t kFreeListZapValue = 0xfeed1eaf;
 constexpr int kCodeZapValue = 0xbadc0de;
 constexpr uint32_t kPhantomReferenceZap = 0xca11bac;
 
+// Page constants.
+static const intptr_t kPageAlignmentMask = (intptr_t{1} << kPageSizeBits) - 1;
+
 // On Intel architecture, cache line size is 64 bytes.
 // On ARM it may be less (32 bytes), but as far this constant is
 // used for aligning data, it doesn't hurt to align on a greater value.
@@ -584,7 +565,7 @@ enum AllocationSpace {
   FIRST_GROWABLE_PAGED_SPACE = OLD_SPACE,
   LAST_GROWABLE_PAGED_SPACE = MAP_SPACE
 };
-constexpr int kSpaceTagSize = 4;
+constexpr int kSpaceTagSize = 3;
 STATIC_ASSERT(FIRST_SPACE == 0);
 
 enum AllocationAlignment { kWordAligned, kDoubleAligned, kDoubleUnaligned };
@@ -1547,7 +1528,7 @@ V8_INLINE static bool HasWeakHeapObjectTag(const Object* value) {
           kWeakHeapObjectTag);
 }
 
-V8_INLINE static bool IsClearedWeakHeapObject(MaybeObject* value) {
+V8_INLINE static bool IsClearedWeakHeapObject(const MaybeObject* value) {
   return reinterpret_cast<intptr_t>(value) == kClearedWeakHeapObject;
 }
 

@@ -164,7 +164,7 @@ void PerfJitLogger::CloseMarkerFile(void* marker_address) {
   munmap(marker_address, page_size);
 }
 
-PerfJitLogger::PerfJitLogger() {
+PerfJitLogger::PerfJitLogger(Isolate* isolate) : CodeEventLogger(isolate) {
   base::LockGuard<base::RecursiveMutex> guard_file(file_mutex_.Pointer());
 
   reference_count_++;
@@ -420,7 +420,7 @@ void PerfJitLogger::LogWriteUnwindingInfo(Code* code) {
   LogWriteBytes(padding_bytes, static_cast<int>(padding_size));
 }
 
-void PerfJitLogger::CodeMoveEvent(AbstractCode* from, Address to) {
+void PerfJitLogger::CodeMoveEvent(AbstractCode* from, AbstractCode* to) {
   // We may receive a CodeMove event if a BytecodeArray object moves. Otherwise
   // code relocation is not supported.
   CHECK(from->IsBytecodeArray());

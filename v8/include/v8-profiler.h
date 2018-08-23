@@ -47,24 +47,6 @@ template class V8_EXPORT std::vector<v8::CpuProfileDeoptInfo>;
 
 namespace v8 {
 
-/**
- * TracingCpuProfiler monitors tracing being enabled/disabled
- * and emits CpuProfile trace events once v8.cpu_profiler tracing category
- * is enabled. It has no overhead unless the category is enabled.
- */
-class V8_EXPORT TracingCpuProfiler {
- public:
-  V8_DEPRECATED(
-      "The profiler is created automatically with the isolate.\n"
-      "No need to create it explicitly.",
-      static std::unique_ptr<TracingCpuProfiler> Create(Isolate*));
-
-  virtual ~TracingCpuProfiler() = default;
-
- protected:
-  TracingCpuProfiler() = default;
-};
-
 // TickSample captures the information collected for each sample.
 struct TickSample {
   // Internal profiling (with --prof + tools/$OS-tick-processor) wants to
@@ -703,11 +685,14 @@ class V8_EXPORT EmbedderGraph {
   virtual Node* AddNode(std::unique_ptr<Node> node) = 0;
 
   /**
-   * Adds an edge that represents a strong reference from the given node
-   * |from| to the given node |to|. The nodes must be added to the graph
+   * Adds an edge that represents a strong reference from the given
+   * node |from| to the given node |to|. The nodes must be added to the graph
    * before calling this function.
+   *
+   * If name is nullptr, the edge will have auto-increment indexes, otherwise
+   * it will be named accordingly.
    */
-  virtual void AddEdge(Node* from, Node* to) = 0;
+  virtual void AddEdge(Node* from, Node* to, const char* name = nullptr) = 0;
 
   virtual ~EmbedderGraph() = default;
 };
@@ -912,7 +897,7 @@ class V8_EXPORT HeapProfiler {
       "Use AddBuildEmbedderGraphCallback to provide info about embedder nodes",
       void SetGetRetainerInfosCallback(GetRetainerInfosCallback callback));
 
-  V8_DEPRECATE_SOON(
+  V8_DEPRECATED(
       "Use AddBuildEmbedderGraphCallback to provide info about embedder nodes",
       void SetBuildEmbedderGraphCallback(
           LegacyBuildEmbedderGraphCallback callback));

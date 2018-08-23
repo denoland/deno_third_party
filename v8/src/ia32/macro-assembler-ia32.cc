@@ -27,9 +27,9 @@ namespace internal {
 // -------------------------------------------------------------------------
 // MacroAssembler implementation.
 
-MacroAssembler::MacroAssembler(Isolate* isolate, const Options& options,
-                               void* buffer, int size,
-                               CodeObjectRequired create_code_object)
+MacroAssembler::MacroAssembler(Isolate* isolate,
+                               const AssemblerOptions& options, void* buffer,
+                               int size, CodeObjectRequired create_code_object)
     : TurboAssembler(isolate, options, buffer, size, create_code_object) {
   if (create_code_object == CodeObjectRequired::kYes) {
     // Unlike TurboAssembler, which can be used off the main thread and may not
@@ -893,8 +893,7 @@ void MacroAssembler::JumpToExternalReference(const ExternalReference& ext,
 }
 
 void MacroAssembler::JumpToInstructionStream(Address entry) {
-  mov(kOffHeapTrampolineRegister, Immediate(entry, RelocInfo::OFF_HEAP_TARGET));
-  jmp(kOffHeapTrampolineRegister);
+  jmp(entry, RelocInfo::OFF_HEAP_TARGET);
 }
 
 void TurboAssembler::PrepareForTailCall(
@@ -1300,6 +1299,24 @@ void TurboAssembler::Pshufd(XMMRegister dst, Operand src, uint8_t shuffle) {
   }
 }
 
+void TurboAssembler::Psraw(XMMRegister dst, int8_t shift) {
+  if (CpuFeatures::IsSupported(AVX)) {
+    CpuFeatureScope scope(this, AVX);
+    vpsraw(dst, dst, shift);
+  } else {
+    psraw(dst, shift);
+  }
+}
+
+void TurboAssembler::Psrlw(XMMRegister dst, int8_t shift) {
+  if (CpuFeatures::IsSupported(AVX)) {
+    CpuFeatureScope scope(this, AVX);
+    vpsrlw(dst, dst, shift);
+  } else {
+    psrlw(dst, shift);
+  }
+}
+
 void TurboAssembler::Psignb(XMMRegister dst, Operand src) {
   if (CpuFeatures::IsSupported(AVX)) {
     CpuFeatureScope scope(this, AVX);
@@ -1573,6 +1590,15 @@ void TurboAssembler::Abort(AbortReason reason) {
     return;
   }
 
+  if (should_abort_hard()) {
+    // We don't care if we constructed a frame. Just pretend we did.
+    FrameScope assume_frame(this, StackFrame::NONE);
+    PrepareCallCFunction(1, eax);
+    mov(Operand(esp, 0), Immediate(static_cast<int>(reason)));
+    CallCFunction(ExternalReference::abort_with_reason(), 1);
+    return;
+  }
+
   Move(edx, Smi::FromInt(static_cast<int>(reason)));
 
   // Disable stub call restrictions to always allow calls to abort.
@@ -1681,43 +1707,14 @@ void TurboAssembler::RetpolineJump(Register reg) {
   ret(0);
 }
 
-#ifdef DEBUG
-bool AreAliased(Register reg1,
-                Register reg2,
-                Register reg3,
-                Register reg4,
-                Register reg5,
-                Register reg6,
-                Register reg7,
-                Register reg8) {
-  int n_of_valid_regs = reg1.is_valid() + reg2.is_valid() +
-      reg3.is_valid() + reg4.is_valid() + reg5.is_valid() + reg6.is_valid() +
-      reg7.is_valid() + reg8.is_valid();
-
-  RegList regs = 0;
-  if (reg1.is_valid()) regs |= reg1.bit();
-  if (reg2.is_valid()) regs |= reg2.bit();
-  if (reg3.is_valid()) regs |= reg3.bit();
-  if (reg4.is_valid()) regs |= reg4.bit();
-  if (reg5.is_valid()) regs |= reg5.bit();
-  if (reg6.is_valid()) regs |= reg6.bit();
-  if (reg7.is_valid()) regs |= reg7.bit();
-  if (reg8.is_valid()) regs |= reg8.bit();
-  int n_of_non_aliasing_regs = NumRegs(regs);
-
-  return n_of_valid_regs != n_of_non_aliasing_regs;
-}
-#endif
-
-
 void TurboAssembler::CheckPageFlag(Register object, Register scratch, int mask,
                                    Condition cc, Label* condition_met,
                                    Label::Distance condition_met_distance) {
   DCHECK(cc == zero || cc == not_zero);
   if (scratch == object) {
-    and_(scratch, Immediate(~Page::kPageAlignmentMask));
+    and_(scratch, Immediate(~kPageAlignmentMask));
   } else {
-    mov(scratch, Immediate(~Page::kPageAlignmentMask));
+    mov(scratch, Immediate(~kPageAlignmentMask));
     and_(scratch, object);
   }
   if (mask < (1 << kBitsPerByte)) {

@@ -276,15 +276,18 @@ config("default_libs") {
   }
 }
 
-# Dependencies that all executables and shared libraries should have.
-group("exe_and_shlib_deps") {
+# Only //build/config/BUILDCONFIG.gn should reference this.
+group("common_deps") {
   public_deps = []
+
   if (using_sanitizer) {
     public_deps += [ "//build/config/sanitizers:deps" ]
   }
+
   if (use_custom_libcxx) {
     public_deps += [ "//buildtools/third_party/libc++" ]
   }
+
   if (use_afl) {
     public_deps += [ "//third_party/afl" ]
   }
@@ -296,6 +299,27 @@ group("exe_and_shlib_deps") {
   if (is_win && generate_order_files && !is_nacl) {
     public_deps += [ "//tools/cygprofile_win" ]
   }
+}
+
+group("executable_deps") {
+  public_deps = [
+    ":common_deps",
+  ]
+  if (export_libcxxabi_from_executables) {
+    public_deps += [ "//buildtools/third_party/libc++abi" ]
+  }
+}
+
+group("loadable_module_deps") {
+  public_deps = [
+    ":common_deps",
+  ]
+}
+
+group("shared_library_deps") {
+  public_deps = [
+    ":common_deps",
+  ]
 }
 
 # Executable configs -----------------------------------------------------------

@@ -5,7 +5,7 @@
 #include "src/v8.h"
 #include "test/cctest/cctest.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/debug/debug.h"
 #include "src/execution.h"
 #include "src/global-handles.h"
@@ -439,7 +439,7 @@ TEST(VectorLoadICOnSmi) {
   CompileRun("f(34)");
   CHECK_EQ(MONOMORPHIC, nexus.StateFromFeedback());
   // Verify that the monomorphic map is the one we expect.
-  Map* number_map = heap->heap_number_map();
+  Map* number_map = ReadOnlyRoots(heap).heap_number_map();
   CHECK_EQ(number_map, nexus.FindFirstMap());
 
   // Now go polymorphic on o.

@@ -8,7 +8,7 @@
 #include <limits>
 
 #include "src/accessors.h"
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/debug/debug.h"
 #include "src/elements.h"
 #include "src/isolate-inl.h"
@@ -213,7 +213,7 @@ Handle<Dictionary> ShallowCopyDictionaryTemplate(
     Object* value = dictionary->ValueAt(i);
     if (value->IsAccessorPair()) {
       Handle<AccessorPair> pair(AccessorPair::cast(value), isolate);
-      pair = AccessorPair::Copy(pair);
+      pair = AccessorPair::Copy(isolate, pair);
       dictionary->ValueAtPut(i, *pair);
     }
   }
@@ -228,9 +228,10 @@ bool SubstituteValues(Isolate* isolate, Handle<Dictionary> dictionary,
 
   // Replace all indices with proper methods.
   int capacity = dictionary->Capacity();
+  ReadOnlyRoots roots(isolate);
   for (int i = 0; i < capacity; i++) {
     Object* maybe_key = dictionary->KeyAt(i);
-    if (!Dictionary::IsKey(isolate, maybe_key)) continue;
+    if (!Dictionary::IsKey(roots, maybe_key)) continue;
     if (install_name_accessor && *install_name_accessor &&
         (maybe_key == *name_string)) {
       *install_name_accessor = false;
@@ -297,8 +298,8 @@ bool AddDescriptorsByTemplate(
   for (int i = 0; i < nof_descriptors; i++) {
     Object* value = descriptors_template->GetStrongValue(i);
     if (value->IsAccessorPair()) {
-      Handle<AccessorPair> pair =
-          AccessorPair::Copy(handle(AccessorPair::cast(value), isolate));
+      Handle<AccessorPair> pair = AccessorPair::Copy(
+          isolate, handle(AccessorPair::cast(value), isolate));
       value = *pair;
     }
     DisallowHeapAllocation no_gc;
@@ -409,7 +410,7 @@ bool AddDescriptorsByTemplate(
         static_cast<PropertyAttributes>(DONT_ENUM | READ_ONLY);
     PropertyDetails details(kAccessor, attribs, PropertyCellType::kNoCell);
     Handle<NameDictionary> dict = NameDictionary::Add(
-        properties_dictionary, isolate->factory()->name_string(),
+        isolate, properties_dictionary, isolate->factory()->name_string(),
         isolate->factory()->function_name_accessor(), details);
     CHECK_EQ(*dict, *properties_dictionary);
   }
@@ -830,20 +831,6 @@ RUNTIME_FUNCTION(Runtime_StoreKeyedToSuper_Sloppy) {
   RETURN_RESULT_OR_FAILURE(
       isolate, StoreKeyedToSuper(isolate, home_object, receiver, key, value,
                                  LanguageMode::kSloppy));
-}
-
-
-RUNTIME_FUNCTION(Runtime_GetSuperConstructor) {
-  SealHandleScope shs(isolate);
-  DCHECK_EQ(1, args.length());
-  CONVERT_ARG_CHECKED(JSFunction, active_function, 0);
-  Object* prototype = active_function->map()->prototype();
-  if (!prototype->IsConstructor()) {
-    HandleScope scope(isolate);
-    return ThrowNotSuperConstructor(isolate, handle(prototype, isolate),
-                                    handle(active_function, isolate));
-  }
-  return prototype;
 }
 
 }  // namespace internal

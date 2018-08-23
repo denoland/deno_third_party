@@ -211,7 +211,7 @@ uint32_t RelocInfo::wasm_call_tag() const {
         Memory::Address_at(Assembler::target_pointer_address_at(pc_)));
   } else {
     DCHECK(instr->IsBranchAndLink() || instr->IsUnconditionalBranch());
-    return static_cast<uint32_t>(instr->ImmPCOffset() / kInstructionSize);
+    return static_cast<uint32_t>(instr->ImmPCOffset() / kInstrSize);
   }
 }
 
@@ -347,7 +347,7 @@ bool ConstPool::RecordEntry(intptr_t data, RelocInfo::Mode mode) {
     first_use_ = offset;
   }
 
-  if (CanBeShared(mode)) {
+  if (RelocInfo::IsShareableRelocMode(mode)) {
     write_reloc_info = AddSharedEntry(shared_entries_, raw_data, offset);
   } else if (mode == RelocInfo::CODE_TARGET && raw_data != 0) {
     // A zero data value is a placeholder and must not be shared.
@@ -391,7 +391,7 @@ int ConstPool::WorstCaseSize() {
   //   blr xzr
   //   nop
   // All entries are 64-bit for now.
-  return 4 * kInstructionSize + EntryCount() * kPointerSize;
+  return 4 * kInstrSize + EntryCount() * kPointerSize;
 }
 
 
@@ -403,10 +403,10 @@ int ConstPool::SizeIfEmittedAtCurrentPc(bool require_jump) {
   //   ldr xzr, #pool_size
   //   blr xzr
   //   nop       ;; if not 64-bit aligned
-  int prologue_size = require_jump ? kInstructionSize : 0;
-  prologue_size += 2 * kInstructionSize;
-  prologue_size += IsAligned(assm_->pc_offset() + prologue_size, 8) ?
-                   0 : kInstructionSize;
+  int prologue_size = require_jump ? kInstrSize : 0;
+  prologue_size += 2 * kInstrSize;
+  prologue_size +=
+      IsAligned(assm_->pc_offset() + prologue_size, 8) ? 0 : kInstrSize;
 
   // All entries are 64-bit for now.
   return prologue_size + EntryCount() * kPointerSize;
@@ -473,11 +473,6 @@ void ConstPool::Clear() {
   handle_to_index_map_.clear();
   entries_.clear();
   first_use_ = -1;
-}
-
-
-bool ConstPool::CanBeShared(RelocInfo::Mode mode) {
-  return RelocInfo::IsNone(mode) || RelocInfo::IsShareableRelocMode(mode);
 }
 
 
@@ -552,7 +547,8 @@ void ConstPool::EmitEntries() {
 
 
 // Assembler
-Assembler::Assembler(const Options& options, void* buffer, int buffer_size)
+Assembler::Assembler(const AssemblerOptions& options, void* buffer,
+                     int buffer_size)
     : AssemblerBase(options, buffer, buffer_size),
       constpool_(this),
       unresolved_branches_() {
@@ -578,7 +574,7 @@ void Assembler::Reset() {
   memset(buffer_, 0, pc_ - buffer_);
 #endif
   pc_ = buffer_;
-  code_targets_.reserve(64);
+  ReserveCodeTargetSpace(64);
   reloc_info_writer.Reposition(buffer_ + buffer_size_, pc_);
   constpool_.Clear();
   next_constant_pool_check_ = 0;
@@ -600,12 +596,9 @@ void Assembler::AllocateAndInstallRequestedHeapObjects(Isolate* isolate) {
         request.code_stub()->set_isolate(isolate);
         Instruction* instr = reinterpret_cast<Instruction*>(pc);
         DCHECK(instr->IsBranchAndLink() || instr->IsUnconditionalBranch());
-        DCHECK_GE(instr->ImmPCOffset(), 0);
-        DCHECK_EQ(instr->ImmPCOffset() % kInstructionSize, 0);
-        DCHECK_LT(instr->ImmPCOffset() >> kInstructionSizeLog2,
-                  code_targets_.size());
-        code_targets_[instr->ImmPCOffset() >> kInstructionSizeLog2] =
-            request.code_stub()->GetCode();
+        DCHECK_EQ(instr->ImmPCOffset() % kInstrSize, 0);
+        UpdateCodeTarget(instr->ImmPCOffset() >> kInstrSizeLog2,
+                         request.code_stub()->GetCode());
         break;
       }
     }
@@ -961,12 +954,12 @@ int Assembler::ConstantPoolSizeAt(Instruction* instr) {
         reinterpret_cast<const char*>(
             instr->InstructionAtOffset(kDebugMessageOffset));
     int size = static_cast<int>(kDebugMessageOffset + strlen(message) + 1);
-    return RoundUp(size, kInstructionSize) / kInstructionSize;
+    return RoundUp(size, kInstrSize) / kInstrSize;
   }
   // Same for printf support, see MacroAssembler::CallPrintf().
   if ((instr->Mask(ExceptionMask) == HLT) &&
       (instr->ImmException() == kImmExceptionIsPrintf)) {
-    return kPrintfLength / kInstructionSize;
+    return kPrintfLength / kInstrSize;
   }
 #endif
   if (IsConstantPoolAt(instr)) {
@@ -3940,7 +3933,7 @@ void Assembler::dcptr(Label* label) {
     // references are not instructions so while unbound they are encoded as
     // two consecutive brk instructions. The two 16-bit immediates are used
     // to encode the offset.
-    offset >>= kInstructionSizeLog2;
+    offset >>= kInstrSizeLog2;
     DCHECK(is_int32(offset));
     uint32_t high16 = unsigned_bitextract_32(31, 16, offset);
     uint32_t low16 = unsigned_bitextract_32(15, 0, offset);
@@ -4071,13 +4064,13 @@ void Assembler::brk(int code) {
 
 void Assembler::EmitStringData(const char* string) {
   size_t len = strlen(string) + 1;
-  DCHECK_LE(RoundUp(len, kInstructionSize), static_cast<size_t>(kGap));
+  DCHECK_LE(RoundUp(len, kInstrSize), static_cast<size_t>(kGap));
   EmitData(string, static_cast<int>(len));
   // Pad with nullptr characters until pc_ is aligned.
   const char pad[] = {'\0', '\0', '\0', '\0'};
-  static_assert(sizeof(pad) == kInstructionSize,
+  static_assert(sizeof(pad) == kInstrSize,
                 "Size of padding must match instruction size.");
-  EmitData(pad, RoundUp(pc_offset(), kInstructionSize) - pc_offset());
+  EmitData(pad, RoundUp(pc_offset(), kInstrSize) - pc_offset());
 }
 
 
@@ -4105,6 +4098,10 @@ void Assembler::debug(const char* message, uint32_t code, Instr params) {
     return;
   }
   // Fall through if Serializer is enabled.
+#else
+  // Make sure we haven't dynamically enabled simulator code when there is no
+  // simulator built in.
+  DCHECK(!options().enable_simulator_code);
 #endif
 
   if (params & BREAK) {
@@ -4424,7 +4421,7 @@ bool Assembler::IsImmLSPair(int64_t offset, unsigned size) {
 
 
 bool Assembler::IsImmLLiteral(int64_t offset) {
-  int inst_size = static_cast<int>(kInstructionSizeLog2);
+  int inst_size = static_cast<int>(kInstrSizeLog2);
   bool offset_is_inst_multiple =
       (((offset >> inst_size) << inst_size) == offset);
   DCHECK_GT(offset, 0);
@@ -4756,6 +4753,7 @@ void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data,
                                 ConstantPoolMode constant_pool_mode) {
   // Non-relocatable constants should not end up in the literal pool.
   DCHECK(!RelocInfo::IsNone(rmode));
+  if (options().disable_reloc_info_for_patching) return;
 
   // We do not try to reuse pool constants.
   RelocInfo rinfo(reinterpret_cast<Address>(pc_), rmode, data, nullptr);
@@ -4782,7 +4780,7 @@ void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data,
   // For modes that cannot use the constant pool, a different sequence of
   // instructions will be emitted by this function's caller.
 
-  if (!RelocInfo::IsNone(rmode) && write_reloc_info) {
+  if (write_reloc_info) {
     // Don't record external references unless the heap will be serialized.
     if (RelocInfo::IsOnlyForSerializer(rmode) &&
         !options().record_reloc_info_for_serialization && !emit_debug_code()) {
@@ -4790,18 +4788,6 @@ void Assembler::RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data,
     }
     DCHECK_GE(buffer_space(), kMaxRelocSize);  // too late to grow buffer here
     reloc_info_writer.Write(&rinfo);
-  }
-}
-
-int Assembler::GetCodeTargetIndex(Handle<Code> target) {
-  int current = static_cast<int>(code_targets_.size());
-  if (current > 0 && !target.is_null() &&
-      code_targets_.back().address() == target.address()) {
-    // Optimization if we keep jumping to the same code target.
-    return (current - 1);
-  } else {
-    code_targets_.push_back(target);
-    return current;
   }
 }
 
@@ -4817,13 +4803,13 @@ void Assembler::near_call(int offset, RelocInfo::Mode rmode) {
 
 void Assembler::near_call(HeapObjectRequest request) {
   RequestHeapObject(request);
-  int index = GetCodeTargetIndex(Handle<Code>());
+  int index = AddCodeTarget(Handle<Code>());
   RecordRelocInfo(RelocInfo::CODE_TARGET, index, NO_POOL_ENTRY);
   bl(index);
 }
 
 void Assembler::BlockConstPoolFor(int instructions) {
-  int pc_limit = pc_offset() + instructions * kInstructionSize;
+  int pc_limit = pc_offset() + instructions * kInstrSize;
   if (no_const_pool_before_ < pc_limit) {
     no_const_pool_before_ = pc_limit;
     // Make sure the pool won't be blocked for too long.
@@ -4875,7 +4861,7 @@ void Assembler::CheckConstPool(bool force_emit, bool require_jump) {
 
   // Check that the code buffer is large enough before emitting the constant
   // pool (this includes the gap to the relocation information).
-  int needed_space = worst_case_size + kGap + 1 * kInstructionSize;
+  int needed_space = worst_case_size + kGap + 1 * kInstrSize;
   while (buffer_space() <= needed_space) {
     GrowBuffer();
   }
@@ -4894,7 +4880,7 @@ void Assembler::CheckConstPool(bool force_emit, bool require_jump) {
 
 bool Assembler::ShouldEmitVeneer(int max_reachable_pc, int margin) {
   // Account for the branch around the veneers and the guard.
-  int protection_offset = 2 * kInstructionSize;
+  int protection_offset = 2 * kInstrSize;
   return pc_offset() > max_reachable_pc - margin - protection_offset -
     static_cast<int>(unresolved_branches_.size() * kMaxVeneerCodeSize);
 }
@@ -5031,10 +5017,10 @@ void PatchingAssembler::PatchAdrFar(int64_t target_offset) {
   CHECK(expected_adr->IsAdr() && (expected_adr->ImmPCRel() == 0));
   int rd_code = expected_adr->Rd();
   for (int i = 0; i < kAdrFarPatchableNNops; ++i) {
-    CHECK(InstructionAt((i + 1) * kInstructionSize)->IsNop(ADR_FAR_NOP));
+    CHECK(InstructionAt((i + 1) * kInstrSize)->IsNop(ADR_FAR_NOP));
   }
   Instruction* expected_movz =
-      InstructionAt((kAdrFarPatchableNInstrs - 1) * kInstructionSize);
+      InstructionAt((kAdrFarPatchableNInstrs - 1) * kInstrSize);
   CHECK(expected_movz->IsMovz() &&
         (expected_movz->ImmMoveWide() == 0) &&
         (expected_movz->ShiftMoveWide() == 0));

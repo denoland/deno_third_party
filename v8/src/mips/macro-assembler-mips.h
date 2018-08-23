@@ -39,7 +39,6 @@ constexpr Register kWasmInstanceRegister = a0;
 
 // Forward declarations
 enum class AbortReason;
-class JumpTarget;
 
 // Reserved Register Usage Summary.
 //
@@ -58,14 +57,6 @@ class JumpTarget;
 enum LeaveExitFrameMode {
   EMIT_RETURN = true,
   NO_EMIT_RETURN = false
-};
-
-// Flags used for AllocateHeapNumber
-enum TaggingMode {
-  // Tag the result.
-  TAG_RESULT,
-  // Don't tag
-  DONT_TAG_RESULT
 };
 
 // Allow programmer to use Branch Delay Slot of Branches, Jumps, Calls.
@@ -96,13 +87,6 @@ Register GetRegisterThatIsNotOneOf(Register reg1,
                                    Register reg5 = no_reg,
                                    Register reg6 = no_reg);
 
-bool AreAliased(Register reg1, Register reg2, Register reg3 = no_reg,
-                Register reg4 = no_reg, Register reg5 = no_reg,
-                Register reg6 = no_reg, Register reg7 = no_reg,
-                Register reg8 = no_reg, Register reg9 = no_reg,
-                Register reg10 = no_reg);
-
-
 // -----------------------------------------------------------------------------
 // Static helper functions.
 
@@ -131,10 +115,11 @@ inline MemOperand CFunctionArgumentOperand(int index) {
   return MemOperand(sp, offset);
 }
 
-class TurboAssembler : public TurboAssemblerBase {
+class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
  public:
-  TurboAssembler(Isolate* isolate, const Options& options, void* buffer,
-                 int buffer_size, CodeObjectRequired create_code_object)
+  TurboAssembler(Isolate* isolate, const AssemblerOptions& options,
+                 void* buffer, int buffer_size,
+                 CodeObjectRequired create_code_object)
       : TurboAssemblerBase(isolate, options, buffer, buffer_size,
                            create_code_object) {}
 
@@ -263,14 +248,9 @@ class TurboAssembler : public TurboAssemblerBase {
   void Jump(intptr_t target, RelocInfo::Mode rmode, COND_ARGS);
   void Jump(Address target, RelocInfo::Mode rmode, COND_ARGS);
   void Jump(Handle<Code> code, RelocInfo::Mode rmode, COND_ARGS);
-  static int CallSize(Register target, int16_t offset = 0, COND_ARGS);
   void Call(Register target, int16_t offset = 0, COND_ARGS);
   void Call(Register target, Register base, int16_t offset = 0, COND_ARGS);
-  static int CallSize(Address target, RelocInfo::Mode rmode, COND_ARGS);
   void Call(Address target, RelocInfo::Mode rmode, COND_ARGS);
-  int CallSize(Handle<Code> code,
-               RelocInfo::Mode rmode = RelocInfo::CODE_TARGET,
-               COND_ARGS);
   void Call(Handle<Code> code,
             RelocInfo::Mode rmode = RelocInfo::CODE_TARGET,
             COND_ARGS);
@@ -922,10 +902,10 @@ class MacroAssembler : public TurboAssembler {
  public:
   MacroAssembler(Isolate* isolate, void* buffer, int size,
                  CodeObjectRequired create_code_object)
-      : MacroAssembler(isolate, Assembler::DefaultOptions(isolate), buffer,
+      : MacroAssembler(isolate, AssemblerOptions::Default(isolate), buffer,
                        size, create_code_object) {}
-  MacroAssembler(Isolate* isolate, const Options& options, void* buffer,
-                 int size, CodeObjectRequired create_code_object);
+  MacroAssembler(Isolate* isolate, const AssemblerOptions& options,
+                 void* buffer, int size, CodeObjectRequired create_code_object);
 
   // Swap two registers.  If the scratch register is omitted then a slightly
   // less efficient form using xor instead of mov is emitted.
@@ -1208,7 +1188,7 @@ void TurboAssembler::GenerateSwitchTable(Register index, size_t case_count,
     bind(&here);
     addu(scratch, scratch, ra);
     pop(ra);
-    lw(scratch, MemOperand(scratch, 6 * v8::internal::Assembler::kInstrSize));
+    lw(scratch, MemOperand(scratch, 6 * v8::internal::kInstrSize));
   }
   jr(scratch);
   nop();  // Branch delay slot nop.

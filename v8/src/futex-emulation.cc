@@ -12,6 +12,7 @@
 #include "src/handles-inl.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
+#include "src/objects/js-array-buffer-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -138,7 +139,7 @@ Object* FutexEmulation::Wait(Isolate* isolate,
     ResetWaitingOnScopeExit reset_waiting(node);
 
     if (*p != value) {
-      result = isolate->heap()->not_equal();
+      result = ReadOnlyRoots(isolate).not_equal();
       callback_result = AtomicsWaitEvent::kNotEqual;
       break;
     }
@@ -196,7 +197,7 @@ Object* FutexEmulation::Wait(Isolate* isolate,
       }
 
       if (!node->waiting_) {
-        result = isolate->heap()->ok();
+        result = ReadOnlyRoots(isolate).ok();
         break;
       }
 
@@ -204,7 +205,7 @@ Object* FutexEmulation::Wait(Isolate* isolate,
       if (use_timeout) {
         current_time = base::TimeTicks::Now();
         if (current_time >= timeout_time) {
-          result = isolate->heap()->timed_out();
+          result = ReadOnlyRoots(isolate).timed_out();
           callback_result = AtomicsWaitEvent::kTimedOut;
           break;
         }
@@ -235,8 +236,7 @@ Object* FutexEmulation::Wait(Isolate* isolate,
   return result;
 }
 
-Object* FutexEmulation::Wake(Isolate* isolate,
-                             Handle<JSArrayBuffer> array_buffer, size_t addr,
+Object* FutexEmulation::Wake(Handle<JSArrayBuffer> array_buffer, size_t addr,
                              uint32_t num_waiters_to_wake) {
   DCHECK(addr < NumberToSize(array_buffer->byte_length()));
 
@@ -261,9 +261,7 @@ Object* FutexEmulation::Wake(Isolate* isolate,
   return Smi::FromInt(waiters_woken);
 }
 
-
-Object* FutexEmulation::NumWaitersForTesting(Isolate* isolate,
-                                             Handle<JSArrayBuffer> array_buffer,
+Object* FutexEmulation::NumWaitersForTesting(Handle<JSArrayBuffer> array_buffer,
                                              size_t addr) {
   DCHECK(addr < NumberToSize(array_buffer->byte_length()));
   void* backing_store = array_buffer->backing_store();

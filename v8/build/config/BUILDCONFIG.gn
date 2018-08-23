@@ -291,6 +291,7 @@ if (custom_toolchain != "") {
 # current_os value directly.
 
 if (current_os == "win" || current_os == "winuwp") {
+  is_aix = false
   is_android = false
   is_chromeos = false
   is_fuchsia = false
@@ -301,6 +302,7 @@ if (current_os == "win" || current_os == "winuwp") {
   is_posix = false
   is_win = true
 } else if (current_os == "mac") {
+  is_aix = false
   is_android = false
   is_chromeos = false
   is_fuchsia = false
@@ -311,6 +313,7 @@ if (current_os == "win" || current_os == "winuwp") {
   is_posix = true
   is_win = false
 } else if (current_os == "android") {
+  is_aix = false
   is_android = true
   is_chromeos = false
   is_fuchsia = false
@@ -321,6 +324,7 @@ if (current_os == "win" || current_os == "winuwp") {
   is_posix = true
   is_win = false
 } else if (current_os == "chromeos") {
+  is_aix = false
   is_android = false
   is_chromeos = true
   is_fuchsia = false
@@ -334,6 +338,7 @@ if (current_os == "win" || current_os == "winuwp") {
   # current_os == "nacl" will be passed by the nacl toolchain definition.
   # It is not set by default or on the command line. We treat is as a
   # Posix variant.
+  is_aix = false
   is_android = false
   is_chromeos = false
   is_fuchsia = false
@@ -344,6 +349,7 @@ if (current_os == "win" || current_os == "winuwp") {
   is_posix = true
   is_win = false
 } else if (current_os == "fuchsia") {
+  is_aix = false
   is_android = false
   is_chromeos = false
   is_fuchsia = true
@@ -354,6 +360,7 @@ if (current_os == "win" || current_os == "winuwp") {
   is_posix = false
   is_win = false
 } else if (current_os == "ios") {
+  is_aix = false
   is_android = false
   is_chromeos = false
   is_fuchsia = false
@@ -364,6 +371,7 @@ if (current_os == "win" || current_os == "winuwp") {
   is_posix = true
   is_win = false
 } else if (current_os == "linux") {
+  is_aix = false
   is_android = false
   is_chromeos = false
   is_fuchsia = false
@@ -374,6 +382,7 @@ if (current_os == "win" || current_os == "winuwp") {
   is_posix = true
   is_win = false
 } else if (current_os == "aix") {
+  is_aix = true
   is_android = false
   is_chromeos = false
   is_fuchsia = false
@@ -513,7 +522,6 @@ default_compiler_configs = [
   "//build/config/compiler:afdo",
   "//build/config/compiler:afdo_optimize_size",
   "//build/config/compiler:compiler",
-  "//build/config/compiler:clang_stackrealign",
   "//build/config/compiler:compiler_arm_fpu",
   "//build/config/compiler:compiler_arm_thumb",
   "//build/config/compiler:chromium_code",
@@ -521,6 +529,7 @@ default_compiler_configs = [
   "//build/config/compiler:default_optimization",
   "//build/config/compiler:default_stack_frames",
   "//build/config/compiler:default_symbols",
+  "//build/config/compiler:export_dynamic",
   "//build/config/compiler:no_exceptions",
   "//build/config/compiler:no_rtti",
   "//build/config/compiler:runtime_library",
@@ -566,10 +575,6 @@ if (is_clang && !is_nacl) {
     "//build/config/clang:find_bad_constructs",
     "//build/config/clang:extra_warnings",
   ]
-}
-
-if (is_desktop_linux) {
-  default_compiler_configs += [ "//build/config/linux:export_dynamic" ]
 }
 
 # Debug/release-related defines.
@@ -642,20 +647,20 @@ set_defaults("loadable_module") {
 #
 # Variables
 #   no_default_deps: If true, no standard dependencies will be added.
-foreach(target_type,
+foreach(_target_type,
         [
           "executable",
           "loadable_module",
           "shared_library",
         ]) {
-  template(target_type) {
-    target(target_type, target_name) {
+  template(_target_type) {
+    target(_target_type, target_name) {
       forward_variables_from(invoker, "*", [ "no_default_deps" ])
       if (!defined(deps)) {
         deps = []
       }
       if (!defined(invoker.no_default_deps) || !invoker.no_default_deps) {
-        deps += [ "//build/config:exe_and_shlib_deps" ]
+        deps += [ "//build/config:${_target_type}_deps" ]
       }
     }
   }

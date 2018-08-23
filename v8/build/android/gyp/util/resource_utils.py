@@ -27,6 +27,7 @@ EMPTY_ANDROID_MANIFEST_PATH = os.path.join(
 
 # A variation of this lists also exists in:
 # //base/android/java/src/org/chromium/base/LocaleUtils.java
+# //ui/android/java/src/org/chromium/base/LocalizationUtils.java
 CHROME_TO_ANDROID_LOCALE_MAP = {
     'en-GB': 'en-rGB',
     'en-US': 'en-rUS',
@@ -213,7 +214,7 @@ def CreateRJavaFiles(srcjar_dir, package, main_r_txt_file,
   packages = list(extra_res_packages)
   r_txt_files = list(extra_r_txt_files)
 
-  if package not in packages:
+  if package and package not in packages:
     # Sometimes, an apk target and a resources target share the same
     # AndroidManifest.xml and thus |package| will already be in |packages|.
     packages.append(package)
@@ -455,7 +456,8 @@ def ResourceArgsParser():
                          help='Path to the Android aapt tool')
 
   input_opts.add_argument('--aapt2-path',
-                          help='Path to the Android aapt2 tool')
+                          help='Path to the Android aapt2 tool. If in different'
+                          ' directory from --aapt-path.')
 
   input_opts.add_argument('--dependencies-res-zips', required=True,
                     help='Resources zip archives from dependents. Required to '
@@ -504,3 +506,6 @@ def HandleCommonOptions(options):
         build_utils.ParseGnList(options.extra_r_text_files))
   else:
     options.extra_r_text_files = []
+
+  if not options.aapt2_path:
+    options.aapt2_path = options.aapt_path + '2'

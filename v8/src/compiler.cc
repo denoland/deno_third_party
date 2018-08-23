@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <memory>
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/asmjs/asm-js.h"
 #include "src/assembler-inl.h"
 #include "src/ast/prettyprinter.h"
@@ -94,7 +94,7 @@ void LogFunctionCompilation(CodeEventListener::LogEventsAndTags tag,
   int column_num = Script::GetColumnNumber(script, shared->StartPosition()) + 1;
   String* script_name = script->name()->IsString()
                             ? String::cast(script->name())
-                            : isolate->heap()->empty_string();
+                            : ReadOnlyRoots(isolate).empty_string();
   CodeEventListener::LogEventsAndTags log_tag =
       Logger::ToNativeByScript(tag, *script);
   PROFILE(isolate, CodeCreateEvent(log_tag, *abstract_code, *shared,
@@ -130,11 +130,7 @@ void LogFunctionCompilation(CodeEventListener::LogEventsAndTags tag,
 // Implementation of UnoptimizedCompilationJob
 
 CompilationJob::Status UnoptimizedCompilationJob::ExecuteJob() {
-  DisallowHeapAllocation no_allocation;
-  DisallowHandleAllocation no_handles;
-  DisallowHandleDereference no_deref;
-  DisallowCodeDependencyChange no_dependency_change;
-
+  DisallowHeapAccess no_heap_access;
   // Delegate to the underlying implementation.
   DCHECK_EQ(state(), State::kReadyToExecute);
   ScopedTimer t(&time_taken_to_execute_);
@@ -212,11 +208,7 @@ CompilationJob::Status OptimizedCompilationJob::PrepareJob(Isolate* isolate) {
 }
 
 CompilationJob::Status OptimizedCompilationJob::ExecuteJob() {
-  DisallowHeapAllocation no_allocation;
-  DisallowHandleAllocation no_handles;
-  DisallowHandleDereference no_deref;
-  DisallowCodeDependencyChange no_dependency_change;
-
+  DisallowHeapAccess no_heap_access;
   // Delegate to the underlying implementation.
   DCHECK_EQ(state(), State::kReadyToExecute);
   ScopedTimer t(&time_taken_to_execute_);
@@ -340,7 +332,7 @@ void InstallBytecodeArray(Handle<BytecodeArray> bytecode_array,
       Script::GetColumnNumber(script, shared_info->StartPosition()) + 1;
   String* script_name = script->name()->IsString()
                             ? String::cast(script->name())
-                            : isolate->heap()->empty_string();
+                            : ReadOnlyRoots(isolate).empty_string();
   CodeEventListener::LogEventsAndTags log_tag = Logger::ToNativeByScript(
       CodeEventListener::INTERPRETED_FUNCTION_TAG, *script);
   PROFILE(isolate, CodeCreateEvent(log_tag, *abstract_code, *shared_info,
@@ -372,7 +364,7 @@ void InstallUnoptimizedCode(UnoptimizedCompilationInfo* compilation_info,
     DCHECK(compilation_info->has_asm_wasm_data());
     shared_info->set_asm_wasm_data(*compilation_info->asm_wasm_data());
     shared_info->set_feedback_metadata(
-        isolate->heap()->empty_feedback_metadata());
+        ReadOnlyRoots(isolate).empty_feedback_metadata());
   }
 
   // Install coverage info on the shared function info.
@@ -478,9 +470,7 @@ std::unique_ptr<UnoptimizedCompilationJob> ExecuteUnoptimizedCompileJobs(
 std::unique_ptr<UnoptimizedCompilationJob> GenerateUnoptimizedCode(
     ParseInfo* parse_info, AccountingAllocator* allocator,
     UnoptimizedCompilationJobList* inner_function_jobs) {
-  DisallowHeapAllocation no_allocation;
-  DisallowHandleAllocation no_handles;
-  DisallowHandleDereference no_deref;
+  DisallowHeapAccess no_heap_access;
   DCHECK(inner_function_jobs->empty());
 
   if (!Compiler::Analyze(parse_info)) {
@@ -922,9 +912,7 @@ MaybeHandle<SharedFunctionInfo> CompileToplevel(ParseInfo* parse_info,
 std::unique_ptr<UnoptimizedCompilationJob> CompileTopLevelOnBackgroundThread(
     ParseInfo* parse_info, AccountingAllocator* allocator,
     UnoptimizedCompilationJobList* inner_function_jobs) {
-  DisallowHeapAllocation no_allocation;
-  DisallowHandleAllocation no_handles;
-  DisallowHandleDereference no_deref;
+  DisallowHeapAccess no_heap_access;
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.compile"),
                "V8.CompileCodeBackground");
   RuntimeCallTimerScope runtimeTimer(
@@ -970,7 +958,7 @@ BackgroundCompileTask::BackgroundCompileTask(ScriptStreamingData* source,
   // Prepare the data for the internalization phase and compilation phase, which
   // will happen in the main thread after parsing.
   ParseInfo* info = new ParseInfo(isolate);
-  LOG(isolate, ScriptEvent(Logger::ScriptEventType::kBackgroundCompile,
+  LOG(isolate, ScriptEvent(Logger::ScriptEventType::kStreamingCompile,
                            info->script_id()));
   if (V8_UNLIKELY(FLAG_runtime_stats)) {
     info->set_runtime_call_stats(new (info->zone()) RuntimeCallStats());
@@ -1003,9 +991,7 @@ BackgroundCompileTask::BackgroundCompileTask(ScriptStreamingData* source,
 
 void BackgroundCompileTask::Run() {
   TimedHistogramScope timer(timer_);
-  DisallowHeapAllocation no_allocation;
-  DisallowHandleAllocation no_handles;
-  DisallowHandleDereference no_deref;
+  DisallowHeapAccess no_heap_access;
 
   source_->info->set_on_background_thread(true);
 
@@ -1087,14 +1073,11 @@ bool Compiler::Compile(Handle<SharedFunctionInfo> shared_info,
   }
 
   if (FLAG_preparser_scope_analysis) {
-    if (shared_info->HasPreParsedScopeData()) {
-      Handle<PreParsedScopeData> data(
-          PreParsedScopeData::cast(shared_info->preparsed_scope_data()),
-          isolate);
-      parse_info.consumed_preparsed_scope_data()->SetData(isolate, data);
-      // After we've compiled the function, we don't need data about its
-      // skippable functions any more.
-      shared_info->ClearPreParsedScopeData();
+    if (shared_info->HasUncompiledDataWithPreParsedScope()) {
+      parse_info.consumed_preparsed_scope_data()->SetData(
+          isolate, handle(shared_info->uncompiled_data_with_pre_parsed_scope()
+                              ->pre_parsed_scope_data(),
+                          isolate));
     }
   }
 
@@ -1200,37 +1183,9 @@ bool Compiler::CompileOptimized(Handle<JSFunction> function,
   return true;
 }
 
-MaybeHandle<JSArray> Compiler::CompileForLiveEdit(Handle<Script> script) {
-  Isolate* isolate = script->GetIsolate();
-  DCHECK(AllowCompilation::IsAllowed(isolate));
-
-  // In order to ensure that live edit function info collection finds the newly
-  // generated shared function infos, clear the script's list temporarily
-  // and restore it at the end of this method.
-  Handle<WeakFixedArray> old_function_infos(script->shared_function_infos(),
-                                            isolate);
-  script->set_shared_function_infos(isolate->heap()->empty_weak_fixed_array());
-
-  // Start a compilation.
-  ParseInfo parse_info(isolate, script);
-  parse_info.set_eager();
-
-  // TODO(635): support extensions.
-  Handle<JSArray> infos;
-  Handle<SharedFunctionInfo> shared_info;
-  if (CompileToplevel(&parse_info, isolate).ToHandle(&shared_info)) {
-    // Check postconditions on success.
-    DCHECK(!isolate->has_pending_exception());
-    infos = LiveEditFunctionTracker::Collect(parse_info.literal(), script,
-                                             parse_info.zone(), isolate);
-  }
-
-  // Restore the original function info list in order to remain side-effect
-  // free as much as possible, since some code expects the old shared function
-  // infos to stick around.
-  script->set_shared_function_infos(*old_function_infos);
-
-  return infos;
+MaybeHandle<SharedFunctionInfo> Compiler::CompileForLiveEdit(
+    ParseInfo* parse_info, Isolate* isolate) {
+  return CompileToplevel(parse_info, isolate);
 }
 
 MaybeHandle<JSFunction> Compiler::GetFunctionFromEval(
@@ -1428,6 +1383,7 @@ struct ScriptCompileTimerScope {
     kNoCacheBecausePacScript,
     kNoCacheBecauseInDocumentWrite,
     kNoCacheBecauseResourceWithNoCacheHandler,
+    kHitIsolateCacheWhenStreamingSource,
     kCount
   };
 
@@ -1500,8 +1456,9 @@ struct ScriptCompileTimerScope {
     }
 
     if (hit_isolate_cache_) {
-      // There's probably no need to distinguish the different isolate cache
-      // hits.
+      if (no_cache_reason_ == ScriptCompiler::kNoCacheBecauseStreamingSource) {
+        return CacheBehaviour::kHitIsolateCacheWhenStreamingSource;
+      }
       return CacheBehaviour::kHitIsolateCacheWhenNoCache;
     }
 
@@ -1555,6 +1512,7 @@ struct ScriptCompileTimerScope {
         return isolate_->counters()->compile_script_with_produce_cache();
       case CacheBehaviour::kHitIsolateCacheWhenNoCache:
       case CacheBehaviour::kHitIsolateCacheWhenConsumeCodeCache:
+      case CacheBehaviour::kHitIsolateCacheWhenStreamingSource:
         return isolate_->counters()->compile_script_with_isolate_cache_hit();
       case CacheBehaviour::kConsumeCodeCacheFailed:
         return isolate_->counters()->compile_script_consume_failed();
@@ -1626,11 +1584,11 @@ Handle<Script> NewScript(Isolate* isolate, ParseInfo* parse_info,
 }  // namespace
 
 MaybeHandle<SharedFunctionInfo> Compiler::GetSharedFunctionInfoForScript(
-    Handle<String> source, const Compiler::ScriptDetails& script_details,
+    Isolate* isolate, Handle<String> source,
+    const Compiler::ScriptDetails& script_details,
     ScriptOriginOptions origin_options, v8::Extension* extension,
     ScriptData* cached_data, ScriptCompiler::CompileOptions compile_options,
     ScriptCompiler::NoCacheReason no_cache_reason, NativesFlag natives) {
-  Isolate* isolate = source->GetIsolate();
   ScriptCompileTimerScope compile_timer(isolate, no_cache_reason);
 
   if (compile_options == ScriptCompiler::kNoCompileOptions ||
@@ -1652,8 +1610,7 @@ MaybeHandle<SharedFunctionInfo> Compiler::GetSharedFunctionInfoForScript(
   MaybeHandle<SharedFunctionInfo> maybe_result;
   if (extension == nullptr) {
     bool can_consume_code_cache =
-        compile_options == ScriptCompiler::kConsumeCodeCache &&
-        !isolate->debug()->is_loaded();
+        compile_options == ScriptCompiler::kConsumeCodeCache;
     if (can_consume_code_cache) {
       compile_timer.set_consuming_code_cache();
     }
@@ -1743,8 +1700,7 @@ MaybeHandle<JSFunction> Compiler::GetWrappedFunction(
 
   MaybeHandle<SharedFunctionInfo> maybe_result;
   bool can_consume_code_cache =
-      compile_options == ScriptCompiler::kConsumeCodeCache &&
-      !isolate->debug()->is_loaded();
+      compile_options == ScriptCompiler::kConsumeCodeCache;
   if (can_consume_code_cache) {
     compile_timer.set_consuming_code_cache();
     // Then check cached code provided by embedder.
@@ -1806,9 +1762,9 @@ ScriptCompiler::ScriptStreamingTask* Compiler::NewBackgroundCompileTask(
 
 MaybeHandle<SharedFunctionInfo>
 Compiler::GetSharedFunctionInfoForStreamedScript(
-    Handle<String> source, const ScriptDetails& script_details,
-    ScriptOriginOptions origin_options, ScriptStreamingData* streaming_data) {
-  Isolate* isolate = source->GetIsolate();
+    Isolate* isolate, Handle<String> source,
+    const ScriptDetails& script_details, ScriptOriginOptions origin_options,
+    ScriptStreamingData* streaming_data) {
   ScriptCompileTimerScope compile_timer(
       isolate, ScriptCompiler::kNoCacheBecauseStreamingSource);
   PostponeInterruptsScope postpone(isolate);

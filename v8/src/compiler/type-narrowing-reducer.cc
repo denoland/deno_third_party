@@ -12,7 +12,7 @@ namespace internal {
 namespace compiler {
 
 TypeNarrowingReducer::TypeNarrowingReducer(Editor* editor, JSGraph* jsgraph,
-                                           const JSHeapBroker* js_heap_broker)
+                                           JSHeapBroker* js_heap_broker)
     : AdvancedReducer(editor),
       jsgraph_(jsgraph),
       op_typer_(jsgraph->isolate(), js_heap_broker, zone()) {}
@@ -20,6 +20,8 @@ TypeNarrowingReducer::TypeNarrowingReducer(Editor* editor, JSGraph* jsgraph,
 TypeNarrowingReducer::~TypeNarrowingReducer() {}
 
 Reduction TypeNarrowingReducer::Reduce(Node* node) {
+  DisallowHeapAccess no_heap_access;
+
   Type new_type = Type::Any();
 
   switch (node->opcode()) {

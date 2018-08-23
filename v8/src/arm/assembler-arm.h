@@ -605,14 +605,7 @@ class NeonListOperand BASE_EMBEDDED {
   int register_count_;
 };
 
-
-struct VmovIndex {
-  unsigned char index;
-};
-constexpr VmovIndex VmovIndexLo = { 0 };
-constexpr VmovIndex VmovIndexHi = { 1 };
-
-class Assembler : public AssemblerBase {
+class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
  public:
   // Create an assembler. Instructions and relocation information are emitted
   // into a buffer, with the instructions starting from the beginning and the
@@ -628,7 +621,7 @@ class Assembler : public AssemblerBase {
   // buffer for code generation and assumes its size to be buffer_size. If the
   // buffer is too small, a fatal error occurs. No deallocation of the buffer is
   // done upon destruction of the assembler.
-  Assembler(const Options& options, void* buffer, int buffer_size);
+  Assembler(const AssemblerOptions& options, void* buffer, int buffer_size);
   virtual ~Assembler();
 
   // GetCode emits any pending (non-emitted) code and fills the descriptor
@@ -700,12 +693,6 @@ class Assembler : public AssemblerBase {
   // pointer.
   static constexpr int kSpecialTargetSize = kPointerSize;
 
-  // Size of an instruction.
-  static constexpr int kInstrSize = sizeof(Instr);
-
-  // Difference between address of current opcode and value read from pc
-  // register.
-  static constexpr int kPcLoadDelta = 8;
   RegList* GetScratchRegisterList() { return &scratch_register_list_; }
   VfpRegList* GetScratchVfpRegisterList() {
     return &scratch_vfp_register_list_;
@@ -725,8 +712,10 @@ class Assembler : public AssemblerBase {
   void CodeTargetAlign();
 
   // Branch instructions
-  void b(int branch_offset, Condition cond = al);
-  void bl(int branch_offset, Condition cond = al);
+  void b(int branch_offset, Condition cond = al,
+         RelocInfo::Mode rmode = RelocInfo::NONE);
+  void bl(int branch_offset, Condition cond = al,
+          RelocInfo::Mode rmode = RelocInfo::NONE);
   void blx(int branch_offset);  // v5 and above
   void blx(Register target, Condition cond = al);  // v5 and above
   void bx(Register target, Condition cond = al);  // v5 and above, plus v4t
@@ -909,6 +898,7 @@ class Assembler : public AssemblerBase {
 
   // Reverse the bits in a register.
   void rbit(Register dst, Register src, Condition cond = al);
+  void rev(Register dst, Register src, Condition cond = al);
 
   // Status register access instructions
 
@@ -941,6 +931,10 @@ class Assembler : public AssemblerBase {
   void strexb(Register src1, Register src2, Register dst, Condition cond = al);
   void ldrexh(Register dst, Register src, Condition cond = al);
   void strexh(Register src1, Register src2, Register dst, Condition cond = al);
+  void ldrexd(Register dst1, Register dst2, const MemOperand& src,
+              Condition cond = al);
+  void strexd(Register res, Register src1, Register src2, const MemOperand& dst,
+              Condition cond = al);
 
   // Preload instructions
   void pld(const MemOperand& address);
@@ -1069,16 +1063,6 @@ class Assembler : public AssemblerBase {
             const SwVfpRegister src,
             const Condition cond = al);
   void vmov(const DwVfpRegister dst,
-            const DwVfpRegister src,
-            const Condition cond = al);
-  // TODO(bbudge) Replace uses of these with the more general core register to
-  // scalar register vmov's.
-  void vmov(const DwVfpRegister dst,
-            const VmovIndex index,
-            const Register src,
-            const Condition cond = al);
-  void vmov(const Register dst,
-            const VmovIndex index,
             const DwVfpRegister src,
             const Condition cond = al);
   void vmov(const DwVfpRegister dst,
@@ -1472,8 +1456,6 @@ class Assembler : public AssemblerBase {
     *reinterpret_cast<Instr*>(pc) = instr;
   }
   static Condition GetCondition(Instr instr);
-  static bool IsBranch(Instr instr);
-  static int GetBranchOffset(Instr instr);
   static bool IsLdrRegisterImmediate(Instr instr);
   static bool IsVldrDRegisterImmediate(Instr instr);
   static int GetLdrRegisterImmediateOffset(Instr instr);
@@ -1549,6 +1531,10 @@ class Assembler : public AssemblerBase {
 
   // Move a 32-bit immediate into a register, potentially via the constant pool.
   void Move32BitImmediate(Register rd, const Operand& x, Condition cond = al);
+
+  // Get the code target object for a pc-relative call or jump.
+  V8_INLINE Handle<Code> relative_code_target_object_handle_at(
+      Address pc_) const;
 
  protected:
   int buffer_space() const { return reloc_info_writer.pos() - pc_; }
@@ -1636,9 +1622,6 @@ class Assembler : public AssemblerBase {
   std::vector<ConstantPoolEntry> pending_32_bit_constants_;
   std::vector<ConstantPoolEntry> pending_64_bit_constants_;
 
-  // Map of address of handle to index in pending_32_bit_constants_.
-  std::map<Address, int> handle_to_index_map_;
-
   // Scratch registers available for use by the Assembler.
   RegList scratch_register_list_;
   VfpRegList scratch_vfp_register_list_;
@@ -1704,7 +1687,6 @@ class Assembler : public AssemblerBase {
   void RecordRelocInfo(RelocInfo::Mode rmode, intptr_t data = 0);
   void ConstantPoolAddEntry(int position, RelocInfo::Mode rmode,
                             intptr_t value);
-  void ConstantPoolAddEntry(int position, Double value);
   void AllocateAndInstallRequestedHeapObjects(Isolate* isolate);
 
   friend class RelocInfo;
@@ -1720,7 +1702,8 @@ class EnsureSpace BASE_EMBEDDED {
 
 class PatchingAssembler : public Assembler {
  public:
-  PatchingAssembler(const Options& options, byte* address, int instructions);
+  PatchingAssembler(const AssemblerOptions& options, byte* address,
+                    int instructions);
   ~PatchingAssembler();
 
   void Emit(Address addr);

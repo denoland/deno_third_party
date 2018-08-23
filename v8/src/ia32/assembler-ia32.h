@@ -141,6 +141,7 @@ typedef XMMRegister Simd128Register;
 DOUBLE_REGISTERS(DEFINE_REGISTER)
 #undef DEFINE_REGISTER
 constexpr DoubleRegister no_double_reg = DoubleRegister::no_reg();
+constexpr DoubleRegister no_dreg = DoubleRegister::no_reg();
 
 // Note that the bit values must match those used in actual instruction encoding
 constexpr int kNumRegs = 8;
@@ -321,7 +322,7 @@ enum ScaleFactor {
   times_twice_pointer_size = times_8
 };
 
-class Operand {
+class V8_EXPORT_PRIVATE Operand {
  public:
   // reg
   V8_INLINE explicit Operand(Register reg) { set_modrm(3, reg); }
@@ -472,8 +473,7 @@ class Displacement BASE_EMBEDDED {
   void init(Label* L, Type type);
 };
 
-
-class Assembler : public AssemblerBase {
+class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
  private:
   // We check before assembling an instruction that there is sufficient
   // space to write an instruction and its relocation information.
@@ -501,7 +501,7 @@ class Assembler : public AssemblerBase {
   // buffer for code generation and assumes its size to be buffer_size. If the
   // buffer is too small, a fatal error occurs. No deallocation of the buffer is
   // done upon destruction of the assembler.
-  Assembler(const Options& options, void* buffer, int buffer_size);
+  Assembler(const AssemblerOptions& options, void* buffer, int buffer_size);
   virtual ~Assembler() {}
 
   // GetCode emits any pending (non-emitted) code and fills the descriptor
@@ -640,6 +640,7 @@ class Assembler : public AssemblerBase {
   void movzx_w(Register dst, Register src) { movzx_w(dst, Operand(src)); }
   void movzx_w(Register dst, Operand src);
 
+  void movq(XMMRegister dst, Operand src);
   // Conditional moves
   void cmov(Condition cc, Register dst, Register src) {
     cmov(cc, dst, Operand(src));
@@ -667,6 +668,7 @@ class Assembler : public AssemblerBase {
   void cmpxchg(Operand dst, Register src);
   void cmpxchg_b(Operand dst, Register src);
   void cmpxchg_w(Operand dst, Register src);
+  void cmpxchg8b(Operand dst);
 
   // Memory Fence
   void lfence();
@@ -815,6 +817,7 @@ class Assembler : public AssemblerBase {
   void xor_(Operand dst, const Immediate& x);
 
   // Bit operations.
+  void bswap(Register dst);
   void bt(Operand dst, Register src);
   void bts(Register dst, Register src) { bts(Operand(dst), src); }
   void bts(Operand dst, Register src);
@@ -850,10 +853,8 @@ class Assembler : public AssemblerBase {
   // Calls
   void call(Label* L);
   void call(Address entry, RelocInfo::Mode rmode);
-  int CallSize(Operand adr);
   void call(Register reg) { call(Operand(reg)); }
   void call(Operand adr);
-  int CallSize(Handle<Code> code, RelocInfo::Mode mode);
   void call(Handle<Code> code, RelocInfo::Mode rmode);
   void call(CodeStub* stub);
   void wasm_call(Address address, RelocInfo::Mode rmode);
@@ -1822,7 +1823,9 @@ class Assembler : public AssemblerBase {
   // sel specifies the /n in the modrm byte (see the Intel PRM).
   void emit_arith(int sel, Operand dst, const Immediate& x);
 
+  void emit_operand(int code, Operand adr);
   void emit_operand(Register reg, Operand adr);
+  void emit_operand(XMMRegister reg, Operand adr);
 
   void emit_label(Label* label);
 

@@ -83,20 +83,20 @@ bool ToPropertyDescriptorFastPath(Isolate* isolate, Handle<JSReceiver> obj,
         return false;
       }
     }
-    Heap* heap = isolate->heap();
-    if (key == heap->enumerable_string()) {
+    ReadOnlyRoots roots(isolate);
+    if (key == roots.enumerable_string()) {
       desc->set_enumerable(value->BooleanValue(isolate));
-    } else if (key == heap->configurable_string()) {
+    } else if (key == roots.configurable_string()) {
       desc->set_configurable(value->BooleanValue(isolate));
-    } else if (key == heap->value_string()) {
+    } else if (key == roots.value_string()) {
       desc->set_value(value);
-    } else if (key == heap->writable_string()) {
+    } else if (key == roots.writable_string()) {
       desc->set_writable(value->BooleanValue(isolate));
-    } else if (key == heap->get_string()) {
+    } else if (key == roots.get_string()) {
       // Bail out to slow path to throw an exception if necessary.
       if (!value->IsCallable()) return false;
       desc->set_get(value);
-    } else if (key == heap->set_string()) {
+    } else if (key == roots.set_string()) {
       // Bail out to slow path to throw an exception if necessary.
       if (!value->IsCallable()) return false;
       desc->set_set(value);
@@ -110,9 +110,8 @@ bool ToPropertyDescriptorFastPath(Isolate* isolate, Handle<JSReceiver> obj,
   return true;
 }
 
-
-void CreateDataProperty(Isolate* isolate, Handle<JSObject> object,
-                        Handle<String> name, Handle<Object> value) {
+void CreateDataProperty(Handle<JSObject> object, Handle<String> name,
+                        Handle<Object> value) {
   LookupIterator it(object, name, object, LookupIterator::OWN_SKIP_INTERCEPTOR);
   Maybe<bool> result = JSObject::CreateDataProperty(&it, value);
   CHECK(result.IsJust() && result.FromJust());
@@ -158,24 +157,24 @@ Handle<Object> PropertyDescriptor::ToObject(Isolate* isolate) {
   }
   Handle<JSObject> result = factory->NewJSObject(isolate->object_function());
   if (has_value()) {
-    CreateDataProperty(isolate, result, factory->value_string(), value());
+    CreateDataProperty(result, factory->value_string(), value());
   }
   if (has_writable()) {
-    CreateDataProperty(isolate, result, factory->writable_string(),
+    CreateDataProperty(result, factory->writable_string(),
                        factory->ToBoolean(writable()));
   }
   if (has_get()) {
-    CreateDataProperty(isolate, result, factory->get_string(), get());
+    CreateDataProperty(result, factory->get_string(), get());
   }
   if (has_set()) {
-    CreateDataProperty(isolate, result, factory->set_string(), set());
+    CreateDataProperty(result, factory->set_string(), set());
   }
   if (has_enumerable()) {
-    CreateDataProperty(isolate, result, factory->enumerable_string(),
+    CreateDataProperty(result, factory->enumerable_string(),
                        factory->ToBoolean(enumerable()));
   }
   if (has_configurable()) {
-    CreateDataProperty(isolate, result, factory->configurable_string(),
+    CreateDataProperty(result, factory->configurable_string(),
                        factory->ToBoolean(configurable()));
   }
   return result;
@@ -361,11 +360,11 @@ Handle<PropertyDescriptorObject> PropertyDescriptor::ToPropertyDescriptorObject(
   obj->set(PropertyDescriptorObject::kFlagsIndex, Smi::FromInt(flags));
 
   obj->set(PropertyDescriptorObject::kValueIndex,
-           has_value() ? *value_ : isolate->heap()->the_hole_value());
+           has_value() ? *value_ : ReadOnlyRoots(isolate).the_hole_value());
   obj->set(PropertyDescriptorObject::kGetIndex,
-           has_get() ? *get_ : isolate->heap()->the_hole_value());
+           has_get() ? *get_ : ReadOnlyRoots(isolate).the_hole_value());
   obj->set(PropertyDescriptorObject::kSetIndex,
-           has_set() ? *set_ : isolate->heap()->the_hole_value());
+           has_set() ? *set_ : ReadOnlyRoots(isolate).the_hole_value());
 
   return obj;
 }

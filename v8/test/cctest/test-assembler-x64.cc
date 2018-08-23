@@ -39,6 +39,7 @@
 #include "src/ostreams.h"
 #include "src/simulator.h"
 #include "test/cctest/cctest.h"
+#include "test/common/assembler-tester.h"
 
 namespace v8 {
 namespace internal {
@@ -74,7 +75,7 @@ TEST(AssemblerX64ReturnOperation) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   // Assemble a simple function that copies argument 2 and returns it.
   __ movq(rax, arg2);
@@ -95,7 +96,7 @@ TEST(AssemblerX64StackOperations) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   // Assemble a simple function that copies argument 2 and returns it.
   // We compile without stack frame pointers, so the gdb debugger shows
@@ -126,7 +127,7 @@ TEST(AssemblerX64ArithmeticOperations) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   // Assemble a simple function that adds arguments returning the sum.
   __ movq(rax, arg2);
@@ -147,7 +148,7 @@ TEST(AssemblerX64CmpbOperation) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   // Assemble a function that compare argument byte returing 1 if equal else 0.
   // On Windows, it compares rcx with rdx which does not require REX prefix;
@@ -176,7 +177,7 @@ TEST(AssemblerX64ImulOperation) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   // Assemble a simple function that multiplies arguments returning the high
   // word.
@@ -203,7 +204,7 @@ TEST(AssemblerX64testbwqOperation) {
   v8::HandleScope scope(CcTest::isolate());
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   __ pushq(rbx);
   __ pushq(rdi);
@@ -369,7 +370,7 @@ TEST(AssemblerX64XchglOperations) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   __ movq(rax, Operand(arg1, 0));
   __ movq(r11, Operand(arg2, 0));
@@ -396,7 +397,7 @@ TEST(AssemblerX64OrlOperations) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   __ movq(rax, Operand(arg2, 0));
   __ orl(Operand(arg1, 0), rax);
@@ -419,7 +420,7 @@ TEST(AssemblerX64RollOperations) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   __ movq(rax, arg1);
   __ roll(rax, Immediate(1));
@@ -440,7 +441,7 @@ TEST(AssemblerX64SublOperations) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   __ movq(rax, Operand(arg2, 0));
   __ subl(Operand(arg1, 0), rax);
@@ -463,7 +464,7 @@ TEST(AssemblerX64TestlOperations) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   // Set rax with the ZF flag of the testl instruction.
   Label done;
@@ -491,7 +492,7 @@ TEST(AssemblerX64TestwOperations) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   // Set rax with the ZF flag of the testl instruction.
   Label done;
@@ -516,7 +517,7 @@ TEST(AssemblerX64XorlOperations) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   __ movq(rax, Operand(arg2, 0));
   __ xorl(Operand(arg1, 0), rax);
@@ -539,7 +540,7 @@ TEST(AssemblerX64MemoryOperands) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   // Assemble a simple function that copies argument 2 and returns it.
   __ pushq(rbp);
@@ -572,7 +573,7 @@ TEST(AssemblerX64ControlFlow) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   // Assemble a simple function that copies argument 1 and returns it.
   __ pushq(rbp);
@@ -600,7 +601,7 @@ TEST(AssemblerX64LoopImmediates) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   // Assemble two loops using rax as counter, and verify the ending counts.
   Label Fail;
@@ -693,7 +694,7 @@ TEST(AssemblerX64LabelChaining) {
   // Test chaining of label usages within instructions (issue 1644).
   CcTest::InitializeVM();
   v8::HandleScope scope(CcTest::isolate());
-  Assembler masm(Assembler::Options{}, nullptr, 0);
+  Assembler masm(AssemblerOptions{}, nullptr, 0);
 
   Label target;
   __ j(equal, &target);
@@ -708,7 +709,7 @@ TEST(AssemblerMultiByteNop) {
   v8::HandleScope scope(CcTest::isolate());
   byte buffer[1024];
   Isolate* isolate = CcTest::i_isolate();
-  Assembler masm(Assembler::Options{}, buffer, sizeof(buffer));
+  Assembler masm(AssemblerOptions{}, buffer, sizeof(buffer));
   __ pushq(rbx);
   __ pushq(rcx);
   __ pushq(rdx);
@@ -779,7 +780,7 @@ void DoSSE2(const v8::FunctionCallbackInfo<v8::Value>& args) {
   CHECK_EQ(ELEMENT_COUNT, vec->Length());
 
   Isolate* isolate = CcTest::i_isolate();
-  Assembler masm(Assembler::Options{}, buffer, sizeof(buffer));
+  Assembler masm(AssemblerOptions{}, buffer, sizeof(buffer));
 
   // Remove return address from the stack for fix stack frame alignment.
   __ popq(rcx);
@@ -868,7 +869,7 @@ TEST(AssemblerX64Extractps) {
   v8::HandleScope scope(CcTest::isolate());
   byte buffer[256];
   Isolate* isolate = CcTest::i_isolate();
-  Assembler masm(Assembler::Options{}, buffer, sizeof(buffer));
+  Assembler masm(AssemblerOptions{}, buffer, sizeof(buffer));
   {
     CpuFeatureScope fscope2(&masm, SSE4_1);
     __ extractps(rax, xmm0, 0x1);
@@ -881,7 +882,7 @@ TEST(AssemblerX64Extractps) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F3>::FromCode(*code);
@@ -918,7 +919,7 @@ TEST(AssemblerX64SSE) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F6>::FromCode(*code);
@@ -949,7 +950,7 @@ TEST(AssemblerX64SSE3) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F6>::FromCode(*code);
@@ -1174,7 +1175,7 @@ TEST(AssemblerX64FMA_sd) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F7>::FromCode(*code);
@@ -1400,7 +1401,7 @@ TEST(AssemblerX64FMA_ss) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F8>::FromCode(*code);
@@ -1414,7 +1415,7 @@ TEST(AssemblerX64SSE_ss) {
   Isolate* isolate = reinterpret_cast<Isolate*>(CcTest::isolate());
   HandleScope scope(isolate);
   v8::internal::byte buffer[1024];
-  Assembler masm(Assembler::Options{}, buffer, sizeof(buffer));
+  Assembler masm(AssemblerOptions{}, buffer, sizeof(buffer));
   {
     Label exit;
     // arguments in xmm0, xmm1 and xmm2
@@ -1475,7 +1476,7 @@ TEST(AssemblerX64SSE_ss) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F8>::FromCode(*code);
@@ -1492,7 +1493,7 @@ TEST(AssemblerX64AVX_ss) {
   Isolate* isolate = reinterpret_cast<Isolate*>(CcTest::isolate());
   HandleScope scope(isolate);
   v8::internal::byte buffer[1024];
-  Assembler masm(Assembler::Options{}, buffer, sizeof(buffer));
+  Assembler masm(AssemblerOptions{}, buffer, sizeof(buffer));
   {
     CpuFeatureScope avx_scope(&masm, AVX);
     Label exit;
@@ -1560,7 +1561,7 @@ TEST(AssemblerX64AVX_ss) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F8>::FromCode(*code);
@@ -1577,7 +1578,7 @@ TEST(AssemblerX64AVX_sd) {
   Isolate* isolate = reinterpret_cast<Isolate*>(CcTest::isolate());
   HandleScope scope(isolate);
   v8::internal::byte buffer[1024];
-  Assembler masm(Assembler::Options{}, buffer, sizeof(buffer));
+  Assembler masm(AssemblerOptions{}, buffer, sizeof(buffer));
   {
     CpuFeatureScope avx_scope(&masm, AVX);
     Label exit;
@@ -1799,7 +1800,7 @@ TEST(AssemblerX64AVX_sd) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F7>::FromCode(*code);
@@ -1991,7 +1992,7 @@ TEST(AssemblerX64BMI1) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F0>::FromCode(*code);
@@ -2051,7 +2052,7 @@ TEST(AssemblerX64LZCNT) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F0>::FromCode(*code);
@@ -2111,7 +2112,7 @@ TEST(AssemblerX64POPCNT) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F0>::FromCode(*code);
@@ -2374,7 +2375,7 @@ TEST(AssemblerX64BMI2) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F0>::FromCode(*code);
@@ -2418,7 +2419,7 @@ TEST(AssemblerX64JumpTables1) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
 
   auto f = GeneratedCode<F1>::FromCode(*code);
@@ -2467,7 +2468,7 @@ TEST(AssemblerX64JumpTables2) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
 
   auto f = GeneratedCode<F1>::FromCode(*code);
@@ -2482,7 +2483,7 @@ TEST(AssemblerX64PslldWithXmm15) {
   CcTest::InitializeVM();
   size_t allocated;
   byte* buffer = AllocateAssemblerBuffer(&allocated);
-  Assembler masm(Assembler::Options{}, buffer, static_cast<int>(allocated));
+  Assembler masm(AssemblerOptions{}, buffer, static_cast<int>(allocated));
 
   __ movq(xmm15, arg1);
   __ pslld(xmm15, 1);
@@ -2526,7 +2527,7 @@ TEST(AssemblerX64vmovups) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
 
   auto f = GeneratedCode<F9>::FromCode(*code);

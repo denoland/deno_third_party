@@ -55,7 +55,14 @@ class CodeAssemblerTester {
     return state_.raw_assembler_.get();
   }
 
-  Handle<Code> GenerateCode() { return CodeAssembler::GenerateCode(&state_); }
+  Handle<Code> GenerateCode() {
+    return CodeAssembler::GenerateCode(
+        &state_, AssemblerOptions::Default(scope_.isolate()));
+  }
+
+  Handle<Code> GenerateCode(const AssemblerOptions& options) {
+    return CodeAssembler::GenerateCode(&state_, options);
+  }
 
   Handle<Code> GenerateCodeCloseAndEscape() {
     return scope_.CloseAndEscape(GenerateCode());

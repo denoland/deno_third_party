@@ -38,23 +38,13 @@ class CodeGenerator::JumpTable final : public ZoneObject {
   size_t const target_count_;
 };
 
-Assembler::Options AssemblerOptions(Isolate* isolate, Code::Kind kind) {
-  Assembler::Options options = Assembler::DefaultOptions(isolate);
-  if (kind == Code::JS_TO_WASM_FUNCTION || kind == Code::WASM_FUNCTION) {
-    options.record_reloc_info_for_serialization = true;
-    options.enable_root_array_delta_access = false;
-  }
-  return options;
-}
-
-CodeGenerator::CodeGenerator(Zone* codegen_zone, Frame* frame, Linkage* linkage,
-                             InstructionSequence* code,
-                             OptimizedCompilationInfo* info, Isolate* isolate,
-                             base::Optional<OsrHelper> osr_helper,
-                             int start_source_position,
-                             JumpOptimizationInfo* jump_opt,
-                             WasmCompilationData* wasm_compilation_data,
-                             PoisoningMitigationLevel poisoning_level)
+CodeGenerator::CodeGenerator(
+    Zone* codegen_zone, Frame* frame, Linkage* linkage,
+    InstructionSequence* code, OptimizedCompilationInfo* info, Isolate* isolate,
+    base::Optional<OsrHelper> osr_helper, int start_source_position,
+    JumpOptimizationInfo* jump_opt, WasmCompilationData* wasm_compilation_data,
+    PoisoningMitigationLevel poisoning_level, const AssemblerOptions& options,
+    int32_t builtin_index)
     : zone_(codegen_zone),
       isolate_(isolate),
       frame_access_state_(nullptr),
@@ -66,8 +56,7 @@ CodeGenerator::CodeGenerator(Zone* codegen_zone, Frame* frame, Linkage* linkage,
       current_block_(RpoNumber::Invalid()),
       start_source_position_(start_source_position),
       current_source_position_(SourcePosition::Unknown()),
-      tasm_(isolate, AssemblerOptions(isolate, info->code_kind()), nullptr, 0,
-            CodeObjectRequired::kNo),
+      tasm_(isolate, options, nullptr, 0, CodeObjectRequired::kNo),
       resolver_(this),
       safepoints_(zone()),
       handlers_(zone()),
@@ -100,9 +89,12 @@ CodeGenerator::CodeGenerator(Zone* codegen_zone, Frame* frame, Linkage* linkage,
   Code::Kind code_kind = info_->code_kind();
   if (code_kind == Code::WASM_FUNCTION ||
       code_kind == Code::WASM_TO_JS_FUNCTION ||
-      code_kind == Code::WASM_INTERPRETER_ENTRY) {
-    tasm_.set_trap_on_abort(true);
+      code_kind == Code::WASM_INTERPRETER_ENTRY ||
+      (Builtins::IsBuiltinId(builtin_index) &&
+       Builtins::IsWasmRuntimeStub(builtin_index))) {
+    tasm_.set_abort_hard(true);
   }
+  tasm_.set_builtin_index(builtin_index);
 }
 
 bool CodeGenerator::wasm_runtime_exception_support() const {
@@ -449,10 +441,10 @@ void CodeGenerator::RecordSafepoint(ReferenceMap* references,
       // we also don't need to worry about them, since the GC has special
       // knowledge about those fields anyway.
       if (index < stackSlotToSpillSlotDelta) continue;
-      safepoint.DefinePointerSlot(index, zone());
+      safepoint.DefinePointerSlot(index);
     } else if (operand.IsRegister() && (kind & Safepoint::kWithRegisters)) {
       Register reg = LocationOperand::cast(operand).GetRegister();
-      safepoint.DefinePointerRegister(reg, zone());
+      safepoint.DefinePointerRegister(reg);
     }
   }
 }
@@ -733,7 +725,7 @@ void CodeGenerator::AssembleSourcePosition(SourcePosition source_position) {
     buffer << "-- ";
     // Turbolizer only needs the source position, as it can reconstruct
     // the inlining stack from other information.
-    if (info->trace_turbo_json_enabled() ||
+    if (info->trace_turbo_json_enabled() || !tasm()->isolate() ||
         tasm()->isolate()->concurrent_recompilation_enabled()) {
       buffer << source_position;
     } else {
