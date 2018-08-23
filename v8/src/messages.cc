@@ -6,12 +6,13 @@
 
 #include <memory>
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/execution.h"
 #include "src/isolate-inl.h"
 #include "src/keys.h"
 #include "src/objects/frame-array-inl.h"
-#include "src/string-builder.h"
+#include "src/objects/js-array-inl.h"
+#include "src/string-builder-inl.h"
 #include "src/wasm/wasm-code-manager.h"
 #include "src/wasm/wasm-objects.h"
 
@@ -56,13 +57,11 @@ Handle<JSMessageObject> MessageHandler::MakeMessageObject(
 
   int start = -1;
   int end = -1;
-  Handle<Object> script_handle = factory->undefined_value();
+  Handle<Script> script_handle = isolate->factory()->empty_script();
   if (location != nullptr) {
     start = location->start_pos();
     end = location->end_pos();
-    script_handle = Script::GetWrapper(location->script());
-  } else {
-    script_handle = Script::GetWrapper(isolate->factory()->empty_script());
+    script_handle = location->script();
   }
 
   Handle<Object> stack_frames_handle = stack_frames.is_null()
@@ -85,7 +84,7 @@ void MessageHandler::ReportMessage(Isolate* isolate, const MessageLocation* loc,
     // and ignore scheduled exceptions callbacks can throw.
 
     // We pass the exception object into the message handler callback though.
-    Object* exception_object = isolate->heap()->undefined_value();
+    Object* exception_object = ReadOnlyRoots(isolate).undefined_value();
     if (isolate->has_pending_exception()) {
       exception_object = isolate->pending_exception();
     }
@@ -190,7 +189,7 @@ namespace {
 
 Object* EvalFromFunctionName(Isolate* isolate, Handle<Script> script) {
   if (!script->has_eval_from_shared())
-    return isolate->heap()->undefined_value();
+    return ReadOnlyRoots(isolate).undefined_value();
 
   Handle<SharedFunctionInfo> shared(script->eval_from_shared(), isolate);
   // Find the name of the function calling eval.
@@ -203,13 +202,13 @@ Object* EvalFromFunctionName(Isolate* isolate, Handle<Script> script) {
 
 Object* EvalFromScript(Isolate* isolate, Handle<Script> script) {
   if (!script->has_eval_from_shared())
-    return isolate->heap()->undefined_value();
+    return ReadOnlyRoots(isolate).undefined_value();
 
   Handle<SharedFunctionInfo> eval_from_shared(script->eval_from_shared(),
                                               isolate);
   return eval_from_shared->script()->IsScript()
              ? eval_from_shared->script()
-             : isolate->heap()->undefined_value();
+             : ReadOnlyRoots(isolate).undefined_value();
 }
 
 MaybeHandle<String> FormatEvalOrigin(Isolate* isolate, Handle<Script> script) {
@@ -651,8 +650,8 @@ void WasmStackFrame::FromFrameArray(Isolate* isolate, Handle<FrameArray> array,
   if (array->IsWasmInterpretedFrame(frame_ix)) {
     code_ = nullptr;
   } else {
-    code_ = wasm_instance_->module_object()->native_module()->code(
-        wasm_func_index_);
+    code_ = reinterpret_cast<wasm::WasmCode*>(
+        array->WasmCodeObject(frame_ix)->foreign_address());
   }
   offset_ = array->Offset(frame_ix)->value();
 }
@@ -1031,7 +1030,7 @@ Handle<String> MessageTemplate::FormatMessage(Isolate* isolate,
   Factory* factory = isolate->factory();
   Handle<String> result_string = Object::NoSideEffectsToString(isolate, arg);
   MaybeHandle<String> maybe_result_string = MessageTemplate::FormatMessage(
-      template_index, result_string, factory->empty_string(),
+      isolate, template_index, result_string, factory->empty_string(),
       factory->empty_string());
   if (!maybe_result_string.ToHandle(&result_string)) {
     DCHECK(isolate->has_pending_exception());
@@ -1060,12 +1059,11 @@ const char* MessageTemplate::TemplateString(int template_index) {
   }
 }
 
-
-MaybeHandle<String> MessageTemplate::FormatMessage(int template_index,
+MaybeHandle<String> MessageTemplate::FormatMessage(Isolate* isolate,
+                                                   int template_index,
                                                    Handle<String> arg0,
                                                    Handle<String> arg1,
                                                    Handle<String> arg2) {
-  Isolate* isolate = arg0->GetIsolate();
   const char* template_string = TemplateString(template_index);
   if (template_string == nullptr) {
     isolate->ThrowIllegalOperation();
@@ -1230,8 +1228,8 @@ Handle<String> FormatMessage(Isolate* isolate, int template_index,
   isolate->native_context()->IncrementErrorsThrown();
 
   Handle<String> msg;
-  if (!MessageTemplate::FormatMessage(template_index, arg0_str, arg1_str,
-                                      arg2_str)
+  if (!MessageTemplate::FormatMessage(isolate, template_index, arg0_str,
+                                      arg1_str, arg2_str)
            .ToHandle(&msg)) {
     DCHECK(isolate->has_pending_exception());
     isolate->clear_pending_exception();

@@ -4,7 +4,7 @@
 
 #include "src/api-natives.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/isolate-inl.h"
 #include "src/lookup.h"
 #include "src/messages.h"
@@ -208,7 +208,8 @@ MaybeHandle<JSObject> ConfigureInstance(Isolate* isolate, Handle<JSObject> obj,
       Object* maybe_properties = temp->property_accessors();
       if (!maybe_properties->IsUndefined(isolate)) {
         valid_descriptors = AccessorInfo::AppendUnique(
-            handle(maybe_properties, isolate), array, valid_descriptors);
+            isolate, handle(maybe_properties, isolate), array,
+            valid_descriptors);
       }
     }
 
@@ -290,7 +291,7 @@ MaybeHandle<JSObject> ProbeInstantiationsCache(Isolate* isolate,
               TemplateInfo::kSlowTemplateInstantiationsCacheSize)) {
     Handle<SimpleNumberDictionary> slow_cache =
         isolate->slow_template_instantiations_cache();
-    int entry = slow_cache->FindEntry(serial_number);
+    int entry = slow_cache->FindEntry(isolate, serial_number);
     if (entry == SimpleNumberDictionary::kNotFound) {
       return MaybeHandle<JSObject>();
     }
@@ -308,7 +309,7 @@ void CacheTemplateInstantiation(Isolate* isolate, int serial_number,
     Handle<FixedArray> fast_cache =
         isolate->fast_template_instantiations_cache();
     Handle<FixedArray> new_cache =
-        FixedArray::SetAndGrow(fast_cache, serial_number - 1, object);
+        FixedArray::SetAndGrow(isolate, fast_cache, serial_number - 1, object);
     if (*new_cache != *fast_cache) {
       isolate->native_context()->set_fast_template_instantiations_cache(
           *new_cache);
@@ -318,7 +319,8 @@ void CacheTemplateInstantiation(Isolate* isolate, int serial_number,
               TemplateInfo::kSlowTemplateInstantiationsCacheSize)) {
     Handle<SimpleNumberDictionary> cache =
         isolate->slow_template_instantiations_cache();
-    auto new_cache = SimpleNumberDictionary::Set(cache, serial_number, object);
+    auto new_cache =
+        SimpleNumberDictionary::Set(isolate, cache, serial_number, object);
     if (*new_cache != *cache) {
       isolate->native_context()->set_slow_template_instantiations_cache(
           *new_cache);
@@ -339,9 +341,9 @@ void UncacheTemplateInstantiation(Isolate* isolate, int serial_number,
               TemplateInfo::kSlowTemplateInstantiationsCacheSize)) {
     Handle<SimpleNumberDictionary> cache =
         isolate->slow_template_instantiations_cache();
-    int entry = cache->FindEntry(serial_number);
+    int entry = cache->FindEntry(isolate, serial_number);
     DCHECK_NE(SimpleNumberDictionary::kNotFound, entry);
-    cache = SimpleNumberDictionary::DeleteEntry(cache, entry);
+    cache = SimpleNumberDictionary::DeleteEntry(isolate, cache, entry);
     isolate->native_context()->set_slow_template_instantiations_cache(*cache);
   }
 }

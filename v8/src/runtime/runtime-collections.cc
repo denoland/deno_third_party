@@ -2,13 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/runtime/runtime-utils.h"
-
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/conversions-inl.h"
 #include "src/heap/factory.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/js-collection-inl.h"
+#include "src/runtime/runtime-utils.h"
 
 namespace v8 {
 namespace internal {
@@ -98,7 +97,7 @@ RUNTIME_FUNCTION(Runtime_WeakCollectionDelete) {
 
 #ifdef DEBUG
   DCHECK(key->IsJSReceiver());
-  DCHECK(EphemeronHashTableShape::IsLive(isolate, *key));
+  DCHECK(EphemeronHashTableShape::IsLive(ReadOnlyRoots(isolate), *key));
   Handle<EphemeronHashTable> table(
       EphemeronHashTable::cast(weak_collection->table()), isolate);
   // Should only be called when shrinking the table is necessary. See
@@ -130,7 +129,7 @@ RUNTIME_FUNCTION(Runtime_WeakCollectionSet) {
 
 #ifdef DEBUG
   DCHECK(key->IsJSReceiver());
-  DCHECK(EphemeronHashTableShape::IsLive(isolate, *key));
+  DCHECK(EphemeronHashTableShape::IsLive(ReadOnlyRoots(isolate), *key));
   Handle<EphemeronHashTable> table(
       EphemeronHashTable::cast(weak_collection->table()), isolate);
   // Should only be called when rehashing or resizing the table is necessary.
@@ -141,20 +140,6 @@ RUNTIME_FUNCTION(Runtime_WeakCollectionSet) {
 
   JSWeakCollection::Set(weak_collection, key, value, hash);
   return *weak_collection;
-}
-
-RUNTIME_FUNCTION(Runtime_IsJSWeakMap) {
-  SealHandleScope shs(isolate);
-  DCHECK_EQ(1, args.length());
-  CONVERT_ARG_CHECKED(Object, obj, 0);
-  return isolate->heap()->ToBoolean(obj->IsJSWeakMap());
-}
-
-RUNTIME_FUNCTION(Runtime_IsJSWeakSet) {
-  SealHandleScope shs(isolate);
-  DCHECK_EQ(1, args.length());
-  CONVERT_ARG_CHECKED(Object, obj, 0);
-  return isolate->heap()->ToBoolean(obj->IsJSWeakSet());
 }
 
 }  // namespace internal

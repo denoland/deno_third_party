@@ -144,12 +144,19 @@ def AtomicOutput(path, only_if_changed=True):
   """
   # Create in same directory to ensure same filesystem when moving.
   with tempfile.NamedTemporaryFile(suffix=os.path.basename(path),
-                                   dir=os.path.dirname(path)) as f:
-    yield f
-    if not (
-        only_if_changed and os.path.exists(path) and filecmp.cmp(f.name, path)):
-      shutil.move(f.name, path)
-      f.delete = False
+                                   dir=os.path.dirname(path),
+                                   delete=False) as f:
+    try:
+      yield f
+
+      # file should be closed before comparison/move.
+      f.close()
+      if not (only_if_changed and os.path.exists(path) and
+              filecmp.cmp(f.name, path)):
+        shutil.move(f.name, path)
+    finally:
+      if os.path.exists(f.name):
+        os.unlink(f.name)
 
 
 class CalledProcessError(Exception):
@@ -248,6 +255,7 @@ def ExtractAll(zip_path, path=None, no_clobber=True, pattern=None,
   with zipfile.ZipFile(zip_path) as z:
     for name in z.namelist():
       if name.endswith('/'):
+        MakeDirectory(os.path.join(path, name))
         continue
       if pattern is not None:
         if not fnmatch.fnmatch(name, pattern):
@@ -344,7 +352,9 @@ def ZipDir(output, base_dir, compress_fn=None):
   for root, _, files in os.walk(base_dir):
     for f in files:
       inputs.append(os.path.join(root, f))
-  DoZip(inputs, output, base_dir, compress_fn=compress_fn)
+
+  with AtomicOutput(output) as f:
+    DoZip(inputs, f, base_dir, compress_fn=compress_fn)
 
 
 def MatchesGlob(path, filters):
@@ -544,10 +554,10 @@ def CallAndWriteDepfileIfStale(function, options, record_path=None,
                                output_paths=None, force=False,
                                pass_changes=False, depfile_deps=None,
                                add_pydeps=True):
-  """Wraps md5_check.CallAndRecordIfStale() and also writes dep & stamp files.
+  """Wraps md5_check.CallAndRecordIfStale() and writes a depfile if applicable.
 
-  Depfiles and stamp files are automatically added to output_paths when present
-  in the |options| argument. They are then created after |function| is called.
+  Depfiles are automatically added to output_paths when present in the |options|
+  argument. They are then created after |function| is called.
 
   By default, only python dependencies are added to the depfile. If there are
   other input paths that are not captured by GN deps, then they should be listed
@@ -567,10 +577,6 @@ def CallAndWriteDepfileIfStale(function, options, record_path=None,
     input_paths += python_deps
     output_paths += [options.depfile]
 
-  stamp_file = hasattr(options, 'stamp') and options.stamp
-  if stamp_file:
-    output_paths += [stamp_file]
-
   def on_stale_md5(changes):
     args = (changes,) if pass_changes else ()
     function(*args)
@@ -580,8 +586,6 @@ def CallAndWriteDepfileIfStale(function, options, record_path=None,
         all_depfile_deps.extend(depfile_deps)
       WriteDepfile(options.depfile, output_paths[0], all_depfile_deps,
                    add_pydeps=False)
-    if stamp_file:
-      Touch(stamp_file)
 
   md5_check.CallAndRecordIfStale(
       on_stale_md5,
@@ -591,4 +595,3 @@ def CallAndWriteDepfileIfStale(function, options, record_path=None,
       output_paths=output_paths,
       force=force,
       pass_changes=True)
-

@@ -121,7 +121,7 @@ void UnoptimizedCompileJob::PrepareOnMainThread(Isolate* isolate) {
 
   unicode_cache_.reset(new UnicodeCache());
   parse_info_->set_unicode_cache(unicode_cache_.get());
-  parse_info_->set_function_literal_id(shared_->function_literal_id());
+  parse_info_->set_function_literal_id(shared_->FunctionLiteralId(isolate));
   if (V8_UNLIKELY(FLAG_runtime_stats)) {
     parse_info_->set_runtime_call_stats(new (parse_info_->zone())
                                             RuntimeCallStats());
@@ -134,7 +134,7 @@ void UnoptimizedCompileJob::PrepareOnMainThread(Isolate* isolate) {
   Handle<String> source(String::cast(script->source()), isolate);
   if (source->IsExternalTwoByteString() || source->IsExternalOneByteString()) {
     std::unique_ptr<Utf16CharacterStream> stream(ScannerStream::For(
-        source, shared_->StartPosition(), shared_->EndPosition()));
+        isolate, source, shared_->StartPosition(), shared_->EndPosition()));
     parse_info_->set_character_stream(std::move(stream));
   } else {
     source = String::Flatten(isolate, source);
@@ -180,24 +180,23 @@ void UnoptimizedCompileJob::PrepareOnMainThread(Isolate* isolate) {
     if (source->IsOneByteRepresentation()) {
       ExternalOneByteString::Resource* resource =
           new OneByteWrapper(data, length);
-      source_wrapper_.reset(resource);
       wrapper = isolate->factory()
                     ->NewExternalStringFromOneByte(resource)
                     .ToHandleChecked();
     } else {
       ExternalTwoByteString::Resource* resource =
           new TwoByteWrapper(data, length);
-      source_wrapper_.reset(resource);
       wrapper = isolate->factory()
                     ->NewExternalStringFromTwoByte(resource)
                     .ToHandleChecked();
     }
     wrapper_ = isolate->global_handles()->Create(*wrapper);
     std::unique_ptr<Utf16CharacterStream> stream(
-        ScannerStream::For(wrapper_, shared_->StartPosition() - offset,
+        ScannerStream::For(isolate, wrapper_, shared_->StartPosition() - offset,
                            shared_->EndPosition() - offset));
     parse_info_->set_character_stream(std::move(stream));
   }
+
   parser_.reset(new Parser(parse_info_.get()));
   parser_->DeserializeScopeChain(isolate, parse_info_.get(),
                                  parse_info_->maybe_outer_scope_info());

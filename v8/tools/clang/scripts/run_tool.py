@@ -82,6 +82,7 @@ def _PruneGitFiles(git_files, paths):
   """
   if not git_files:
     return []
+  git_files.sort()
   pruned_list = []
   git_index = 0
   for path in sorted(paths):
@@ -215,6 +216,10 @@ def _ExecuteTool(toolname, tool_args, build_directory, compdb_entry):
       # passed to the tool twice - once directly and once via
       # the compile args.
       if a != compdb_entry.filename
+        # /showIncludes is used by Ninja to track header file dependencies on
+        # Windows. We don't need to do this here, and it results in lots of spam
+        # and a massive log file, so we strip it.
+        and a != '/showIncludes'
   ])
 
   # shlex.split escapes double qoutes in non-Posix mode, so we need to strip
@@ -294,9 +299,12 @@ class _CompilerDispatcher(object):
       sys.stderr.write('\n')
     done_count = self.__success_count + self.__failed_count
     percentage = (float(done_count) / len(self.__compdb_entries)) * 100
-    sys.stderr.write(
-        'Processed %d files with %s tool (%d failures) [%.2f%%]\r' %
-        (done_count, self.__toolname, self.__failed_count, percentage))
+    # Only output progress for every 100th entry, to make log files easier to
+    # inspect.
+    if done_count % 100 == 0 or done_count == len(self.__compdb_entries):
+      sys.stderr.write(
+          'Processed %d files with %s tool (%d failures) [%.2f%%]\r' %
+          (done_count, self.__toolname, self.__failed_count, percentage))
 
 
 def main():

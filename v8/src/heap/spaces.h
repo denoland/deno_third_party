@@ -110,7 +110,7 @@ class Space;
 // Some assertion macros used in the debugging mode.
 
 #define DCHECK_PAGE_ALIGNED(address) \
-  DCHECK((OffsetFrom(address) & Page::kPageAlignmentMask) == 0)
+  DCHECK((OffsetFrom(address) & kPageAlignmentMask) == 0)
 
 #define DCHECK_OBJECT_ALIGNED(address) \
   DCHECK((OffsetFrom(address) & kObjectAlignmentMask) == 0)
@@ -312,7 +312,11 @@ class MemoryChunk {
 
     // |SWEEP_TO_ITERATE|: The page requires sweeping using external markbits
     // to iterate the page.
-    SWEEP_TO_ITERATE = 1u << 17
+    SWEEP_TO_ITERATE = 1u << 17,
+
+    // |INCREMENTAL_MARKING|: Indicates whether incremental marking is currently
+    // enabled.
+    INCREMENTAL_MARKING = 1u << 18
   };
 
   using Flags = uintptr_t;
@@ -368,9 +372,10 @@ class MemoryChunk {
       + kPointerSize * NUMBER_OF_REMEMBERED_SET_TYPES  // TypedSlotSet* array
       + kPointerSize  // InvalidatedSlots* invalidated_slots_
       + kPointerSize  // SkipList* skip_list_
-      + kPointerSize  // AtomicValue high_water_mark_
+      + kPointerSize  // std::atomic<intptr_t> high_water_mark_
       + kPointerSize  // base::Mutex* mutex_
-      + kPointerSize  // base::AtomicWord concurrent_sweeping_
+      +
+      kPointerSize  // std::atomic<ConcurrentSweepingState> concurrent_sweeping_
       + kPointerSize  // base::Mutex* page_protection_change_mutex_
       + kPointerSize  // unitptr_t write_unprotect_counter_
       + kSizetSize * kNumTypes
@@ -402,7 +407,6 @@ class MemoryChunk {
 
   // Page size in bytes.  This must be a multiple of the OS page size.
   static const int kPageSize = 1 << kPageSizeBits;
-  static const intptr_t kPageAlignmentMask = (1 << kPageSizeBits) - 1;
 
   static const int kAllocatableMemory = kPageSize - kObjectStartOffset;
 
@@ -420,6 +424,9 @@ class MemoryChunk {
                                           ~kAlignmentMask);
   }
 
+  void SetOldGenerationPageFlags(bool is_marking);
+  void SetYoungGenerationPageFlags(bool is_marking);
+
   static inline MemoryChunk* FromAnyPointerAddress(Heap* heap, Address addr);
 
   static inline void UpdateHighWaterMark(Address mark) {
@@ -431,9 +438,10 @@ class MemoryChunk {
     intptr_t new_mark = static_cast<intptr_t>(mark - chunk->address());
     intptr_t old_mark = 0;
     do {
-      old_mark = chunk->high_water_mark_.Value();
-    } while ((new_mark > old_mark) &&
-             !chunk->high_water_mark_.TrySetValue(old_mark, new_mark));
+      old_mark = chunk->high_water_mark_;
+    } while (
+        (new_mark > old_mark) &&
+        !chunk->high_water_mark_.compare_exchange_weak(old_mark, new_mark));
   }
 
   Address address() const {
@@ -452,13 +460,15 @@ class MemoryChunk {
     return addr >= area_start() && addr <= area_end();
   }
 
-  base::AtomicValue<ConcurrentSweepingState>& concurrent_sweeping_state() {
-    return concurrent_sweeping_;
+  void set_concurrent_sweeping_state(ConcurrentSweepingState state) {
+    concurrent_sweeping_ = state;
   }
 
-  bool SweepingDone() {
-    return concurrent_sweeping_state().Value() == kSweepingDone;
+  ConcurrentSweepingState concurrent_sweeping_state() {
+    return static_cast<ConcurrentSweepingState>(concurrent_sweeping_.load());
   }
+
+  bool SweepingDone() { return concurrent_sweeping_ == kSweepingDone; }
 
   size_t size() const { return size_; }
   void set_size(size_t size) { size_ = size; }
@@ -505,6 +515,9 @@ class MemoryChunk {
   InvalidatedSlots* AllocateInvalidatedSlots();
   void ReleaseInvalidatedSlots();
   void RegisterObjectWithInvalidatedSlots(HeapObject* object, int size);
+  // Updates invalidated_slots after array left-trimming.
+  void MoveObjectWithInvalidatedSlots(HeapObject* old_start,
+                                      HeapObject* new_start);
   InvalidatedSlots* invalidated_slots() { return invalidated_slots_; }
 
   void ReleaseLocalTracker();
@@ -519,7 +532,7 @@ class MemoryChunk {
   // Approximate amount of physical memory committed for this chunk.
   size_t CommittedPhysicalMemory();
 
-  Address HighWaterMark() { return address() + high_water_mark_.Value(); }
+  Address HighWaterMark() { return address() + high_water_mark_; }
 
   int progress_bar() {
     DCHECK(IsFlagSet(HAS_PROGRESS_BAR));
@@ -553,34 +566,32 @@ class MemoryChunk {
     return this->address() + (index << kPointerSizeLog2);
   }
 
-  template <AccessMode access_mode = AccessMode::NON_ATOMIC>
-  void SetFlag(Flag flag) {
-    if (access_mode == AccessMode::NON_ATOMIC) {
-      flags_ |= flag;
-    } else {
-      base::AsAtomicWord::SetBits<uintptr_t>(&flags_, flag, flag);
-    }
-  }
+  void SetFlag(Flag flag) { SetFlags(flag, flag); }
 
   template <AccessMode access_mode = AccessMode::NON_ATOMIC>
   bool IsFlagSet(Flag flag) {
-    return (GetFlags<access_mode>() & flag) != 0;
+    return (flags<access_mode>() & flag) != 0;
   }
 
   void ClearFlag(Flag flag) { flags_ &= ~flag; }
   // Set or clear multiple flags at a time. The flags in the mask are set to
   // the value in "flags", the rest retain the current value in |flags_|.
   void SetFlags(uintptr_t flags, uintptr_t mask) {
-    flags_ = (flags_ & ~mask) | (flags & mask);
+    uintptr_t old_flags;
+    uintptr_t new_flags;
+    do {
+      old_flags = flags_;
+      new_flags = (old_flags & ~mask) | (flags & mask);
+    } while (!flags_.compare_exchange_weak(old_flags, new_flags));
   }
 
   // Return all current flags.
   template <AccessMode access_mode = AccessMode::NON_ATOMIC>
-  uintptr_t GetFlags() {
+  uintptr_t flags() {
     if (access_mode == AccessMode::NON_ATOMIC) {
       return flags_;
     } else {
-      return base::AsAtomicWord::Relaxed_Load(&flags_);
+      return flags_.load(std::memory_order_relaxed);
     }
   }
 
@@ -592,18 +603,15 @@ class MemoryChunk {
     return !IsEvacuationCandidate() && !IsFlagSet(NEVER_ALLOCATE_ON_PAGE);
   }
 
-  template <AccessMode access_mode = AccessMode::NON_ATOMIC>
   bool IsEvacuationCandidate() {
-    DCHECK(!(IsFlagSet<access_mode>(NEVER_EVACUATE) &&
-             IsFlagSet<access_mode>(EVACUATION_CANDIDATE)));
-    return IsFlagSet<access_mode>(EVACUATION_CANDIDATE);
+    DCHECK(!(IsFlagSet(NEVER_EVACUATE) && IsFlagSet(EVACUATION_CANDIDATE)));
+    return IsFlagSet(EVACUATION_CANDIDATE);
   }
 
-  template <AccessMode access_mode = AccessMode::NON_ATOMIC>
   bool ShouldSkipEvacuationSlotRecording() {
-    uintptr_t flags = GetFlags<access_mode>();
-    return ((flags & kSkipEvacuationSlotsRecordingMask) != 0) &&
-           ((flags & COMPACTION_WAS_ABORTED) == 0);
+    uintptr_t current_flags = flags();
+    return ((current_flags & kSkipEvacuationSlotsRecordingMask) != 0) &&
+           ((current_flags & COMPACTION_WAS_ABORTED) == 0);
   }
 
   Executability executable() {
@@ -616,9 +624,13 @@ class MemoryChunk {
 
   bool InFromSpace() { return IsFlagSet(IN_FROM_SPACE); }
 
-  Space* owner() const { return owner_.Value(); }
+  bool InOldSpace() const;
 
-  void set_owner(Space* space) { owner_.SetValue(space); }
+  bool InLargeObjectSpace() const;
+
+  Space* owner() const { return owner_; }
+
+  void set_owner(Space* space) { owner_ = space; }
 
   bool IsPagedSpace() const;
 
@@ -643,7 +655,7 @@ class MemoryChunk {
   VirtualMemory* reserved_memory() { return &reservation_; }
 
   size_t size_;
-  uintptr_t flags_;
+  std::atomic<uintptr_t> flags_;
 
   // Start and end of allocatable memory on this chunk.
   Address area_start_;
@@ -653,7 +665,7 @@ class MemoryChunk {
   VirtualMemory reservation_;
 
   // The space owning this memory chunk.
-  base::AtomicValue<Space*> owner_;
+  std::atomic<Space*> owner_;
 
   Heap* heap_;
 
@@ -675,11 +687,11 @@ class MemoryChunk {
 
   // Assuming the initial allocation on a page is sequential,
   // count highest number of bytes ever allocated on the page.
-  base::AtomicValue<intptr_t> high_water_mark_;
+  std::atomic<intptr_t> high_water_mark_;
 
   base::Mutex* mutex_;
 
-  base::AtomicValue<ConcurrentSweepingState> concurrent_sweeping_;
+  std::atomic<intptr_t> concurrent_sweeping_;
 
   base::Mutex* page_protection_change_mutex_;
 
@@ -731,6 +743,9 @@ class MemoryChunk {
   friend class PagedSpace;
 };
 
+static_assert(sizeof(std::atomic<intptr_t>) == kPointerSize,
+              "sizeof(std::atomic<intptr_t>) == kPointerSize");
+
 static_assert(kMaxRegularHeapObjectSize <= MemoryChunk::kAllocatableMemory,
               "kMaxRegularHeapObjectSize <= MemoryChunk::kAllocatableMemory");
 
@@ -748,13 +763,18 @@ class Page : public MemoryChunk {
   // Page flags copied from from-space to to-space when flipping semispaces.
   static const intptr_t kCopyOnFlipFlagsMask =
       static_cast<intptr_t>(MemoryChunk::POINTERS_TO_HERE_ARE_INTERESTING) |
-      static_cast<intptr_t>(MemoryChunk::POINTERS_FROM_HERE_ARE_INTERESTING);
+      static_cast<intptr_t>(MemoryChunk::POINTERS_FROM_HERE_ARE_INTERESTING) |
+      static_cast<intptr_t>(MemoryChunk::INCREMENTAL_MARKING);
 
   // Returns the page containing a given address. The address ranges
   // from [page_addr .. page_addr + kPageSize[. This only works if the object
   // is in fact in a page.
   static Page* FromAddress(Address addr) {
     return reinterpret_cast<Page*>(OffsetFrom(addr) & ~kPageAlignmentMask);
+  }
+  static Page* FromHeapObject(const HeapObject* o) {
+    return reinterpret_cast<Page*>(reinterpret_cast<Address>(o) &
+                                   ~kAlignmentMask);
   }
 
   // Returns the page containing the address provided. The address can
@@ -1059,9 +1079,7 @@ class MemoryChunkValidator {
 class CodeRange {
  public:
   CodeRange(Isolate* isolate, size_t requested_size);
-  ~CodeRange() {
-    if (virtual_memory_.IsReserved()) virtual_memory_.Free();
-  }
+  ~CodeRange();
 
   bool valid() { return virtual_memory_.IsReserved(); }
   Address start() {
@@ -1134,10 +1152,31 @@ class CodeRange {
   // The block at current_allocation_block_index_ is the current block.
   std::vector<FreeBlock> allocation_list_;
   size_t current_allocation_block_index_;
+  size_t requested_code_range_size_;
 
   DISALLOW_COPY_AND_ASSIGN(CodeRange);
 };
 
+// The process-wide singleton that keeps track of code range regions with the
+// intention to reuse free code range regions as a workaround for CFG memory
+// leaks (see crbug.com/870054).
+class CodeRangeAddressHint {
+ public:
+  // Returns the most recently freed code range start address for the given
+  // size. If there is no such entry, then a random address is returned.
+  V8_EXPORT_PRIVATE void* GetAddressHint(size_t code_range_size);
+
+  V8_EXPORT_PRIVATE void NotifyFreedCodeRange(void* code_range_start,
+                                              size_t code_range_size);
+
+ private:
+  base::Mutex mutex_;
+  // A map from code range size to an array of recently freed code range
+  // addresses. There should be O(1) different code range sizes.
+  // The length of each array is limited by the peak number of code ranges,
+  // which should be also O(1).
+  std::map<size_t, std::vector<void*>> recently_freed_;
+};
 
 class SkipList {
  public:
@@ -1167,7 +1206,7 @@ class SkipList {
   }
 
   static inline int RegionNumber(Address addr) {
-    return (OffsetFrom(addr) & Page::kPageAlignmentMask) >> kRegionSizeLog2;
+    return (OffsetFrom(addr) & kPageAlignmentMask) >> kRegionSizeLog2;
   }
 
   static void Update(Address addr, int size) {
@@ -1368,8 +1407,8 @@ class V8_EXPORT_PRIVATE MemoryAllocator {
   // Returns an indication of whether a pointer is in a space that has
   // been allocated by this MemoryAllocator.
   V8_INLINE bool IsOutsideAllocatedSpace(Address address) {
-    return address < lowest_ever_allocated_.Value() ||
-           address >= highest_ever_allocated_.Value();
+    return address < lowest_ever_allocated_ ||
+           address >= highest_ever_allocated_;
   }
 
   // Returns a MemoryChunk in which the memory region from commit_area_size to
@@ -1452,11 +1491,13 @@ class V8_EXPORT_PRIVATE MemoryAllocator {
     // values only if they did not change in between.
     Address ptr = kNullAddress;
     do {
-      ptr = lowest_ever_allocated_.Value();
-    } while ((low < ptr) && !lowest_ever_allocated_.TrySetValue(ptr, low));
+      ptr = lowest_ever_allocated_;
+    } while ((low < ptr) &&
+             !lowest_ever_allocated_.compare_exchange_weak(ptr, low));
     do {
-      ptr = highest_ever_allocated_.Value();
-    } while ((high > ptr) && !highest_ever_allocated_.TrySetValue(ptr, high));
+      ptr = highest_ever_allocated_;
+    } while ((high > ptr) &&
+             !highest_ever_allocated_.compare_exchange_weak(ptr, high));
   }
 
   void RegisterExecutableMemoryChunk(MemoryChunk* chunk) {
@@ -1487,8 +1528,8 @@ class V8_EXPORT_PRIVATE MemoryAllocator {
   // conservative, i.e. not all addresses in 'allocated' space are allocated
   // to our heap. The range is [lowest, highest[, inclusive on the low end
   // and exclusive on the high end.
-  base::AtomicValue<Address> lowest_ever_allocated_;
-  base::AtomicValue<Address> highest_ever_allocated_;
+  std::atomic<Address> lowest_ever_allocated_;
+  std::atomic<Address> highest_ever_allocated_;
 
   VirtualMemory last_chunk_;
   Unmapper unmapper_;
@@ -1959,7 +2000,10 @@ class LocalAllocationBuffer {
   // Indicates that a buffer cannot be used for allocations anymore. Can result
   // from either reassigning a buffer, or trying to construct it from an
   // invalid {AllocationResult}.
-  static inline LocalAllocationBuffer InvalidBuffer();
+  static LocalAllocationBuffer InvalidBuffer() {
+    return LocalAllocationBuffer(
+        nullptr, LinearAllocationArea(kNullAddress, kNullAddress));
+  }
 
   // Creates a new LAB from a given {AllocationResult}. Results in
   // InvalidBuffer if the result indicates a retry.
@@ -2680,11 +2724,11 @@ class NewSpace : public SpaceWithLinearArea {
   void ResetOriginalTop() {
     DCHECK_GE(top(), original_top());
     DCHECK_LE(top(), original_limit());
-    original_top_.SetValue(top());
+    original_top_ = top();
   }
 
-  Address original_top() { return original_top_.Value(); }
-  Address original_limit() { return original_limit_.Value(); }
+  Address original_top() { return original_top_; }
+  Address original_limit() { return original_limit_; }
 
   // Return the address of the first allocatable address in the active
   // semispace. This may be the address where the first object resides.
@@ -2773,8 +2817,8 @@ class NewSpace : public SpaceWithLinearArea {
 
   // The top and the limit at the time of setting the linear allocation area.
   // These values can be accessed by background tasks.
-  base::AtomicValue<Address> original_top_;
-  base::AtomicValue<Address> original_limit_;
+  std::atomic<Address> original_top_;
+  std::atomic<Address> original_limit_;
 
   // The semispaces.
   SemiSpace to_space_;
@@ -2953,8 +2997,6 @@ class LargeObjectSpace : public Space {
     return chunk_size - Page::kPageSize - Page::kObjectStartOffset;
   }
 
-  // Shared implementation of AllocateRaw, AllocateRawCode and
-  // AllocateRawFixedArray.
   V8_WARN_UNUSED_RESULT AllocationResult AllocateRaw(int object_size,
                                                      Executability executable);
 
@@ -3021,6 +3063,9 @@ class LargeObjectSpace : public Space {
   void Print() override;
 #endif
 
+ protected:
+  LargePage* AllocateLargePage(int object_size, Executability executable);
+
  private:
   size_t size_;          // allocated bytes
   int page_count_;       // number of chunks
@@ -3039,6 +3084,8 @@ class LargeObjectSpace : public Space {
 class NewLargeObjectSpace : public LargeObjectSpace {
  public:
   explicit NewLargeObjectSpace(Heap* heap);
+
+  V8_WARN_UNUSED_RESULT AllocationResult AllocateRaw(int object_size);
 
   // Available bytes for objects in this space.
   size_t Available() override;

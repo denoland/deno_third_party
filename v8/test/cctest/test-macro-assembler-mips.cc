@@ -28,7 +28,7 @@
 #include <stdlib.h>
 #include <iostream>  // NOLINT(readability/streams)
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/base/utils/random-number-generator.h"
 #include "src/macro-assembler.h"
 #include "src/mips/macro-assembler-mips.h"
@@ -202,7 +202,7 @@ TEST(jump_tables4) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F1>::FromCode(*code);
   for (int i = 0; i < kNumCases; ++i) {
@@ -236,7 +236,7 @@ TEST(jump_tables5) {
   {
     __ BlockTrampolinePoolFor(kNumCases + 6 + 1);
     PredictableCodeSizeScope predictable(
-        masm, kNumCases * kPointerSize + ((6 + 1) * Assembler::kInstrSize));
+        masm, kNumCases * kPointerSize + ((6 + 1) * kInstrSize));
 
     __ addiupc(at, 6 + 1);
     __ Lsa(at, at, a0, 2);
@@ -268,7 +268,7 @@ TEST(jump_tables5) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F1>::FromCode(*code);
   for (int i = 0; i < kNumCases; ++i) {
@@ -294,7 +294,6 @@ TEST(jump_tables6) {
 
   const int kSwitchTableCases = 40;
 
-  const int kInstrSize = Assembler::kInstrSize;
   const int kMaxBranchOffset = Assembler::kMaxBranchOffset;
   const int kTrampolineSlotsSize = Assembler::kTrampolineSlotsSize;
   const int kSwitchTablePrologueSize = MacroAssembler::kSwitchTablePrologueSize;
@@ -358,7 +357,7 @@ TEST(jump_tables6) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F1>::FromCode(*code);
   for (int i = 0; i < kSwitchTableCases; ++i) {
@@ -1129,7 +1128,7 @@ static GeneratedCode<F4> GenerateMacroFloat32MinMax(MacroAssembler* masm) {
       masm->isolate()->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef DEBUG
   StdoutStream os;
-  code->Print(masm->isolate(), os);
+  code->Print(os);
 #endif
   return GeneratedCode<F4>::FromCode(*code);
 }
@@ -1271,7 +1270,7 @@ static GeneratedCode<F4> GenerateMacroFloat64MinMax(MacroAssembler* masm) {
       masm->isolate()->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef DEBUG
   StdoutStream os;
-  code->Print(masm->isolate(), os);
+  code->Print(os);
 #endif
   return GeneratedCode<F4>::FromCode(*code);
 }

@@ -1095,7 +1095,7 @@ class RuntimeCallTimerScope {
                                RuntimeCallCounterId counter_id);
   // This constructor is here just to avoid calling GetIsolate() when the
   // stats are disabled and the isolate is not directly available.
-  inline RuntimeCallTimerScope(HeapObject* heap_object,
+  inline RuntimeCallTimerScope(Isolate* isolate, HeapObject* heap_object,
                                RuntimeCallCounterId counter_id);
   inline RuntimeCallTimerScope(RuntimeCallStats* stats,
                                RuntimeCallCounterId counter_id) {
@@ -1171,8 +1171,8 @@ class RuntimeCallTimerScope {
      20)                                                                       \
   HR(wasm_lazy_compilation_throughput, V8.WasmLazyCompilationThroughput, 1,    \
      10000, 50)                                                                \
-  HR(compile_script_cache_behaviour, V8.CompileScript.CacheBehaviour, 0, 19,   \
-     20)                                                                       \
+  HR(compile_script_cache_behaviour, V8.CompileScript.CacheBehaviour, 0, 20,   \
+     21)                                                                       \
   HR(wasm_memory_allocation_result, V8.WasmMemoryAllocationResult, 0, 3, 4)    \
   HR(wasm_address_space_usage_mb, V8.WasmAddressSpaceUsageMiB, 0, 1 << 20,     \
      128)                                                                      \
@@ -1290,12 +1290,6 @@ class RuntimeCallTimerScope {
   HM(heap_sample_code_space_committed, V8.MemoryHeapSampleCodeSpaceCommitted) \
   HM(heap_sample_maximum_committed, V8.MemoryHeapSampleMaximumCommitted)
 
-// Note: These define both Histogram and AggregatedMemoryHistogram<Histogram>
-// histograms with options (min=4000, max=2000000, buckets=100).
-#define HISTOGRAM_MEMORY_LIST(HM)                   \
-  HM(memory_heap_committed, V8.MemoryHeapCommitted) \
-  HM(memory_heap_used, V8.MemoryHeapUsed)
-
 // WARNING: STATS_COUNTER_LIST_* is a very large macro that is causing MSVC
 // Intellisense to crash.  It was broken into two macros (each of length 40
 // lines) rather than one macro (of length about 80 lines) to work around
@@ -1316,7 +1310,6 @@ class RuntimeCallTimerScope {
   SC(objs_since_last_full, V8.ObjsSinceLastFull)                    \
   SC(string_table_capacity, V8.StringTableCapacity)                 \
   SC(number_of_symbols, V8.NumberOfSymbols)                         \
-  SC(script_wrappers, V8.ScriptWrappers)                            \
   SC(inlined_copied_elements, V8.InlinedCopiedElements)             \
   SC(arguments_adaptors, V8.ArgumentsAdaptors)                      \
   SC(compilation_cache_hits, V8.CompilationCacheHits)               \
@@ -1477,14 +1470,6 @@ class Counters : public std::enable_shared_from_this<Counters> {
 #define HM(name, caption) \
   Histogram* name() { return &name##_; }
   HISTOGRAM_LEGACY_MEMORY_LIST(HM)
-  HISTOGRAM_MEMORY_LIST(HM)
-#undef HM
-
-#define HM(name, caption)                                     \
-  AggregatedMemoryHistogram<Histogram>* aggregated_##name() { \
-    return &aggregated_##name##_;                             \
-  }
-  HISTOGRAM_MEMORY_LIST(HM)
 #undef HM
 
 #define SC(name, caption) \
@@ -1512,7 +1497,6 @@ class Counters : public std::enable_shared_from_this<Counters> {
 #undef PERCENTAGE_ID
 #define MEMORY_ID(name, caption) k_##name,
     HISTOGRAM_LEGACY_MEMORY_LIST(MEMORY_ID)
-    HISTOGRAM_MEMORY_LIST(MEMORY_ID)
 #undef MEMORY_ID
 #define COUNTER_ID(name, caption) k_##name,
     STATS_COUNTER_LIST_1(COUNTER_ID)
@@ -1584,12 +1568,6 @@ class Counters : public std::enable_shared_from_this<Counters> {
 #define HM(name, caption) \
   Histogram name##_;
   HISTOGRAM_LEGACY_MEMORY_LIST(HM)
-  HISTOGRAM_MEMORY_LIST(HM)
-#undef HM
-
-#define HM(name, caption) \
-  AggregatedMemoryHistogram<Histogram> aggregated_##name##_;
-  HISTOGRAM_MEMORY_LIST(HM)
 #undef HM
 
 #define SC(name, caption) \

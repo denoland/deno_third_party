@@ -67,6 +67,7 @@ class Declarations {
   Label* LookupLabel(const std::string& name);
 
   GenericList* LookupGeneric(const std::string& name);
+  ModuleConstant* LookupModuleConstant(const std::string& name);
 
   const AbstractType* DeclareAbstractType(
       const std::string& name, const std::string& generated,
@@ -74,6 +75,9 @@ class Declarations {
       const base::Optional<std::string>& parent = {});
 
   void DeclareType(const std::string& name, const Type* type);
+
+  void DeclareStruct(Module* module, const std::string& name,
+                     const std::vector<NameAndType>& fields);
 
   Label* DeclareLabel(const std::string& name);
 
@@ -86,7 +90,8 @@ class Declarations {
   RuntimeFunction* DeclareRuntimeFunction(const std::string& name,
                                           const Signature& signature);
 
-  Variable* DeclareVariable(const std::string& var, const Type* type);
+  Variable* DeclareVariable(const std::string& var, const Type* type,
+                            bool is_const);
 
   Parameter* DeclareParameter(const std::string& name,
                               const std::string& mangled_name,
@@ -94,19 +99,24 @@ class Declarations {
 
   Label* DeclarePrivateLabel(const std::string& name);
 
-  void DeclareConstant(const std::string& name, const Type* type,
-                       const std::string& value);
+  void DeclareExternConstant(const std::string& name, const Type* type,
+                             const std::string& value);
+  ModuleConstant* DeclareModuleConstant(const std::string& name,
+                                        const Type* type);
 
   Generic* DeclareGeneric(const std::string& name, Module* module,
                           GenericDeclaration* generic);
 
   TypeVector GetCurrentSpecializationTypeNamesVector();
+  base::Optional<Generic*> GetCurrentGeneric();
 
   ScopeChain::Snapshot GetScopeChainSnapshot() { return chain_.TaskSnapshot(); }
 
   std::set<const Variable*> GetLiveVariables() {
     return chain_.GetLiveVariables();
   }
+
+  bool IsDeclaredInCurrentScope(const std::string& name);
 
   Statement* next_body() const { return next_body_; }
 

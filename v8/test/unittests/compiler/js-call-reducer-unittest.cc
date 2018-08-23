@@ -4,7 +4,7 @@
 
 #include <cctype>
 
-#include "src/compilation-dependencies.h"
+#include "src/compiler/compilation-dependencies.h"
 #include "src/compiler/js-call-reducer.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/simplified-operator.h"
@@ -24,7 +24,7 @@ class JSCallReducerTest : public TypedGraphTest {
       : TypedGraphTest(3),
         javascript_(zone()),
         deps_(isolate(), zone()),
-        js_heap_broker(isolate()) {}
+        js_heap_broker(isolate(), zone()) {}
   ~JSCallReducerTest() override {}
 
  protected:
@@ -60,7 +60,7 @@ class JSCallReducerTest : public TypedGraphTest {
   Node* GlobalFunction(const char* name) {
     Handle<JSFunction> f = Handle<JSFunction>::cast(
         Object::GetProperty(
-            isolate()->global_object(),
+            isolate(), isolate()->global_object(),
             isolate()->factory()->NewStringFromAsciiChecked(name))
             .ToHandleChecked());
     return HeapConstant(f);
@@ -74,7 +74,8 @@ class JSCallReducerTest : public TypedGraphTest {
             .ToHandleChecked();
     Handle<JSFunction> f = Handle<JSFunction>::cast(
         Object::GetProperty(
-            m, isolate()->factory()->NewStringFromAsciiChecked(name.c_str()))
+            isolate(), m,
+            isolate()->factory()->NewStringFromAsciiChecked(name.c_str()))
             .ToHandleChecked());
     return HeapConstant(f);
   }
@@ -87,7 +88,7 @@ class JSCallReducerTest : public TypedGraphTest {
             .ToHandleChecked();
     Handle<JSFunction> f = Handle<JSFunction>::cast(
         Object::GetProperty(
-            m, isolate()->factory()->NewStringFromAsciiChecked(name))
+            isolate(), m, isolate()->factory()->NewStringFromAsciiChecked(name))
             .ToHandleChecked());
     return HeapConstant(f);
   }
@@ -100,7 +101,7 @@ class JSCallReducerTest : public TypedGraphTest {
             .ToHandleChecked();
     Handle<JSFunction> f = Handle<JSFunction>::cast(
         Object::GetProperty(
-            m, isolate()->factory()->NewStringFromAsciiChecked(name))
+            isolate(), m, isolate()->factory()->NewStringFromAsciiChecked(name))
             .ToHandleChecked());
     return HeapConstant(f);
   }

@@ -257,7 +257,7 @@ class MarkCompactCollectorBase {
   virtual void CollectGarbage() = 0;
 
   inline Heap* heap() const { return heap_; }
-  inline Isolate* isolate() { return heap()->isolate(); }
+  inline Isolate* isolate();
 
  protected:
   static const int kMainThread = 0;
@@ -420,7 +420,6 @@ typedef Worklist<Ephemeron, 64> EphemeronWorklist;
 
 // Weak objects encountered during marking.
 struct WeakObjects {
-  Worklist<WeakCell*, 64> weak_cells;
   Worklist<TransitionArray*, 64> transition_arrays;
 
   // Keep track of all EphemeronHashTables in the heap to process
@@ -449,6 +448,12 @@ struct WeakObjects {
   // object. Optimize this by adding a different storage for old space.
   Worklist<std::pair<HeapObject*, HeapObjectReference**>, 64> weak_references;
   Worklist<std::pair<HeapObject*, Code*>, 64> weak_objects_in_code;
+};
+
+struct EphemeronMarking {
+  std::vector<HeapObject*> newly_discovered;
+  bool newly_discovered_overflowed;
+  size_t newly_discovered_limit;
 };
 
 // Collector for young and old generation.
@@ -641,10 +646,6 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
 
   WeakObjects* weak_objects() { return &weak_objects_; }
 
-  void AddWeakCell(WeakCell* weak_cell) {
-    weak_objects_.weak_cells.Push(kMainThread, weak_cell);
-  }
-
   void AddTransitionArray(TransitionArray* array) {
     weak_objects_.transition_arrays.Push(kMainThread, array);
   }
@@ -665,6 +666,22 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
   void AddWeakObjectInCode(HeapObject* object, Code* code) {
     weak_objects_.weak_objects_in_code.Push(kMainThread,
                                             std::make_pair(object, code));
+  }
+
+  void AddNewlyDiscovered(HeapObject* object) {
+    if (ephemeron_marking_.newly_discovered_overflowed) return;
+
+    if (ephemeron_marking_.newly_discovered.size() <
+        ephemeron_marking_.newly_discovered_limit) {
+      ephemeron_marking_.newly_discovered.push_back(object);
+    } else {
+      ephemeron_marking_.newly_discovered_overflowed = true;
+    }
+  }
+
+  void ResetNewlyDiscovered() {
+    ephemeron_marking_.newly_discovered_overflowed = false;
+    ephemeron_marking_.newly_discovered.clear();
   }
 
   Sweeper* sweeper() { return sweeper_; }
@@ -735,6 +752,14 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
   // if no concurrent threads are running.
   void ProcessMarkingWorklist() override;
 
+  enum class MarkingWorklistProcessingMode {
+    kDefault,
+    kTrackNewlyDiscoveredObjects
+  };
+
+  template <MarkingWorklistProcessingMode mode>
+  void ProcessMarkingWorklistInternal();
+
   // Implements ephemeron semantics: Marks value if key is already reachable.
   // Returns true if value was actually marked.
   bool VisitEphemeron(HeapObject* key, HeapObject* value);
@@ -746,6 +771,13 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
   // Drains ephemeron and marking worklists. Single iteration of the
   // fixpoint iteration.
   bool ProcessEphemerons();
+
+  // Mark ephemerons and drain marking worklist with a linear algorithm.
+  // Only used if fixpoint iteration doesn't finish within a few iterations.
+  void ProcessEphemeronsLinear();
+
+  // Perform Wrapper Tracing if in use.
+  void PerformWrapperTracing();
 
   // Callback function for telling whether the object *p is an unmarked
   // heap object.
@@ -768,21 +800,15 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
   void TrimDescriptorArray(Map* map, DescriptorArray* descriptors);
   void TrimEnumCache(Map* map, DescriptorArray* descriptors);
 
-  // Mark all values associated with reachable keys in weak collections
-  // encountered so far.  This might push new object or even new weak maps onto
-  // the marking stack.
-  void ProcessWeakCollections();
-
   // After all reachable objects have been marked those weak map entries
   // with an unreachable key are removed from all encountered weak maps.
   // The linked list of all encountered weak maps is destroyed.
   void ClearWeakCollections();
 
-  // Goes through the list of encountered weak cells and clears those with
+  // Goes through the list of encountered weak references and clears those with
   // dead values. If the value is a dead map and the parent map transitions to
   // the dead map via weak cell, then this function also clears the map
   // transition.
-  void ClearWeakCells();
   void ClearWeakReferences();
   void AbortWeakObjects();
 
@@ -848,6 +874,7 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
 
   MarkingWorklist marking_worklist_;
   WeakObjects weak_objects_;
+  EphemeronMarking ephemeron_marking_;
 
   // Candidates for pages that should be evacuated.
   std::vector<Page*> evacuation_candidates_;
@@ -893,7 +920,6 @@ class MarkingVisitor final
   V8_INLINE int VisitMap(Map* map, Map* object);
   V8_INLINE int VisitNativeContext(Map* map, Context* object);
   V8_INLINE int VisitTransitionArray(Map* map, TransitionArray* object);
-  V8_INLINE int VisitWeakCell(Map* map, WeakCell* object);
 
   // ObjectVisitor implementation.
   V8_INLINE void VisitPointer(HeapObject* host, Object** p) final;

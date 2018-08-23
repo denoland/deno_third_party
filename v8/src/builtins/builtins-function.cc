@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/builtins/builtins-utils.h"
+#include "src/builtins/builtins-utils-inl.h"
 #include "src/builtins/builtins.h"
 #include "src/code-factory.h"
 #include "src/compiler.h"
@@ -11,7 +11,7 @@
 #include "src/lookup.h"
 #include "src/objects-inl.h"
 #include "src/objects/api-callbacks.h"
-#include "src/string-builder.h"
+#include "src/string-builder-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -270,14 +270,14 @@ Object* DoFunctionBind(Isolate* isolate, BuiltinArguments args) {
     if (target_name->IsString()) {
       ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
           isolate, name,
-          Name::ToFunctionName(Handle<String>::cast(target_name)));
+          Name::ToFunctionName(isolate, Handle<String>::cast(target_name)));
       ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
           isolate, name, isolate->factory()->NewConsString(
                              isolate->factory()->bound__string(), name));
     } else {
       name = isolate->factory()->bound__string();
     }
-    LookupIterator it(function, isolate->factory()->name_string());
+    LookupIterator it(isolate, function, isolate->factory()->name_string());
     DCHECK_EQ(LookupIterator::ACCESSOR, it.state());
     RETURN_FAILURE_ON_EXCEPTION(isolate,
                                 JSObject::DefineOwnPropertyIgnoreAttributes(

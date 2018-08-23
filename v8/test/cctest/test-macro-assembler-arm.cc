@@ -33,6 +33,7 @@
 #include "src/simulator.h"
 #include "src/v8.h"
 #include "test/cctest/cctest.h"
+#include "test/common/assembler-tester.h"
 
 namespace v8 {
 namespace internal {
@@ -237,7 +238,7 @@ TEST(ExtractLane) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef DEBUG
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
   f.Call(&t, 0, 0, 0, 0);
@@ -369,7 +370,7 @@ TEST(ReplaceLane) {
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef DEBUG
   StdoutStream os;
-  code->Print(isolate, os);
+  code->Print(os);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
   f.Call(&t, 0, 0, 0, 0);

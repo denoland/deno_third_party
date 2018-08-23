@@ -311,6 +311,7 @@ class String : public Name {
   // Externalization.
   bool MakeExternal(v8::String::ExternalStringResource* resource);
   bool MakeExternal(v8::String::ExternalOneByteStringResource* resource);
+  bool SupportsExternalization();
 
   // Conversion.
   inline bool AsArrayIndex(uint32_t* index);
@@ -463,7 +464,7 @@ class String : public Name {
   V8_EXPORT_PRIVATE bool SlowAsArrayIndex(uint32_t* index);
 
   // Compute and set the hash code.
-  uint32_t ComputeAndSetHash();
+  uint32_t ComputeAndSetHash(Isolate* isolate);
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(String);
 };
@@ -593,7 +594,7 @@ class ConsString : public String {
   // Doesn't check that the result is a string, even in debug mode.  This is
   // useful during GC where the mark bits confuse the checks.
   inline Object* unchecked_first();
-  inline void set_first(String* first,
+  inline void set_first(Isolate* isolate, String* first,
                         WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
   // Second string of the cons cell.
@@ -601,7 +602,7 @@ class ConsString : public String {
   // Doesn't check that the result is a string, even in debug mode.  This is
   // useful during GC where the mark bits confuse the checks.
   inline Object* unchecked_second();
-  inline void set_second(String* second,
+  inline void set_second(Isolate* isolate, String* second,
                          WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
   // Dispatched behavior.
@@ -675,7 +676,7 @@ class ThinString : public String {
 class SlicedString : public String {
  public:
   inline String* parent();
-  inline void set_parent(String* parent,
+  inline void set_parent(Isolate* isolate, String* parent,
                          WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
   inline int offset() const;
   inline void set_offset(int offset);
@@ -751,6 +752,11 @@ class ExternalOneByteString : public ExternalString {
 
   // The underlying resource.
   inline const Resource* resource();
+
+  // It is assumed that the previous resource is null. If it is not null, then
+  // it is the responsability of the caller the handle the previous resource.
+  inline void SetResource(Isolate* isolate, const Resource* buffer);
+  // Used only during serialization.
   inline void set_resource(const Resource* buffer);
 
   // Update the pointer cache to the external character array.
@@ -784,6 +790,11 @@ class ExternalTwoByteString : public ExternalString {
 
   // The underlying string resource.
   inline const Resource* resource();
+
+  // It is assumed that the previous resource is null. If it is not null, then
+  // it is the responsability of the caller the handle the previous resource.
+  inline void SetResource(Isolate* isolate, const Resource* buffer);
+  // Used only during serialization.
   inline void set_resource(const Resource* buffer);
 
   // Update the pointer cache to the external character array.

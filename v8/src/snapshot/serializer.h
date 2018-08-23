@@ -20,7 +20,7 @@ namespace internal {
 
 class CodeAddressMap : public CodeEventLogger {
  public:
-  explicit CodeAddressMap(Isolate* isolate) : isolate_(isolate) {
+  explicit CodeAddressMap(Isolate* isolate) : CodeEventLogger(isolate) {
     isolate->logger()->AddCodeEventListener(this);
   }
 
@@ -28,8 +28,8 @@ class CodeAddressMap : public CodeEventLogger {
     isolate_->logger()->RemoveCodeEventListener(this);
   }
 
-  void CodeMoveEvent(AbstractCode* from, Address to) override {
-    address_to_name_map_.Move(from->address(), to);
+  void CodeMoveEvent(AbstractCode* from, AbstractCode* to) override {
+    address_to_name_map_.Move(from->address(), to->address());
   }
 
   void CodeDisableOptEvent(AbstractCode* code,
@@ -125,7 +125,6 @@ class CodeAddressMap : public CodeEventLogger {
   }
 
   NameMap address_to_name_map_;
-  Isolate* isolate_;
 };
 
 template <class AllocatorT = DefaultSerializerAllocator>
@@ -141,7 +140,7 @@ class Serializer : public SerializerDeserializer {
   const std::vector<byte>* Payload() const { return sink_.data(); }
 
   bool ReferenceMapContains(HeapObject* o) {
-    return reference_map()->Lookup(o).is_valid();
+    return reference_map()->LookupReference(o).is_valid();
   }
 
   Isolate* isolate() const { return isolate_; }
@@ -171,6 +170,7 @@ class Serializer : public SerializerDeserializer {
 
   void VisitRootPointers(Root root, const char* description, Object** start,
                          Object** end) override;
+  void SerializeRootObject(Object* object);
 
   void PutRoot(int index, HeapObject* object, HowToCode how, WhereToPoint where,
                int skip);
@@ -219,7 +219,7 @@ class Serializer : public SerializerDeserializer {
   Code* CopyCode(Code* code);
 
   void QueueDeferredObject(HeapObject* obj) {
-    DCHECK(reference_map_.Lookup(obj).is_back_reference());
+    DCHECK(reference_map_.LookupReference(obj).is_back_reference());
     deferred_objects_.push_back(obj);
   }
 
@@ -254,10 +254,8 @@ class Serializer : public SerializerDeserializer {
 
 #ifdef OBJECT_PRINT
   static const int kInstanceTypes = LAST_TYPE + 1;
-  int* instance_type_count_;
-  size_t* instance_type_size_;
-  int* read_only_instance_type_count_;
-  size_t* read_only_instance_type_size_;
+  int* instance_type_count_[LAST_SPACE];
+  size_t* instance_type_size_[LAST_SPACE];
 #endif  // OBJECT_PRINT
 
 #ifdef DEBUG

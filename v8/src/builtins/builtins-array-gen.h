@@ -68,15 +68,6 @@ class ArrayBuiltinsAssembler : public BaseBuiltinsFromDSLAssembler {
 
   void NullPostLoopAction();
 
-  // TODO(szuend): Remove once overload resolution is fixed in Torque.
-  TNode<Object> LoadFixedArrayElementInt(TNode<FixedArray> array, int index) {
-    return LoadFixedArrayElement(array, index);
-  }
-  Node* StoreFixedArrayElementInt(TNode<FixedArray> array, int index,
-                                  TNode<Object> value) {
-    return StoreFixedArrayElement(array, index, value);
-  }
-
  protected:
   TNode<Context> context() { return context_; }
   TNode<Object> receiver() { return receiver_; }
@@ -149,6 +140,9 @@ class ArrayBuiltinsAssembler : public BaseBuiltinsFromDSLAssembler {
 
   void GenerateInternalArrayNoArgumentConstructor(ElementsKind kind);
   void GenerateInternalArraySingleArgumentConstructor(ElementsKind kind);
+
+  TNode<Object> GenerateFastArrayShift(TNode<Context> context,
+                                       TNode<Object> receiver, Label* slow);
 
  private:
   static ElementsKind ElementsKindForInstanceType(InstanceType type);

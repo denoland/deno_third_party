@@ -2,12 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/runtime/runtime-utils.h"
-
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/base/bits.h"
 #include "src/bootstrapper.h"
 #include "src/isolate-inl.h"
+#include "src/runtime/runtime-utils.h"
 
 namespace v8 {
 namespace internal {
@@ -44,7 +43,8 @@ RUNTIME_FUNCTION(Runtime_StringParseInt) {
 
   // Convert {radix} to Int32.
   if (!radix->IsNumber()) {
-    ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, radix, Object::ToNumber(radix));
+    ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, radix,
+                                       Object::ToNumber(isolate, radix));
   }
   int radix32 = DoubleToInt32(radix->Number());
   if (radix32 != 0 && (radix32 < 2 || radix32 > 36)) {

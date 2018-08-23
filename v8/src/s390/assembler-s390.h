@@ -472,7 +472,7 @@ class DeferredRelocInfo {
   intptr_t data_;
 };
 
-class Assembler : public AssemblerBase {
+class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
  public:
   // Create an assembler. Instructions and relocation information are emitted
   // into a buffer, with the instructions starting from the beginning and the
@@ -488,7 +488,7 @@ class Assembler : public AssemblerBase {
   // buffer for code generation and assumes its size to be buffer_size. If the
   // buffer is too small, a fatal error occurs. No deallocation of the buffer is
   // done upon destruction of the assembler.
-  Assembler(const Options& options, void* buffer, int buffer_size);
+  Assembler(const AssemblerOptions& options, void* buffer, int buffer_size);
   virtual ~Assembler() {}
 
   // GetCode emits any pending (non-emitted) code and fills the descriptor
@@ -980,7 +980,7 @@ enum FIDBRA_FLAGS {
 
 inline void rsi_format(Opcode op, int f1, int f2, int f3) {
   DCHECK(is_uint8(op));
-  DCHECK(is_uint16(f3));
+  DCHECK(is_uint16(f3) || is_int16(f3));
   uint32_t code = getfield<uint32_t, 4, 0, 8>(op) |
                   getfield<uint32_t, 4, 8, 12>(f1) |
                   getfield<uint32_t, 4, 12, 16>(f2) |
@@ -1074,7 +1074,7 @@ inline void si_format(Opcode op, int f1, int f2, int f3) {
 inline void siy_format(Opcode op, int f1, int f2, int f3) {
   DCHECK(is_uint20(f3) || is_int20(f3));
   DCHECK(is_uint16(op));
-  DCHECK(is_uint8(f1));
+  DCHECK(is_uint8(f1) || is_int8(f1));
   uint64_t code = getfield<uint64_t, 6, 0, 8>(op >> 8) |
                   getfield<uint64_t, 6, 8, 16>(f1) |
                   getfield<uint64_t, 6, 16, 20>(f2) |
@@ -1331,6 +1331,46 @@ inline void ss_a_format(Opcode op, int f1, int f2, int f3, int f4, int f5) {
     brxhg(dst, inc, Operand(offset_halfwords));
   }
 
+  template <class R1, class R2>
+  void ledbr(R1 r1, R2 r2) {
+    ledbra(Condition(0), Condition(0), r1, r2);
+  }
+
+  template <class R1, class R2>
+  void cdfbr(R1 r1, R2 r2) {
+    cdfbra(Condition(0), Condition(0), r1, r2);
+  }
+
+  template <class R1, class R2>
+  void cdgbr(R1 r1, R2 r2) {
+    cdgbra(Condition(0), Condition(0), r1, r2);
+  }
+
+  template <class R1, class R2>
+  void cegbr(R1 r1, R2 r2) {
+    cegbra(Condition(0), Condition(0), r1, r2);
+  }
+
+  template <class R1, class R2>
+  void cgebr(Condition m3, R1 r1, R2 r2) {
+    cgebra(m3, Condition(0), r1, r2);
+  }
+
+  template <class R1, class R2>
+  void cgdbr(Condition m3, R1 r1, R2 r2) {
+    cgdbra(m3, Condition(0), r1, r2);
+  }
+
+  template <class R1, class R2>
+  void cfdbr(Condition m3, R1 r1, R2 r2) {
+    cfdbra(m3, Condition(0), r1, r2);
+  }
+
+  template <class R1, class R2>
+  void cfebr(Condition m3, R1 r1, R2 r2) {
+    cfebra(m3, Condition(0), r1, r2);
+  }
+
   // ---------------------------------------------------------------------------
   // Code generation
 
@@ -1558,9 +1598,6 @@ inline void ss_a_format(Opcode op, int f1, int f2, int f3, int f4, int f5) {
   inline void TrackBranch();
   inline void UntrackBranch();
 
-  inline int32_t emit_code_target(
-      Handle<Code> target, RelocInfo::Mode rmode);
-
   // Helper to emit the binary encoding of a 2 byte instruction
   void emit2bytes(uint16_t x) {
     CheckBuffer();
@@ -1625,8 +1662,6 @@ inline void ss_a_format(Opcode op, int f1, int f2, int f3, int f4, int f5) {
   friend class RegExpMacroAssemblerS390;
   friend class RelocInfo;
   friend class EnsureSpace;
-
-  std::vector<Handle<Code>> code_targets_;
 };
 
 class EnsureSpace BASE_EMBEDDED {

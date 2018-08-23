@@ -8,6 +8,7 @@
 #include "src/code-stub-assembler.h"
 #include "src/heap/heap-inl.h"
 #include "src/ic/accessor-assembler.h"
+#include "src/ic/keyed-store-generic.h"
 #include "src/macro-assembler.h"
 #include "src/objects/debug-objects.h"
 #include "src/objects/shared-function-info.h"
@@ -100,7 +101,7 @@ TF_BUILTIN(NewArgumentsElements, CodeStubAssembler) {
     BIND(&if_notempty);
     {
       // Allocate a FixedArray in new space.
-      Node* result = AllocateFixedArray(kind, length);
+      TNode<FixedArray> result = CAST(AllocateFixedArray(kind, length));
 
       // The elements might be used to back mapped arguments. In that case fill
       // the mapped elements (i.e. the first {mapped_count}) with the hole, but
@@ -109,14 +110,13 @@ TF_BUILTIN(NewArgumentsElements, CodeStubAssembler) {
       Node* the_hole = TheHoleConstant();
 
       // Fill the first elements up to {number_of_holes} with the hole.
-      VARIABLE(var_index, MachineType::PointerRepresentation());
+      TVARIABLE(IntPtrT, var_index, IntPtrConstant(0));
       Label loop1(this, &var_index), done_loop1(this);
-      var_index.Bind(IntPtrConstant(0));
       Goto(&loop1);
       BIND(&loop1);
       {
         // Load the current {index}.
-        Node* index = var_index.value();
+        TNode<IntPtrT> index = var_index.value();
 
         // Check if we are done.
         GotoIf(WordEqual(index, number_of_holes), &done_loop1);
@@ -125,13 +125,13 @@ TF_BUILTIN(NewArgumentsElements, CodeStubAssembler) {
         StoreFixedArrayElement(result, index, the_hole, SKIP_WRITE_BARRIER);
 
         // Continue with next {index}.
-        var_index.Bind(IntPtrAdd(index, IntPtrConstant(1)));
+        var_index = IntPtrAdd(index, IntPtrConstant(1));
         Goto(&loop1);
       }
       BIND(&done_loop1);
 
       // Compute the effective {offset} into the {frame}.
-      Node* offset = IntPtrAdd(length, IntPtrConstant(1));
+      TNode<IntPtrT> offset = IntPtrAdd(length, IntPtrConstant(1));
 
       // Copy the parameters from {frame} (starting at {offset}) to {result}.
       Label loop2(this, &var_index), done_loop2(this);
@@ -139,20 +139,21 @@ TF_BUILTIN(NewArgumentsElements, CodeStubAssembler) {
       BIND(&loop2);
       {
         // Load the current {index}.
-        Node* index = var_index.value();
+        TNode<IntPtrT> index = var_index.value();
 
         // Check if we are done.
         GotoIf(WordEqual(index, length), &done_loop2);
 
         // Load the parameter at the given {index}.
-        Node* value = Load(MachineType::AnyTagged(), frame,
-                           TimesPointerSize(IntPtrSub(offset, index)));
+        TNode<Object> value =
+            CAST(Load(MachineType::AnyTagged(), frame,
+                      TimesPointerSize(IntPtrSub(offset, index))));
 
         // Store the {value} into the {result}.
         StoreFixedArrayElement(result, index, value, SKIP_WRITE_BARRIER);
 
         // Continue with next {index}.
-        var_index.Bind(IntPtrAdd(index, IntPtrConstant(1)));
+        var_index = IntPtrAdd(index, IntPtrConstant(1));
         Goto(&loop2);
       }
       BIND(&done_loop2);
@@ -185,8 +186,8 @@ TF_BUILTIN(DebugBreakTrampoline, CodeStubAssembler) {
   // Check break-at-entry flag on the debug info.
   TNode<SharedFunctionInfo> shared =
       CAST(LoadObjectField(function, JSFunction::kSharedFunctionInfoOffset));
-  TNode<Object> maybe_heap_object_or_smi = LoadObjectField(
-      shared, SharedFunctionInfo::kFunctionIdentifierOrDebugInfoOffset);
+  TNode<Object> maybe_heap_object_or_smi =
+      LoadObjectField(shared, SharedFunctionInfo::kScriptOrDebugInfoOffset);
   TNode<HeapObject> maybe_debug_info =
       TaggedToHeapObject(maybe_heap_object_or_smi, &tailcall_to_shared);
   GotoIfNot(HasInstanceType(maybe_debug_info, InstanceType::DEBUG_INFO_TYPE),
@@ -221,53 +222,11 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
   }
 
   Node* IsPageFlagSet(Node* object, int mask) {
-    Node* page = WordAnd(object, IntPtrConstant(~Page::kPageAlignmentMask));
+    Node* page = WordAnd(object, IntPtrConstant(~kPageAlignmentMask));
     Node* flags = Load(MachineType::Pointer(), page,
                        IntPtrConstant(MemoryChunk::kFlagsOffset));
     return WordNotEqual(WordAnd(flags, IntPtrConstant(mask)),
                         IntPtrConstant(0));
-  }
-
-  void GotoIfNotBlack(Node* object, Label* not_black) {
-    Label exit(this);
-    Label* black = &exit;
-
-    DCHECK_EQ(strcmp(Marking::kBlackBitPattern, "11"), 0);
-
-    Node* cell;
-    Node* mask;
-
-    GetMarkBit(object, &cell, &mask);
-    mask = TruncateIntPtrToInt32(mask);
-
-    Node* bits = Load(MachineType::Int32(), cell);
-    Node* bit_0 = Word32And(bits, mask);
-
-    GotoIf(Word32Equal(bit_0, Int32Constant(0)), not_black);
-
-    mask = Word32Shl(mask, Int32Constant(1));
-
-    Label word_boundary(this), in_word(this);
-
-    // If mask becomes zero, we know mask was `1 << 31`, i.e., the bit is on
-    // word boundary. Otherwise, the bit is within the word.
-    Branch(Word32Equal(mask, Int32Constant(0)), &word_boundary, &in_word);
-
-    BIND(&word_boundary);
-    {
-      Node* bit_1 = Word32And(
-          Load(MachineType::Int32(), IntPtrAdd(cell, IntPtrConstant(4))),
-          Int32Constant(1));
-      Branch(Word32Equal(bit_1, Int32Constant(0)), not_black, black);
-    }
-
-    BIND(&in_word);
-    {
-      Branch(Word32Equal(Word32And(bits, mask), Int32Constant(0)), not_black,
-             black);
-    }
-
-    BIND(&exit);
   }
 
   Node* IsWhite(Node* object) {
@@ -283,7 +242,7 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
   }
 
   void GetMarkBit(Node* object, Node** cell, Node** mask) {
-    Node* page = WordAnd(object, IntPtrConstant(~Page::kPageAlignmentMask));
+    Node* page = WordAnd(object, IntPtrConstant(~kPageAlignmentMask));
 
     {
       // Temp variable to calculate cell offset in bitmap.
@@ -291,7 +250,7 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
       int shift = Bitmap::kBitsPerCellLog2 + kPointerSizeLog2 -
                   Bitmap::kBytesPerCellLog2;
       r0 = WordShr(object, IntPtrConstant(shift));
-      r0 = WordAnd(r0, IntPtrConstant((Page::kPageAlignmentMask >> shift) &
+      r0 = WordAnd(r0, IntPtrConstant((kPageAlignmentMask >> shift) &
                                       ~(Bitmap::kBytesPerCell - 1)));
       *cell = IntPtrAdd(IntPtrAdd(page, r0),
                         IntPtrConstant(MemoryChunk::kHeaderSize));
@@ -374,7 +333,7 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
                         store_buffer_top_addr, new_store_buffer_top);
 
     Node* test = WordAnd(new_store_buffer_top,
-                         IntPtrConstant(StoreBuffer::kStoreBufferMask));
+                         IntPtrConstant(Heap::store_buffer_mask_constant()));
 
     Label overflow(this);
     Branch(WordEqual(test, IntPtrConstant(0)), &overflow, next);
@@ -443,10 +402,6 @@ TF_BUILTIN(RecordWrite, RecordWriteCodeStubAssembler) {
   BIND(&incremental_wb);
   {
     Label call_incremental_wb(this);
-
-#ifndef V8_CONCURRENT_MARKING
-    GotoIfNotBlack(object, &exit);
-#endif
 
     // There are two cases we need to call incremental write barrier.
     // 1) value_is_white
@@ -625,7 +580,7 @@ TF_BUILTIN(ForInFilter, CodeStubAssembler) {
   CSA_ASSERT(this, IsString(key));
 
   Label if_true(this), if_false(this);
-  TNode<Oddball> result = HasProperty(object, key, context, kForInHasProperty);
+  TNode<Oddball> result = HasProperty(context, object, key, kForInHasProperty);
   Branch(IsTrue(result), &if_true, &if_false);
 
   BIND(&if_true);
@@ -890,7 +845,7 @@ TF_BUILTIN(EnqueueMicrotask, InternalBuiltinsAssembler) {
       // This is the likely case where the new queue fits into new space,
       // and thus we don't need any write barriers for initializing it.
       TNode<FixedArray> new_queue =
-          AllocateFixedArray(PACKED_ELEMENTS, new_queue_length);
+          CAST(AllocateFixedArray(PACKED_ELEMENTS, new_queue_length));
       CopyFixedArrayElements(PACKED_ELEMENTS, queue, new_queue, num_tasks,
                              SKIP_WRITE_BARRIER);
       StoreFixedArrayElement(new_queue, num_tasks, microtask,
@@ -904,9 +859,9 @@ TF_BUILTIN(EnqueueMicrotask, InternalBuiltinsAssembler) {
     BIND(&if_lospace);
     {
       // The fallback case where the new queue ends up in large object space.
-      TNode<FixedArray> new_queue = AllocateFixedArray(
+      TNode<FixedArray> new_queue = CAST(AllocateFixedArray(
           PACKED_ELEMENTS, new_queue_length, INTPTR_PARAMETERS,
-          AllocationFlag::kAllowLargeObjectAllocation);
+          AllocationFlag::kAllowLargeObjectAllocation));
       CopyFixedArrayElements(PACKED_ELEMENTS, queue, new_queue, num_tasks);
       StoreFixedArrayElement(new_queue, num_tasks, microtask);
       FillFixedArrayWithValue(PACKED_ELEMENTS, new_queue, new_num_tasks,
@@ -1302,6 +1257,17 @@ TF_BUILTIN(GetProperty, CodeStubAssembler) {
 
   BIND(&end);
   Return(var_result.value());
+}
+
+// ES6 [[Set]] operation.
+TF_BUILTIN(SetProperty, CodeStubAssembler) {
+  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
+  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
+  TNode<Object> key = CAST(Parameter(Descriptor::kKey));
+  TNode<Object> value = CAST(Parameter(Descriptor::kValue));
+
+  KeyedStoreGenericGenerator::SetProperty(state(), context, receiver, key,
+                                          value, LanguageMode::kStrict);
 }
 
 }  // namespace internal

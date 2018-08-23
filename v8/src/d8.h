@@ -8,11 +8,13 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <queue>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "src/allocation.h"
+#include "src/async-hooks-wrapper.h"
 #include "src/base/platform/time.h"
 #include "src/string-hasher.h"
 #include "src/utils.h"
@@ -137,13 +139,15 @@ class ExternalizedContents {
       : base_(contents.AllocationBase()),
         length_(contents.AllocationLength()),
         mode_(contents.AllocationMode()) {}
-  ExternalizedContents(ExternalizedContents&& other)
-      : base_(other.base_), length_(other.length_), mode_(other.mode_) {
+  ExternalizedContents(ExternalizedContents&& other) V8_NOEXCEPT
+      : base_(other.base_),
+        length_(other.length_),
+        mode_(other.mode_) {
     other.base_ = nullptr;
     other.length_ = 0;
     other.mode_ = ArrayBuffer::Allocator::AllocationMode::kNormal;
   }
-  ExternalizedContents& operator=(ExternalizedContents&& other) {
+  ExternalizedContents& operator=(ExternalizedContents&& other) V8_NOEXCEPT {
     if (this != &other) {
       base_ = other.base_;
       length_ = other.length_;
@@ -264,6 +268,49 @@ class Worker {
   base::Atomic32 running_;
 };
 
+class PerIsolateData {
+ public:
+  explicit PerIsolateData(Isolate* isolate);
+
+  ~PerIsolateData();
+
+  inline static PerIsolateData* Get(Isolate* isolate) {
+    return reinterpret_cast<PerIsolateData*>(isolate->GetData(0));
+  }
+
+  class RealmScope {
+   public:
+    explicit RealmScope(PerIsolateData* data);
+    ~RealmScope();
+
+   private:
+    PerIsolateData* data_;
+  };
+
+  inline void SetTimeout(Local<Function> callback, Local<Context> context);
+  inline MaybeLocal<Function> GetTimeoutCallback();
+  inline MaybeLocal<Context> GetTimeoutContext();
+
+  AsyncHooks* GetAsyncHooks() { return async_hooks_wrapper_; }
+
+ private:
+  friend class Shell;
+  friend class RealmScope;
+  Isolate* isolate_;
+  int realm_count_;
+  int realm_current_;
+  int realm_switch_;
+  Global<Context>* realms_;
+  Global<Value> realm_shared_;
+  std::queue<Global<Function>> set_timeout_callbacks_;
+  std::queue<Global<Context>> set_timeout_contexts_;
+  AsyncHooks* async_hooks_wrapper_;
+
+  int RealmIndexOrThrow(const v8::FunctionCallbackInfo<v8::Value>& args,
+                        int arg_offset);
+  int RealmFind(Local<Context> context);
+};
+
 class ShellOptions {
  public:
   enum CodeCacheOptions {
@@ -273,8 +320,7 @@ class ShellOptions {
   };
 
   ShellOptions()
-      : script_executed(false),
-        send_idle_notification(false),
+      : send_idle_notification(false),
         invoke_weak_callbacks(false),
         omit_quit(false),
         wait_for_wasm(true),
@@ -305,11 +351,6 @@ class ShellOptions {
     delete[] isolate_sources;
   }
 
-  bool use_interactive_shell() {
-    return (interactive_shell || !script_executed) && !test_shell;
-  }
-
-  bool script_executed;
   bool send_idle_notification;
   bool invoke_weak_callbacks;
   bool omit_quit;
@@ -400,6 +441,13 @@ class Shell : public i::AllStatic {
                              Local<Value> value,
                              const  PropertyCallbackInfo<void>& info);
 
+  static void AsyncHooksCreateHook(
+      const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void AsyncHooksExecutionAsyncId(
+      const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void AsyncHooksTriggerAsyncId(
+      const v8::FunctionCallbackInfo<v8::Value>& args);
+
   static void Print(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void PrintErr(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void Write(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -476,6 +524,12 @@ class Shell : public i::AllStatic {
 
   static char* ReadCharsFromTcpPort(const char* name, int* size_out);
 
+  static void set_script_executed() { script_executed_.store(true); }
+  static bool use_interactive_shell() {
+    return (options.interactive_shell || !script_executed_.load()) &&
+           !options.test_shell;
+  }
+
  private:
   static Global<Context> evaluation_context_;
   static base::OnceType quit_once_;
@@ -489,10 +543,13 @@ class Shell : public i::AllStatic {
   static base::LazyMutex context_mutex_;
   static const base::TimeTicks kInitialTicks;
 
-  static base::LazyMutex workers_mutex_;
+  static base::LazyMutex workers_mutex_;  // Guards the following members.
   static bool allow_new_workers_;
   static std::vector<Worker*> workers_;
   static std::vector<ExternalizedContents> externalized_contents_;
+
+  // Multiple isolates may update this flag concurrently.
+  static std::atomic<bool> script_executed_;
 
   static void WriteIgnitionDispatchCountersFile(v8::Isolate* isolate);
   // Append LCOV coverage data to file.

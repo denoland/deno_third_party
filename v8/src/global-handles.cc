@@ -4,7 +4,7 @@
 
 #include "src/global-handles.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/cancelable-task.h"
 #include "src/objects-inl.h"
 #include "src/v8.h"
@@ -191,12 +191,6 @@ class GlobalHandles::Node {
     set_state(PENDING);
   }
 
-  // Independent flag accessors.
-  void MarkIndependent() {
-    DCHECK(IsInUse());
-    set_independent(true);
-  }
-
   // Callback parameter accessors.
   void set_parameter(void* parameter) {
     DCHECK(IsInUse());
@@ -262,7 +256,7 @@ class GlobalHandles::Node {
   }
 
   void CollectPhantomCallbackData(
-      Isolate* isolate,
+
       std::vector<PendingPhantomCallback>* pending_phantom_callbacks) {
     DCHECK(weakness_type() == PHANTOM_WEAK ||
            weakness_type() == PHANTOM_WEAK_2_EMBEDDER_FIELDS);
@@ -552,8 +546,7 @@ Handle<Object> GlobalHandles::Create(Object* value) {
   Node* result = first_free_;
   first_free_ = result->next_free();
   result->Acquire(value);
-  if (isolate_->heap()->InNewSpace(value) &&
-      !result->is_in_new_space_list()) {
+  if (Heap::InNewSpace(value) && !result->is_in_new_space_list()) {
     new_space_nodes_.push_back(result);
     result->set_in_new_space_list(true);
   }
@@ -563,7 +556,14 @@ Handle<Object> GlobalHandles::Create(Object* value) {
 
 Handle<Object> GlobalHandles::CopyGlobal(Object** location) {
   DCHECK_NOT_NULL(location);
-  return Node::FromLocation(location)->GetGlobalHandles()->Create(*location);
+  GlobalHandles* global_handles =
+      Node::FromLocation(location)->GetGlobalHandles();
+#ifdef VERIFY_HEAP
+  if (i::FLAG_verify_heap) {
+    (*location)->ObjectVerify(global_handles->isolate());
+  }
+#endif  // VERIFY_HEAP
+  return global_handles->Create(*location);
 }
 
 
@@ -592,14 +592,6 @@ void* GlobalHandles::ClearWeakness(Object** location) {
 void GlobalHandles::AnnotateStrongRetainer(Object** location,
                                            const char* label) {
   Node::FromLocation(location)->AnnotateStrongRetainer(label);
-}
-
-void GlobalHandles::MarkIndependent(Object** location) {
-  Node::FromLocation(location)->MarkIndependent();
-}
-
-bool GlobalHandles::IsIndependent(Object** location) {
-  return Node::FromLocation(location)->is_independent();
 }
 
 bool GlobalHandles::IsNearDeath(Object** location) {
@@ -638,8 +630,7 @@ void GlobalHandles::IterateWeakRootsForPhantomHandles(
         ++number_of_phantom_handle_resets_;
       } else if (node->IsPhantomCallback()) {
         node->MarkPending();
-        node->CollectPhantomCallbackData(isolate(),
-                                         &pending_phantom_callbacks_);
+        node->CollectPhantomCallbackData(&pending_phantom_callbacks_);
       }
     }
   }
@@ -737,8 +728,7 @@ void GlobalHandles::IterateNewSpaceWeakUnmodifiedRootsForPhantomHandles(
 
         } else if (node->IsPhantomCallback()) {
           node->MarkPending();
-          node->CollectPhantomCallbackData(isolate(),
-                                           &pending_phantom_callbacks_);
+          node->CollectPhantomCallbackData(&pending_phantom_callbacks_);
         } else {
           UNREACHABLE();
         }
@@ -838,7 +828,7 @@ void GlobalHandles::UpdateListOfNewSpaceNodes() {
   for (Node* node : new_space_nodes_) {
     DCHECK(node->is_in_new_space_list());
     if (node->IsRetainer()) {
-      if (isolate_->heap()->InNewSpace(node->object())) {
+      if (Heap::InNewSpace(node->object())) {
         new_space_nodes_[last++] = node;
         isolate_->heap()->IncrementNodesCopiedInNewSpace();
       } else {
@@ -1128,11 +1118,10 @@ void EternalHandles::IterateNewSpaceRoots(RootVisitor* visitor) {
   }
 }
 
-
-void EternalHandles::PostGarbageCollectionProcessing(Heap* heap) {
+void EternalHandles::PostGarbageCollectionProcessing() {
   size_t last = 0;
   for (int index : new_space_indices_) {
-    if (heap->InNewSpace(*GetLocation(index))) {
+    if (Heap::InNewSpace(*GetLocation(index))) {
       new_space_indices_[last++] = index;
     }
   }
@@ -1144,19 +1133,19 @@ void EternalHandles::PostGarbageCollectionProcessing(Heap* heap) {
 void EternalHandles::Create(Isolate* isolate, Object* object, int* index) {
   DCHECK_EQ(kInvalidIndex, *index);
   if (object == nullptr) return;
-  DCHECK_NE(isolate->heap()->the_hole_value(), object);
+  Object* the_hole = ReadOnlyRoots(isolate).the_hole_value();
+  DCHECK_NE(the_hole, object);
   int block = size_ >> kShift;
   int offset = size_ & kMask;
   // need to resize
   if (offset == 0) {
     Object** next_block = new Object*[kSize];
-    Object* the_hole = isolate->heap()->the_hole_value();
     MemsetPointer(next_block, the_hole, kSize);
     blocks_.push_back(next_block);
   }
-  DCHECK_EQ(isolate->heap()->the_hole_value(), blocks_[block][offset]);
+  DCHECK_EQ(the_hole, blocks_[block][offset]);
   blocks_[block][offset] = object;
-  if (isolate->heap()->InNewSpace(object)) {
+  if (Heap::InNewSpace(object)) {
     new_space_indices_.push_back(size_);
   }
   *index = size_++;

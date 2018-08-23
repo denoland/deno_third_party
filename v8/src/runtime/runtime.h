@@ -79,7 +79,6 @@ namespace internal {
 
 #define FOR_EACH_INTRINSIC_CLASSES(F)       \
   F(DefineClass, -1 /* >= 3 */, 1)          \
-  F(GetSuperConstructor, 1, 1)              \
   F(HomeObjectSymbol, 0, 1)                 \
   F(LoadFromSuper, 3, 1)                    \
   F(LoadKeyedFromSuper, 3, 1)               \
@@ -97,8 +96,6 @@ namespace internal {
 #define FOR_EACH_INTRINSIC_COLLECTIONS(F) \
   F(GetWeakMapEntries, 2, 1)              \
   F(GetWeakSetValues, 2, 1)               \
-  F(IsJSWeakMap, 1, 1)                    \
-  F(IsJSWeakSet, 1, 1)                    \
   F(MapGrow, 1, 1)                        \
   F(MapIteratorClone, 1, 1)               \
   F(MapShrink, 1, 1)                      \
@@ -129,7 +126,7 @@ namespace internal {
   F(CollectGarbage, 1, 1)                       \
   F(DebugBreakAtEntry, 1, 1)                    \
   F(DebugCollectCoverage, 0, 1)                 \
-  F(DebugGetLoadedScripts, 0, 1)                \
+  F(DebugGetLoadedScriptIds, 0, 1)              \
   F(DebugIsActive, 0, 1)                        \
   F(DebugOnFunctionCall, 2, 1)                  \
   F(DebugPopPromise, 0, 1)                      \
@@ -141,19 +138,14 @@ namespace internal {
   F(DebugTogglePreciseCoverage, 1, 1)           \
   F(FunctionGetInferredName, 1, 1)              \
   F(GetBreakLocations, 1, 1)                    \
-  F(GetDebugContext, 0, 1)                      \
   F(GetGeneratorScopeCount, 1, 1)               \
   F(GetGeneratorScopeDetails, 2, 1)             \
   F(GetHeapUsage, 0, 1)                         \
-  F(GetScript, 1, 1)                            \
   F(HandleDebuggerStatement, 0, 1)              \
   F(IncBlockCounter, 2, 1)                      \
   F(IsBreakOnException, 1, 1)                   \
   F(ScheduleBreak, 0, 1)                        \
   F(ScriptLocationFromLine2, 4, 1)              \
-  F(ScriptLocationFromLine, 4, 1)               \
-  F(ScriptPositionInfo2, 3, 1)                  \
-  F(ScriptPositionInfo, 3, 1)                   \
   F(SetGeneratorScopeVariableValue, 4, 1)       \
   F(LiveEditPatchScript, 2, 1)
 
@@ -184,7 +176,7 @@ namespace internal {
 #define FOR_EACH_INTRINSIC_FUNCTION(F)     \
   F(Call, -1 /* >= 2 */, 1)                \
   F(FunctionGetName, 1, 1)                 \
-  F(FunctionGetScript, 1, 1)               \
+  F(FunctionGetScriptSource, 1, 1)         \
   F(FunctionGetScriptId, 1, 1)             \
   F(FunctionGetScriptSourcePosition, 1, 1) \
   F(FunctionGetSourceCode, 1, 1)           \
@@ -214,27 +206,33 @@ namespace internal {
   F(BreakIteratorFirst, 1, 1)                \
   F(BreakIteratorNext, 1, 1)                 \
   F(CanonicalizeLanguageTag, 1, 1)           \
+  F(CollatorResolvedOptions, 1, 1)           \
   F(CreateBreakIterator, 3, 1)               \
-  F(CreateCollator, 3, 1)                    \
   F(CreateDateTimeFormat, 3, 1)              \
   F(CreateNumberFormat, 3, 1)                \
-  F(CreatePluralRules, 3, 1)                 \
   F(CurrencyDigits, 1, 1)                    \
   F(DateCacheVersion, 0, 1)                  \
+  F(DefaultNumberOption, 5, 1)               \
+  F(DefineWEProperty, 3, 1)                  \
+  F(FormatList, 2, 1)                        \
+  F(FormatListToParts, 2, 1)                 \
+  F(FormatDate, 2, 1)                        \
   F(GetDefaultICULocale, 0, 1)               \
-  F(InternalCompare, 3, 1)                   \
-  F(InternalDateFormat, 2, 1)                \
-  F(InternalNumberFormat, 2, 1)              \
+  F(GetNumberOption, 5, 1)                   \
   F(IntlUnwrapReceiver, 5, 1)                \
   F(IsInitializedIntlObjectOfType, 2, 1)     \
+  F(IsWellFormedCurrencyCode, 1, 1)          \
   F(MarkAsInitializedIntlObjectOfType, 2, 1) \
+  F(ParseExtension, 1, 1)                    \
+  F(PluralRulesResolvedOptions, 1, 1)        \
   F(PluralRulesSelect, 2, 1)                 \
-  F(StringLocaleConvertCase, 3, 1)           \
   F(StringToLowerCaseIntl, 1, 1)             \
-  F(StringToUpperCaseIntl, 1, 1)
+  F(StringToUpperCaseIntl, 1, 1)             \
+  F(SupportedLocalesOf, 3, 1)                \
+// End of macro.
 #else
 #define FOR_EACH_INTRINSIC_INTL(F)
-#endif
+#endif  // V8_INTL_SUPPORT
 
 #define FOR_EACH_INTRINSIC_INTERNAL(F)                               \
   F(AllocateInNewSpace, 1, 1)                                        \
@@ -282,23 +280,11 @@ namespace internal {
   F(Typeof, 1, 1)                                                    \
   F(UnwindAndFindExceptionHandler, 0, 1)
 
-#define FOR_EACH_INTRINSIC_LITERALS(F) \
-  F(CreateArrayLiteral, 4, 1)          \
-  F(CreateObjectLiteral, 4, 1)         \
+#define FOR_EACH_INTRINSIC_LITERALS(F)              \
+  F(CreateArrayLiteral, 4, 1)                       \
+  F(CreateObjectLiteral, 4, 1)                      \
+  F(CreateObjectLiteralWithoutAllocationSite, 2, 1) \
   F(CreateRegExpLiteral, 4, 1)
-
-#define FOR_EACH_INTRINSIC_LIVEEDIT(F)              \
-  F(LiveEditCheckAndDropActivations, 3, 1)          \
-  F(LiveEditCompareStrings, 2, 1)                   \
-  F(LiveEditFindSharedFunctionInfosForScript, 1, 1) \
-  F(LiveEditFixupScript, 2, 1)                      \
-  F(LiveEditFunctionSetScript, 2, 1)                \
-  F(LiveEditFunctionSourceUpdated, 2, 1)            \
-  F(LiveEditGatherCompileInfo, 2, 1)                \
-  F(LiveEditPatchFunctionPositions, 2, 1)           \
-  F(LiveEditReplaceFunctionCode, 2, 1)              \
-  F(LiveEditReplaceRefToNestedFunction, 3, 1)       \
-  F(LiveEditReplaceScript, 3, 1)
 
 #define FOR_EACH_INTRINSIC_MATHS(F) F(GenerateRandomNumbers, 0, 1)
 
@@ -402,12 +388,14 @@ namespace internal {
   F(PromiseRevokeReject, 1, 1)         \
   F(PromiseStatus, 1, 1)               \
   F(RejectPromise, 3, 1)               \
-  F(ResolvePromise, 2, 1)
+  F(ResolvePromise, 2, 1)              \
+  F(PromiseRejectAfterResolved, 2, 1)  \
+  F(PromiseResolveAfterResolved, 2, 1)
 
 #define FOR_EACH_INTRINSIC_PROXY(F)   \
   F(CheckProxyGetSetTrapResult, 2, 1) \
   F(CheckProxyHasTrap, 2, 1)          \
-  F(GetPropertyWithReceiver, 2, 1)    \
+  F(GetPropertyWithReceiver, 3, 1)    \
   F(IsJSProxy, 1, 1)                  \
   F(JSProxyGetHandler, 1, 1)          \
   F(JSProxyGetTarget, 1, 1)           \
@@ -531,10 +519,10 @@ namespace internal {
   F(InNewSpace, 1, 1)                         \
   F(IsAsmWasmCode, 1, 1)                      \
   F(IsConcurrentRecompilationSupported, 0, 1) \
+  F(WasmTierUpFunction, 2, 1)                 \
   F(IsLiftoffFunction, 1, 1)                  \
   F(IsWasmCode, 1, 1)                         \
   F(IsWasmTrapHandlerEnabled, 0, 1)           \
-  F(NativeScriptsCount, 0, 1)                 \
   F(NeverOptimizeFunction, 1, 1)              \
   F(NotifyContextDisposed, 0, 1)              \
   F(OptimizeFunctionOnNextCall, -1, 1)        \
@@ -558,7 +546,8 @@ namespace internal {
   F(WasmGetNumberOfInstances, 1, 1)           \
   F(WasmNumInterpretedCalls, 1, 1)            \
   F(WasmTraceMemory, 1, 1)                    \
-  F(WasmMemoryHasFullGuardRegion, 1, 1)
+  F(WasmMemoryHasFullGuardRegion, 1, 1)       \
+  F(SetWasmThreadsEnabled, 1, 1)
 
 #define FOR_EACH_INTRINSIC_TYPEDARRAY(F) \
   F(ArrayBufferNeuter, 1, 1)             \
@@ -595,6 +584,8 @@ namespace internal {
   F(KeyedLoadIC_Miss, 4, 1)                  \
   F(KeyedStoreIC_Miss, 5, 1)                 \
   F(KeyedStoreIC_Slow, 5, 1)                 \
+  F(LoadAccessorProperty, 4, 1)              \
+  F(LoadCallbackProperty, 4, 1)              \
   F(LoadElementWithInterceptor, 2, 1)        \
   F(LoadGlobalIC_Miss, 3, 1)                 \
   F(LoadGlobalIC_Slow, 3, 1)                 \
@@ -605,7 +596,9 @@ namespace internal {
   F(StoreGlobalIC_Slow, 5, 1)                \
   F(StoreIC_Miss, 5, 1)                      \
   F(StoreInArrayLiteralIC_Slow, 5, 1)        \
-  F(StorePropertyWithInterceptor, 5, 1)
+  F(StorePropertyWithInterceptor, 5, 1)      \
+  F(CloneObjectIC_Miss, 4, 1)                \
+  F(CloneObjectIC_Slow, 2, 1)
 
 #define FOR_EACH_INTRINSIC_RETURN_OBJECT(F) \
   FOR_EACH_INTRINSIC_ARRAY(F)               \
@@ -624,7 +617,6 @@ namespace internal {
   FOR_EACH_INTRINSIC_INTERPRETER(F)         \
   FOR_EACH_INTRINSIC_INTL(F)                \
   FOR_EACH_INTRINSIC_LITERALS(F)            \
-  FOR_EACH_INTRINSIC_LIVEEDIT(F)            \
   FOR_EACH_INTRINSIC_MATHS(F)               \
   FOR_EACH_INTRINSIC_MODULE(F)              \
   FOR_EACH_INTRINSIC_NUMBERS(F)             \

@@ -59,7 +59,7 @@ class TransitionsAccessor {
   Map* SearchSpecial(Symbol* name);
   // Returns true for non-property transitions like elements kind, or
   // or frozen/sealed transitions.
-  static bool IsSpecialTransition(Isolate* isolate, Name* name);
+  static bool IsSpecialTransition(ReadOnlyRoots roots, Name* name);
 
   enum RequestedLocation { kAnyLocation, kFieldOnly };
   MaybeHandle<Map> FindTransitionToDataProperty(
@@ -80,8 +80,7 @@ class TransitionsAccessor {
   bool CanHaveMoreTransitions();
   inline Name* GetKey(int transition_number);
   inline Map* GetTarget(int transition_number);
-  static inline PropertyDetails GetTargetDetails(Isolate* isolate, Name* name,
-                                                 Map* target);
+  static inline PropertyDetails GetTargetDetails(Name* name, Map* target);
 
   static bool IsMatchingMap(Map* target, Name* name, PropertyKind kind,
                             PropertyAttributes attributes);
@@ -109,8 +108,7 @@ class TransitionsAccessor {
 
 #if DEBUG || OBJECT_PRINT
   void PrintTransitions(std::ostream& os);
-  static void PrintOneTransition(Isolate* isolate, std::ostream& os, Name* key,
-                                 Map* target);
+  static void PrintOneTransition(std::ostream& os, Name* key, Map* target);
   void PrintTransitionTree();
   void PrintTransitionTree(std::ostream& os, int level,
                            DisallowHeapAllocation* no_gc);
@@ -119,7 +117,7 @@ class TransitionsAccessor {
   void CheckNewTransitionsAreConsistent(TransitionArray* old_transitions,
                                         Object* transitions);
   bool IsConsistentWithBackPointers();
-  bool IsSortedNoDuplicates(Isolate* isolate);
+  bool IsSortedNoDuplicates();
 #endif
 
  protected:
@@ -232,14 +230,14 @@ class TransitionArray : public WeakFixedArray {
   int GetSortedKeyIndex(int transition_number) { return transition_number; }
   inline int number_of_entries() const { return number_of_transitions(); }
 #ifdef DEBUG
-  bool IsSortedNoDuplicates(Isolate* isolate, int valid_entries = -1);
+  bool IsSortedNoDuplicates(int valid_entries = -1);
 #endif
 
-  void Sort(Isolate* isolate);
+  void Sort();
 
-  void PrintInternal(Isolate* isolate, std::ostream& os);
+  void PrintInternal(std::ostream& os);
 
-  DECL_PRINTER_WITH_ISOLATE(TransitionArray)
+  DECL_PRINTER(TransitionArray)
   DECL_VERIFIER(TransitionArray)
 
   // Layout for full transition arrays.
@@ -299,8 +297,8 @@ class TransitionArray : public WeakFixedArray {
   }
 
   // Search a  transition for a given kind, property name and attributes.
-  int Search(Isolate* isolate, PropertyKind kind, Name* name,
-             PropertyAttributes attributes, int* out_insertion_index = nullptr);
+  int Search(PropertyKind kind, Name* name, PropertyAttributes attributes,
+             int* out_insertion_index = nullptr);
 
   // Search a non-property transition (like elements kind, observe or frozen
   // transitions).
@@ -309,7 +307,7 @@ class TransitionArray : public WeakFixedArray {
   }
   // Search a first transition for a given property name.
   inline int SearchName(Name* name, int* out_insertion_index = nullptr);
-  int SearchDetails(Isolate* isolate, int transition, PropertyKind kind,
+  int SearchDetails(int transition, PropertyKind kind,
                     PropertyAttributes attributes, int* out_insertion_index);
 
   inline int number_of_transitions() const;

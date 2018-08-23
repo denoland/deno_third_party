@@ -76,8 +76,10 @@ class ProducedPreParsedScopeData : public ZoneObject {
     void WriteUint8(uint8_t data);
     void WriteQuarter(uint8_t data);
 
+#ifdef DEBUG
     // For overwriting previously written data at position 0.
     void OverwriteFirstUint32(uint32_t data);
+#endif
 
     Handle<PodArray<uint8_t>> Serialize(Isolate* isolate);
 
@@ -210,10 +212,7 @@ class ConsumedPreParsedScopeData {
     uint8_t ReadUint8();
     uint8_t ReadQuarter();
 
-    size_t RemainingBytes() const {
-      DCHECK_NOT_NULL(data_);
-      return data_->length() - index_;
-    }
+    size_t RemainingBytes() const;
 
     // private:
     PodArray<uint8_t>* data_;

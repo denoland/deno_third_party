@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/ast/ast.h"
 #include "src/compiler.h"
 #include "src/objects-inl.h"
@@ -734,13 +734,15 @@ TEST(PreParserScopeAnalysis) {
 
       if (inners[inner_ix].bailout == Bailout::BAILOUT_IF_OUTER_SLOPPY &&
           !outers[outer_ix].strict_outer) {
-        CHECK(!shared->HasPreParsedScopeData());
+        CHECK(!shared->HasUncompiledDataWithPreParsedScope());
         continue;
       }
 
-      CHECK(shared->HasPreParsedScopeData());
+      CHECK(shared->HasUncompiledDataWithPreParsedScope());
       i::Handle<i::PreParsedScopeData> produced_data_on_heap(
-          i::PreParsedScopeData::cast(shared->preparsed_scope_data()), isolate);
+          shared->uncompiled_data_with_pre_parsed_scope()
+              ->pre_parsed_scope_data(),
+          isolate);
 
       // Parse the lazy function using the scope data.
       i::ParseInfo using_scope_data(isolate, shared);
@@ -820,7 +822,9 @@ TEST(ProducingAndConsumingByteData) {
   bytes.WriteUint8(255);
   bytes.WriteUint32(0);
   bytes.WriteUint8(0);
+#ifdef DEBUG
   bytes.OverwriteFirstUint32(2017);
+#endif
   bytes.WriteUint8(100);
   // Write quarter bytes between uint8s and uint32s to verify they're stored
   // correctly.
@@ -843,7 +847,11 @@ TEST(ProducingAndConsumingByteData) {
       &bytes_for_reading, *data_on_heap);
 
   // Read the data back.
+#ifdef DEBUG
   CHECK_EQ(bytes_for_reading.ReadUint32(), 2017);
+#else
+  CHECK_EQ(bytes_for_reading.ReadUint32(), 1983);
+#endif
   CHECK_EQ(bytes_for_reading.ReadUint32(), 2147483647);
   CHECK_EQ(bytes_for_reading.ReadUint8(), 4);
   CHECK_EQ(bytes_for_reading.ReadUint8(), 255);

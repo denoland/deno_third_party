@@ -5,6 +5,7 @@
 #ifndef V8_ROOTS_H_
 #define V8_ROOTS_H_
 
+#include "src/handles.h"
 #include "src/heap-symbols.h"
 #include "src/objects-definitions.h"
 
@@ -40,7 +41,6 @@ namespace internal {
   V(Map, code_map, CodeMap)                                                    \
   V(Map, function_context_map, FunctionContextMap)                             \
   V(Map, cell_map, CellMap)                                                    \
-  V(Map, weak_cell_map, WeakCellMap)                                           \
   V(Map, global_property_cell_map, GlobalPropertyCellMap)                      \
   V(Map, foreign_map, ForeignMap)                                              \
   V(Map, heap_number_map, HeapNumberMap)                                       \
@@ -73,7 +73,7 @@ namespace internal {
   V(Map, feedback_metadata_map, FeedbackMetadataArrayMap)                      \
   V(Map, array_list_map, ArrayListMap)                                         \
   V(Map, bigint_map, BigIntMap)                                                \
-  V(Map, boilerplate_description_map, BoilerplateDescriptionMap)               \
+  V(Map, object_boilerplate_description_map, ObjectBoilerplateDescriptionMap)  \
   V(Map, bytecode_array_map, BytecodeArrayMap)                                 \
   V(Map, code_data_container_map, CodeDataContainerMap)                        \
   V(Map, descriptor_array_map, DescriptorArrayMap)                             \
@@ -88,6 +88,7 @@ namespace internal {
   V(Map, one_closure_cell_map, OneClosureCellMap)                              \
   V(Map, ordered_hash_map_map, OrderedHashMapMap)                              \
   V(Map, ordered_hash_set_map, OrderedHashSetMap)                              \
+  V(Map, pre_parsed_scope_data_map, PreParsedScopeDataMap)                     \
   V(Map, property_array_map, PropertyArrayMap)                                 \
   V(Map, side_effect_call_handler_info_map, SideEffectCallHandlerInfoMap)      \
   V(Map, side_effect_free_call_handler_info_map,                               \
@@ -99,6 +100,10 @@ namespace internal {
   V(Map, small_ordered_hash_map_map, SmallOrderedHashMapMap)                   \
   V(Map, small_ordered_hash_set_map, SmallOrderedHashSetMap)                   \
   V(Map, string_table_map, StringTableMap)                                     \
+  V(Map, uncompiled_data_without_pre_parsed_scope_map,                         \
+    UncompiledDataWithoutPreParsedScopeMap)                                    \
+  V(Map, uncompiled_data_with_pre_parsed_scope_map,                            \
+    UncompiledDataWithPreParsedScopeMap)                                       \
   V(Map, weak_fixed_array_map, WeakFixedArrayMap)                              \
   V(Map, weak_array_list_map, WeakArrayListMap)                                \
   V(Map, ephemeron_hash_table_map, EphemeronHashTableMap)                      \
@@ -159,8 +164,8 @@ namespace internal {
   V(EnumCache, empty_enum_cache, EmptyEnumCache)                               \
   V(PropertyArray, empty_property_array, EmptyPropertyArray)                   \
   V(ByteArray, empty_byte_array, EmptyByteArray)                               \
-  V(BoilerplateDescription, empty_boilerplate_description,                     \
-    EmptyBoilerplateDescription)                                               \
+  V(ObjectBoilerplateDescription, empty_object_boilerplate_description,        \
+    EmptyObjectBoilerplateDescription)                                         \
   V(FixedTypedArrayBase, empty_fixed_uint8_array, EmptyFixedUint8Array)        \
   V(FixedTypedArrayBase, empty_fixed_int8_array, EmptyFixedInt8Array)          \
   V(FixedTypedArrayBase, empty_fixed_uint16_array, EmptyFixedUint16Array)      \
@@ -181,7 +186,6 @@ namespace internal {
   V(FixedArray, empty_ordered_hash_set, EmptyOrderedHashSet)                   \
   V(FeedbackMetadata, empty_feedback_metadata, EmptyFeedbackMetadata)          \
   V(PropertyCell, empty_property_cell, EmptyPropertyCell)                      \
-  V(WeakCell, empty_weak_cell, EmptyWeakCell)                                  \
   V(InterceptorInfo, noop_interceptor_info, NoOpInterceptorInfo)               \
   V(WeakFixedArray, empty_weak_fixed_array, EmptyWeakFixedArray)               \
   V(WeakArrayList, empty_weak_array_list, EmptyWeakArrayList)                  \
@@ -226,20 +230,20 @@ namespace internal {
   V(NameDictionary, public_symbol_table, PublicSymbolTable)                  \
   V(NameDictionary, api_symbol_table, ApiSymbolTable)                        \
   V(NameDictionary, api_private_symbol_table, ApiPrivateSymbolTable)         \
-  V(Object, script_list, ScriptList)                                         \
+  V(WeakArrayList, script_list, ScriptList)                                  \
   V(SimpleNumberDictionary, code_stubs, CodeStubs)                           \
   V(FixedArray, materialized_objects, MaterializedObjects)                   \
   V(FixedArray, microtask_queue, MicrotaskQueue)                             \
-  V(FixedArray, detached_contexts, DetachedContexts)                         \
-  V(HeapObject, retaining_path_targets, RetainingPathTargets)                \
+  V(WeakArrayList, detached_contexts, DetachedContexts)                      \
+  V(WeakArrayList, retaining_path_targets, RetainingPathTargets)             \
   V(WeakArrayList, retained_maps, RetainedMaps)                              \
   /* Indirection lists for isolate-independent builtins */                   \
   V(FixedArray, builtins_constants_table, BuiltinsConstantsTable)            \
   /* Feedback vectors that we need for code coverage or type profile */      \
   V(Object, feedback_vectors_for_profiling_tools,                            \
     FeedbackVectorsForProfilingTools)                                        \
-  V(Object, weak_stack_trace_list, WeakStackTraceList)                       \
-  V(Object, noscript_shared_function_infos, NoScriptSharedFunctionInfos)     \
+  V(WeakArrayList, noscript_shared_function_infos,                           \
+    NoScriptSharedFunctionInfos)                                             \
   V(FixedArray, serialized_objects, SerializedObjects)                       \
   V(FixedArray, serialized_global_proxy_sizes, SerializedGlobalProxySizes)   \
   V(TemplateList, message_listeners, MessageListeners)                       \
@@ -248,6 +252,8 @@ namespace internal {
   V(Object, deserialize_lazy_handler_wide, DeserializeLazyHandlerWide)       \
   V(Object, deserialize_lazy_handler_extra_wide,                             \
     DeserializeLazyHandlerExtraWide)                                         \
+  /* Hash seed */                                                            \
+  V(ByteArray, hash_seed, HashSeed)                                          \
   /* JS Entries */                                                           \
   V(Code, js_entry_code, JsEntryCode)                                        \
   V(Code, js_construct_entry_code, JsConstructEntryCode)                     \
@@ -263,7 +269,6 @@ namespace internal {
   V(Smi, real_stack_limit, RealStackLimit)                                     \
   V(Smi, last_script_id, LastScriptId)                                         \
   V(Smi, last_debugging_id, LastDebuggingId)                                   \
-  V(Smi, hash_seed, HashSeed)                                                  \
   /* To distinguish the function templates, so that we can find them in the */ \
   /* function cache of the native context. */                                  \
   V(Smi, next_template_serial_number, NextTemplateSerialNumber)                \
@@ -283,8 +288,10 @@ namespace internal {
   MUTABLE_ROOT_LIST(V) \
   STRONG_READ_ONLY_ROOT_LIST(V)
 
+class FixedTypedArrayBase;
 class Heap;
 class Isolate;
+class Map;
 class String;
 class Symbol;
 
@@ -293,32 +300,45 @@ class ReadOnlyRoots {
   explicit ReadOnlyRoots(Heap* heap) : heap_(heap) {}
   inline explicit ReadOnlyRoots(Isolate* isolate);
 
-#define ROOT_ACCESSOR(type, name, camel_name) inline class type* name();
+#define ROOT_ACCESSOR(type, name, camel_name) \
+  inline class type* name();                  \
+  inline Handle<type> name##_handle();
   STRONG_READ_ONLY_ROOT_LIST(ROOT_ACCESSOR)
 #undef ROOT_ACCESSOR
 
-#define STRING_ACCESSOR(name, str) inline String* name();
+#define STRING_ACCESSOR(name, str) \
+  inline String* name();           \
+  inline Handle<String> name##_handle();
   INTERNALIZED_STRING_LIST(STRING_ACCESSOR)
 #undef STRING_ACCESSOR
 
-#define SYMBOL_ACCESSOR(name) inline Symbol* name();
+#define SYMBOL_ACCESSOR(name) \
+  inline Symbol* name();      \
+  inline Handle<Symbol> name##_handle();
   PRIVATE_SYMBOL_LIST(SYMBOL_ACCESSOR)
 #undef SYMBOL_ACCESSOR
 
-#define SYMBOL_ACCESSOR(name, description) inline Symbol* name();
+#define SYMBOL_ACCESSOR(name, description) \
+  inline Symbol* name();                   \
+  inline Handle<Symbol> name##_handle();
   PUBLIC_SYMBOL_LIST(SYMBOL_ACCESSOR)
   WELL_KNOWN_SYMBOL_LIST(SYMBOL_ACCESSOR)
 #undef SYMBOL_ACCESSOR
 
 // Utility type maps.
-#define STRUCT_MAP_ACCESSOR(NAME, Name, name) inline Map* name##_map();
+#define STRUCT_MAP_ACCESSOR(NAME, Name, name) \
+  inline Map* name##_map();                   \
+  inline class Handle<Map> name##_map_handle();
   STRUCT_LIST(STRUCT_MAP_ACCESSOR)
 #undef STRUCT_MAP_ACCESSOR
 
 #define ALLOCATION_SITE_MAP_ACCESSOR(NAME, Name, Size, name) \
-  inline Map* name##_map();
+  inline Map* name##_map();                                  \
+  inline class Handle<Map> name##_map_handle();
   ALLOCATION_SITE_LIST(ALLOCATION_SITE_MAP_ACCESSOR)
 #undef ALLOCATION_SITE_MAP_ACCESSOR
+
+  inline FixedTypedArrayBase* EmptyFixedTypedArrayForMap(const Map* map);
 
  private:
   Heap* heap_;

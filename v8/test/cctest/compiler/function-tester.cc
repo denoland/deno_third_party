@@ -4,7 +4,7 @@
 
 #include "test/cctest/compiler/function-tester.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/compiler.h"
 #include "src/compiler/linkage.h"
 #include "src/compiler/pipeline.h"
@@ -21,6 +21,7 @@ namespace compiler {
 
 FunctionTester::FunctionTester(const char* source, uint32_t flags)
     : isolate(main_isolate()),
+      canonical(isolate),
       function((FLAG_allow_natives_syntax = true, NewFunction(source))),
       flags_(flags) {
   Compile(function);
@@ -30,6 +31,7 @@ FunctionTester::FunctionTester(const char* source, uint32_t flags)
 
 FunctionTester::FunctionTester(Graph* graph, int param_count)
     : isolate(main_isolate()),
+      canonical(isolate),
       function(NewFunction(BuildFunction(param_count).c_str())),
       flags_(0) {
   CompileGraph(graph);
@@ -37,6 +39,7 @@ FunctionTester::FunctionTester(Graph* graph, int param_count)
 
 FunctionTester::FunctionTester(Handle<Code> code, int param_count)
     : isolate(main_isolate()),
+      canonical(isolate),
       function((FLAG_allow_natives_syntax = true,
                 NewFunction(BuildFunction(param_count).c_str()))),
       flags_(0) {
@@ -153,7 +156,6 @@ Handle<JSFunction> FunctionTester::Compile(Handle<JSFunction> function) {
 
   Handle<Code> code =
       Pipeline::GenerateCodeForTesting(&info, isolate).ToHandleChecked();
-  CHECK(info.dependencies()->Commit(code));
   info.context()->native_context()->AddOptimizedCode(*code);
   function->set_code(*code);
   return function;
@@ -166,8 +168,11 @@ Handle<JSFunction> FunctionTester::CompileGraph(Graph* graph) {
   Zone zone(isolate->allocator(), ZONE_NAME);
   OptimizedCompilationInfo info(&zone, isolate, shared, function);
 
+  auto call_descriptor = Linkage::ComputeIncoming(&zone, &info);
   Handle<Code> code =
-      Pipeline::GenerateCodeForTesting(&info, isolate, graph).ToHandleChecked();
+      Pipeline::GenerateCodeForTesting(&info, isolate, call_descriptor, graph,
+                                       AssemblerOptions::Default(isolate))
+          .ToHandleChecked();
   function->set_code(*code);
   return function;
 }

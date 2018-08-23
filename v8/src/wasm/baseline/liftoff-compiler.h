@@ -5,15 +5,15 @@
 #ifndef V8_WASM_BASELINE_LIFTOFF_COMPILER_H_
 #define V8_WASM_BASELINE_LIFTOFF_COMPILER_H_
 
-#include "src/source-position-table.h"
-#include "src/trap-handler/trap-handler.h"
-#include "src/wasm/baseline/liftoff-assembler.h"
-#include "src/wasm/function-body-decoder.h"
-#include "src/wasm/function-compiler.h"
+#include "src/base/macros.h"
 
 namespace v8 {
 namespace internal {
 namespace wasm {
+
+class ErrorThrower;
+class WasmCode;
+class WasmCompilationUnit;
 
 class LiftoffCompilationUnit final {
  public:
@@ -21,15 +21,13 @@ class LiftoffCompilationUnit final {
       : wasm_unit_(wasm_unit) {}
 
   bool ExecuteCompilation();
-  wasm::WasmCode* FinishCompilation(wasm::ErrorThrower*);
-  void AbortCompilation();
+  WasmCode* FinishCompilation(ErrorThrower*);
 
  private:
   WasmCompilationUnit* const wasm_unit_;
-  wasm::LiftoffAssembler asm_;
-  int safepoint_table_offset_;
-  SourcePositionTableBuilder source_position_table_builder_;
-  std::vector<trap_handler::ProtectedInstructionData> protected_instructions_;
+
+  // Result of compilation:
+  WasmCode* code_;
 
   DISALLOW_COPY_AND_ASSIGN(LiftoffCompilationUnit);
 };
