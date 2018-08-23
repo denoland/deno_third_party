@@ -1,11 +1,21 @@
 [package]
 name = "rust_usage_test"
 version = "0.1.0"
-authors = ["rw <me@rwinslow.com>"]
+authors = ["Robert Winslow <me@rwinslow.com>", "FlatBuffers Maintainers"]
 
 [dependencies]
 flatbuffers = { path = "../../rust/flatbuffers" }
 quickcheck = "0.6"
+
+[dev-dependencies]
+# TODO(rw): look into moving to criterion.rs once its (I think?) compilation
+#           issue is fixed with 0.2.4.
+bencher = "0.1.5"
+
+[[bench]]
+# setup for criterion
+name = "flatbuffers_benchmarks"
+harness = false
 
 #[profile.test]
 #opt-level = 3

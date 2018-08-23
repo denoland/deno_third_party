@@ -882,6 +882,12 @@ extern std::string DartMakeRule(const Parser &parser,
                                 const std::string &path,
                                 const std::string &file_name);
 
+// Generate a make rule for the generated Rust code.
+// See idl_gen_rust.cpp.
+extern std::string RustMakeRule(const Parser &parser,
+                                const std::string &path,
+                                const std::string &file_name);
+
 // Generate a make rule for the generated Java/C#/... files.
 // See idl_gen_general.cpp.
 extern std::string GeneralMakeRule(const Parser &parser,

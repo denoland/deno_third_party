@@ -58,7 +58,7 @@
 ../flatc --rust -I include_test -o rust_usage_test/src monster_test.fbs
 ../flatc --rust -o rust_usage_test/src/namespace_test namespace_test/namespace_test1.fbs namespace_test/namespace_test2.fbs
 cd ./rust_usage_test
-time cargo test $1
+cargo test $1
 TEST_RESULT=$?
 #rm -rf ${go_path}/{pkg,src}
 if [[ $TEST_RESULT  == 0 ]]; then
@@ -67,6 +67,8 @@ else
     echo "KO: Rust tests failed."
     exit 1
 fi
+
+cargo bench
 
 #NOT_FMT_FILES=$(gofmt -l MyGame)
 #if [[ ${NOT_FMT_FILES} != "" ]]; then
