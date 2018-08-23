@@ -10,6 +10,7 @@
 #include "src/compiler/code-assembler.h"
 #include "src/handles-inl.h"
 #include "src/interface-descriptors.h"
+#include "src/interpreter/bytecodes.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
 #include "src/objects/shared-function-info.h"
@@ -33,6 +34,28 @@ void PostBuildProfileAndTracing(Isolate* isolate, Code* code,
     code->PrintBuiltinCode(isolate, name);
   }
 #endif
+}
+
+AssemblerOptions BuiltinAssemblerOptions(Isolate* isolate,
+                                         int32_t builtin_index) {
+  AssemblerOptions options = AssemblerOptions::Default(isolate);
+  CHECK(!options.isolate_independent_code);
+  CHECK(!options.use_pc_relative_calls_and_jumps);
+
+  if (!isolate->ShouldLoadConstantsFromRootList() ||
+      !Builtins::IsIsolateIndependent(builtin_index)) {
+    return options;
+  }
+
+  CodeRange* code_range = isolate->heap()->memory_allocator()->code_range();
+  bool pc_relative_calls_fit_in_code_range =
+      code_range->valid() &&
+      code_range->size() <= kMaxPCRelativeCodeRangeInMB * MB;
+
+  options.isolate_independent_code = true;
+  options.use_pc_relative_calls_and_jumps = pc_relative_calls_fit_in_code_range;
+
+  return options;
 }
 
 typedef void (*MacroAssemblerGenerator)(MacroAssembler*);
@@ -67,7 +90,9 @@ Code* BuildWithMacroAssembler(Isolate* isolate, int32_t builtin_index,
   CanonicalHandleScope canonical(isolate);
   const size_t buffer_size = 32 * KB;
   byte buffer[buffer_size];  // NOLINT(runtime/arrays)
-  MacroAssembler masm(isolate, buffer, buffer_size, CodeObjectRequired::kYes);
+
+  MacroAssembler masm(isolate, BuiltinAssemblerOptions(isolate, builtin_index),
+                      buffer, buffer_size, CodeObjectRequired::kYes);
   masm.set_builtin_index(builtin_index);
   DCHECK(!masm.has_frame());
   generator(&masm);
@@ -88,7 +113,8 @@ Code* BuildAdaptor(Isolate* isolate, int32_t builtin_index,
   CanonicalHandleScope canonical(isolate);
   const size_t buffer_size = 32 * KB;
   byte buffer[buffer_size];  // NOLINT(runtime/arrays)
-  MacroAssembler masm(isolate, buffer, buffer_size, CodeObjectRequired::kYes);
+  MacroAssembler masm(isolate, BuiltinAssemblerOptions(isolate, builtin_index),
+                      buffer, buffer_size, CodeObjectRequired::kYes);
   masm.set_builtin_index(builtin_index);
   DCHECK(!masm.has_frame());
   Builtins::Generate_Adaptor(&masm, builtin_address, exit_frame_type);
@@ -119,7 +145,8 @@ Code* BuildWithCodeStubAssemblerJS(Isolate* isolate, int32_t builtin_index,
       isolate, &zone, argc_with_recv, Code::BUILTIN, name,
       PoisoningMitigationLevel::kDontPoison, builtin_index);
   generator(&state);
-  Handle<Code> code = compiler::CodeAssembler::GenerateCode(&state);
+  Handle<Code> code = compiler::CodeAssembler::GenerateCode(
+      &state, BuiltinAssemblerOptions(isolate, builtin_index));
   PostBuildProfileAndTracing(isolate, *code, name);
   return *code;
 }
@@ -147,7 +174,8 @@ Code* BuildWithCodeStubAssemblerCS(Isolate* isolate, int32_t builtin_index,
       isolate, &zone, descriptor, Code::BUILTIN, name,
       PoisoningMitigationLevel::kDontPoison, 0, builtin_index);
   generator(&state);
-  Handle<Code> code = compiler::CodeAssembler::GenerateCode(&state);
+  Handle<Code> code = compiler::CodeAssembler::GenerateCode(
+      &state, BuiltinAssemblerOptions(isolate, builtin_index));
   PostBuildProfileAndTracing(isolate, *code, name);
   return *code;
 }
@@ -179,8 +207,10 @@ void SetupIsolateDelegate::ReplacePlaceholders(Isolate* isolate) {
   Builtins* builtins = isolate->builtins();
   DisallowHeapAllocation no_gc;
   CodeSpaceMemoryModificationScope modification_scope(isolate->heap());
-  static const int kRelocMask = RelocInfo::ModeMask(RelocInfo::CODE_TARGET) |
-                                RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT);
+  static const int kRelocMask =
+      RelocInfo::ModeMask(RelocInfo::CODE_TARGET) |
+      RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT) |
+      RelocInfo::ModeMask(RelocInfo::RELATIVE_CODE_TARGET);
   HeapIterator iterator(isolate->heap());
   while (HeapObject* obj = iterator.next()) {
     if (!obj->IsCode()) continue;
@@ -188,8 +218,10 @@ void SetupIsolateDelegate::ReplacePlaceholders(Isolate* isolate) {
     bool flush_icache = false;
     for (RelocIterator it(code, kRelocMask); !it.done(); it.next()) {
       RelocInfo* rinfo = it.rinfo();
-      if (RelocInfo::IsCodeTarget(rinfo->rmode())) {
+      if (RelocInfo::IsCodeTargetMode(rinfo->rmode())) {
         Code* target = Code::GetCodeFromTargetAddress(rinfo->target_address());
+        DCHECK_IMPLIES(RelocInfo::IsRelativeCodeTarget(rinfo->rmode()),
+                       Builtins::IsIsolateIndependent(target->builtin_index()));
         if (!target->is_builtin()) continue;
         Code* new_target = builtins->builtin(target->builtin_index());
         rinfo->set_target_address(new_target->raw_instruction_start(),
@@ -212,6 +244,17 @@ void SetupIsolateDelegate::ReplacePlaceholders(Isolate* isolate) {
     }
   }
 }
+
+#ifdef V8_EMBEDDED_BYTECODE_HANDLERS
+namespace {
+Code* GenerateBytecodeHandler(Isolate* isolate, int builtin_index,
+                              interpreter::Bytecode code,
+                              interpreter::OperandScale scale) {
+  // TODO(v8:8068): Actually generate the handler.
+  return nullptr;
+}
+}  // namespace
+#endif
 
 // static
 void SetupIsolateDelegate::SetupBuiltinsInternal(Isolate* isolate) {
@@ -254,13 +297,28 @@ void SetupIsolateDelegate::SetupBuiltinsInternal(Isolate* isolate) {
       isolate, index, &Builtins::Generate_##Name,          \
       CallDescriptors::InterfaceDescriptor, #Name, 1);     \
   AddBuiltin(builtins, index++, code);
+
+#define BUILD_BCH_WITH_SCALE(Code, Scale)                                     \
+  code =                                                                      \
+      GenerateBytecodeHandler(isolate, index, interpreter::Bytecode::k##Code, \
+                              interpreter::OperandScale::k##Scale);           \
+  if (code) {                                                                 \
+    AddBuiltin(builtins, index, code);                                        \
+  }                                                                           \
+  ++index;
+
+#define BUILD_BCH(Code, ...)         \
+  BUILD_BCH_WITH_SCALE(Code, Single) \
+  BUILD_BCH_WITH_SCALE(Code, Double) \
+  BUILD_BCH_WITH_SCALE(Code, Quadruple)
+
 #define BUILD_ASM(Name)                                                     \
   code = BuildWithMacroAssembler(isolate, index, Builtins::Generate_##Name, \
                                  #Name);                                    \
   AddBuiltin(builtins, index++, code);
 
   BUILTIN_LIST(BUILD_CPP, BUILD_API, BUILD_TFJ, BUILD_TFC, BUILD_TFS, BUILD_TFH,
-               BUILD_ASM);
+               BUILD_BCH, BUILD_ASM);
 
 #undef BUILD_CPP
 #undef BUILD_API
@@ -268,6 +326,8 @@ void SetupIsolateDelegate::SetupBuiltinsInternal(Isolate* isolate) {
 #undef BUILD_TFC
 #undef BUILD_TFS
 #undef BUILD_TFH
+#undef BUILD_BCH
+#undef BUILD_BCH_WITH_SCALE
 #undef BUILD_ASM
   CHECK_EQ(Builtins::builtin_count, index);
 

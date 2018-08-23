@@ -585,9 +585,6 @@ def _OnStaleMd5(options):
 
     r_txt_path = _WriteFinalRTxtFile(options, build.r_txt_path)
 
-    package = resource_utils.ExtractPackageFromManifest(
-        options.android_manifest)
-
     # If --shared-resources-whitelist is used, the all resources listed in
     # the corresponding R.txt file will be non-final, and an onResourcesLoaded()
     # will be generated to adjust them at runtime.
@@ -607,7 +604,7 @@ def _OnStaleMd5(options):
       rjava_build_options.GenerateOnResourcesLoaded()
 
     resource_utils.CreateRJavaFiles(
-        build.srcjar_dir, package, r_txt_path,
+        build.srcjar_dir, None, r_txt_path,
         options.extra_res_packages,
         options.extra_r_text_files,
         rjava_build_options)
@@ -656,6 +653,7 @@ def main(args):
 
   possible_input_paths = [
     options.aapt_path,
+    options.aapt2_path,
     options.android_manifest,
     options.shared_resources_whitelist,
   ]
@@ -673,7 +671,8 @@ def main(args):
       input_paths=input_paths,
       input_strings=input_strings,
       output_paths=output_paths,
-      depfile_deps=options.dependencies_res_zips + options.extra_r_text_files)
+      depfile_deps=options.dependencies_res_zips + options.extra_r_text_files,
+      add_pydeps=False)
 
 
 if __name__ == '__main__':

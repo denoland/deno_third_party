@@ -9,7 +9,6 @@
 
 // Clients of this interface shouldn't depend on lots of compiler internals.
 // Do not include anything from src/compiler here!
-#include "src/optimized-compilation-info.h"
 #include "src/runtime/runtime.h"
 #include "src/trap-handler/trap-handler.h"
 #include "src/wasm/function-body-decoder.h"
@@ -21,8 +20,7 @@
 
 namespace v8 {
 namespace internal {
-
-class OptimizedCompilationJob;
+struct AssemblerOptions;
 
 namespace compiler {
 // Forward declarations for some compiler data structures.
@@ -84,6 +82,7 @@ class TurbofanWasmCompilationUnit {
   ~TurbofanWasmCompilationUnit();
 
   SourcePositionTable* BuildGraphForWasmFunction(double* decode_ms,
+                                                 MachineGraph* mcgraph,
                                                  NodeOriginTable* node_origins);
 
   void ExecuteCompilation();
@@ -94,15 +93,7 @@ class TurbofanWasmCompilationUnit {
   wasm::WasmCompilationUnit* const wasm_unit_;
   WasmCompilationData wasm_compilation_data_;
   bool ok_ = true;
-  // The graph zone is deallocated at the end of {ExecuteCompilation} by virtue
-  // of it being zone allocated.
-  MachineGraph* mcgraph_ = nullptr;
-  // The compilation_zone_, info_, and job_ fields need to survive past
-  // {ExecuteCompilation}, onto {FinishCompilation} (which happens on the main
-  // thread).
-  std::unique_ptr<Zone> compilation_zone_;
-  std::unique_ptr<OptimizedCompilationInfo> info_;
-  std::unique_ptr<OptimizedCompilationJob> job_;
+  wasm::WasmCode* wasm_code_ = nullptr;
   wasm::Result<wasm::DecodeStruct*> graph_construction_result_;
 
   DISALLOW_COPY_AND_ASSIGN(TurbofanWasmCompilationUnit);
@@ -114,9 +105,12 @@ MaybeHandle<Code> CompileWasmToJSWrapper(Isolate*, Handle<JSReceiver> target,
                                          wasm::ModuleOrigin,
                                          wasm::UseTrapHandler);
 
-// Wraps a given wasm code object, producing a code object.
+// Creates a code object calling a wasm function with the given signature,
+// callable from JS.
+// TODO(clemensh): Remove the {UseTrapHandler} parameter to make js-to-wasm
+// wrappers sharable across instances.
 V8_EXPORT_PRIVATE MaybeHandle<Code> CompileJSToWasmWrapper(
-    Isolate*, const wasm::WasmModule*, Address call_target, uint32_t index,
+    Isolate*, const wasm::NativeModule*, wasm::FunctionSig*, bool is_import,
     wasm::UseTrapHandler);
 
 // Compiles a stub that redirects a call to a wasm function to the wasm
@@ -276,8 +270,22 @@ class WasmGraphBuilder {
     this->instance_node_ = instance_node;
   }
 
-  Node* Control() { return *control_; }
-  Node* Effect() { return *effect_; }
+  Node* Control() {
+    DCHECK_NOT_NULL(*control_);
+    return *control_;
+  }
+  Node* Effect() {
+    DCHECK_NOT_NULL(*effect_);
+    return *effect_;
+  }
+  Node* SetControl(Node* node) {
+    *control_ = node;
+    return node;
+  }
+  Node* SetEffect(Node* node) {
+    *effect_ = node;
+    return node;
+  }
 
   void set_control_ptr(Node** control) { this->control_ = control; }
 
@@ -393,6 +401,8 @@ class WasmGraphBuilder {
                       UseRetpoline use_retpoline);
   Node* BuildImportWasmCall(wasm::FunctionSig* sig, Node** args, Node*** rets,
                             wasm::WasmCodePosition position, int func_index);
+  Node* BuildImportWasmCall(wasm::FunctionSig* sig, Node** args, Node*** rets,
+                            wasm::WasmCodePosition position, Node* func_index);
 
   Node* BuildF32CopySign(Node* left, Node* right);
   Node* BuildF64CopySign(Node* left, Node* right);
@@ -507,6 +517,8 @@ V8_EXPORT_PRIVATE CallDescriptor* GetI32WasmCallDescriptor(
 
 V8_EXPORT_PRIVATE CallDescriptor* GetI32WasmCallDescriptorForSimd(
     Zone* zone, CallDescriptor* call_descriptor);
+
+AssemblerOptions WasmAssemblerOptions();
 
 }  // namespace compiler
 }  // namespace internal

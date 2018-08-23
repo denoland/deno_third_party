@@ -4,7 +4,7 @@
 
 #include "src/profiler/heap-profiler.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/debug/debug.h"
 #include "src/heap/heap-inl.h"
 #include "src/profiler/allocation-tracker.h"
@@ -16,14 +16,14 @@ namespace internal {
 
 HeapProfiler::HeapProfiler(Heap* heap)
     : ids_(new HeapObjectsMap(heap)),
-      names_(new StringsStorage(heap->HashSeed())),
+      names_(new StringsStorage()),
       is_tracking_object_moves_(false) {}
 
 HeapProfiler::~HeapProfiler() = default;
 
 void HeapProfiler::DeleteAllSnapshots() {
   snapshots_.clear();
-  names_.reset(new StringsStorage(heap()->HashSeed()));
+  names_.reset(new StringsStorage());
 }
 
 
@@ -221,6 +221,8 @@ void HeapProfiler::ClearHeapObjectMap() {
 
 
 Heap* HeapProfiler::heap() const { return ids_->heap(); }
+
+Isolate* HeapProfiler::isolate() const { return heap()->isolate(); }
 
 void HeapProfiler::QueryObjects(Handle<Context> context,
                                 debug::QueryObjectPredicate* predicate,

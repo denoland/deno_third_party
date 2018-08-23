@@ -6,6 +6,7 @@
 #define V8_OBJECTS_JS_COLLECTION_H_
 
 #include "src/objects.h"
+#include "src/objects/ordered-hash-table.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -34,7 +35,7 @@ class JSSet : public JSCollection {
   static void Clear(Isolate* isolate, Handle<JSSet> set);
 
   // Dispatched behavior.
-  DECL_PRINTER_WITH_ISOLATE(JSSet)
+  DECL_PRINTER(JSSet)
   DECL_VERIFIER(JSSet)
 
  private:
@@ -45,7 +46,7 @@ class JSSetIterator
     : public OrderedHashTableIterator<JSSetIterator, OrderedHashSet> {
  public:
   // Dispatched behavior.
-  DECL_PRINTER_WITH_ISOLATE(JSSetIterator)
+  DECL_PRINTER(JSSetIterator)
   DECL_VERIFIER(JSSetIterator)
 
   DECL_CAST(JSSetIterator)
@@ -63,7 +64,7 @@ class JSMap : public JSCollection {
   static void Clear(Isolate* isolate, Handle<JSMap> map);
 
   // Dispatched behavior.
-  DECL_PRINTER_WITH_ISOLATE(JSMap)
+  DECL_PRINTER(JSMap)
   DECL_VERIFIER(JSMap)
 
  private:
@@ -74,7 +75,7 @@ class JSMapIterator
     : public OrderedHashTableIterator<JSMapIterator, OrderedHashMap> {
  public:
   // Dispatched behavior.
-  DECL_PRINTER_WITH_ISOLATE(JSMapIterator)
+  DECL_PRINTER(JSMapIterator)
   DECL_VERIFIER(JSMapIterator)
 
   DECL_CAST(JSMapIterator)
@@ -125,7 +126,7 @@ class JSWeakMap : public JSWeakCollection {
   DECL_CAST(JSWeakMap)
 
   // Dispatched behavior.
-  DECL_PRINTER_WITH_ISOLATE(JSWeakMap)
+  DECL_PRINTER(JSWeakMap)
   DECL_VERIFIER(JSWeakMap)
 
  private:
@@ -138,7 +139,7 @@ class JSWeakSet : public JSWeakCollection {
   DECL_CAST(JSWeakSet)
 
   // Dispatched behavior.
-  DECL_PRINTER_WITH_ISOLATE(JSWeakSet)
+  DECL_PRINTER(JSWeakSet)
   DECL_VERIFIER(JSWeakSet)
 
  private:

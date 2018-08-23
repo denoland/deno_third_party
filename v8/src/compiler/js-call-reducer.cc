@@ -4,15 +4,15 @@
 
 #include "src/compiler/js-call-reducer.h"
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/builtins/builtins-promise-gen.h"
 #include "src/builtins/builtins-utils.h"
 #include "src/code-factory.h"
 #include "src/code-stubs.h"
-#include "src/compilation-dependencies.h"
 #include "src/compiler/access-builder.h"
 #include "src/compiler/access-info.h"
 #include "src/compiler/allocation-builder.h"
+#include "src/compiler/compilation-dependencies.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/linkage.h"
 #include "src/compiler/node-matchers.h"
@@ -23,6 +23,8 @@
 #include "src/ic/call-optimization.h"
 #include "src/objects-inl.h"
 #include "src/objects/arguments-inl.h"
+#include "src/objects/js-array-buffer-inl.h"
+#include "src/objects/js-array-inl.h"
 #include "src/vector-slot-pair.h"
 
 namespace v8 {
@@ -218,11 +220,11 @@ Reduction JSCallReducer::ReduceArrayConstructor(Node* node) {
 
   // Turn the {node} into a {JSCreateArray} call.
   DCHECK_LE(2u, p.arity());
-  Handle<AllocationSite> site;
   size_t const arity = p.arity() - 2;
   NodeProperties::ReplaceValueInput(node, target, 0);
   NodeProperties::ReplaceValueInput(node, target, 1);
-  NodeProperties::ChangeOp(node, javascript()->CreateArray(arity, site));
+  NodeProperties::ChangeOp(
+      node, javascript()->CreateArray(arity, MaybeHandle<AllocationSite>()));
   return Changed(node);
 }
 
@@ -431,7 +433,7 @@ Reduction JSCallReducer::ReduceFunctionPrototypeBind(Node* node) {
                                         isolate());
     if (descriptors->number_of_descriptors() < 2) return NoChange();
     if (descriptors->GetKey(JSFunction::kLengthDescriptorIndex) !=
-        isolate()->heap()->length_string()) {
+        ReadOnlyRoots(isolate()).length_string()) {
       return NoChange();
     }
     if (!descriptors->GetStrongValue(JSFunction::kLengthDescriptorIndex)
@@ -439,7 +441,7 @@ Reduction JSCallReducer::ReduceFunctionPrototypeBind(Node* node) {
       return NoChange();
     }
     if (descriptors->GetKey(JSFunction::kNameDescriptorIndex) !=
-        isolate()->heap()->name_string()) {
+        ReadOnlyRoots(isolate()).name_string()) {
       return NoChange();
     }
     if (!descriptors->GetStrongValue(JSFunction::kNameDescriptorIndex)
@@ -594,7 +596,8 @@ Reduction JSCallReducer::ReduceObjectGetPrototype(Node* node, Node* object) {
     }
     if (result == NodeProperties::kUnreliableReceiverMaps) {
       for (size_t i = 0; i < object_maps.size(); ++i) {
-        dependencies()->DependOnStableMap(object_maps[i]);
+        dependencies()->DependOnStableMap(
+            MapRef(js_heap_broker(), object_maps[i]));
       }
     }
     Node* value = jsgraph()->Constant(candidate_prototype);
@@ -936,7 +939,7 @@ Reduction JSCallReducer::ReduceReflectHas(Node* node) {
   Node* vtrue;
   {
     vtrue = etrue = if_true =
-        graph()->NewNode(javascript()->HasProperty(), key, target, context,
+        graph()->NewNode(javascript()->HasProperty(), target, key, context,
                          frame_state, etrue, if_true);
   }
 
@@ -975,7 +978,6 @@ bool CanInlineArrayIteratingBuiltin(Isolate* isolate,
                                      isolate);
   return receiver_map->instance_type() == JS_ARRAY_TYPE &&
          IsFastElementsKind(receiver_map->elements_kind()) &&
-         (!receiver_map->is_prototype_map() || receiver_map->is_stable()) &&
          isolate->IsNoElementsProtectorIntact() &&
          isolate->IsAnyInitialArrayPrototype(receiver_prototype);
 }
@@ -1050,7 +1052,8 @@ Reduction JSCallReducer::ReduceArrayForEach(Node* node,
 
   // Install code dependencies on the {receiver} prototype maps and the
   // global array protector cell.
-  dependencies()->DependOnProtector(factory()->no_elements_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
 
   // If we have unreliable maps, we need a map check.
   if (result == NodeProperties::kUnreliableReceiverMaps) {
@@ -1234,7 +1237,8 @@ Reduction JSCallReducer::ReduceArrayReduce(Node* node,
 
   // Install code dependencies on the {receiver} prototype maps and the
   // global array protector cell.
-  dependencies()->DependOnProtector(factory()->no_elements_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
 
   // If we have unreliable maps, we need a map check.
   if (result == NodeProperties::kUnreliableReceiverMaps) {
@@ -1504,7 +1508,13 @@ Reduction JSCallReducer::ReduceArrayMap(Node* node,
     if (receiver_map->elements_kind() != kind) return NoChange();
   }
 
-  dependencies()->DependOnProtector(factory()->array_species_protector());
+  if (IsHoleyElementsKind(kind)) {
+    dependencies()->DependOnProtector(
+        PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
+  }
+
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->array_species_protector()));
 
   Handle<JSFunction> handle_constructor(
       JSFunction::cast(
@@ -1527,11 +1537,10 @@ Reduction JSCallReducer::ReduceArrayMap(Node* node,
       simplified()->LoadField(AccessBuilder::ForJSArrayLength(kind)), receiver,
       effect, control);
 
-  // This array should be HOLEY_SMI_ELEMENTS because of the non-zero length.
   // Even though {JSCreateArray} is not marked as {kNoThrow}, we can elide the
   // exceptional projections because it cannot throw with the given parameters.
   Node* a = control = effect = graph()->NewNode(
-      javascript()->CreateArray(1, Handle<AllocationSite>::null()),
+      javascript()->CreateArray(1, MaybeHandle<AllocationSite>()),
       array_constructor, array_constructor, original_length, context,
       outer_frame_state, effect, control);
 
@@ -1629,6 +1638,9 @@ Reduction JSCallReducer::ReduceArrayMap(Node* node,
                                      &check_fail, &control);
   }
 
+  // The array {a} should be HOLEY_SMI_ELEMENTS because we'd only come into this
+  // loop if the input array length is non-zero, and "new Array({x > 0})" always
+  // produces a HOLEY array.
   Handle<Map> double_map(Map::cast(native_context()->get(
                              Context::ArrayMapIndex(HOLEY_DOUBLE_ELEMENTS))),
                          isolate());
@@ -1711,7 +1723,13 @@ Reduction JSCallReducer::ReduceArrayFilter(Node* node,
     if (receiver_map->elements_kind() != kind) return NoChange();
   }
 
-  dependencies()->DependOnProtector(factory()->array_species_protector());
+  if (IsHoleyElementsKind(kind)) {
+    dependencies()->DependOnProtector(
+        PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
+  }
+
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->array_species_protector()));
 
   Handle<Map> initial_map(
       Map::cast(native_context()->GetInitialJSArrayMap(packed_kind)),
@@ -1730,7 +1748,7 @@ Reduction JSCallReducer::ReduceArrayFilter(Node* node,
 
   Node* a;  // Construct the output array.
   {
-    AllocationBuilder ab(jsgraph(), js_heap_broker(), effect, control);
+    AllocationBuilder ab(jsgraph(), effect, control);
     ab.Allocate(initial_map->instance_size(), NOT_TENURED, Type::Array());
     ab.Store(AccessBuilder::ForMap(), initial_map);
     Node* empty_fixed_array = jsgraph()->EmptyFixedArrayConstant();
@@ -1739,7 +1757,8 @@ Reduction JSCallReducer::ReduceArrayFilter(Node* node,
     ab.Store(AccessBuilder::ForJSArrayLength(packed_kind),
              jsgraph()->ZeroConstant());
     for (int i = 0; i < initial_map->GetInObjectProperties(); ++i) {
-      ab.Store(AccessBuilder::ForJSObjectInObjectProperty(initial_map, i),
+      ab.Store(AccessBuilder::ForJSObjectInObjectProperty(
+                   MapRef(js_heap_broker(), initial_map), i),
                jsgraph()->UndefinedConstant());
     }
     a = effect = ab.Finish();
@@ -1988,7 +2007,8 @@ Reduction JSCallReducer::ReduceArrayFind(Node* node, ArrayFindVariant variant,
 
   // Install code dependencies on the {receiver} prototype maps and the
   // global array protector cell.
-  dependencies()->DependOnProtector(factory()->no_elements_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
 
   // If we have unreliable maps, we need a map check.
   if (result == NodeProperties::kUnreliableReceiverMaps) {
@@ -2303,7 +2323,13 @@ Reduction JSCallReducer::ReduceArrayEvery(Node* node,
     if (receiver_map->elements_kind() != kind) return NoChange();
   }
 
-  dependencies()->DependOnProtector(factory()->array_species_protector());
+  if (IsHoleyElementsKind(kind)) {
+    dependencies()->DependOnProtector(
+        PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
+  }
+
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->array_species_protector()));
 
   // If we have unreliable maps, we need a map check.
   if (result == NodeProperties::kUnreliableReceiverMaps) {
@@ -2547,8 +2573,13 @@ Reduction JSCallReducer::ReduceArrayIndexOfIncludes(
   if (!NodeProperties::GetMapWitness(isolate(), node).ToHandle(&receiver_map))
     return NoChange();
 
-  if (receiver_map->instance_type() != JS_ARRAY_TYPE) return NoChange();
-  if (!IsFastElementsKind(receiver_map->elements_kind())) return NoChange();
+  if (!CanInlineArrayIteratingBuiltin(isolate(), receiver_map))
+    return NoChange();
+
+  if (IsHoleyElementsKind(receiver_map->elements_kind())) {
+    dependencies()->DependOnProtector(
+        PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
+  }
 
   Callable const callable =
       search_variant == SearchVariant::kIndexOf
@@ -2643,7 +2674,13 @@ Reduction JSCallReducer::ReduceArraySome(Node* node,
     if (receiver_map->elements_kind() != kind) return NoChange();
   }
 
-  dependencies()->DependOnProtector(factory()->array_species_protector());
+  if (IsHoleyElementsKind(kind)) {
+    dependencies()->DependOnProtector(
+        PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
+  }
+
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->array_species_protector()));
 
   Node* k = jsgraph()->ZeroConstant();
 
@@ -2891,7 +2928,8 @@ Reduction JSCallReducer::ReduceCallApiFunction(
   // Install stability dependencies for unreliable {receiver_maps}.
   if (result == NodeProperties::kUnreliableReceiverMaps) {
     for (size_t i = 0; i < receiver_maps.size(); ++i) {
-      dependencies()->DependOnStableMap(receiver_maps[i]);
+      dependencies()->DependOnStableMap(
+          MapRef(js_heap_broker(), receiver_maps[i]));
     }
   }
 
@@ -3061,7 +3099,8 @@ Reduction JSCallReducer::ReduceCallOrConstructWithArrayLikeOrSpread(
   // that no one messed with the %ArrayIteratorPrototype%.next method.
   if (node->opcode() == IrOpcode::kJSCallWithSpread ||
       node->opcode() == IrOpcode::kJSConstructWithSpread) {
-    dependencies()->DependOnProtector(factory()->array_iterator_protector());
+    dependencies()->DependOnProtector(PropertyCellRef(
+        js_heap_broker(), factory()->array_iterator_protector()));
   }
 
   // Remove the {arguments_list} input from the {node}.
@@ -3408,6 +3447,8 @@ Reduction JSCallReducer::ReduceJSCall(Node* node,
       return ReduceArrayPrototypePop(node);
     case Builtins::kArrayPrototypeShift:
       return ReduceArrayPrototypeShift(node);
+    case Builtins::kArrayPrototypeSlice:
+      return ReduceArrayPrototypeSlice(node);
     case Builtins::kArrayPrototypeEntries:
       return ReduceArrayIterator(node, IterationKind::kEntries);
     case Builtins::kArrayPrototypeKeys:
@@ -3434,6 +3475,48 @@ Reduction JSCallReducer::ReduceJSCall(Node* node,
     case Builtins::kDataViewPrototypeGetInt8:
       return ReduceDataViewPrototypeGet(node,
                                         ExternalArrayType::kExternalInt8Array);
+    case Builtins::kDataViewPrototypeGetUint16:
+      return ReduceDataViewPrototypeGet(
+          node, ExternalArrayType::kExternalUint16Array);
+    case Builtins::kDataViewPrototypeGetInt16:
+      return ReduceDataViewPrototypeGet(node,
+                                        ExternalArrayType::kExternalInt16Array);
+    case Builtins::kDataViewPrototypeGetUint32:
+      return ReduceDataViewPrototypeGet(
+          node, ExternalArrayType::kExternalUint32Array);
+    case Builtins::kDataViewPrototypeGetInt32:
+      return ReduceDataViewPrototypeGet(node,
+                                        ExternalArrayType::kExternalInt32Array);
+    case Builtins::kDataViewPrototypeGetFloat32:
+      return ReduceDataViewPrototypeGet(
+          node, ExternalArrayType::kExternalFloat32Array);
+    case Builtins::kDataViewPrototypeGetFloat64:
+      return ReduceDataViewPrototypeGet(
+          node, ExternalArrayType::kExternalFloat64Array);
+    case Builtins::kDataViewPrototypeSetUint8:
+      return ReduceDataViewPrototypeSet(node,
+                                        ExternalArrayType::kExternalUint8Array);
+    case Builtins::kDataViewPrototypeSetInt8:
+      return ReduceDataViewPrototypeSet(node,
+                                        ExternalArrayType::kExternalInt8Array);
+    case Builtins::kDataViewPrototypeSetUint16:
+      return ReduceDataViewPrototypeSet(
+          node, ExternalArrayType::kExternalUint16Array);
+    case Builtins::kDataViewPrototypeSetInt16:
+      return ReduceDataViewPrototypeSet(node,
+                                        ExternalArrayType::kExternalInt16Array);
+    case Builtins::kDataViewPrototypeSetUint32:
+      return ReduceDataViewPrototypeSet(
+          node, ExternalArrayType::kExternalUint32Array);
+    case Builtins::kDataViewPrototypeSetInt32:
+      return ReduceDataViewPrototypeSet(node,
+                                        ExternalArrayType::kExternalInt32Array);
+    case Builtins::kDataViewPrototypeSetFloat32:
+      return ReduceDataViewPrototypeSet(
+          node, ExternalArrayType::kExternalFloat32Array);
+    case Builtins::kDataViewPrototypeSetFloat64:
+      return ReduceDataViewPrototypeSet(
+          node, ExternalArrayType::kExternalFloat64Array);
     case Builtins::kTypedArrayPrototypeByteLength:
       return ReduceArrayBufferViewAccessor(
           node, JS_TYPED_ARRAY_TYPE,
@@ -3579,10 +3662,6 @@ Reduction JSCallReducer::ReduceJSCall(Node* node,
       return ReduceAsyncFunctionPromiseCreate(node);
     case Builtins::kAsyncFunctionPromiseRelease:
       return ReduceAsyncFunctionPromiseRelease(node);
-    case Builtins::kPromiseCapabilityDefaultReject:
-      return ReducePromiseCapabilityDefaultReject(node);
-    case Builtins::kPromiseCapabilityDefaultResolve:
-      return ReducePromiseCapabilityDefaultResolve(node);
     case Builtins::kPromiseInternalConstructor:
       return ReducePromiseInternalConstructor(node);
     case Builtins::kPromiseInternalReject:
@@ -3626,6 +3705,8 @@ Reduction JSCallReducer::ReduceJSCall(Node* node,
       return ReduceDatePrototypeGetTime(node);
     case Builtins::kDateNow:
       return ReduceDateNow(node);
+    case Builtins::kNumberConstructor:
+      return ReduceNumberConstructor(node);
     default:
       break;
   }
@@ -4295,7 +4376,8 @@ Reduction JSCallReducer::ReduceArrayPrototypePush(Node* node) {
   }
 
   // Install code dependencies on the {receiver} global array protector cell.
-  dependencies()->DependOnProtector(factory()->no_elements_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
 
   // If the {receiver_maps} information is not reliable, we need
   // to check that the {receiver} still has one of these maps.
@@ -4409,7 +4491,8 @@ Reduction JSCallReducer::ReduceArrayPrototypePop(Node* node) {
   }
 
   // Install code dependencies on the {receiver} global array protector cell.
-  dependencies()->DependOnProtector(factory()->no_elements_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
 
   // If the {receiver_maps} information is not reliable, we need
   // to check that the {receiver} still has one of these maps.
@@ -4527,7 +4610,8 @@ Reduction JSCallReducer::ReduceArrayPrototypeShift(Node* node) {
   }
 
   // Install code dependencies on the {receiver} global array protector cell.
-  dependencies()->DependOnProtector(factory()->no_elements_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
 
   // If the {receiver_maps} information is not reliable, we need
   // to check that the {receiver} still has one of these maps.
@@ -4687,6 +4771,85 @@ Reduction JSCallReducer::ReduceArrayPrototypeShift(Node* node) {
     return Replace(value);
 }
 
+// ES6 section 22.1.3.23 Array.prototype.slice ( )
+Reduction JSCallReducer::ReduceArrayPrototypeSlice(Node* node) {
+  if (!FLAG_turbo_inline_array_builtins) return NoChange();
+  DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
+  CallParameters const& p = CallParametersOf(node->op());
+  if (p.speculation_mode() == SpeculationMode::kDisallowSpeculation) {
+    return NoChange();
+  }
+
+  int arity = static_cast<int>(p.arity() - 2);
+  // Here we only optimize for cloning, that is when slice is called
+  // without arguments, or with a single argument that is the constant 0.
+  if (arity >= 2) return NoChange();
+  if (arity == 1) {
+    NumberMatcher m(NodeProperties::GetValueInput(node, 2));
+    if (!m.HasValue()) return NoChange();
+    if (m.Value() != 0) return NoChange();
+  }
+
+  Node* receiver = NodeProperties::GetValueInput(node, 1);
+  Node* effect = NodeProperties::GetEffectInput(node);
+  Node* control = NodeProperties::GetControlInput(node);
+
+  // Try to determine the {receiver} map.
+  ZoneHandleSet<Map> receiver_maps;
+  NodeProperties::InferReceiverMapsResult result =
+      NodeProperties::InferReceiverMaps(isolate(), receiver, effect,
+                                        &receiver_maps);
+  if (result == NodeProperties::kNoReceiverMaps) return NoChange();
+
+  // Ensure that any changes to the Array species constructor cause deopt.
+  if (!isolate()->IsArraySpeciesLookupChainIntact()) return NoChange();
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->array_species_protector()));
+
+  bool can_be_holey = false;
+  // Check that the maps are of JSArray (and more)
+  for (Handle<Map> receiver_map : receiver_maps) {
+    if (!CanInlineArrayIteratingBuiltin(isolate(), receiver_map))
+      return NoChange();
+
+    if (IsHoleyElementsKind(receiver_map->elements_kind())) can_be_holey = true;
+  }
+
+  // Install code dependency on the array protector for holey arrays.
+  if (can_be_holey) {
+    dependencies()->DependOnProtector(
+        PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
+  }
+
+  // If we have unreliable maps, we need a map check.
+  // This is actually redundant due to how JSNativeContextSpecialization
+  // reduces the load of slice, but we do it here nevertheless for consistency
+  // and robustness.
+  if (result == NodeProperties::kUnreliableReceiverMaps) {
+    effect =
+        graph()->NewNode(simplified()->CheckMaps(CheckMapsFlag::kNone,
+                                                 receiver_maps, p.feedback()),
+                         receiver, effect, control);
+  }
+
+  Node* context = NodeProperties::GetContextInput(node);
+
+  Callable callable =
+      Builtins::CallableFor(isolate(), Builtins::kCloneFastJSArray);
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, CallDescriptor::kNoFlags,
+      Operator::kNoThrow | Operator::kNoDeopt);
+
+  // Calls to Builtins::kCloneFastJSArray produce COW arrays
+  // if the original array is COW
+  Node* clone = effect = graph()->NewNode(
+      common()->Call(call_descriptor), jsgraph()->HeapConstant(callable.code()),
+      receiver, context, effect, control);
+
+  ReplaceWithValue(node, clone, effect, control);
+  return Replace(clone);
+}
+
 // ES6 section 22.1.2.2 Array.isArray ( arg )
 Reduction JSCallReducer::ReduceArrayIsArray(Node* node) {
   // We certainly know that undefined is not an array.
@@ -4808,20 +4971,17 @@ Reduction JSCallReducer::ReduceArrayIteratorPrototypeNext(Node* node) {
 
   // Install code dependency on the array protector for holey arrays.
   if (IsHoleyElementsKind(elements_kind)) {
-    dependencies()->DependOnProtector(factory()->no_elements_protector());
+    dependencies()->DependOnProtector(
+        PropertyCellRef(js_heap_broker(), factory()->no_elements_protector()));
   }
 
-  // Load the (current) {iterated_object} from the {iterator}; this might be
-  // either undefined or the JSReceiver that was passed to the JSArrayIterator
-  // creation.
+  // Load the (current) {iterated_object} from the {iterator}.
   Node* iterated_object = effect =
       graph()->NewNode(simplified()->LoadField(
                            AccessBuilder::ForJSArrayIteratorIteratedObject()),
                        iterator, effect, control);
 
-  // Ensure that the {iterated_object} map didn't change. This also rules
-  // out the undefined that we put as a termination marker into the
-  // iterator.[[IteratedObject]] field once we reach the end.
+  // Ensure that the {iterated_object} map didn't change.
   effect = graph()->NewNode(
       simplified()->CheckMaps(CheckMapsFlag::kNone, iterated_object_maps,
                               p.feedback()),
@@ -4832,8 +4992,8 @@ Reduction JSCallReducer::ReduceArrayIteratorPrototypeNext(Node* node) {
     if (isolate()->IsArrayBufferNeuteringIntact()) {
       // Add a code dependency so we are deoptimized in case an ArrayBuffer
       // gets neutered.
-      dependencies()->DependOnProtector(
-          factory()->array_buffer_neutering_protector());
+      dependencies()->DependOnProtector(PropertyCellRef(
+          js_heap_broker(), factory()->array_buffer_neutering_protector()));
     } else {
       // Deoptimize if the array buffer was neutered.
       Node* buffer = effect = graph()->NewNode(
@@ -4916,9 +5076,9 @@ Reduction JSCallReducer::ReduceArrayIteratorPrototypeNext(Node* node) {
 
         ExternalArrayType array_type = kExternalInt8Array;
         switch (elements_kind) {
-#define TYPED_ARRAY_CASE(Type, type, TYPE, ctype, size) \
-  case TYPE##_ELEMENTS:                                 \
-    array_type = kExternal##Type##Array;                \
+#define TYPED_ARRAY_CASE(Type, type, TYPE, ctype) \
+  case TYPE##_ELEMENTS:                           \
+    array_type = kExternal##Type##Array;          \
     break;
           TYPED_ARRAYS(TYPED_ARRAY_CASE)
           default:
@@ -4979,10 +5139,22 @@ Reduction JSCallReducer::ReduceArrayIteratorPrototypeNext(Node* node) {
     // iterator.[[NextIndex]] >= array.length, stop iterating.
     done_false = jsgraph()->TrueConstant();
     value_false = jsgraph()->UndefinedConstant();
-    efalse =
-        graph()->NewNode(simplified()->StoreField(
-                             AccessBuilder::ForJSArrayIteratorIteratedObject()),
-                         iterator, value_false, efalse, if_false);
+
+    if (!IsFixedTypedArrayElementsKind(elements_kind)) {
+      // Mark the {iterator} as exhausted by setting the [[NextIndex]] to a
+      // value that will never pass the length check again (aka the maximum
+      // value possible for the specific iterated object). Note that this is
+      // different from what the specification says, which is changing the
+      // [[IteratedObject]] field to undefined, but that makes it difficult
+      // to eliminate the map checks and "length" accesses in for..of loops.
+      //
+      // This is not necessary for JSTypedArray's, since the length of those
+      // cannot change later and so if we were ever out of bounds for them
+      // we will stay out-of-bounds forever.
+      Node* end_index = jsgraph()->Constant(index_access.type.Max());
+      efalse = graph()->NewNode(simplified()->StoreField(index_access),
+                                iterator, end_index, efalse, if_false);
+    }
   }
 
   control = graph()->NewNode(common()->Merge(2), if_true, if_false);
@@ -5318,7 +5490,8 @@ Reduction JSCallReducer::ReduceAsyncFunctionPromiseCreate(Node* node) {
   if (!isolate()->IsPromiseHookProtectorIntact()) return NoChange();
 
   // Install a code dependency on the promise hook protector cell.
-  dependencies()->DependOnProtector(factory()->promise_hook_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->promise_hook_protector()));
 
   // Morph this {node} into a JSCreatePromise node.
   RelaxControls(node);
@@ -5333,126 +5506,13 @@ Reduction JSCallReducer::ReduceAsyncFunctionPromiseRelease(Node* node) {
   DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
   if (!isolate()->IsPromiseHookProtectorIntact()) return NoChange();
 
-  dependencies()->DependOnProtector(factory()->promise_hook_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->promise_hook_protector()));
 
   // The AsyncFunctionPromiseRelease builtin is a no-op as long as neither
   // the debugger is active nor any promise hook has been installed (ever).
   Node* value = jsgraph()->UndefinedConstant();
   ReplaceWithValue(node, value);
-  return Replace(value);
-}
-
-// ES section #sec-promise-reject-functions
-Reduction JSCallReducer::ReducePromiseCapabilityDefaultReject(Node* node) {
-  DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
-  Node* target = NodeProperties::GetValueInput(node, 0);
-  Node* resolution = node->op()->ValueInputCount() > 2
-                         ? NodeProperties::GetValueInput(node, 2)
-                         : jsgraph()->UndefinedConstant();
-  Node* frame_state = NodeProperties::GetFrameStateInput(node);
-  Node* effect = NodeProperties::GetEffectInput(node);
-  Node* control = NodeProperties::GetControlInput(node);
-
-  // We need to execute in the {target}s context.
-  Node* context = effect = graph()->NewNode(
-      simplified()->LoadField(AccessBuilder::ForJSFunctionContext()), target,
-      effect, control);
-
-  // Grab the promise closed over by {target}.
-  Node* promise = effect =
-      graph()->NewNode(simplified()->LoadField(AccessBuilder::ForContextSlot(
-                           PromiseBuiltinsAssembler::kPromiseSlot)),
-                       context, effect, control);
-
-  // Check if the {promise} is still pending or already settled.
-  Node* check = graph()->NewNode(simplified()->ReferenceEqual(), promise,
-                                 jsgraph()->UndefinedConstant());
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kFalse), check, control);
-
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  {
-    // Mark the {promise} as settled.
-    efalse = graph()->NewNode(
-        simplified()->StoreField(AccessBuilder::ForContextSlot(
-            PromiseBuiltinsAssembler::kPromiseSlot)),
-        context, jsgraph()->UndefinedConstant(), efalse, if_false);
-
-    // Check if we should emit a debug event.
-    Node* debug_event = efalse =
-        graph()->NewNode(simplified()->LoadField(AccessBuilder::ForContextSlot(
-                             PromiseBuiltinsAssembler::kDebugEventSlot)),
-                         context, efalse, if_false);
-
-    // Actually reject the {promise}.
-    efalse =
-        graph()->NewNode(javascript()->RejectPromise(), promise, resolution,
-                         debug_event, context, frame_state, efalse, if_false);
-  }
-
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-
-  Node* value = jsgraph()->UndefinedConstant();
-  ReplaceWithValue(node, value, effect, control);
-  return Replace(value);
-}
-
-// ES section #sec-promise-resolve-functions
-Reduction JSCallReducer::ReducePromiseCapabilityDefaultResolve(Node* node) {
-  DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
-  Node* target = NodeProperties::GetValueInput(node, 0);
-  Node* resolution = node->op()->ValueInputCount() > 2
-                         ? NodeProperties::GetValueInput(node, 2)
-                         : jsgraph()->UndefinedConstant();
-  Node* frame_state = NodeProperties::GetFrameStateInput(node);
-  Node* effect = NodeProperties::GetEffectInput(node);
-  Node* control = NodeProperties::GetControlInput(node);
-
-  // We need to execute in the {target}s context.
-  Node* context = effect = graph()->NewNode(
-      simplified()->LoadField(AccessBuilder::ForJSFunctionContext()), target,
-      effect, control);
-
-  // Grab the promise closed over by {target}.
-  Node* promise = effect =
-      graph()->NewNode(simplified()->LoadField(AccessBuilder::ForContextSlot(
-                           PromiseBuiltinsAssembler::kPromiseSlot)),
-                       context, effect, control);
-
-  // Check if the {promise} is still pending or already settled.
-  Node* check = graph()->NewNode(simplified()->ReferenceEqual(), promise,
-                                 jsgraph()->UndefinedConstant());
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kFalse), check, control);
-
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  {
-    // Mark the {promise} as settled.
-    efalse = graph()->NewNode(
-        simplified()->StoreField(AccessBuilder::ForContextSlot(
-            PromiseBuiltinsAssembler::kPromiseSlot)),
-        context, jsgraph()->UndefinedConstant(), efalse, if_false);
-
-    // Actually resolve the {promise}.
-    efalse =
-        graph()->NewNode(javascript()->ResolvePromise(), promise, resolution,
-                         context, frame_state, efalse, if_false);
-  }
-
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-
-  Node* value = jsgraph()->UndefinedConstant();
-  ReplaceWithValue(node, value, effect, control);
   return Replace(value);
 }
 
@@ -5502,7 +5562,8 @@ Reduction JSCallReducer::ReducePromiseConstructor(Node* node) {
   // Only handle builtins Promises, not subclasses.
   if (target != new_target) return NoChange();
 
-  dependencies()->DependOnProtector(factory()->promise_hook_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->promise_hook_protector()));
 
   Handle<SharedFunctionInfo> promise_shared(
       handle(native_context()->promise_function()->shared(), isolate()));
@@ -5555,6 +5616,10 @@ Reduction JSCallReducer::ReducePromiseConstructor(Node* node) {
       graph()->NewNode(simplified()->StoreField(AccessBuilder::ForContextSlot(
                            PromiseBuiltinsAssembler::kPromiseSlot)),
                        promise_context, promise, effect, control);
+  effect = graph()->NewNode(
+      simplified()->StoreField(AccessBuilder::ForContextSlot(
+          PromiseBuiltinsAssembler::kAlreadyResolvedSlot)),
+      promise_context, jsgraph()->FalseConstant(), effect, control);
   effect = graph()->NewNode(
       simplified()->StoreField(AccessBuilder::ForContextSlot(
           PromiseBuiltinsAssembler::kDebugEventSlot)),
@@ -5655,7 +5720,8 @@ Reduction JSCallReducer::ReducePromiseInternalConstructor(Node* node) {
   // Check that promises aren't being observed through (debug) hooks.
   if (!isolate()->IsPromiseHookProtectorIntact()) return NoChange();
 
-  dependencies()->DependOnProtector(factory()->promise_hook_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->promise_hook_protector()));
 
   // Create a new pending promise.
   Node* value = effect =
@@ -5747,7 +5813,8 @@ Reduction JSCallReducer::ReducePromisePrototypeCatch(Node* node) {
     }
   }
 
-  dependencies()->DependOnProtector(factory()->promise_then_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->promise_then_protector()));
 
   // If the {receiver_maps} aren't reliable, we need to repeat the
   // map check here, guarded by the CALL_IC.
@@ -5823,9 +5890,12 @@ Reduction JSCallReducer::ReducePromisePrototypeFinally(Node* node) {
     }
   }
 
-  dependencies()->DependOnProtector(factory()->promise_hook_protector());
-  dependencies()->DependOnProtector(factory()->promise_then_protector());
-  dependencies()->DependOnProtector(factory()->promise_species_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->promise_hook_protector()));
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->promise_then_protector()));
+  dependencies()->DependOnProtector(PropertyCellRef(
+      js_heap_broker(), factory()->promise_species_protector()));
 
   // If the {receiver_maps} aren't reliable, we need to repeat the
   // map check here, guarded by the CALL_IC.
@@ -5975,8 +6045,10 @@ Reduction JSCallReducer::ReducePromisePrototypeThen(Node* node) {
     }
   }
 
-  dependencies()->DependOnProtector(factory()->promise_hook_protector());
-  dependencies()->DependOnProtector(factory()->promise_species_protector());
+  dependencies()->DependOnProtector(
+      PropertyCellRef(js_heap_broker(), factory()->promise_hook_protector()));
+  dependencies()->DependOnProtector(PropertyCellRef(
+      js_heap_broker(), factory()->promise_species_protector()));
 
   // If the {receiver_maps} aren't reliable, we need to repeat the
   // map check here, guarded by the CALL_IC.
@@ -6081,7 +6153,7 @@ Reduction JSCallReducer::ReduceTypedArrayConstructor(
   Node* const parameters[] = {jsgraph()->TheHoleConstant()};
   int const num_parameters = static_cast<int>(arraysize(parameters));
   frame_state = CreateJavaScriptBuiltinContinuationFrameState(
-      jsgraph(), shared, Builtins::kTypedArrayConstructorLazyDeoptContinuation,
+      jsgraph(), shared, Builtins::kGenericConstructorLazyDeoptContinuation,
       target, context, parameters, num_parameters, frame_state,
       ContinuationFrameStateMode::LAZY);
 
@@ -6129,7 +6201,7 @@ Reduction JSCallReducer::ReduceTypedArrayPrototypeToStringTag(Node* node) {
       simplified()->NumberSubtract(), receiver_elements_kind,
       jsgraph()->Constant(FIRST_FIXED_TYPED_ARRAY_ELEMENTS_KIND));
 
-#define TYPED_ARRAY_CASE(Type, type, TYPE, ctype, size)                \
+#define TYPED_ARRAY_CASE(Type, type, TYPE, ctype)                      \
   do {                                                                 \
     Node* check = graph()->NewNode(                                    \
         simplified()->NumberEqual(), receiver_elements_kind,           \
@@ -6653,8 +6725,8 @@ Reduction JSCallReducer::ReduceArrayBufferViewAccessor(
     if (isolate()->IsArrayBufferNeuteringIntact()) {
       // Add a code dependency so we are deoptimized in case an ArrayBuffer
       // gets neutered.
-      dependencies()->DependOnProtector(
-          factory()->array_buffer_neutering_protector());
+      dependencies()->DependOnProtector(PropertyCellRef(
+          js_heap_broker(), factory()->array_buffer_neutering_protector()));
     } else {
       // Check if the {receiver}s buffer was neutered.
       Node* buffer = effect = graph()->NewNode(
@@ -6675,16 +6747,32 @@ Reduction JSCallReducer::ReduceArrayBufferViewAccessor(
   return NoChange();
 }
 
+namespace {
+uint32_t ExternalArrayElementSize(const ExternalArrayType element_type) {
+  switch (element_type) {
+#define TYPED_ARRAY_CASE(Type, type, TYPE, ctype) \
+  case kExternal##Type##Array:                    \
+    DCHECK_LE(sizeof(ctype), 8);                  \
+    return sizeof(ctype);
+    TYPED_ARRAYS(TYPED_ARRAY_CASE)
+    default:
+      UNREACHABLE();
+#undef TYPED_ARRAY_CASE
+  }
+}
+}  // namespace
+
 Reduction JSCallReducer::ReduceDataViewPrototypeGet(
     Node* node, ExternalArrayType element_type) {
   Node* effect = NodeProperties::GetEffectInput(node);
   Node* control = NodeProperties::GetControlInput(node);
   Node* receiver = NodeProperties::GetValueInput(node, 1);
 
-  Node* context = NodeProperties::GetContextInput(node);
-  Node* frame_state = NodeProperties::GetFrameStateInput(node);
-
   CallParameters const& p = CallParametersOf(node->op());
+
+  if (p.speculation_mode() == SpeculationMode::kDisallowSpeculation) {
+    return NoChange();
+  }
 
   Node* offset = node->op()->ValueInputCount() > 2
                      ? NodeProperties::GetValueInput(node, 2)
@@ -6705,8 +6793,12 @@ Reduction JSCallReducer::ReduceDataViewPrototypeGet(
                                          jsgraph()->ZeroConstant(), offset);
 
     effect = graph()->NewNode(
-        simplified()->CheckIf(DeoptimizeReason::kNotASmi, p.feedback()),
+        simplified()->CheckIf(DeoptimizeReason::kOutOfBounds, p.feedback()),
         is_positive, effect, control);
+
+    // Tell the typer that we're a positive Smi, so we'll fit in Int32 math.
+    offset = effect = graph()->NewNode(
+        common()->TypeGuard(Type::UnsignedSmall()), offset, effect, control);
 
     // Coerce {is_little_endian} to boolean.
     is_little_endian =
@@ -6717,125 +6809,214 @@ Reduction JSCallReducer::ReduceDataViewPrototypeGet(
         simplified()->LoadField(AccessBuilder::ForJSArrayBufferViewBuffer()),
         receiver, effect, control);
 
-    Node* check_neutered = effect = graph()->NewNode(
-        simplified()->ArrayBufferWasNeutered(), buffer, effect, control);
-    Node* branch_neutered = graph()->NewNode(
-        common()->Branch(BranchHint::kFalse), check_neutered, control);
-
-    // Raise an error if it was neuteured.
-    Node* if_true_neutered =
-        graph()->NewNode(common()->IfTrue(), branch_neutered);
-    Node* etrue_neutered = effect;
-    {
-      if_true_neutered = etrue_neutered = graph()->NewNode(
-          javascript()->CallRuntime(Runtime::kThrowTypeError, 2),
-          jsgraph()->Constant(MessageTemplate::kDetachedOperation),
-          jsgraph()->HeapConstant(
-              factory()->NewStringFromAsciiChecked("DataView.prototype.get")),
-          context, frame_state, etrue_neutered, if_true_neutered);
+    if (isolate()->IsArrayBufferNeuteringIntact()) {
+      // Add a code dependency so we are deoptimized in case an ArrayBuffer
+      // gets neutered.
+      dependencies()->DependOnProtector(PropertyCellRef(
+          js_heap_broker(), factory()->array_buffer_neutering_protector()));
+    } else {
+      // If the buffer was neutered, deopt and let the unoptimized code throw.
+      Node* check_neutered = effect = graph()->NewNode(
+          simplified()->ArrayBufferWasNeutered(), buffer, effect, control);
+      check_neutered =
+          graph()->NewNode(simplified()->BooleanNot(), check_neutered);
+      effect = graph()->NewNode(
+          simplified()->CheckIf(DeoptimizeReason::kArrayBufferWasNeutered,
+                                p.feedback()),
+          check_neutered, effect, control);
     }
 
-    // Otherwise, proceed.
-    Node* if_false_neutered =
-        graph()->NewNode(common()->IfFalse(), branch_neutered);
-    Node* efalse_neutered = effect;
-
-    // Get the byte offset and byte length of the {receiver}.
-    Node* byte_offset = efalse_neutered =
+    // Get the byte offset and byte length of the {receiver},
+    // and deopt if they aren't Smis.
+    Node* byte_offset = effect =
         graph()->NewNode(simplified()->LoadField(
                              AccessBuilder::ForJSArrayBufferViewByteOffset()),
-                         receiver, efalse_neutered, if_false_neutered);
+                         receiver, effect, control);
 
-    Node* byte_length = efalse_neutered =
+    byte_offset = effect = graph()->NewNode(
+        simplified()->CheckSmi(p.feedback()), byte_offset, effect, control);
+
+    Node* byte_length = effect =
         graph()->NewNode(simplified()->LoadField(
                              AccessBuilder::ForJSArrayBufferViewByteLength()),
-                         receiver, efalse_neutered, if_false_neutered);
+                         receiver, effect, control);
+
+    byte_length = effect = graph()->NewNode(
+        simplified()->CheckSmi(p.feedback()), byte_length, effect, control);
 
     // The end offset is the offset plus the element size
     // of the type that we want to load.
-    // Since we only load int8 and uint8 for now, that size is 1.
+    uint32_t element_size = ExternalArrayElementSize(element_type);
+
     Node* end_offset = graph()->NewNode(simplified()->NumberAdd(), offset,
-                                        jsgraph()->OneConstant());
+                                        jsgraph()->Constant(element_size));
 
-    // We need to check that {end_offset} <= {byte_length}, ie
-    // throw a RangeError if {byte_length} < {end_offset}.
-    Node* check_range = graph()->NewNode(simplified()->NumberLessThan(),
-                                         byte_length, end_offset);
-    Node* branch_range = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                          check_range, if_false_neutered);
+    // Also deopt if this is not a Smi to avoid Float64 math.
+    end_offset = effect = graph()->NewNode(simplified()->CheckSmi(p.feedback()),
+                                           end_offset, effect, control);
 
-    Node* if_true_range = graph()->NewNode(common()->IfTrue(), branch_range);
-    Node* etrue_range = efalse_neutered;
-    {
-      if_true_range = etrue_range = graph()->NewNode(
-          javascript()->CallRuntime(Runtime::kThrowRangeError, 2),
-          jsgraph()->Constant(MessageTemplate::kInvalidDataViewAccessorOffset),
-          jsgraph()->HeapConstant(
-              factory()->NewStringFromAsciiChecked("DataView.prototype.get")),
-          context, frame_state, etrue_range, if_true_range);
-    }
+    // We need to check that {end_offset} <= {byte_length}.
+    Node* check_bounds = graph()->NewNode(simplified()->NumberLessThanOrEqual(),
+                                          end_offset, byte_length);
 
-    Node* if_false_range = graph()->NewNode(common()->IfFalse(), branch_range);
-    Node* efalse_range = efalse_neutered;
-    Node* vfalse_range;
-    {
-      // Get the buffer's backing store.
-      Node* backing_store = efalse_range =
-          graph()->NewNode(simplified()->LoadField(
-                               AccessBuilder::ForJSArrayBufferBackingStore()),
-                           buffer, efalse_range, if_false_range);
+    // Also deopt and let the unoptimized code throw in this case.
+    effect = graph()->NewNode(
+        simplified()->CheckIf(DeoptimizeReason::kOutOfBounds, p.feedback()),
+        check_bounds, effect, control);
 
-      // Compute the buffer index at which we'll read.
-      Node* buffer_index =
-          graph()->NewNode(simplified()->NumberAdd(), offset, byte_offset);
+    // Get the buffer's backing store.
+    Node* backing_store = effect = graph()->NewNode(
+        simplified()->LoadField(AccessBuilder::ForJSArrayBufferBackingStore()),
+        buffer, effect, control);
 
-      // Perform the load.
-      vfalse_range = efalse_range = graph()->NewNode(
-          simplified()->LoadElement(AccessBuilder::ForTypedArrayElement(
-              element_type, true, LoadSensitivity::kCritical)),
-          backing_store, buffer_index, efalse_range, if_false_range);
-    }
+    // Compute the buffer index at which we'll read.
+    Node* buffer_index =
+        graph()->NewNode(simplified()->NumberAdd(), offset, byte_offset);
 
-    // Rewire potential exception edges.
-    Node* on_exception = nullptr;
-    if (NodeProperties::IsExceptionalCall(node, &on_exception)) {
-      // Create appropriate {IfException} and {IfSuccess} nodes.
-      Node* extrue_neutered = graph()->NewNode(
-          common()->IfException(), etrue_neutered,
-          if_true_neutered);  // We threw because the array was neutered.
-      if_true_neutered =
-          graph()->NewNode(common()->IfSuccess(), if_true_neutered);
-
-      Node* extrue_range =
-          graph()->NewNode(common()->IfException(), etrue_range,
-                           if_true_range);  // We threw because out of bounds.
-      if_true_range = graph()->NewNode(common()->IfSuccess(), if_true_range);
-
-      // We can't throw in LoadTypedElement(),
-      // so we don't need to handle that path here.
-
-      // Join the exception edges.
-      Node* merge =
-          graph()->NewNode(common()->Merge(2), extrue_neutered, extrue_range);
-      Node* ephi = graph()->NewNode(common()->EffectPhi(2), extrue_neutered,
-                                    extrue_range, merge);
-      Node* phi =
-          graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
-                           extrue_neutered, extrue_range, merge);
-      ReplaceWithValue(on_exception, phi, ephi, merge);
-    }
-
-    // Connect the throwing paths to end.
-    if_true_neutered =
-        graph()->NewNode(common()->Throw(), etrue_neutered, if_true_neutered);
-    NodeProperties::MergeControlToEnd(graph(), common(), if_true_neutered);
-    if_true_range =
-        graph()->NewNode(common()->Throw(), etrue_range, if_true_range);
-    NodeProperties::MergeControlToEnd(graph(), common(), if_true_range);
+    // Perform the load.
+    Node* value = effect = graph()->NewNode(
+        simplified()->LoadDataViewElement(element_type), buffer, backing_store,
+        buffer_index, is_little_endian, effect, control);
 
     // Continue on the regular path.
-    ReplaceWithValue(node, vfalse_range, efalse_range, if_false_range);
-    return Changed(vfalse_range);
+    ReplaceWithValue(node, value, effect, control);
+    return Changed(value);
+  }
+
+  return NoChange();
+}
+
+Reduction JSCallReducer::ReduceDataViewPrototypeSet(
+    Node* node, ExternalArrayType element_type) {
+  Node* effect = NodeProperties::GetEffectInput(node);
+  Node* control = NodeProperties::GetControlInput(node);
+  Node* receiver = NodeProperties::GetValueInput(node, 1);
+
+  CallParameters const& p = CallParametersOf(node->op());
+
+  if (p.speculation_mode() == SpeculationMode::kDisallowSpeculation) {
+    return NoChange();
+  }
+
+  Node* offset = node->op()->ValueInputCount() > 2
+                     ? NodeProperties::GetValueInput(node, 2)
+                     : jsgraph()->ZeroConstant();
+
+  Node* value = node->op()->ValueInputCount() > 3
+                    ? NodeProperties::GetValueInput(node, 3)
+                    : jsgraph()->ZeroConstant();
+
+  Node* is_little_endian = node->op()->ValueInputCount() > 4
+                               ? NodeProperties::GetValueInput(node, 4)
+                               : jsgraph()->FalseConstant();
+
+  // Only do stuff if the {receiver} is really a DataView.
+  if (NodeProperties::HasInstanceTypeWitness(isolate(), receiver, effect,
+                                             JS_DATA_VIEW_TYPE)) {
+    // Check that the {offset} is a positive Smi.
+    offset = effect = graph()->NewNode(simplified()->CheckSmi(p.feedback()),
+                                       offset, effect, control);
+
+    Node* is_positive = graph()->NewNode(simplified()->NumberLessThanOrEqual(),
+                                         jsgraph()->ZeroConstant(), offset);
+
+    effect = graph()->NewNode(
+        simplified()->CheckIf(DeoptimizeReason::kOutOfBounds, p.feedback()),
+        is_positive, effect, control);
+
+    // Tell the typer that we're a positive Smi, so we'll fit in Int32 math.
+    offset = effect = graph()->NewNode(
+        common()->TypeGuard(Type::UnsignedSmall()), offset, effect, control);
+
+    // Coerce {is_little_endian} to boolean.
+    is_little_endian =
+        graph()->NewNode(simplified()->ToBoolean(), is_little_endian);
+
+    // Coerce {value} to Number.
+    value = effect = graph()->NewNode(
+        simplified()->SpeculativeToNumber(NumberOperationHint::kNumberOrOddball,
+                                          p.feedback()),
+        value, effect, control);
+
+    // Get the underlying buffer and check that it has not been neutered.
+    Node* buffer = effect = graph()->NewNode(
+        simplified()->LoadField(AccessBuilder::ForJSArrayBufferViewBuffer()),
+        receiver, effect, control);
+
+    if (isolate()->IsArrayBufferNeuteringIntact()) {
+      // Add a code dependency so we are deoptimized in case an ArrayBuffer
+      // gets neutered.
+      dependencies()->DependOnProtector(PropertyCellRef(
+          js_heap_broker(), factory()->array_buffer_neutering_protector()));
+    } else {
+      // If the buffer was neutered, deopt and let the unoptimized code throw.
+      Node* check_neutered = effect = graph()->NewNode(
+          simplified()->ArrayBufferWasNeutered(), buffer, effect, control);
+      check_neutered =
+          graph()->NewNode(simplified()->BooleanNot(), check_neutered);
+      effect = graph()->NewNode(
+          simplified()->CheckIf(DeoptimizeReason::kArrayBufferWasNeutered,
+                                p.feedback()),
+          check_neutered, effect, control);
+    }
+
+    // Get the byte offset and byte length of the {receiver},
+    // and deopt if they aren't Smis.
+    Node* byte_offset = effect =
+        graph()->NewNode(simplified()->LoadField(
+                             AccessBuilder::ForJSArrayBufferViewByteOffset()),
+                         receiver, effect, control);
+
+    byte_offset = effect = graph()->NewNode(
+        simplified()->CheckSmi(p.feedback()), byte_offset, effect, control);
+
+    Node* byte_length = effect =
+        graph()->NewNode(simplified()->LoadField(
+                             AccessBuilder::ForJSArrayBufferViewByteLength()),
+                         receiver, effect, control);
+
+    byte_length = effect = graph()->NewNode(
+        simplified()->CheckSmi(p.feedback()), byte_length, effect, control);
+
+    // The end offset is the offset plus the element size
+    // of the type that we want to store.
+    uint32_t element_size = ExternalArrayElementSize(element_type);
+
+    Node* end_offset = graph()->NewNode(simplified()->NumberAdd(), offset,
+                                        jsgraph()->Constant(element_size));
+
+    // Also deopt if this is not a Smi to avoid Float64 math.
+    end_offset = effect = graph()->NewNode(simplified()->CheckSmi(p.feedback()),
+                                           end_offset, effect, control);
+
+    // We need to check that {end_offset} <= {byte_length}.
+    Node* check_bounds = graph()->NewNode(simplified()->NumberLessThanOrEqual(),
+                                          end_offset, byte_length);
+
+    // Also deopt and let the unoptimized code throw in this case.
+    effect = graph()->NewNode(
+        simplified()->CheckIf(DeoptimizeReason::kOutOfBounds, p.feedback()),
+        check_bounds, effect, control);
+
+    // Get the buffer's backing store.
+    Node* backing_store = effect = graph()->NewNode(
+        simplified()->LoadField(AccessBuilder::ForJSArrayBufferBackingStore()),
+        buffer, effect, control);
+
+    // Compute the buffer index at which we'll write.
+    Node* buffer_index =
+        graph()->NewNode(simplified()->NumberAdd(), offset, byte_offset);
+
+    // Perform the store.
+    effect = graph()->NewNode(simplified()->StoreDataViewElement(element_type),
+                              buffer, backing_store, buffer_index, value,
+                              is_little_endian, effect, control);
+
+    Node* value = jsgraph()->UndefinedConstant();
+
+    // Continue on the regular path.
+    ReplaceWithValue(node, value, effect, control);
+    return Changed(value);
   }
 
   return NoChange();
@@ -6980,7 +7161,7 @@ Reduction JSCallReducer::ReduceRegExpPrototypeTest(Node* node) {
 
   // Compute property access info for "exec" on {resolution}.
   PropertyAccessInfo ai_exec;
-  AccessInfoFactory access_info_factory(dependencies(), js_heap_broker(),
+  AccessInfoFactory access_info_factory(js_heap_broker(), dependencies(),
                                         native_context(), graph()->zone());
   if (!access_info_factory.ComputePropertyAccessInfo(
           MapHandles(regexp_maps.begin(), regexp_maps.end()),
@@ -6992,13 +7173,14 @@ Reduction JSCallReducer::ReduceRegExpPrototypeTest(Node* node) {
   Handle<Object> exec_on_proto = ai_exec.constant();
   if (*exec_on_proto != *isolate()->regexp_exec_function()) return NoChange();
 
-  PropertyAccessBuilder access_builder(jsgraph(), dependencies());
+  PropertyAccessBuilder access_builder(jsgraph(), js_heap_broker(),
+                                       dependencies());
 
   // Add proper dependencies on the {regexp}s [[Prototype]]s.
   Handle<JSObject> holder;
   if (ai_exec.holder().ToHandle(&holder)) {
     dependencies()->DependOnStablePrototypeChains(
-        native_context(), ai_exec.receiver_maps(), holder);
+        js_heap_broker(), native_context(), ai_exec.receiver_maps(), holder);
   }
 
   if (need_map_check) {
@@ -7037,6 +7219,45 @@ Reduction JSCallReducer::ReduceRegExpPrototypeTest(Node* node) {
   node->TrimInputCount(6);
   NodeProperties::ChangeOp(node, javascript()->RegExpTest());
   return Changed(node);
+}
+
+// ES section #sec-number-constructor
+Reduction JSCallReducer::ReduceNumberConstructor(Node* node) {
+  DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
+  CallParameters const& p = CallParametersOf(node->op());
+
+  if (p.arity() <= 2) {
+    ReplaceWithValue(node, jsgraph()->ZeroConstant());
+  }
+
+  // We don't have a new.target argument, so we can convert to number,
+  // but must also convert BigInts.
+  if (p.arity() == 3) {
+    Node* target = NodeProperties::GetValueInput(node, 0);
+    Node* context = NodeProperties::GetContextInput(node);
+    Node* value = NodeProperties::GetValueInput(node, 2);
+    Node* outer_frame_state = NodeProperties::GetFrameStateInput(node);
+    Handle<SharedFunctionInfo> number_constructor(
+        handle(native_context()->number_function()->shared(), isolate()));
+
+    const std::vector<Node*> checkpoint_parameters({
+        jsgraph()->UndefinedConstant(), /* receiver */
+    });
+    int checkpoint_parameters_size =
+        static_cast<int>(checkpoint_parameters.size());
+
+    Node* frame_state = CreateJavaScriptBuiltinContinuationFrameState(
+        jsgraph(), number_constructor,
+        Builtins::kGenericConstructorLazyDeoptContinuation, target, context,
+        checkpoint_parameters.data(), checkpoint_parameters_size,
+        outer_frame_state, ContinuationFrameStateMode::LAZY);
+
+    NodeProperties::ReplaceValueInputs(node, value);
+    NodeProperties::ChangeOp(node, javascript()->ToNumberConvertBigInt());
+    NodeProperties::ReplaceFrameStateInput(node, frame_state);
+    return Changed(node);
+  }
+  return NoChange();
 }
 
 Graph* JSCallReducer::graph() const { return jsgraph()->graph(); }

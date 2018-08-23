@@ -8,17 +8,18 @@
 #include <cmath>
 
 // Clients of this interface shouldn't depend on lots of heap internals.
-// Do not include anything from src/heap other than src/heap/heap.h here!
+// Do not include anything from src/heap other than src/heap/heap.h and its
+// write barrier here!
+#include "src/heap/heap-write-barrier.h"
 #include "src/heap/heap.h"
 
 #include "src/base/platform/platform.h"
 #include "src/counters-inl.h"
 #include "src/feedback-vector.h"
-// TODO(mstarzinger): There are 3 more includes to remove in order to no longer
+
+// TODO(mstarzinger): There is one more include to remove in order to no longer
 // leak heap internals to users of this interface!
-#include "src/heap/incremental-marking-inl.h"
 #include "src/heap/spaces-inl.h"
-#include "src/heap/store-buffer.h"
 #include "src/isolate.h"
 #include "src/log.h"
 #include "src/msan.h"
@@ -31,6 +32,12 @@
 #include "src/profiler/heap-profiler.h"
 #include "src/string-hasher.h"
 #include "src/zone/zone-list-inl.h"
+
+// The following header includes the write barrier essentials that can also be
+// used stand-alone without including heap-inl.h.
+// TODO(mlippautz): Remove once users of object-macros.h include this file on
+// their own.
+#include "src/heap/heap-write-barrier-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -47,20 +54,8 @@ HeapObject* AllocationResult::ToObjectChecked() {
 
 #define ROOT_ACCESSOR(type, name, camel_name) \
   type* Heap::name() { return type::cast(roots_[k##camel_name##RootIndex]); }
-ROOT_LIST(ROOT_ACCESSOR)
+MUTABLE_ROOT_LIST(ROOT_ACCESSOR)
 #undef ROOT_ACCESSOR
-
-#define STRUCT_MAP_ACCESSOR(NAME, Name, name) \
-  Map* Heap::name##_map() { return Map::cast(roots_[k##Name##MapRootIndex]); }
-STRUCT_LIST(STRUCT_MAP_ACCESSOR)
-#undef STRUCT_MAP_ACCESSOR
-
-#define ALLOCATION_SITE_MAP_ACCESSOR(NAME, Name, Size, name) \
-  Map* Heap::name##_map() {                                  \
-    return Map::cast(roots_[k##Name##Size##MapRootIndex]);   \
-  }
-ALLOCATION_SITE_LIST(ALLOCATION_SITE_MAP_ACCESSOR)
-#undef ALLOCATION_SITE_MAP_ACCESSOR
 
 #define DATA_HANDLER_MAP_ACCESSOR(NAME, Name, Size, name)  \
   Map* Heap::name##_map() {                                \
@@ -68,22 +63,6 @@ ALLOCATION_SITE_LIST(ALLOCATION_SITE_MAP_ACCESSOR)
   }
 DATA_HANDLER_LIST(DATA_HANDLER_MAP_ACCESSOR)
 #undef DATA_HANDLER_MAP_ACCESSOR
-
-#define STRING_ACCESSOR(name, str) \
-  String* Heap::name() { return String::cast(roots_[k##name##RootIndex]); }
-INTERNALIZED_STRING_LIST(STRING_ACCESSOR)
-#undef STRING_ACCESSOR
-
-#define SYMBOL_ACCESSOR(name) \
-  Symbol* Heap::name() { return Symbol::cast(roots_[k##name##RootIndex]); }
-PRIVATE_SYMBOL_LIST(SYMBOL_ACCESSOR)
-#undef SYMBOL_ACCESSOR
-
-#define SYMBOL_ACCESSOR(name, description) \
-  Symbol* Heap::name() { return Symbol::cast(roots_[k##name##RootIndex]); }
-PUBLIC_SYMBOL_LIST(SYMBOL_ACCESSOR)
-WELL_KNOWN_SYMBOL_LIST(SYMBOL_ACCESSOR)
-#undef SYMBOL_ACCESSOR
 
 #define ACCESSOR_INFO_ACCESSOR(accessor_name, AccessorName)                \
   AccessorInfo* Heap::accessor_name##_accessor() {                         \
@@ -154,13 +133,19 @@ AllocationResult Heap::AllocateRaw(int size_in_bytes, AllocationSpace space,
 #endif
 
   bool large_object = size_in_bytes > kMaxRegularHeapObjectSize;
+  bool new_large_object = FLAG_young_generation_large_objects &&
+                          size_in_bytes > kMaxNewSpaceHeapObjectSize;
   HeapObject* object = nullptr;
   AllocationResult allocation;
   if (NEW_SPACE == space) {
     if (large_object) {
       space = LO_SPACE;
     } else {
-      allocation = new_space_->AllocateRaw(size_in_bytes, alignment);
+      if (new_large_object) {
+        allocation = new_lo_space_->AllocateRaw(size_in_bytes);
+      } else {
+        allocation = new_space_->AllocateRaw(size_in_bytes, alignment);
+      }
       if (allocation.To(&object)) {
         OnAllocationEvent(object, size_in_bytes);
       }
@@ -183,11 +168,7 @@ AllocationResult Heap::AllocateRaw(int size_in_bytes, AllocationSpace space,
     }
   } else if (LO_SPACE == space) {
     DCHECK(large_object);
-    if (FLAG_young_generation_large_objects) {
-      allocation = new_lo_space_->AllocateRaw(size_in_bytes, NOT_EXECUTABLE);
-    } else {
-      allocation = lo_space_->AllocateRaw(size_in_bytes, NOT_EXECUTABLE);
-    }
+    allocation = lo_space_->AllocateRaw(size_in_bytes, NOT_EXECUTABLE);
   } else if (MAP_SPACE == space) {
     allocation = map_space_->AllocateRawUnaligned(size_in_bytes);
   } else if (RO_SPACE == space) {
@@ -305,12 +286,33 @@ void Heap::UpdateAllocationsHash(uint32_t value) {
 
 
 void Heap::RegisterExternalString(String* string) {
+  DCHECK(string->IsExternalString());
+  DCHECK(!string->IsThinString());
   external_string_table_.AddString(string);
 }
 
+void Heap::UpdateExternalString(String* string, size_t old_payload,
+                                size_t new_payload) {
+  DCHECK(string->IsExternalString());
+  Page* page = Page::FromHeapObject(string);
+
+  if (old_payload > new_payload)
+    page->DecrementExternalBackingStoreBytes(
+        ExternalBackingStoreType::kExternalString, old_payload - new_payload);
+  else
+    page->IncrementExternalBackingStoreBytes(
+        ExternalBackingStoreType::kExternalString, new_payload - old_payload);
+}
 
 void Heap::FinalizeExternalString(String* string) {
   DCHECK(string->IsExternalString());
+  Page* page = Page::FromHeapObject(string);
+  ExternalString* ext_string = ExternalString::cast(string);
+
+  page->DecrementExternalBackingStoreBytes(
+      ExternalBackingStoreType::kExternalString,
+      ext_string->ExternalPayloadSize());
+
   v8::String::ExternalStringResourceBase** resource_addr =
       reinterpret_cast<v8::String::ExternalStringResourceBase**>(
           reinterpret_cast<byte*>(string) + ExternalString::kResourceOffset -
@@ -325,23 +327,32 @@ void Heap::FinalizeExternalString(String* string) {
 
 Address Heap::NewSpaceTop() { return new_space_->top(); }
 
+// static
 bool Heap::InNewSpace(Object* object) {
   DCHECK(!HasWeakHeapObjectTag(object));
   return object->IsHeapObject() && InNewSpace(HeapObject::cast(object));
 }
 
+// static
 bool Heap::InNewSpace(MaybeObject* object) {
   HeapObject* heap_object;
   return object->ToStrongOrWeakHeapObject(&heap_object) &&
          InNewSpace(heap_object);
 }
 
+// static
 bool Heap::InNewSpace(HeapObject* heap_object) {
   // Inlined check from NewSpace::Contains.
   bool result = MemoryChunk::FromHeapObject(heap_object)->InNewSpace();
-  DCHECK(!result ||                 // Either not in new space
-         gc_state_ != NOT_IN_GC ||  // ... or in the middle of GC
-         InToSpace(heap_object));   // ... or in to-space (where we allocate).
+#ifdef DEBUG
+  // If in NEW_SPACE, then check we're either not in the middle of GC or the
+  // object is in to-space.
+  if (result) {
+    // If the object is in NEW_SPACE, then it's not in RO_SPACE so this is safe.
+    Heap* heap = Heap::FromWritableHeapObject(heap_object);
+    DCHECK(heap->gc_state_ != NOT_IN_GC || InToSpace(heap_object));
+  }
+#endif
   return result;
 }
 
@@ -416,40 +427,6 @@ bool Heap::ShouldBePromoted(Address old_address) {
          (!page->ContainsLimit(age_mark) || old_address < age_mark);
 }
 
-void Heap::RecordWrite(Object* object, Object** slot, Object* value) {
-  DCHECK(!HasWeakHeapObjectTag(*slot));
-  DCHECK(!HasWeakHeapObjectTag(value));
-  DCHECK(object->IsHeapObject());  // Can't write to slots of a Smi.
-  if (!InNewSpace(value) || InNewSpace(HeapObject::cast(object))) return;
-  store_buffer()->InsertEntry(reinterpret_cast<Address>(slot));
-}
-
-void Heap::RecordWrite(Object* object, MaybeObject** slot, MaybeObject* value) {
-  if (!InNewSpace(value) || !object->IsHeapObject() || InNewSpace(object)) {
-    return;
-  }
-  store_buffer()->InsertEntry(reinterpret_cast<Address>(slot));
-}
-
-void Heap::RecordWriteIntoCode(Code* host, RelocInfo* rinfo, Object* value) {
-  if (InNewSpace(value)) {
-    RecordWriteIntoCodeSlow(host, rinfo, value);
-  }
-}
-
-void Heap::RecordFixedArrayElements(FixedArray* array, int offset, int length) {
-  if (InNewSpace(array)) return;
-  for (int i = 0; i < length; i++) {
-    if (!InNewSpace(array->get(offset + i))) continue;
-    store_buffer()->InsertEntry(
-        reinterpret_cast<Address>(array->RawFieldOfElementAt(offset + i)));
-  }
-}
-
-Address* Heap::store_buffer_top_address() {
-  return store_buffer()->top_address();
-}
-
 void Heap::CopyBlock(Address dst, Address src, int byte_size) {
   CopyWords(reinterpret_cast<Object**>(dst), reinterpret_cast<Object**>(src),
             static_cast<size_t>(byte_size / kPointerSize));
@@ -470,7 +447,7 @@ AllocationMemento* Heap::FindAllocationMemento(Map* map, HeapObject* object) {
   // below (memento_address == top) ensures that this is safe. Mark the word as
   // initialized to silence MemorySanitizer warnings.
   MSAN_MEMORY_IS_INITIALIZED(&candidate_map, sizeof(candidate_map));
-  if (candidate_map != allocation_memento_map()) {
+  if (candidate_map != ReadOnlyRoots(this).allocation_memento_map()) {
     return nullptr;
   }
 
@@ -547,7 +524,9 @@ Isolate* Heap::isolate() {
 
 void Heap::ExternalStringTable::AddString(String* string) {
   DCHECK(string->IsExternalString());
-  if (heap_->InNewSpace(string)) {
+  DCHECK(!Contains(string));
+
+  if (InNewSpace(string)) {
     new_space_strings_.push_back(string);
   } else {
     old_space_strings_.push_back(string);
@@ -555,15 +534,16 @@ void Heap::ExternalStringTable::AddString(String* string) {
 }
 
 Oddball* Heap::ToBoolean(bool condition) {
-  return condition ? true_value() : false_value();
+  ReadOnlyRoots roots(this);
+  return condition ? roots.true_value() : roots.false_value();
 }
 
-uint32_t Heap::HashSeed() {
-  uint32_t seed = static_cast<uint32_t>(hash_seed()->value());
+uint64_t Heap::HashSeed() {
+  uint64_t seed;
+  hash_seed()->copy_out(0, reinterpret_cast<byte*>(&seed), kInt64Size);
   DCHECK(FLAG_randomize_hashes || seed == 0);
   return seed;
 }
-
 
 int Heap::NextScriptId() {
   int last_id = last_script_id()->value();

@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <fstream>
 #include <iostream>
 
 #include "src/torque/declarable.h"
@@ -33,6 +32,7 @@ std::string Type::ToString() const {
 }
 
 bool Type::IsSubtypeOf(const Type* supertype) const {
+  if (IsNever()) return true;
   if (const UnionType* union_type = UnionType::DynamicCast(supertype)) {
     return union_type->IsSupertypeOf(this);
   }
@@ -154,6 +154,44 @@ const Type* UnionType::NonConstexprVersion() const {
   return this;
 }
 
+void UnionType::RecomputeParent() {
+  const Type* parent = nullptr;
+  for (const Type* t : types_) {
+    if (parent == nullptr) {
+      parent = t;
+    } else {
+      parent = CommonSupertype(parent, t);
+    }
+  }
+  set_parent(parent);
+}
+
+void UnionType::Subtract(const Type* t) {
+  for (auto it = types_.begin(); it != types_.end();) {
+    if ((*it)->IsSubtypeOf(t)) {
+      it = types_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  if (types_.size() == 0) types_.insert(TypeOracle::GetNeverType());
+  RecomputeParent();
+}
+
+const Type* SubtractType(const Type* a, const Type* b) {
+  UnionType result = UnionType::FromType(a);
+  result.Subtract(b);
+  return TypeOracle::GetUnionType(result);
+}
+
+std::string StructType::ToExplicitString() const {
+  std::stringstream result;
+  result << "{";
+  PrintCommaSeparatedList(result, fields_);
+  result << "}";
+  return result.str();
+}
+
 void PrintSignature(std::ostream& os, const Signature& sig, bool with_names) {
   os << "(";
   for (size_t i = 0; i < sig.parameter_types.types.size(); ++i) {
@@ -179,6 +217,13 @@ void PrintSignature(std::ostream& os, const Signature& sig, bool with_names) {
 
     if (sig.labels[i].types.size() > 0) os << "(" << sig.labels[i].types << ")";
   }
+}
+
+std::ostream& operator<<(std::ostream& os, const NameAndType& name_and_type) {
+  os << name_and_type.name;
+  os << ": ";
+  os << *name_and_type.type;
+  return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const Signature& sig) {
@@ -246,6 +291,30 @@ bool IsCompatibleSignature(const Signature& sig, const TypeVector& types,
 
 bool operator<(const Type& a, const Type& b) {
   return a.MangledName() < b.MangledName();
+}
+
+VisitResult::VisitResult(const Type* type, const Value* declarable)
+    : type_(type), value_(), declarable_(declarable) {}
+
+std::string VisitResult::LValue() const {
+  return std::string("*") + (declarable_ ? (*declarable_)->value() : value_);
+}
+
+std::string VisitResult::RValue() const {
+  std::string result;
+  if (declarable()) {
+    auto value = *declarable();
+    if (value->IsVariable() && !Variable::cast(value)->IsDefined()) {
+      std::stringstream s;
+      s << "\"" << value->name() << "\" is used before it is defined";
+      ReportError(s.str());
+    }
+    result = value->RValue();
+  } else {
+    result = value_;
+  }
+  return "implicit_cast<" + type()->GetGeneratedTypeName() + ">(" + result +
+         ")";
 }
 
 }  // namespace torque

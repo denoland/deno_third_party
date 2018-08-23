@@ -25,7 +25,7 @@ Handle<ScriptContextTable> ScriptContextTable::Extend(
     Isolate* isolate = script_context->GetIsolate();
     Handle<FixedArray> copy =
         isolate->factory()->CopyFixedArrayAndGrow(table, length);
-    copy->set_map(isolate->heap()->script_context_table_map());
+    copy->set_map(ReadOnlyRoots(isolate).script_context_table_map());
     result = Handle<ScriptContextTable>::cast(copy);
   } else {
     result = table;
@@ -37,11 +37,11 @@ Handle<ScriptContextTable> ScriptContextTable::Extend(
   return result;
 }
 
-
-bool ScriptContextTable::Lookup(Handle<ScriptContextTable> table,
+bool ScriptContextTable::Lookup(Isolate* isolate,
+                                Handle<ScriptContextTable> table,
                                 Handle<String> name, LookupResult* result) {
   for (int i = 0; i < table->used(); i++) {
-    Handle<Context> context = GetContext(table, i);
+    Handle<Context> context = GetContext(isolate, table, i);
     DCHECK(context->IsScriptContext());
     Handle<ScopeInfo> scope_info(context->scope_info(), context->GetIsolate());
     int slot_index = ScopeInfo::ContextSlotIndex(
@@ -93,7 +93,7 @@ JSObject* Context::extension_object() {
   DCHECK(IsNativeContext() || IsFunctionContext() || IsBlockContext() ||
          IsEvalContext() || IsCatchContext());
   HeapObject* object = extension();
-  if (object->IsTheHole(GetIsolate())) return nullptr;
+  if (object->IsTheHole()) return nullptr;
   DCHECK(object->IsJSContextExtensionObject() ||
          (IsNativeContext() && object->IsJSGlobalObject()));
   return JSObject::cast(object);
@@ -130,13 +130,11 @@ Context* Context::script_context() {
   return current;
 }
 
-
-JSObject* Context::global_proxy() {
+JSGlobalProxy* Context::global_proxy() {
   return native_context()->global_proxy_object();
 }
 
-
-void Context::set_global_proxy(JSObject* object) {
+void Context::set_global_proxy(JSGlobalProxy* object) {
   native_context()->set_global_proxy_object(object);
 }
 
@@ -223,10 +221,10 @@ Handle<Object> Context::Lookup(Handle<String> name, ContextLookupFlags flags,
             context->global_object()->native_context()->script_context_table(),
             isolate);
         ScriptContextTable::LookupResult r;
-        if (ScriptContextTable::Lookup(script_contexts, name, &r)) {
+        if (ScriptContextTable::Lookup(isolate, script_contexts, name, &r)) {
           if (FLAG_trace_contexts) {
-            Handle<Context> c = ScriptContextTable::GetContext(script_contexts,
-                                                               r.context_index);
+            Handle<Context> c = ScriptContextTable::GetContext(
+                isolate, script_contexts, r.context_index);
             PrintF("=> found property in script context %d: %p\n",
                    r.context_index, reinterpret_cast<void*>(*c));
           }
@@ -234,7 +232,7 @@ Handle<Object> Context::Lookup(Handle<String> name, ContextLookupFlags flags,
           *variable_mode = r.mode;
           *init_flag = r.init_flag;
           *attributes = GetAttributesForMode(r.mode);
-          return ScriptContextTable::GetContext(script_contexts,
+          return ScriptContextTable::GetContext(isolate, script_contexts,
                                                 r.context_index);
         }
       }
@@ -378,7 +376,8 @@ Handle<Object> Context::Lookup(Handle<String> name, ContextLookupFlags flags,
       // to with, script or native contexts up the context chain.
       obj = context->get(WHITE_LIST_INDEX);
       if (obj->IsStringSet()) {
-        failed_whitelist = failed_whitelist || !StringSet::cast(obj)->Has(name);
+        failed_whitelist =
+            failed_whitelist || !StringSet::cast(obj)->Has(isolate, name);
       }
     }
 

@@ -10,6 +10,7 @@
 #include "src/heap/heap.h"
 #include "src/heap/spaces.h"
 #include "src/objects.h"
+#include "src/objects/js-array-buffer-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -65,9 +66,7 @@ void LocalArrayBufferTracker::Free(Callback should_free) {
     const size_t length = it->second.length;
 
     if (should_free(buffer)) {
-      JSArrayBuffer::FreeBackingStore(
-          isolate, {it->second.backing_store, length, it->second.backing_store,
-                    buffer->allocation_mode(), buffer->is_wasm_memory()});
+      JSArrayBuffer::FreeBackingStore(isolate, it->second);
       it = array_buffers_.erase(it);
       freed_memory += length;
     } else {
@@ -101,7 +100,10 @@ void LocalArrayBufferTracker::Add(JSArrayBuffer* buffer, size_t length) {
   page_->IncrementExternalBackingStoreBytes(
       ExternalBackingStoreType::kArrayBuffer, length);
 
-  auto ret = array_buffers_.insert({buffer, {buffer->backing_store(), length}});
+  auto ret = array_buffers_.insert(
+      {buffer,
+       {buffer->backing_store(), length, buffer->backing_store(),
+        buffer->is_wasm_memory()}});
   USE(ret);
   // Check that we indeed inserted a new value and did not overwrite an existing
   // one (which would be a bug).

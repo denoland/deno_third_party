@@ -347,6 +347,13 @@ TF_BUILTIN(StringAdd_ConvertRight_NotTenured, StringBuiltinsAssembler) {
                      right);
 }
 
+TF_BUILTIN(SubString, StringBuiltinsAssembler) {
+  TNode<String> string = CAST(Parameter(Descriptor::kString));
+  TNode<Smi> from = CAST(Parameter(Descriptor::kFrom));
+  TNode<Smi> to = CAST(Parameter(Descriptor::kTo));
+  Return(SubString(string, SmiUntag(from), SmiUntag(to)));
+}
+
 void StringBuiltinsAssembler::GenerateStringAt(char const* method_name,
                                                TNode<Context> context,
                                                Node* receiver,
@@ -1830,8 +1837,8 @@ TNode<JSArray> StringBuiltinsAssembler::StringToArray(
 
     ToDirectStringAssembler to_direct(state(), subject_string);
     to_direct.TryToDirect(&call_runtime);
-    TNode<FixedArray> elements = AllocateFixedArray(
-        PACKED_ELEMENTS, length, AllocationFlag::kAllowLargeObjectAllocation);
+    TNode<FixedArray> elements = CAST(AllocateFixedArray(
+        PACKED_ELEMENTS, length, AllocationFlag::kAllowLargeObjectAllocation));
     // Don't allocate anything while {string_data} is live!
     TNode<RawPtrT> string_data = UncheckedCast<RawPtrT>(
         to_direct.PointerToData(&fill_thehole_and_call_runtime));
@@ -1944,7 +1951,7 @@ TF_BUILTIN(StringPrototypeSplit, StringBuiltinsAssembler) {
     Node* const capacity = IntPtrConstant(1);
     Node* const result = AllocateJSArray(kind, array_map, capacity, length);
 
-    Node* const fixed_array = LoadElements(result);
+    TNode<FixedArray> const fixed_array = CAST(LoadElements(result));
     StoreFixedArrayElement(fixed_array, 0, subject_string);
 
     args.PopAndReturn(result);

@@ -23,7 +23,8 @@ if (is_android || is_chromeos) {
                  ".gclient configuration file (in the parent directory of " +
                  "src) must include \"android\" and/or \"chromeos\". For " +
                  "example:${n}${n}solutions = [${n}...${n}]${n}" +
-                 "target_os=[\"chromeos\"]${n}")
+                 "target_os=[\"chromeos\"]${n}${n}" +
+                 "After adding |target_os| please re-run \"gclient sync\".${n}")
     }
   }
 
@@ -118,10 +119,6 @@ if (is_android || is_chromeos) {
     google_play_services_package = "//third_party/android_tools"
   }
 
-  if (!defined(android_support_library_package)) {
-    android_support_library_package = "//third_party/android_tools/support"
-  }
-
   if (!defined(system_webview_apk_target)) {
     system_webview_apk_target = "//android_webview:system_webview_apk"
   }
@@ -166,9 +163,6 @@ if (is_android || is_chromeos) {
     # The password for the keystore to use for signing builds.
     android_keystore_password = default_android_keystore_password
 
-    # Enables verbose proguard output (summaries and unfiltered output).
-    proguard_verbose = false
-
     # Java debug on Android. Having this on enables multidexing, and turning it
     # off will enable proguard.
     is_java_debug = is_debug
@@ -208,13 +202,16 @@ if (is_android || is_chromeos) {
     # Refer to android_aar_prebuilt() for more details.
     update_android_aar_prebuilts = false
 
-    # When true, uses the third party libraries from //third_party/android_deps
-    # over the ones in other places. (instead of the support library from
-    # android_tools for example)
-    enable_android_deps_repository = true
-
     # Turns off android lint. Useful for prototyping or for faster local builds.
     disable_android_lint = false
+
+    # Location of aapt2 binary used for app bundles. For now, a more recent version
+    # than the one distributed with the Android SDK is required.
+    android_sdk_tools_bundle_aapt2 =
+        "//third_party/android_build_tools/aapt2/aapt2"
+
+    # Path to r8.jar. If specified, will be used instead of ProGuard for optimization.
+    experimental_r8_path = ""
   }
 
   # We need a second declare_args block to make sure we are using the overridden
@@ -352,21 +349,6 @@ if (is_android || is_chromeos) {
   if (android_libcpp_lib_dir == "") {
     android_libcpp_lib_dir = "${android_libcpp_root}/libs/${android_app_abi}"
   }
-
-  # Dynamic app bundles -------------------------------------------------------
-
-  # TODO(digit): Remove this once we roll a version of the Android SDK that
-  # has the proper build-tools binaries to both public and internal.
-  declare_args() {
-    # To enable generation of application bundles, define
-    # android_sdk_app_bundle_build_tools to point to an Android SDK build-tools
-    # directory that has the relevant aapt2 and bundletool binaries.
-    #
-    android_sdk_app_bundle_build_tools = ""
-  }
-
-  # Whether building application bundles is supported.
-  android_enable_app_bundles = android_sdk_app_bundle_build_tools != ""
 }
 
 declare_args() {

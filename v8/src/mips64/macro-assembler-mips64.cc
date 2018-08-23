@@ -21,13 +21,14 @@
 #include "src/register-configuration.h"
 #include "src/runtime/runtime.h"
 #include "src/snapshot/snapshot.h"
+#include "src/wasm/wasm-code-manager.h"
 
 namespace v8 {
 namespace internal {
 
-MacroAssembler::MacroAssembler(Isolate* isolate, const Options& options,
-                               void* buffer, int size,
-                               CodeObjectRequired create_code_object)
+MacroAssembler::MacroAssembler(Isolate* isolate,
+                               const AssemblerOptions& options, void* buffer,
+                               int size, CodeObjectRequired create_code_object)
     : TurboAssembler(isolate, options, buffer, size, create_code_object) {
   if (create_code_object == CodeObjectRequired::kYes) {
     // Unlike TurboAssembler, which can be used off the main thread and may not
@@ -212,6 +213,7 @@ void MacroAssembler::RecordWriteField(Register object, int offset,
 
   Daddu(dst, object, Operand(offset - kHeapObjectTag));
   if (emit_debug_code()) {
+    BlockTrampolinePoolScope block_trampoline_pool(this);
     Label ok;
     And(t8, dst, Operand(kPointerSize - 1));
     Branch(&ok, eq, t8, Operand(zero_reg));
@@ -938,6 +940,7 @@ void TurboAssembler::Slt(Register rd, Register rs, const Operand& rt) {
     } else {
       // li handles the relocation.
       UseScratchRegisterScope temps(this);
+      BlockTrampolinePoolScope block_trampoline_pool(this);
       Register scratch = temps.hasAvailable() ? temps.Acquire() : t8;
       DCHECK(rs != scratch);
       li(scratch, rt);
@@ -961,6 +964,7 @@ void TurboAssembler::Sltu(Register rd, Register rs, const Operand& rt) {
     } else {
       // li handles the relocation.
       UseScratchRegisterScope temps(this);
+      BlockTrampolinePoolScope block_trampoline_pool(this);
       Register scratch = temps.hasAvailable() ? temps.Acquire() : t8;
       DCHECK(rs != scratch);
       li(scratch, rt);
@@ -976,6 +980,7 @@ void TurboAssembler::Sle(Register rd, Register rs, const Operand& rt) {
     // li handles the relocation.
     UseScratchRegisterScope temps(this);
     Register scratch = temps.hasAvailable() ? temps.Acquire() : t8;
+    BlockTrampolinePoolScope block_trampoline_pool(this);
     DCHECK(rs != scratch);
     li(scratch, rt);
     slt(rd, scratch, rs);
@@ -990,6 +995,7 @@ void TurboAssembler::Sleu(Register rd, Register rs, const Operand& rt) {
     // li handles the relocation.
     UseScratchRegisterScope temps(this);
     Register scratch = temps.hasAvailable() ? temps.Acquire() : t8;
+    BlockTrampolinePoolScope block_trampoline_pool(this);
     DCHECK(rs != scratch);
     li(scratch, rt);
     sltu(rd, scratch, rs);
@@ -1014,6 +1020,7 @@ void TurboAssembler::Sgt(Register rd, Register rs, const Operand& rt) {
     // li handles the relocation.
     UseScratchRegisterScope temps(this);
     Register scratch = temps.hasAvailable() ? temps.Acquire() : t8;
+    BlockTrampolinePoolScope block_trampoline_pool(this);
     DCHECK(rs != scratch);
     li(scratch, rt);
     slt(rd, scratch, rs);
@@ -1027,6 +1034,7 @@ void TurboAssembler::Sgtu(Register rd, Register rs, const Operand& rt) {
     // li handles the relocation.
     UseScratchRegisterScope temps(this);
     Register scratch = temps.hasAvailable() ? temps.Acquire() : t8;
+    BlockTrampolinePoolScope block_trampoline_pool(this);
     DCHECK(rs != scratch);
     li(scratch, rt);
     sltu(rd, scratch, rs);
@@ -2115,11 +2123,14 @@ void TurboAssembler::Neg_d(FPURegister fd, FPURegister fs) {
 
 void TurboAssembler::Cvt_d_uw(FPURegister fd, FPURegister fs) {
   // Move the data from fs to t8.
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   mfc1(t8, fs);
   Cvt_d_uw(fd, t8);
 }
 
 void TurboAssembler::Cvt_d_uw(FPURegister fd, Register rs) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+
   // Convert rs to a FP value in fd.
   DCHECK(rs != t9);
   DCHECK(rs != at);
@@ -2131,12 +2142,14 @@ void TurboAssembler::Cvt_d_uw(FPURegister fd, Register rs) {
 }
 
 void TurboAssembler::Cvt_d_ul(FPURegister fd, FPURegister fs) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   // Move the data from fs to t8.
   dmfc1(t8, fs);
   Cvt_d_ul(fd, t8);
 }
 
 void TurboAssembler::Cvt_d_ul(FPURegister fd, Register rs) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   // Convert rs to a FP value in fd.
 
   DCHECK(rs != t9);
@@ -2164,12 +2177,14 @@ void TurboAssembler::Cvt_d_ul(FPURegister fd, Register rs) {
 }
 
 void TurboAssembler::Cvt_s_uw(FPURegister fd, FPURegister fs) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   // Move the data from fs to t8.
   mfc1(t8, fs);
   Cvt_s_uw(fd, t8);
 }
 
 void TurboAssembler::Cvt_s_uw(FPURegister fd, Register rs) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   // Convert rs to a FP value in fd.
   DCHECK(rs != t9);
   DCHECK(rs != at);
@@ -2181,12 +2196,14 @@ void TurboAssembler::Cvt_s_uw(FPURegister fd, Register rs) {
 }
 
 void TurboAssembler::Cvt_s_ul(FPURegister fd, FPURegister fs) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   // Move the data from fs to t8.
   dmfc1(t8, fs);
   Cvt_s_ul(fd, t8);
 }
 
 void TurboAssembler::Cvt_s_ul(FPURegister fd, Register rs) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   // Convert rs to a FP value in fd.
 
   DCHECK(rs != t9);
@@ -2237,6 +2254,7 @@ void MacroAssembler::Trunc_l_d(FPURegister fd, FPURegister fs) {
 void MacroAssembler::Trunc_l_ud(FPURegister fd,
                                 FPURegister fs,
                                 FPURegister scratch) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   // Load to GPR.
   dmfc1(t8, fs);
   // Reset sign bit.
@@ -2372,7 +2390,7 @@ void TurboAssembler::Trunc_uw_s(Register rd, FPURegister fs,
 void TurboAssembler::Trunc_ul_d(Register rd, FPURegister fs,
                                 FPURegister scratch, Register result) {
   DCHECK(fs != scratch);
-  DCHECK(!AreAliased(rd, result, at));
+  DCHECK(result.is_valid() ? !AreAliased(rd, result, at) : !AreAliased(rd, at));
 
   Label simple_convert, done, fail;
   if (result.is_valid()) {
@@ -2427,7 +2445,7 @@ void TurboAssembler::Trunc_ul_d(Register rd, FPURegister fs,
 void TurboAssembler::Trunc_ul_s(Register rd, FPURegister fs,
                                 FPURegister scratch, Register result) {
   DCHECK(fs != scratch);
-  DCHECK(!AreAliased(rd, result, at));
+  DCHECK(result.is_valid() ? !AreAliased(rd, result, at) : !AreAliased(rd, at));
 
   Label simple_convert, done, fail;
   if (result.is_valid()) {
@@ -2842,6 +2860,7 @@ void TurboAssembler::Movn(Register rd, Register rs, Register rt) {
 
 void TurboAssembler::LoadZeroOnCondition(Register rd, Register rs,
                                          const Operand& rt, Condition cond) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   switch (cond) {
     case cc_always:
       mov(rd, zero_reg);
@@ -3059,6 +3078,7 @@ void TurboAssembler::Popcnt(Register rd, Register rs) {
   uint32_t shift = 24;          // (sizeof(T) - 1) * BITS_PER_BYTE
 
   UseScratchRegisterScope temps(this);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   Register scratch = temps.Acquire();
   Register scratch2 = t8;
   srl(scratch, rs, 1);
@@ -3087,6 +3107,7 @@ void TurboAssembler::Dpopcnt(Register rd, Register rs) {
   uint64_t shift = 24;                   // (sizeof(T) - 1) * BITS_PER_BYTE
 
   UseScratchRegisterScope temps(this);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   Register scratch = temps.Acquire();
   Register scratch2 = t8;
   dsrl(scratch, rs, 1);
@@ -3176,6 +3197,7 @@ void TurboAssembler::TryInlineTruncateDoubleToI(Register result,
                                                 Label* done) {
   DoubleRegister single_scratch = kScratchDoubleReg.low();
   UseScratchRegisterScope temps(this);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   Register scratch = temps.Acquire();
   Register scratch2 = t9;
 
@@ -3374,6 +3396,7 @@ bool TurboAssembler::BranchShortHelperR6(int32_t offset, Label* L,
                                          const Operand& rt) {
   DCHECK(L == nullptr || offset == 0);
   UseScratchRegisterScope temps(this);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   Register scratch = temps.hasAvailable() ? temps.Acquire() : t8;
 
   // Be careful to always use shifted_branch_offset only just before the
@@ -3588,6 +3611,7 @@ bool TurboAssembler::BranchShortHelper(int16_t offset, Label* L, Condition cond,
   if (!is_near(L, OffsetSize::kOffset16)) return false;
 
   UseScratchRegisterScope temps(this);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   Register scratch = temps.hasAvailable() ? temps.Acquire() : t8;
   int32_t offset32;
 
@@ -4153,9 +4177,12 @@ void TurboAssembler::Jump(intptr_t target, RelocInfo::Mode rmode,
   }
   // The first instruction of 'li' may be placed in the delay slot.
   // This is not an issue, t9 is expected to be clobbered anyway.
-  li(t9, Operand(target, rmode));
-  Jump(t9, al, zero_reg, Operand(zero_reg), bd);
-  bind(&skip);
+  {
+    BlockTrampolinePoolScope block_trampoline_pool(this);
+    li(t9, Operand(target, rmode));
+    Jump(t9, al, zero_reg, Operand(zero_reg), bd);
+    bind(&skip);
+  }
 }
 
 void TurboAssembler::Jump(Address target, RelocInfo::Mode rmode, Condition cond,
@@ -4169,6 +4196,7 @@ void TurboAssembler::Jump(Handle<Code> code, RelocInfo::Mode rmode,
                           BranchDelaySlot bd) {
   DCHECK(RelocInfo::IsCodeTarget(rmode));
   if (FLAG_embedded_builtins) {
+    BlockTrampolinePoolScope block_trampoline_pool(this);
     if (root_array_available_ && options().isolate_independent_code) {
       IndirectLoadConstant(t9, code);
       Daddu(t9, t9, Operand(Code::kHeaderSize - kHeapObjectTag));
@@ -4179,6 +4207,7 @@ void TurboAssembler::Jump(Handle<Code> code, RelocInfo::Mode rmode,
       if (isolate()->builtins()->IsBuiltinHandle(code, &builtin_index) &&
           Builtins::IsIsolateIndependent(builtin_index)) {
         // Inline the trampoline.
+        RecordCommentForOffHeapTrampoline(builtin_index);
         CHECK_NE(builtin_index, Builtins::kNoBuiltinId);
         EmbeddedData d = EmbeddedData::FromBlob();
         Address entry = d.InstructionStartOfBuiltin(builtin_index);
@@ -4191,32 +4220,10 @@ void TurboAssembler::Jump(Handle<Code> code, RelocInfo::Mode rmode,
   Jump(static_cast<intptr_t>(code.address()), rmode, cond, rs, rt, bd);
 }
 
-int TurboAssembler::CallSize(Register target, Condition cond, Register rs,
-                             const Operand& rt, BranchDelaySlot bd) {
-  int size = 0;
-
-  if (cond == cc_always) {
-    size += 1;
-  } else {
-    size += 3;
-  }
-
-  if (bd == PROTECT && kArchVariant != kMips64r6) size += 1;
-
-  return size * kInstrSize;
-}
-
-
 // Note: To call gcc-compiled C code on mips, you must call through t9.
 void TurboAssembler::Call(Register target, Condition cond, Register rs,
                           const Operand& rt, BranchDelaySlot bd) {
-#ifdef DEBUG
-  int size = IsPrevInstrCompactBranch() ? kInstrSize : 0;
-#endif
-
   BlockTrampolinePoolScope block_trampoline_pool(this);
-  Label start;
-  bind(&start);
   if (kArchVariant == kMips64r6 && bd == PROTECT) {
     if (cond == cc_always) {
       jialc(target, 0);
@@ -4236,35 +4243,13 @@ void TurboAssembler::Call(Register target, Condition cond, Register rs,
     // Emit a nop in the branch delay slot if required.
     if (bd == PROTECT) nop();
   }
-
-#ifdef DEBUG
-  DCHECK_EQ(size + CallSize(target, cond, rs, rt, bd),
-            SizeOfCodeGeneratedSince(&start));
-#endif
-}
-
-int TurboAssembler::CallSize(Address target, RelocInfo::Mode rmode,
-                             Condition cond, Register rs, const Operand& rt,
-                             BranchDelaySlot bd) {
-  int size = CallSize(t9, cond, rs, rt, bd);
-  return size + 4 * kInstrSize;
 }
 
 void TurboAssembler::Call(Address target, RelocInfo::Mode rmode, Condition cond,
                           Register rs, const Operand& rt, BranchDelaySlot bd) {
   BlockTrampolinePoolScope block_trampoline_pool(this);
-  Label start;
-  bind(&start);
   li(t9, Operand(static_cast<int64_t>(target), rmode), ADDRESS_LOAD);
   Call(t9, cond, rs, rt, bd);
-  DCHECK_EQ(CallSize(target, rmode, cond, rs, rt, bd),
-            SizeOfCodeGeneratedSince(&start));
-}
-
-int TurboAssembler::CallSize(Handle<Code> code, RelocInfo::Mode rmode,
-                             Condition cond, Register rs, const Operand& rt,
-                             BranchDelaySlot bd) {
-  return CallSize(code.address(), rmode, cond, rs, rt, bd);
 }
 
 void TurboAssembler::Call(Handle<Code> code, RelocInfo::Mode rmode,
@@ -4282,6 +4267,7 @@ void TurboAssembler::Call(Handle<Code> code, RelocInfo::Mode rmode,
       if (isolate()->builtins()->IsBuiltinHandle(code, &builtin_index) &&
           Builtins::IsIsolateIndependent(builtin_index)) {
         // Inline the trampoline.
+        RecordCommentForOffHeapTrampoline(builtin_index);
         CHECK_NE(builtin_index, Builtins::kNoBuiltinId);
         EmbeddedData d = EmbeddedData::FromBlob();
         Address entry = d.InstructionStartOfBuiltin(builtin_index);
@@ -4291,12 +4277,8 @@ void TurboAssembler::Call(Handle<Code> code, RelocInfo::Mode rmode,
       }
     }
   }
-  Label start;
-  bind(&start);
   DCHECK(RelocInfo::IsCodeTarget(rmode));
   Call(code.address(), rmode, cond, rs, rt, bd);
-  DCHECK_EQ(CallSize(code, rmode, cond, rs, rt, bd),
-            SizeOfCodeGeneratedSince(&start));
 }
 
 void TurboAssembler::Ret(Condition cond, Register rs, const Operand& rt,
@@ -4309,17 +4291,22 @@ void TurboAssembler::BranchLong(Label* L, BranchDelaySlot bdslot) {
       (!L->is_bound() || is_near_r6(L))) {
     BranchShortHelperR6(0, L);
   } else {
-    EmitForbiddenSlotInstruction();
+    // Generate position independent long branch.
     BlockTrampolinePoolScope block_trampoline_pool(this);
-    {
-      BlockGrowBufferScope block_buf_growth(this);
-      // Buffer growth (and relocation) must be blocked for internal references
-      // until associated instructions are emitted and available to be patched.
-      RecordRelocInfo(RelocInfo::INTERNAL_REFERENCE_ENCODED);
-      j(L);
+    int64_t imm64;
+    imm64 = branch_long_offset(L);
+    DCHECK(is_int32(imm64));
+    or_(t8, ra, zero_reg);
+    nal();                                        // Read PC into ra register.
+    lui(t9, (imm64 & kHiMaskOf32) >> kLuiShift);  // Branch delay slot.
+    ori(t9, t9, (imm64 & kImm16Mask));
+    daddu(t9, ra, t9);
+    if (bdslot == USE_DELAY_SLOT) {
+      or_(ra, t8, zero_reg);
     }
-    // Emit a nop in the branch delay slot if required.
-    if (bdslot == PROTECT) nop();
+    jr(t9);
+    // Emit a or_ in the branch delay slot if it's protected.
+    if (bdslot == PROTECT) or_(ra, t8, zero_reg);
   }
 }
 
@@ -4328,15 +4315,16 @@ void TurboAssembler::BranchAndLinkLong(Label* L, BranchDelaySlot bdslot) {
       (!L->is_bound() || is_near_r6(L))) {
     BranchAndLinkShortHelperR6(0, L);
   } else {
-    EmitForbiddenSlotInstruction();
+    // Generate position independent long branch and link.
     BlockTrampolinePoolScope block_trampoline_pool(this);
-    {
-      BlockGrowBufferScope block_buf_growth(this);
-      // Buffer growth (and relocation) must be blocked for internal references
-      // until associated instructions are emitted and available to be patched.
-      RecordRelocInfo(RelocInfo::INTERNAL_REFERENCE_ENCODED);
-      jal(L);
-    }
+    int64_t imm64;
+    imm64 = branch_long_offset(L);
+    DCHECK(is_int32(imm64));
+    lui(t8, (imm64 & kHiMaskOf32) >> kLuiShift);
+    nal();                              // Read PC into ra register.
+    ori(t8, t8, (imm64 & kImm16Mask));  // Branch delay slot.
+    daddu(t8, ra, t8);
+    jalr(t8);
     // Emit a nop in the branch delay slot if required.
     if (bdslot == PROTECT) nop();
   }
@@ -4833,6 +4821,7 @@ bool TurboAssembler::AllowThisStubCall(CodeStub* stub) {
 
 void TurboAssembler::DaddOverflow(Register dst, Register left,
                                   const Operand& right, Register overflow) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   Register right_reg = no_reg;
   Register scratch = t8;
   if (!right.is_reg()) {
@@ -4862,6 +4851,7 @@ void TurboAssembler::DaddOverflow(Register dst, Register left,
 
 void TurboAssembler::DsubOverflow(Register dst, Register left,
                                   const Operand& right, Register overflow) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   Register right_reg = no_reg;
   Register scratch = t8;
   if (!right.is_reg()) {
@@ -4891,6 +4881,7 @@ void TurboAssembler::DsubOverflow(Register dst, Register left,
 
 void TurboAssembler::MulOverflow(Register dst, Register left,
                                  const Operand& right, Register overflow) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   Register right_reg = no_reg;
   Register scratch = t8;
   if (!right.is_reg()) {
@@ -5038,6 +5029,15 @@ void TurboAssembler::Abort(AbortReason reason) {
     return;
   }
 
+  if (should_abort_hard()) {
+    // We don't care if we constructed a frame. Just pretend we did.
+    FrameScope assume_frame(this, StackFrame::NONE);
+    PrepareCallCFunction(0, a0);
+    li(a0, Operand(static_cast<int>(reason)));
+    CallCFunction(ExternalReference::abort_with_reason(), 1);
+    return;
+  }
+
   Move(a0, Smi::FromInt(static_cast<int>(reason)));
 
   // Disable stub call restrictions to always allow calls to abort.
@@ -5081,6 +5081,7 @@ void TurboAssembler::StubPrologue(StackFrame::Type type) {
 void TurboAssembler::Prologue() { PushStandardFrame(a1); }
 
 void TurboAssembler::EnterFrame(StackFrame::Type type) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   int stack_offset = -3 * kPointerSize;
   const int fp_offset = 1 * kPointerSize;
   daddiu(sp, sp, stack_offset);
@@ -5152,17 +5153,20 @@ void MacroAssembler::EnterExitFrame(bool save_doubles, int stack_space,
     Sd(zero_reg, MemOperand(fp, ExitFrameConstants::kSPOffset));
   }
 
-  // Accessed from ExitFrame::code_slot.
-  li(t8, CodeObject(), CONSTANT_SIZE);
-  Sd(t8, MemOperand(fp, ExitFrameConstants::kCodeOffset));
+  {
+    BlockTrampolinePoolScope block_trampoline_pool(this);
+    // Accessed from ExitFrame::code_slot.
+    li(t8, CodeObject(), CONSTANT_SIZE);
+    Sd(t8, MemOperand(fp, ExitFrameConstants::kCodeOffset));
 
-  // Save the frame pointer and the context in top.
-  li(t8,
-     ExternalReference::Create(IsolateAddressId::kCEntryFPAddress, isolate()));
-  Sd(fp, MemOperand(t8));
-  li(t8,
-     ExternalReference::Create(IsolateAddressId::kContextAddress, isolate()));
-  Sd(cp, MemOperand(t8));
+    // Save the frame pointer and the context in top.
+    li(t8, ExternalReference::Create(IsolateAddressId::kCEntryFPAddress,
+                                     isolate()));
+    Sd(fp, MemOperand(t8));
+    li(t8,
+       ExternalReference::Create(IsolateAddressId::kContextAddress, isolate()));
+    Sd(cp, MemOperand(t8));
+  }
 
   const int frame_alignment = MacroAssembler::ActivationFrameAlignment();
   if (save_doubles) {
@@ -5198,6 +5202,7 @@ void MacroAssembler::EnterExitFrame(bool save_doubles, int stack_space,
 void MacroAssembler::LeaveExitFrame(bool save_doubles, Register argument_count,
                                     bool do_return,
                                     bool argument_count_is_length) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   // Optionally restore all double registers.
   if (save_doubles) {
     // Remember: we only need to restore every 2nd double FPU value.
@@ -5361,6 +5366,7 @@ void MacroAssembler::AssertSmi(Register object) {
 
 void MacroAssembler::AssertConstructor(Register object) {
   if (emit_debug_code()) {
+    BlockTrampolinePoolScope block_trampoline_pool(this);
     STATIC_ASSERT(kSmiTag == 0);
     SmiTst(object, t8);
     Check(ne, AbortReason::kOperandIsASmiAndNotAConstructor, t8,
@@ -5375,6 +5381,7 @@ void MacroAssembler::AssertConstructor(Register object) {
 
 void MacroAssembler::AssertFunction(Register object) {
   if (emit_debug_code()) {
+    BlockTrampolinePoolScope block_trampoline_pool(this);
     STATIC_ASSERT(kSmiTag == 0);
     SmiTst(object, t8);
     Check(ne, AbortReason::kOperandIsASmiAndNotAFunction, t8,
@@ -5388,6 +5395,7 @@ void MacroAssembler::AssertFunction(Register object) {
 
 void MacroAssembler::AssertBoundFunction(Register object) {
   if (emit_debug_code()) {
+    BlockTrampolinePoolScope block_trampoline_pool(this);
     STATIC_ASSERT(kSmiTag == 0);
     SmiTst(object, t8);
     Check(ne, AbortReason::kOperandIsASmiAndNotABoundFunction, t8,
@@ -5400,6 +5408,7 @@ void MacroAssembler::AssertBoundFunction(Register object) {
 
 void MacroAssembler::AssertGeneratorObject(Register object) {
   if (!emit_debug_code()) return;
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   STATIC_ASSERT(kSmiTag == 0);
   SmiTst(object, t8);
   Check(ne, AbortReason::kOperandIsASmiAndNotAGeneratorObject, t8,
@@ -5457,10 +5466,13 @@ void TurboAssembler::Float32Max(FPURegister dst, FPURegister src1,
     BranchTrueShortF(&return_left);
 
     // Operands are equal, but check for +/-0.
-    mfc1(t8, src1);
-    dsll32(t8, t8, 0);
-    Branch(&return_left, eq, t8, Operand(zero_reg));
-    Branch(&return_right);
+    {
+      BlockTrampolinePoolScope block_trampoline_pool(this);
+      mfc1(t8, src1);
+      dsll32(t8, t8, 0);
+      Branch(&return_left, eq, t8, Operand(zero_reg));
+      Branch(&return_right);
+    }
 
     bind(&return_right);
     if (src2 != dst) {
@@ -5504,10 +5516,13 @@ void TurboAssembler::Float32Min(FPURegister dst, FPURegister src1,
     BranchTrueShortF(&return_right);
 
     // Left equals right => check for -0.
-    mfc1(t8, src1);
-    dsll32(t8, t8, 0);
-    Branch(&return_right, eq, t8, Operand(zero_reg));
-    Branch(&return_left);
+    {
+      BlockTrampolinePoolScope block_trampoline_pool(this);
+      mfc1(t8, src1);
+      dsll32(t8, t8, 0);
+      Branch(&return_right, eq, t8, Operand(zero_reg));
+      Branch(&return_left);
+    }
 
     bind(&return_right);
     if (src2 != dst) {
@@ -5551,9 +5566,12 @@ void TurboAssembler::Float64Max(FPURegister dst, FPURegister src1,
     BranchTrueShortF(&return_left);
 
     // Left equals right => check for -0.
-    dmfc1(t8, src1);
-    Branch(&return_left, eq, t8, Operand(zero_reg));
-    Branch(&return_right);
+    {
+      BlockTrampolinePoolScope block_trampoline_pool(this);
+      dmfc1(t8, src1);
+      Branch(&return_left, eq, t8, Operand(zero_reg));
+      Branch(&return_right);
+    }
 
     bind(&return_right);
     if (src2 != dst) {
@@ -5597,9 +5615,12 @@ void TurboAssembler::Float64Min(FPURegister dst, FPURegister src1,
     BranchTrueShortF(&return_right);
 
     // Left equals right => check for -0.
-    dmfc1(t8, src1);
-    Branch(&return_right, eq, t8, Operand(zero_reg));
-    Branch(&return_left);
+    {
+      BlockTrampolinePoolScope block_trampoline_pool(this);
+      dmfc1(t8, src1);
+      Branch(&return_right, eq, t8, Operand(zero_reg));
+      Branch(&return_left);
+    }
 
     bind(&return_right);
     if (src2 != dst) {
@@ -5672,6 +5693,7 @@ void TurboAssembler::PrepareCallCFunction(int num_reg_arguments,
 void TurboAssembler::CallCFunction(ExternalReference function,
                                    int num_reg_arguments,
                                    int num_double_arguments) {
+  BlockTrampolinePoolScope block_trampoline_pool(this);
   li(t9, function);
   CallCFunctionHelper(t9, num_reg_arguments, num_double_arguments);
 }
@@ -5725,13 +5747,15 @@ void TurboAssembler::CallCFunctionHelper(Register function,
   // Just call directly. The function called cannot cause a GC, or
   // allow preemption, so the return address in the link register
   // stays correct.
+  {
+    BlockTrampolinePoolScope block_trampoline_pool(this);
+    if (function != t9) {
+      mov(t9, function);
+      function = t9;
+    }
 
-  if (function != t9) {
-    mov(t9, function);
-    function = t9;
+    Call(function);
   }
-
-  Call(function);
 
   int stack_passed_arguments = CalculateStackPassedWords(
       num_reg_arguments, num_double_arguments);
@@ -5748,7 +5772,7 @@ void TurboAssembler::CallCFunctionHelper(Register function,
 
 void TurboAssembler::CheckPageFlag(Register object, Register scratch, int mask,
                                    Condition cc, Label* condition_met) {
-  And(scratch, object, Operand(~Page::kPageAlignmentMask));
+  And(scratch, object, Operand(~kPageAlignmentMask));
   Ld(scratch, MemOperand(scratch, MemoryChunk::kFlagsOffset));
   And(scratch, scratch, Operand(mask));
   Branch(condition_met, cc, scratch, Operand(zero_reg));
@@ -5779,42 +5803,20 @@ Register GetRegisterThatIsNotOneOf(Register reg1,
   UNREACHABLE();
 }
 
-bool AreAliased(Register reg1, Register reg2, Register reg3, Register reg4,
-                Register reg5, Register reg6, Register reg7, Register reg8,
-                Register reg9, Register reg10) {
-  int n_of_valid_regs = reg1.is_valid() + reg2.is_valid() + reg3.is_valid() +
-                        reg4.is_valid() + reg5.is_valid() + reg6.is_valid() +
-                        reg7.is_valid() + reg8.is_valid() + reg9.is_valid() +
-                        reg10.is_valid();
-
-  RegList regs = 0;
-  if (reg1.is_valid()) regs |= reg1.bit();
-  if (reg2.is_valid()) regs |= reg2.bit();
-  if (reg3.is_valid()) regs |= reg3.bit();
-  if (reg4.is_valid()) regs |= reg4.bit();
-  if (reg5.is_valid()) regs |= reg5.bit();
-  if (reg6.is_valid()) regs |= reg6.bit();
-  if (reg7.is_valid()) regs |= reg7.bit();
-  if (reg8.is_valid()) regs |= reg8.bit();
-  if (reg9.is_valid()) regs |= reg9.bit();
-  if (reg10.is_valid()) regs |= reg10.bit();
-  int n_of_non_aliasing_regs = NumRegs(regs);
-
-  return n_of_valid_regs != n_of_non_aliasing_regs;
-}
-
 void TurboAssembler::ComputeCodeStartAddress(Register dst) {
   // This push on ra and the pop below together ensure that we restore the
   // register ra, which is needed while computing the code start address.
   push(ra);
 
-  // The bal instruction puts the address of the current instruction into
+  // The nal instruction puts the address of the current instruction into
   // the return address (ra) register, which we can use later on.
-  Label current;
-  bal(&current);
-  nop();
+  if (kArchVariant == kMips64r6) {
+    addiupc(ra, 1);
+  } else {
+    nal();
+    nop();
+  }
   int pc = pc_offset();
-  bind(&current);
   li(dst, Operand(pc));
   Dsubu(dst, ra, dst);
 

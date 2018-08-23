@@ -167,7 +167,8 @@ PoisoningMitigationLevel CodeAssembler::poisoning_level() const {
 }
 
 // static
-Handle<Code> CodeAssembler::GenerateCode(CodeAssemblerState* state) {
+Handle<Code> CodeAssembler::GenerateCode(CodeAssemblerState* state,
+                                         const AssemblerOptions& options) {
   DCHECK(!state->code_generated_);
 
   RawMachineAssembler* rasm = state->raw_assembler_.get();
@@ -181,18 +182,20 @@ Handle<Code> CodeAssembler::GenerateCode(CodeAssemblerState* state) {
       Pipeline::GenerateCodeForCodeStub(
           rasm->isolate(), rasm->call_descriptor(), rasm->graph(), schedule,
           state->kind_, state->name_, state->stub_key_, state->builtin_index_,
-          should_optimize_jumps ? &jump_opt : nullptr, rasm->poisoning_level())
+          should_optimize_jumps ? &jump_opt : nullptr, rasm->poisoning_level(),
+          options)
           .ToHandleChecked();
 
   if (jump_opt.is_optimizable()) {
     jump_opt.set_optimizing();
 
     // Regenerate machine code
-    code = Pipeline::GenerateCodeForCodeStub(
-               rasm->isolate(), rasm->call_descriptor(), rasm->graph(),
-               schedule, state->kind_, state->name_, state->stub_key_,
-               state->builtin_index_, &jump_opt, rasm->poisoning_level())
-               .ToHandleChecked();
+    code =
+        Pipeline::GenerateCodeForCodeStub(
+            rasm->isolate(), rasm->call_descriptor(), rasm->graph(), schedule,
+            state->kind_, state->name_, state->stub_key_, state->builtin_index_,
+            &jump_opt, rasm->poisoning_level(), options)
+            .ToHandleChecked();
   }
 
   state->code_generated_ = true;
@@ -1381,6 +1384,26 @@ void CodeAssembler::Branch(SloppyTNode<IntegralT> condition, Label* true_label,
                                  false_label->label_);
 }
 
+void CodeAssembler::Branch(TNode<BoolT> condition,
+                           std::function<void()> true_body,
+                           std::function<void()> false_body) {
+  int32_t constant;
+  if (ToInt32Constant(condition, constant)) {
+    return constant ? true_body() : false_body();
+  }
+
+  Label vtrue(this), vfalse(this);
+  Branch(condition, &vtrue, &vfalse);
+  Bind(&vtrue);
+  {
+    true_body();
+  }
+  Bind(&vfalse);
+  {
+    false_body();
+  }
+}
+
 void CodeAssembler::Switch(Node* index, Label* default_label,
                            const int32_t* case_values, Label** case_labels,
                            size_t case_count) {
@@ -1682,8 +1705,7 @@ void CodeAssemblerLabel::UpdateVariablesAfterBind() {
 
 }  // namespace compiler
 
-Smi* CheckObjectType(Isolate* isolate, Object* value, Smi* type,
-                     String* location) {
+Smi* CheckObjectType(Object* value, Smi* type, String* location) {
 #ifdef DEBUG
   const char* expected;
   switch (static_cast<ObjectType>(type->value())) {
@@ -1706,7 +1728,7 @@ Smi* CheckObjectType(Isolate* isolate, Object* value, Smi* type,
 #undef TYPE_STRUCT_CASE
   }
   std::stringstream value_description;
-  value->Print(isolate, value_description);
+  value->Print(value_description);
   V8_Fatal(__FILE__, __LINE__,
            "Type cast failed in %s\n"
            "  Expected %s but found %s",

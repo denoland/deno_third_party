@@ -2,15 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/runtime/runtime-utils.h"
-
 #include "src/allocation-site-scopes.h"
-#include "src/arguments.h"
+#include "src/arguments-inl.h"
 #include "src/ast/ast.h"
 #include "src/isolate-inl.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/js-regexp-inl.h"
 #include "src/objects/literal-objects-inl.h"
+#include "src/runtime/runtime-utils.h"
 #include "src/runtime/runtime.h"
 
 namespace v8 {
@@ -22,7 +21,7 @@ bool IsUninitializedLiteralSite(Object* literal_site) {
   return literal_site == Smi::kZero;
 }
 
-bool HasBoilerplate(Isolate* isolate, Handle<Object> literal_site) {
+bool HasBoilerplate(Handle<Object> literal_site) {
   return !literal_site->IsSmi();
 }
 
@@ -31,9 +30,9 @@ void PreInitializeLiteralSite(Handle<FeedbackVector> vector,
   vector->Set(slot, Smi::FromInt(1));
 }
 
-Handle<Object> InnerCreateBoilerplate(
-    Isolate* isolate, Handle<CompileTimeValue> compile_time_value,
-    PretenureFlag pretenure_flag);
+Handle<Object> InnerCreateBoilerplate(Isolate* isolate,
+                                      Handle<Object> description,
+                                      PretenureFlag pretenure_flag);
 
 enum DeepCopyHints { kNoHints = 0, kObjectIsShallow = 1 };
 
@@ -196,7 +195,7 @@ MaybeHandle<JSObject> JSObjectWalkVisitor<ContextObject>::StructureWalk(
       UNREACHABLE();
       break;
 
-#define TYPED_ARRAY_CASE(Type, type, TYPE, ctype, size) case TYPE##_ELEMENTS:
+#define TYPED_ARRAY_CASE(Type, type, TYPE, ctype) case TYPE##_ELEMENTS:
 
       TYPED_ARRAYS(TYPED_ARRAY_CASE)
 #undef TYPED_ARRAY_CASE
@@ -317,13 +316,13 @@ MaybeHandle<JSObject> DeepCopy(Handle<JSObject> object,
   return copy;
 }
 
-struct ObjectBoilerplate {
+struct ObjectLiteralHelper {
   static Handle<JSObject> Create(Isolate* isolate,
                                  Handle<HeapObject> description, int flags,
                                  PretenureFlag pretenure_flag) {
     Handle<Context> native_context = isolate->native_context();
-    Handle<BoilerplateDescription> boilerplate_description =
-        Handle<BoilerplateDescription>::cast(description);
+    Handle<ObjectBoilerplateDescription> object_boilerplate_description =
+        Handle<ObjectBoilerplateDescription>::cast(description);
     bool use_fast_elements = (flags & ObjectLiteral::kFastElements) != 0;
     bool has_null_prototype = (flags & ObjectLiteral::kHasNullPrototype) != 0;
 
@@ -331,7 +330,8 @@ struct ObjectBoilerplate {
     // slow properties mode for now. We don't go in the map cache because
     // maps with constant functions can't be shared if the functions are
     // not the same (which is the common case).
-    int number_of_properties = boilerplate_description->backing_store_size();
+    int number_of_properties =
+        object_boilerplate_description->backing_store_size();
 
     // Ignoring number_of_properties for force dictionary map with
     // __proto__:null.
@@ -352,18 +352,16 @@ struct ObjectBoilerplate {
     if (!use_fast_elements) JSObject::NormalizeElements(boilerplate);
 
     // Add the constant properties to the boilerplate.
-    int length = boilerplate_description->size();
+    int length = object_boilerplate_description->size();
     // TODO(verwaest): Support tracking representations in the boilerplate.
     for (int index = 0; index < length; index++) {
-      Handle<Object> key(boilerplate_description->name(index), isolate);
-      Handle<Object> value(boilerplate_description->value(index), isolate);
-      if (value->IsCompileTimeValue()) {
-        // The value contains the CompileTimeValue with the boilerplate
-        // properties of a simple object or array literal.
-        Handle<CompileTimeValue> compile_time_value =
-            Handle<CompileTimeValue>::cast(value);
-        value =
-            InnerCreateBoilerplate(isolate, compile_time_value, pretenure_flag);
+      Handle<Object> key(object_boilerplate_description->name(index), isolate);
+      Handle<Object> value(object_boilerplate_description->value(index),
+                           isolate);
+
+      if (value->IsObjectBoilerplateDescription() ||
+          value->IsArrayBoilerplateDescription()) {
+        value = InnerCreateBoilerplate(isolate, value, pretenure_flag);
       }
       uint32_t element_index = 0;
       if (key->ToArrayIndex(&element_index)) {
@@ -393,18 +391,20 @@ struct ObjectBoilerplate {
   }
 };
 
-struct ArrayBoilerplate {
+struct ArrayLiteralHelper {
   static Handle<JSObject> Create(Isolate* isolate,
                                  Handle<HeapObject> description, int flags,
                                  PretenureFlag pretenure_flag) {
-    Handle<ConstantElementsPair> elements =
-        Handle<ConstantElementsPair>::cast(description);
-    // Create the JSArray.
-    ElementsKind constant_elements_kind =
-        static_cast<ElementsKind>(elements->elements_kind());
+    Handle<ArrayBoilerplateDescription> array_boilerplate_description =
+        Handle<ArrayBoilerplateDescription>::cast(description);
 
-    Handle<FixedArrayBase> constant_elements_values(elements->constant_values(),
-                                                    isolate);
+    ElementsKind constant_elements_kind =
+        array_boilerplate_description->elements_kind();
+
+    Handle<FixedArrayBase> constant_elements_values(
+        array_boilerplate_description->constant_elements(), isolate);
+
+    // Create the JSArray.
     Handle<FixedArrayBase> copied_elements_values;
     if (IsDoubleElementsKind(constant_elements_kind)) {
       copied_elements_values = isolate->factory()->CopyFixedDoubleArray(
@@ -430,15 +430,12 @@ struct ArrayBoilerplate {
         copied_elements_values = fixed_array_values_copy;
         FOR_WITH_HANDLE_SCOPE(
             isolate, int, i = 0, i, i < fixed_array_values->length(), i++, {
-              if (fixed_array_values->get(i)->IsCompileTimeValue()) {
-                // The value contains the CompileTimeValue with the
-                // boilerplate description of a simple object or
-                // array literal.
-                Handle<CompileTimeValue> compile_time_value(
-                    CompileTimeValue::cast(fixed_array_values->get(i)),
-                    for_with_handle_isolate);
-                Handle<Object> result = InnerCreateBoilerplate(
-                    isolate, compile_time_value, pretenure_flag);
+              Handle<Object> value(fixed_array_values->get(i), isolate);
+
+              if (value->IsArrayBoilerplateDescription() ||
+                  value->IsObjectBoilerplateDescription()) {
+                Handle<Object> result =
+                    InnerCreateBoilerplate(isolate, value, pretenure_flag);
                 fixed_array_values_copy->set(i, *result);
               }
             });
@@ -451,19 +448,49 @@ struct ArrayBoilerplate {
   }
 };
 
-Handle<Object> InnerCreateBoilerplate(
-    Isolate* isolate, Handle<CompileTimeValue> compile_time_value,
-    PretenureFlag pretenure_flag) {
-  int flags = compile_time_value->literal_type_flag();
-  Handle<HeapObject> elements(
-      HeapObject::cast(compile_time_value->constant_elements()), isolate);
-  if (flags == CompileTimeValue::kArrayLiteralFlag) {
-    return ArrayBoilerplate::Create(isolate, elements, flags, pretenure_flag);
+Handle<Object> InnerCreateBoilerplate(Isolate* isolate,
+                                      Handle<Object> description,
+                                      PretenureFlag pretenure_flag) {
+  if (description->IsObjectBoilerplateDescription()) {
+    Handle<ObjectBoilerplateDescription> object_boilerplate_description =
+        Handle<ObjectBoilerplateDescription>::cast(description);
+    return ObjectLiteralHelper::Create(isolate, object_boilerplate_description,
+                                       object_boilerplate_description->flags(),
+                                       pretenure_flag);
+  } else {
+    DCHECK(description->IsArrayBoilerplateDescription());
+    Handle<ArrayBoilerplateDescription> array_boilerplate_description =
+        Handle<ArrayBoilerplateDescription>::cast(description);
+    return ArrayLiteralHelper::Create(
+        isolate, array_boilerplate_description,
+        array_boilerplate_description->elements_kind(), pretenure_flag);
   }
-  return ObjectBoilerplate::Create(isolate, elements, flags, pretenure_flag);
 }
 
-template <typename Boilerplate>
+inline DeepCopyHints DecodeCopyHints(int flags) {
+  DeepCopyHints copy_hints =
+      (flags & AggregateLiteral::kIsShallow) ? kObjectIsShallow : kNoHints;
+  if (FLAG_track_double_fields && !FLAG_unbox_double_fields) {
+    // Make sure we properly clone mutable heap numbers on 32-bit platforms.
+    copy_hints = kNoHints;
+  }
+  return copy_hints;
+}
+
+template <typename LiteralHelper>
+MaybeHandle<JSObject> CreateLiteralWithoutAllocationSite(
+    Isolate* isolate, Handle<HeapObject> description, int flags) {
+  Handle<JSObject> literal =
+      LiteralHelper::Create(isolate, description, flags, NOT_TENURED);
+  DeepCopyHints copy_hints = DecodeCopyHints(flags);
+  if (copy_hints == kNoHints) {
+    DeprecationUpdateContext update_context(isolate);
+    RETURN_ON_EXCEPTION(isolate, DeepWalk(literal, &update_context), JSObject);
+  }
+  return literal;
+}
+
+template <typename LiteralHelper>
 MaybeHandle<JSObject> CreateLiteral(Isolate* isolate,
                                     Handle<FeedbackVector> vector,
                                     int literals_index,
@@ -471,41 +498,25 @@ MaybeHandle<JSObject> CreateLiteral(Isolate* isolate,
   FeedbackSlot literals_slot(FeedbackVector::ToSlot(literals_index));
   CHECK(literals_slot.ToInt() < vector->length());
   Handle<Object> literal_site(vector->Get(literals_slot)->ToObject(), isolate);
-  DeepCopyHints copy_hints =
-      (flags & AggregateLiteral::kIsShallow) ? kObjectIsShallow : kNoHints;
-  if (FLAG_track_double_fields && !FLAG_unbox_double_fields) {
-    // Make sure we properly clone mutable heap numbers on 32-bit platforms.
-    copy_hints = kNoHints;
-  }
+  DeepCopyHints copy_hints = DecodeCopyHints(flags);
 
   Handle<AllocationSite> site;
   Handle<JSObject> boilerplate;
 
-  if (HasBoilerplate(isolate, literal_site)) {
+  if (HasBoilerplate(literal_site)) {
     site = Handle<AllocationSite>::cast(literal_site);
     boilerplate = Handle<JSObject>(site->boilerplate(), isolate);
   } else {
     // Eagerly create AllocationSites for literals that contain an Array.
     bool needs_initial_allocation_site =
         (flags & AggregateLiteral::kNeedsInitialAllocationSite) != 0;
-    // TODO(cbruni): Even in the case where we need an initial allocation site
-    // we could still create the boilerplate lazily to save memory.
     if (!needs_initial_allocation_site &&
         IsUninitializedLiteralSite(*literal_site)) {
       PreInitializeLiteralSite(vector, literals_slot);
-      boilerplate =
-          Boilerplate::Create(isolate, description, flags, NOT_TENURED);
-      if (copy_hints == kNoHints) {
-        DeprecationUpdateContext update_context(isolate);
-        RETURN_ON_EXCEPTION(isolate, DeepWalk(boilerplate, &update_context),
-                            JSObject);
-      }
-      return boilerplate;
+      return CreateLiteralWithoutAllocationSite<LiteralHelper>(
+          isolate, description, flags);
     } else {
-      PretenureFlag pretenure_flag =
-          isolate->heap()->InNewSpace(*vector) ? NOT_TENURED : TENURED;
-      boilerplate =
-          Boilerplate::Create(isolate, description, flags, pretenure_flag);
+      boilerplate = LiteralHelper::Create(isolate, description, flags, TENURED);
     }
     // Install AllocationSite objects.
     AllocationSiteCreationContext creation_context(isolate);
@@ -536,11 +547,21 @@ RUNTIME_FUNCTION(Runtime_CreateObjectLiteral) {
   DCHECK_EQ(4, args.length());
   CONVERT_ARG_HANDLE_CHECKED(FeedbackVector, vector, 0);
   CONVERT_SMI_ARG_CHECKED(literals_index, 1);
-  CONVERT_ARG_HANDLE_CHECKED(BoilerplateDescription, description, 2);
+  CONVERT_ARG_HANDLE_CHECKED(ObjectBoilerplateDescription, description, 2);
   CONVERT_SMI_ARG_CHECKED(flags, 3);
   RETURN_RESULT_OR_FAILURE(
-      isolate, CreateLiteral<ObjectBoilerplate>(isolate, vector, literals_index,
-                                                description, flags));
+      isolate, CreateLiteral<ObjectLiteralHelper>(
+                   isolate, vector, literals_index, description, flags));
+}
+
+RUNTIME_FUNCTION(Runtime_CreateObjectLiteralWithoutAllocationSite) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(2, args.length());
+  CONVERT_ARG_HANDLE_CHECKED(ObjectBoilerplateDescription, description, 0);
+  CONVERT_SMI_ARG_CHECKED(flags, 1);
+  RETURN_RESULT_OR_FAILURE(
+      isolate, CreateLiteralWithoutAllocationSite<ObjectLiteralHelper>(
+                   isolate, description, flags));
 }
 
 RUNTIME_FUNCTION(Runtime_CreateArrayLiteral) {
@@ -548,11 +569,11 @@ RUNTIME_FUNCTION(Runtime_CreateArrayLiteral) {
   DCHECK_EQ(4, args.length());
   CONVERT_ARG_HANDLE_CHECKED(FeedbackVector, vector, 0);
   CONVERT_SMI_ARG_CHECKED(literals_index, 1);
-  CONVERT_ARG_HANDLE_CHECKED(ConstantElementsPair, elements, 2);
+  CONVERT_ARG_HANDLE_CHECKED(ArrayBoilerplateDescription, elements, 2);
   CONVERT_SMI_ARG_CHECKED(flags, 3);
   RETURN_RESULT_OR_FAILURE(
-      isolate, CreateLiteral<ArrayBoilerplate>(isolate, vector, literals_index,
-                                               elements, flags));
+      isolate, CreateLiteral<ArrayLiteralHelper>(
+                   isolate, vector, literals_index, elements, flags));
 }
 
 RUNTIME_FUNCTION(Runtime_CreateRegExpLiteral) {
@@ -568,9 +589,10 @@ RUNTIME_FUNCTION(Runtime_CreateRegExpLiteral) {
   // Check if boilerplate exists. If not, create it first.
   Handle<Object> literal_site(vector->Get(literal_slot)->ToObject(), isolate);
   Handle<Object> boilerplate;
-  if (!HasBoilerplate(isolate, literal_site)) {
+  if (!HasBoilerplate(literal_site)) {
     ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-        isolate, boilerplate, JSRegExp::New(pattern, JSRegExp::Flags(flags)));
+        isolate, boilerplate,
+        JSRegExp::New(isolate, pattern, JSRegExp::Flags(flags)));
     if (IsUninitializedLiteralSite(*literal_site)) {
       PreInitializeLiteralSite(vector, literal_slot);
       return *boilerplate;

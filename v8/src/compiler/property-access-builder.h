@@ -13,22 +13,24 @@
 
 namespace v8 {
 namespace internal {
-
-class CompilationDependencies;
-
 namespace compiler {
 
 class CommonOperatorBuilder;
+class CompilationDependencies;
 class Graph;
 class JSGraph;
+class JSHeapBroker;
 class Node;
 class PropertyAccessInfo;
 class SimplifiedOperatorBuilder;
 
 class PropertyAccessBuilder {
  public:
-  PropertyAccessBuilder(JSGraph* jsgraph, CompilationDependencies* dependencies)
-      : jsgraph_(jsgraph), dependencies_(dependencies) {}
+  PropertyAccessBuilder(JSGraph* jsgraph, JSHeapBroker* js_heap_broker,
+                        CompilationDependencies* dependencies)
+      : jsgraph_(jsgraph),
+        js_heap_broker_(js_heap_broker),
+        dependencies_(dependencies) {}
 
   // Builds the appropriate string check if the maps are only string
   // maps.
@@ -52,6 +54,7 @@ class PropertyAccessBuilder {
 
  private:
   JSGraph* jsgraph() const { return jsgraph_; }
+  JSHeapBroker* js_heap_broker() const { return js_heap_broker_; }
   CompilationDependencies* dependencies() const { return dependencies_; }
   Graph* graph() const;
   Isolate* isolate() const;
@@ -66,6 +69,7 @@ class PropertyAccessBuilder {
   Node* ResolveHolder(PropertyAccessInfo const& access_info, Node* receiver);
 
   JSGraph* jsgraph_;
+  JSHeapBroker* js_heap_broker_;
   CompilationDependencies* dependencies_;
 };
 

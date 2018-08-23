@@ -56,15 +56,15 @@ class Name : public HeapObject {
   // Return a string version of this name that is converted according to the
   // rules described in ES6 section 9.2.11.
   V8_WARN_UNUSED_RESULT static MaybeHandle<String> ToFunctionName(
-      Handle<Name> name);
+      Isolate* isolate, Handle<Name> name);
   V8_WARN_UNUSED_RESULT static MaybeHandle<String> ToFunctionName(
-      Handle<Name> name, Handle<String> prefix);
+      Isolate* isolate, Handle<Name> name, Handle<String> prefix);
 
   DECL_CAST(Name)
 
   DECL_PRINTER(Name)
-  void NameShortPrint(Isolate* isolate);
-  int NameShortPrint(Isolate* isolate, Vector<char> str);
+  void NameShortPrint();
+  int NameShortPrint(Vector<char> str);
 
   // Layout description.
   static const int kHashFieldSlot = HeapObject::kHeaderSize;
@@ -177,7 +177,7 @@ class Symbol : public Name {
   DECL_CAST(Symbol)
 
   // Dispatched behavior.
-  DECL_PRINTER_WITH_ISOLATE(Symbol)
+  DECL_PRINTER(Symbol)
   DECL_VERIFIER(Symbol)
 
   // Layout description.
@@ -199,7 +199,7 @@ class Symbol : public Name {
   void SymbolShortPrint(std::ostream& os);
 
  private:
-  const char* PrivateSymbolToName(Isolate* isolate) const;
+  const char* PrivateSymbolToName() const;
 
   // TODO(cbruni): remove once the new maptracer is in place.
   friend class Name;  // For PrivateSymbolToName.

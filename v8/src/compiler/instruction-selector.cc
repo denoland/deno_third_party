@@ -1705,11 +1705,18 @@ void InstructionSelector::VisitNode(Node* node) {
       return VisitWord32AtomicStore(node);
     case IrOpcode::kWord64AtomicStore:
       return VisitWord64AtomicStore(node);
-#define ATOMIC_CASE(name, rep)                               \
-  case IrOpcode::k##rep##Atomic##name: {                     \
-    MachineType type = AtomicOpRepresentationOf(node->op()); \
-    MarkAsRepresentation(type.representation(), node);       \
-    return Visit##rep##Atomic##name(node);                   \
+    case IrOpcode::kWord32AtomicPairStore:
+      return VisitWord32AtomicPairStore(node);
+    case IrOpcode::kWord32AtomicPairLoad: {
+      MarkAsWord32(node);
+      MarkPairProjectionsAsWord32(node);
+      return VisitWord32AtomicPairLoad(node);
+    }
+#define ATOMIC_CASE(name, rep)                         \
+  case IrOpcode::k##rep##Atomic##name: {               \
+    MachineType type = AtomicOpType(node->op());       \
+    MarkAsRepresentation(type.representation(), node); \
+    return Visit##rep##Atomic##name(node);             \
   }
       ATOMIC_CASE(Add, Word32)
       ATOMIC_CASE(Add, Word64)
@@ -1725,6 +1732,35 @@ void InstructionSelector::VisitNode(Node* node) {
       ATOMIC_CASE(Exchange, Word64)
       ATOMIC_CASE(CompareExchange, Word32)
       ATOMIC_CASE(CompareExchange, Word64)
+#undef ATOMIC_CASE
+#define ATOMIC_CASE(name)                     \
+  case IrOpcode::kWord32AtomicPair##name: {   \
+    MarkAsWord32(node);                       \
+    MarkPairProjectionsAsWord32(node);        \
+    return VisitWord32AtomicPair##name(node); \
+  }
+      ATOMIC_CASE(Add)
+      ATOMIC_CASE(Sub)
+      ATOMIC_CASE(And)
+      ATOMIC_CASE(Or)
+      ATOMIC_CASE(Xor)
+      ATOMIC_CASE(Exchange)
+      ATOMIC_CASE(CompareExchange)
+#undef ATOMIC_CASE
+#define ATOMIC_CASE(name)                              \
+  case IrOpcode::kWord64AtomicNarrow##name: {          \
+    MachineType type = AtomicOpType(node->op());       \
+    MarkAsRepresentation(type.representation(), node); \
+    MarkPairProjectionsAsWord32(node);                 \
+    return VisitWord64AtomicNarrow##name(node);        \
+  }
+      ATOMIC_CASE(Add)
+      ATOMIC_CASE(Sub)
+      ATOMIC_CASE(And)
+      ATOMIC_CASE(Or)
+      ATOMIC_CASE(Xor)
+      ATOMIC_CASE(Exchange)
+      ATOMIC_CASE(CompareExchange)
 #undef ATOMIC_CASE
     case IrOpcode::kSpeculationFence:
       return VisitSpeculationFence(node);
@@ -2353,6 +2389,72 @@ void InstructionSelector::VisitWord32PairShr(Node* node) { UNIMPLEMENTED(); }
 void InstructionSelector::VisitWord32PairSar(Node* node) { UNIMPLEMENTED(); }
 #endif  // V8_TARGET_ARCH_64_BIT
 
+#if !V8_TARGET_ARCH_IA32
+void InstructionSelector::VisitWord32AtomicPairLoad(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairStore(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairAdd(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairSub(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairAnd(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairOr(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairXor(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairExchange(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord32AtomicPairCompareExchange(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord64AtomicNarrowAdd(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord64AtomicNarrowSub(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord64AtomicNarrowAnd(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord64AtomicNarrowOr(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord64AtomicNarrowXor(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord64AtomicNarrowExchange(Node* node) {
+  UNIMPLEMENTED();
+}
+
+void InstructionSelector::VisitWord64AtomicNarrowCompareExchange(Node* node) {
+  UNIMPLEMENTED();
+}
+#endif  // !V8_TARGET_ARCH_IA32
+
 #if !V8_TARGET_ARCH_ARM && !V8_TARGET_ARCH_ARM64 && !V8_TARGET_ARCH_MIPS && \
     !V8_TARGET_ARCH_MIPS64 && !V8_TARGET_ARCH_IA32
 void InstructionSelector::VisitF32x4SConvertI32x4(Node* node) {
@@ -2392,7 +2494,7 @@ void InstructionSelector::VisitWord64AtomicCompareExchange(Node* node) {
 #endif  // !V8_TARGET_ARCH_X64 && !V8_TARGET_ARCH_ARM64
 
 #if !V8_TARGET_ARCH_ARM && !V8_TARGET_ARCH_ARM64 && !V8_TARGET_ARCH_MIPS && \
-    !V8_TARGET_ARCH_MIPS64
+    !V8_TARGET_ARCH_MIPS64 && !V8_TARGET_ARCH_IA32
 void InstructionSelector::VisitI32x4SConvertF32x4(Node* node) {
   UNIMPLEMENTED();
 }
@@ -2400,11 +2502,7 @@ void InstructionSelector::VisitI32x4SConvertF32x4(Node* node) {
 void InstructionSelector::VisitI32x4UConvertF32x4(Node* node) {
   UNIMPLEMENTED();
 }
-#endif  // !V8_TARGET_ARCH_ARM && !V8_TARGET_ARCH_ARM64 && !V8_TARGET_ARCH_MIPS
-        // && !V8_TARGET_ARCH_MIPS64
 
-#if !V8_TARGET_ARCH_ARM && !V8_TARGET_ARCH_ARM64 && !V8_TARGET_ARCH_MIPS && \
-    !V8_TARGET_ARCH_MIPS64 && !V8_TARGET_ARCH_IA32
 void InstructionSelector::VisitI32x4SConvertI16x8Low(Node* node) {
   UNIMPLEMENTED();
 }
@@ -2451,11 +2549,7 @@ void InstructionSelector::VisitI8x16SConvertI16x8(Node* node) {
 void InstructionSelector::VisitI8x16UConvertI16x8(Node* node) {
   UNIMPLEMENTED();
 }
-#endif  // !V8_TARGET_ARCH_ARM && !V8_TARGET_ARCH_ARM64 && !V8_TARGET_ARCH_MIPS
-        // && !V8_TARGET_ARCH_MIPS64 && !V8_TARGET_ARCH_IA32
 
-#if !V8_TARGET_ARCH_ARM && !V8_TARGET_ARCH_ARM64 && !V8_TARGET_ARCH_MIPS && \
-    !V8_TARGET_ARCH_MIPS64 && !V8_TARGET_ARCH_IA32
 void InstructionSelector::VisitI8x16Shl(Node* node) { UNIMPLEMENTED(); }
 
 void InstructionSelector::VisitI8x16ShrS(Node* node) { UNIMPLEMENTED(); }
@@ -2893,6 +2987,76 @@ FrameStateDescriptor* InstructionSelector::GetFrameStateDescriptor(
 }
 
 // static
+void InstructionSelector::CanonicalizeShuffle(bool inputs_equal,
+                                              uint8_t* shuffle,
+                                              bool* needs_swap,
+                                              bool* is_swizzle) {
+  *needs_swap = false;
+  // Inputs equal, then it's a swizzle.
+  if (inputs_equal) {
+    *is_swizzle = true;
+  } else {
+    // Inputs are distinct; check that both are required.
+    bool src0_is_used = false;
+    bool src1_is_used = false;
+    for (int i = 0; i < kSimd128Size; ++i) {
+      if (shuffle[i] < kSimd128Size) {
+        src0_is_used = true;
+      } else {
+        src1_is_used = true;
+      }
+    }
+    if (src0_is_used && !src1_is_used) {
+      *is_swizzle = true;
+    } else if (src1_is_used && !src0_is_used) {
+      *needs_swap = true;
+      *is_swizzle = true;
+    } else {
+      *is_swizzle = false;
+      // Canonicalize general 2 input shuffles so that the first input lanes are
+      // encountered first. This makes architectural shuffle pattern matching
+      // easier, since we only need to consider 1 input ordering instead of 2.
+      if (shuffle[0] >= kSimd128Size) {
+        // The second operand is used first. Swap inputs and adjust the shuffle.
+        *needs_swap = true;
+        for (int i = 0; i < kSimd128Size; ++i) {
+          shuffle[i] ^= kSimd128Size;
+        }
+      }
+    }
+  }
+  if (*is_swizzle) {
+    for (int i = 0; i < kSimd128Size; ++i) shuffle[i] &= kSimd128Size - 1;
+  }
+}
+
+void InstructionSelector::CanonicalizeShuffle(Node* node, uint8_t* shuffle,
+                                              bool* is_swizzle) {
+  // Get raw shuffle indices.
+  memcpy(shuffle, OpParameter<uint8_t*>(node->op()), kSimd128Size);
+  bool needs_swap;
+  bool inputs_equal = GetVirtualRegister(node->InputAt(0)) ==
+                      GetVirtualRegister(node->InputAt(1));
+  CanonicalizeShuffle(inputs_equal, shuffle, &needs_swap, is_swizzle);
+  if (needs_swap) {
+    SwapShuffleInputs(node);
+  }
+  // Duplicate the first input; for some shuffles on some architectures, it's
+  // easiest to implement a swizzle as a shuffle so it might be used.
+  if (*is_swizzle) {
+    node->ReplaceInput(1, node->InputAt(0));
+  }
+}
+
+// static
+void InstructionSelector::SwapShuffleInputs(Node* node) {
+  Node* input0 = node->InputAt(0);
+  Node* input1 = node->InputAt(1);
+  node->ReplaceInput(0, input1);
+  node->ReplaceInput(1, input0);
+}
+
+// static
 bool InstructionSelector::TryMatchIdentity(const uint8_t* shuffle) {
   for (int i = 0; i < kSimd128Size; ++i) {
     if (shuffle[i] != i) return false;
@@ -2953,51 +3117,6 @@ bool InstructionSelector::TryMatchBlend(const uint8_t* shuffle) {
   return true;
 }
 
-void InstructionSelector::CanonicalizeShuffle(Node* node, uint8_t* shuffle,
-                                              bool* is_swizzle) {
-  // Get raw shuffle indices.
-  memcpy(shuffle, OpParameter<uint8_t*>(node->op()), kSimd128Size);
-
-  // Detect shuffles that only operate on one input.
-  if (GetVirtualRegister(node->InputAt(0)) ==
-      GetVirtualRegister(node->InputAt(1))) {
-    *is_swizzle = true;
-  } else {
-    // Inputs are distinct; check that both are required.
-    bool src0_is_used = false;
-    bool src1_is_used = false;
-    for (int i = 0; i < kSimd128Size; ++i) {
-      if (shuffle[i] < kSimd128Size) {
-        src0_is_used = true;
-      } else {
-        src1_is_used = true;
-      }
-    }
-    if (src0_is_used && !src1_is_used) {
-      node->ReplaceInput(1, node->InputAt(0));
-      *is_swizzle = true;
-    } else if (src1_is_used && !src0_is_used) {
-      node->ReplaceInput(0, node->InputAt(1));
-      *is_swizzle = true;
-    } else {
-      *is_swizzle = false;
-      // Canonicalize general 2 input shuffles so that the first input lanes are
-      // encountered first. This makes architectural shuffle pattern matching
-      // easier, since we only need to consider 1 input ordering instead of 2.
-      if (shuffle[0] >= kSimd128Size) {
-        // The second operand is used first. Swap inputs and adjust the shuffle.
-        SwapShuffleInputs(node);
-        for (int i = 0; i < kSimd128Size; ++i) {
-          shuffle[i] ^= kSimd128Size;
-        }
-      }
-    }
-  }
-  if (*is_swizzle) {
-    for (int i = 0; i < kSimd128Size; ++i) shuffle[i] &= kSimd128Size - 1;
-  }
-}
-
 // static
 int32_t InstructionSelector::Pack4Lanes(const uint8_t* shuffle) {
   int32_t result = 0;
@@ -3006,14 +3125,6 @@ int32_t InstructionSelector::Pack4Lanes(const uint8_t* shuffle) {
     result |= shuffle[i];
   }
   return result;
-}
-
-// static
-void InstructionSelector::SwapShuffleInputs(Node* node) {
-  Node* input0 = node->InputAt(0);
-  Node* input1 = node->InputAt(1);
-  node->ReplaceInput(0, input1);
-  node->ReplaceInput(1, input0);
 }
 
 bool InstructionSelector::NeedsPoisoning(IsSafetyCheck safety_check) const {

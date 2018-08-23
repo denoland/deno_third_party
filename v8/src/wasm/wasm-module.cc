@@ -5,12 +5,13 @@
 #include <functional>
 #include <memory>
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/assembler-inl.h"
 #include "src/compiler/wasm-compiler.h"
 #include "src/debug/interface-types.h"
 #include "src/frames-inl.h"
 #include "src/objects.h"
+#include "src/objects/js-array-inl.h"
 #include "src/property-descriptor.h"
 #include "src/simulator.h"
 #include "src/snapshot/snapshot.h"
@@ -39,8 +40,8 @@ WireBytesRef WasmModule::LookupFunctionName(const ModuleWireBytes& wire_bytes,
                                             uint32_t function_index) const {
   if (!function_names) {
     function_names.reset(new std::unordered_map<uint32_t, WireBytesRef>());
-    wasm::DecodeFunctionNames(wire_bytes.start(), wire_bytes.end(),
-                              function_names.get());
+    DecodeFunctionNames(wire_bytes.start(), wire_bytes.end(),
+                        function_names.get());
   }
   auto it = function_names->find(function_index);
   if (it == function_names->end()) return WireBytesRef();
@@ -330,7 +331,7 @@ size_t EstimateWasmModuleSize(const WasmModule* module) {
   size_t estimate =
       sizeof(WasmModule) + VectorSize(module->signatures) +
       VectorSize(module->signature_ids) + VectorSize(module->functions) +
-      VectorSize(module->data_segments) + VectorSize(module->function_tables) +
+      VectorSize(module->data_segments) + VectorSize(module->tables) +
       VectorSize(module->import_table) + VectorSize(module->export_table) +
       VectorSize(module->exceptions) + VectorSize(module->table_inits);
   // TODO(wasm): include names table and wire bytes in size estimate

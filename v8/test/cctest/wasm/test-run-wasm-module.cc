@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "src/api.h"
+#include "src/api-inl.h"
 #include "src/objects-inl.h"
 #include "src/snapshot/code-serializer.h"
 #include "src/version.h"
@@ -604,7 +604,7 @@ TEST(InitDataAtTheUpperLimit) {
     CompileAndInstantiateForTesting(
         isolate, &thrower, ModuleWireBytes(data, data + arraysize(data)));
     if (thrower.error()) {
-      thrower.Reify()->Print(isolate);
+      thrower.Reify()->Print();
       FATAL("compile or instantiate error");
     }
   }
@@ -800,9 +800,9 @@ TEST(Run_WasmModule_Buffer_Externalized_GrowMemMemSize) {
     int32_t result = WasmMemoryObject::Grow(isolate, mem_obj, 0);
     CHECK_EQ(16, result);
     constexpr bool is_wasm_memory = true;
-    const JSArrayBuffer::Allocation allocation{
-        contents.AllocationBase(), contents.AllocationLength(), contents.Data(),
-        contents.AllocationMode(), is_wasm_memory};
+    const JSArrayBuffer::Allocation allocation{contents.AllocationBase(),
+                                               contents.AllocationLength(),
+                                               contents.Data(), is_wasm_memory};
     JSArrayBuffer::FreeBackingStore(isolate, allocation);
   }
   Cleanup();
@@ -819,9 +819,9 @@ TEST(Run_WasmModule_Buffer_Externalized_Detach) {
     auto const contents = v8::Utils::ToLocal(buffer)->Externalize();
     wasm::DetachMemoryBuffer(isolate, buffer, true);
     constexpr bool is_wasm_memory = true;
-    const JSArrayBuffer::Allocation allocation{
-        contents.AllocationBase(), contents.AllocationLength(), contents.Data(),
-        contents.AllocationMode(), is_wasm_memory};
+    const JSArrayBuffer::Allocation allocation{contents.AllocationBase(),
+                                               contents.AllocationLength(),
+                                               contents.Data(), is_wasm_memory};
     JSArrayBuffer::FreeBackingStore(isolate, allocation);
   }
   Cleanup();
@@ -838,9 +838,9 @@ TEST(Run_WasmModule_Buffer_Externalized_Regression_UseAfterFree) {
   WasmMemoryObject::Grow(isolate, mem, 0);
   constexpr bool is_wasm_memory = true;
   JSArrayBuffer::FreeBackingStore(
-      isolate, JSArrayBuffer::Allocation(
-                   contents.AllocationBase(), contents.AllocationLength(),
-                   contents.Data(), contents.AllocationMode(), is_wasm_memory));
+      isolate, JSArrayBuffer::Allocation(contents.AllocationBase(),
+                                         contents.AllocationLength(),
+                                         contents.Data(), is_wasm_memory));
   // Make sure we can write to the buffer without crashing
   uint32_t* int_buffer =
       reinterpret_cast<uint32_t*>(mem->array_buffer()->backing_store());
@@ -886,9 +886,11 @@ TEST(AtomicOpDisassembly) {
     testing::SetupIsolateForWasmModule(isolate);
 
     ErrorThrower thrower(isolate, "Test");
+    auto enabled_features = WasmFeaturesFromIsolate(isolate);
     MaybeHandle<WasmModuleObject> module_object =
         isolate->wasm_engine()->SyncCompile(
-            isolate, &thrower, ModuleWireBytes(buffer.begin(), buffer.end()));
+            isolate, enabled_features, &thrower,
+            ModuleWireBytes(buffer.begin(), buffer.end()));
 
     module_object.ToHandleChecked()->DisassembleFunction(0);
   }

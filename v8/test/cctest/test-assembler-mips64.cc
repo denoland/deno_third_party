@@ -1363,7 +1363,7 @@ TEST(MIPS15) {
   CcTest::InitializeVM();
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
-  Assembler assm(Assembler::Options{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{}, nullptr, 0);
 
   Label target;
   __ beq(v0, v1, &target);
@@ -3293,15 +3293,13 @@ TEST(jump_tables1) {
   Label done;
   {
     __ BlockTrampolinePoolFor(kNumCases * 2 + 6);
-    PredictableCodeSizeScope predictable(
-        &assm, (kNumCases * 2 + 6) * Assembler::kInstrSize);
-    Label here;
+    PredictableCodeSizeScope predictable(&assm,
+                                         (kNumCases * 2 + 6) * kInstrSize);
 
-    __ bal(&here);
+    __ nal();
     __ dsll(at, a0, 3);  // In delay slot.
-    __ bind(&here);
     __ daddu(at, at, ra);
-    __ Ld(at, MemOperand(at, 4 * Assembler::kInstrSize));
+    __ Ld(at, MemOperand(at, 4 * kInstrSize));
     __ jr(at);
     __ nop();
     for (int i = 0; i < kNumCases; ++i) {
@@ -3330,7 +3328,7 @@ TEST(jump_tables1) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F1>::FromCode(*code);
   for (int i = 0; i < kNumCases; ++i) {
@@ -3373,15 +3371,13 @@ TEST(jump_tables2) {
   __ bind(&dispatch);
   {
     __ BlockTrampolinePoolFor(kNumCases * 2 + 6);
-    PredictableCodeSizeScope predictable(
-        &assm, (kNumCases * 2 + 6) * Assembler::kInstrSize);
-    Label here;
+    PredictableCodeSizeScope predictable(&assm,
+                                         (kNumCases * 2 + 6) * kInstrSize);
 
-    __ bal(&here);
+    __ nal();
     __ dsll(at, a0, 3);  // In delay slot.
-    __ bind(&here);
     __ daddu(at, at, ra);
-    __ Ld(at, MemOperand(at, 4 * Assembler::kInstrSize));
+    __ Ld(at, MemOperand(at, 4 * kInstrSize));
     __ jr(at);
     __ nop();
     for (int i = 0; i < kNumCases; ++i) {
@@ -3400,7 +3396,7 @@ TEST(jump_tables2) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F1>::FromCode(*code);
   for (int i = 0; i < kNumCases; ++i) {
@@ -3453,15 +3449,13 @@ TEST(jump_tables3) {
   __ bind(&dispatch);
   {
     __ BlockTrampolinePoolFor(kNumCases * 2 + 6);
-    PredictableCodeSizeScope predictable(
-        &assm, (kNumCases * 2 + 6) * Assembler::kInstrSize);
-    Label here;
+    PredictableCodeSizeScope predictable(&assm,
+                                         (kNumCases * 2 + 6) * kInstrSize);
 
-    __ bal(&here);
+    __ nal();
     __ dsll(at, a0, 3);  // In delay slot.
-    __ bind(&here);
     __ daddu(at, at, ra);
-    __ Ld(at, MemOperand(at, 4 * Assembler::kInstrSize));
+    __ Ld(at, MemOperand(at, 4 * kInstrSize));
     __ jr(at);
     __ nop();
     for (int i = 0; i < kNumCases; ++i) {
@@ -3480,14 +3474,14 @@ TEST(jump_tables3) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F1>::FromCode(*code);
   for (int i = 0; i < kNumCases; ++i) {
     Handle<Object> result(f.Call(i, 0, 0, 0, 0), isolate);
 #ifdef OBJECT_PRINT
     ::printf("f(%d) = ", i);
-    result->Print(isolate, std::cout);
+    result->Print(std::cout);
     ::printf("\n");
 #endif
     CHECK(values[i].is_identical_to(result));
@@ -5087,7 +5081,7 @@ uint64_t run_li_macro(uint64_t imm, LiFlags mode, int32_t num_instr = 0) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F2>::FromCode(*code);
 
@@ -5437,8 +5431,8 @@ uint64_t run_jic(int16_t offset) {
   __ beq(v0, t1, &stop_execution);
   __ nop();
 
-  __ bal(&get_program_counter);  // t0 <- program counter
-  __ nop();
+  __ nal();  // t0 <- program counter
+  __ mov(t0, ra);
   __ jic(t0, offset);
 
   __ addiu(v0, v0, 0x100);
@@ -5446,11 +5440,6 @@ uint64_t run_jic(int16_t offset) {
   __ addiu(v0, v0, 0x1000);
   __ addiu(v0, v0, 0x2000);   // <--- offset = 16
   __ pop(ra);
-  __ jr(ra);
-  __ nop();
-
-  __ bind(&get_program_counter);
-  __ mov(t0, ra);
   __ jr(ra);
   __ nop();
 
@@ -5639,7 +5628,7 @@ void run_bz_bnz(TestCaseMsaBranch* input, Branch GenerateBranch,
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 
@@ -5784,8 +5773,8 @@ uint64_t run_jialc(int16_t offset) {
 
   // Block 3 (Main)
   __ bind(&main_block);
-  __ bal(&get_program_counter);  // t0 <- program counter
-  __ nop();
+  __ nal();  // t0 <- program counter
+  __ mov(t0, ra);
   __ jialc(t0, offset);
   __ addiu(v0, v0, 0x4);
   __ pop(ra);
@@ -5801,11 +5790,6 @@ uint64_t run_jialc(int16_t offset) {
   // Block 5
   __ addiu(v0, v0, 0x1000);     // <--- offset = 36
   __ addiu(v0, v0, 0x2000);
-  __ jr(ra);
-  __ nop();
-
-  __ bind(&get_program_counter);
-  __ mov(t0, ra);
   __ jr(ra);
   __ nop();
 
@@ -6263,7 +6247,7 @@ TEST(Trampoline) {
   MacroAssembler assm(isolate, nullptr, 0,
                       v8::internal::CodeObjectRequired::kYes);
   Label done;
-  size_t nr_calls = kMaxBranchOffset / (2 * Instruction::kInstrSize) + 2;
+  size_t nr_calls = kMaxBranchOffset / (2 * kInstrSize) + 2;
 
   for (size_t i = 0; i < nr_calls; ++i) {
     __ BranchShort(&done, eq, a0, Operand(a1));
@@ -6428,7 +6412,7 @@ uint64_t run_Subu(uint64_t imm, int32_t num_instr) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F2>::FromCode(*code);
 
@@ -6512,7 +6496,7 @@ uint64_t run_Dsubu(uint64_t imm, int32_t num_instr) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F2>::FromCode(*code);
 
@@ -6823,7 +6807,7 @@ TEST(MSA_fill_copy) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 
@@ -6887,7 +6871,7 @@ TEST(MSA_fill_copy_2) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F5>::FromCode(*code);
 
@@ -6941,7 +6925,7 @@ TEST(MSA_fill_copy_3) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F5>::FromCode(*code);
 
@@ -6991,7 +6975,7 @@ void run_msa_insert(int64_t rs_value, int n, msa_reg_t* w) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 
@@ -7102,7 +7086,7 @@ void run_msa_ctc_cfc(uint64_t value) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 
@@ -7152,7 +7136,7 @@ TEST(MSA_move_v) {
     Handle<Code> code =
         isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-    code->Print(isolate, std::cout);
+    code->Print(std::cout);
 #endif
     auto f = GeneratedCode<F3>::FromCode(*code);
     f.Call(&t[i].wd_lo, 0, 0, 0, 0);
@@ -7198,7 +7182,7 @@ void run_msa_sldi(OperFunc GenerateOperation,
     Handle<Code> code =
         isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-    code->Print(isolate, std::cout);
+    code->Print(std::cout);
 #endif
     auto f = GeneratedCode<F3>::FromCode(*code);
     f.Call(&res[0], 0, 0, 0, 0);
@@ -7359,7 +7343,7 @@ void run_msa_i8(SecondaryField opcode, uint64_t ws_lo, uint64_t ws_hi,
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 
@@ -7564,7 +7548,7 @@ void run_msa_i5(struct TestCaseMsaI5* input, bool i5_sign_ext,
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 
@@ -7991,7 +7975,7 @@ void run_msa_2r(const struct TestCaseMsa2R* input,
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 
@@ -9042,7 +9026,7 @@ void run_msa_vector(struct TestCaseMsaVector* input,
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 
@@ -9131,7 +9115,7 @@ void run_msa_bit(struct TestCaseMsaBit* input, InstFunc GenerateInstructionFunc,
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 
@@ -9605,7 +9589,7 @@ void run_msa_i10(int32_t input, InstFunc GenerateVectorInstructionFunc,
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 
@@ -9684,7 +9668,7 @@ void run_msa_mi10(InstFunc GenerateVectorInstructionFunc) {
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F5>::FromCode(*code);
 
@@ -9764,7 +9748,7 @@ void run_msa_3r(struct TestCaseMsa3R* input, InstFunc GenerateI5InstructionFunc,
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 
@@ -10769,7 +10753,7 @@ void run_msa_3rf(const struct TestCaseMsa3RF* input,
   Handle<Code> code =
       isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
 #ifdef OBJECT_PRINT
-  code->Print(isolate, std::cout);
+  code->Print(std::cout);
 #endif
   auto f = GeneratedCode<F3>::FromCode(*code);
 

@@ -310,7 +310,6 @@ class ConcurrentMarkingVisitor final
       VisitPointer(map, HeapObject::RawMaybeWeakField(
                             map, Map::kTransitionsOrPrototypeInfoOffset));
       VisitPointer(map, HeapObject::RawField(map, Map::kDependentCodeOffset));
-      VisitPointer(map, HeapObject::RawField(map, Map::kWeakCellCacheOffset));
       bailout_.Push(map);
     }
     return 0;
@@ -333,26 +332,6 @@ class ConcurrentMarkingVisitor final
     return size;
   }
 
-  int VisitWeakCell(Map* map, WeakCell* object) {
-    if (!ShouldVisit(object)) return 0;
-    VisitMapPointer(object, object->map_slot());
-    if (!object->cleared()) {
-      HeapObject* value = HeapObject::cast(object->value());
-      if (marking_state_.IsBlackOrGrey(value)) {
-        // Weak cells with live values are directly processed here to reduce
-        // the processing time of weak cells during the main GC pause.
-        Object** slot = HeapObject::RawField(object, WeakCell::kValueOffset);
-        MarkCompactCollector::RecordSlot(object, slot, value);
-      } else {
-        // If we do not know about liveness of values of weak cells, we have to
-        // process them when we know the liveness of the whole transitive
-        // closure.
-        weak_objects_->weak_cells.Push(task_id_, object);
-      }
-    }
-    return WeakCell::BodyDescriptor::SizeOf(map, object);
-  }
-
   int VisitJSWeakCollection(Map* map, JSWeakCollection* object) {
     return VisitJSObjectSubclass(map, object);
   }
@@ -361,32 +340,30 @@ class ConcurrentMarkingVisitor final
     if (!ShouldVisit(table)) return 0;
     weak_objects_->ephemeron_hash_tables.Push(task_id_, table);
 
-    if (V8_LIKELY(FLAG_optimize_ephemerons)) {
-      for (int i = 0; i < table->Capacity(); i++) {
-        Object** key_slot =
-            table->RawFieldOfElementAt(EphemeronHashTable::EntryToIndex(i));
-        HeapObject* key = HeapObject::cast(table->KeyAt(i));
-        MarkCompactCollector::RecordSlot(table, key_slot, key);
+    for (int i = 0; i < table->Capacity(); i++) {
+      Object** key_slot =
+          table->RawFieldOfElementAt(EphemeronHashTable::EntryToIndex(i));
+      HeapObject* key = HeapObject::cast(table->KeyAt(i));
+      MarkCompactCollector::RecordSlot(table, key_slot, key);
 
-        Object** value_slot = table->RawFieldOfElementAt(
-            EphemeronHashTable::EntryToValueIndex(i));
+      Object** value_slot =
+          table->RawFieldOfElementAt(EphemeronHashTable::EntryToValueIndex(i));
 
-        if (marking_state_.IsBlackOrGrey(key)) {
-          VisitPointer(table, value_slot);
+      if (marking_state_.IsBlackOrGrey(key)) {
+        VisitPointer(table, value_slot);
 
-        } else {
-          Object* value_obj = table->ValueAt(i);
+      } else {
+        Object* value_obj = table->ValueAt(i);
 
-          if (value_obj->IsHeapObject()) {
-            HeapObject* value = HeapObject::cast(value_obj);
-            MarkCompactCollector::RecordSlot(table, value_slot, value);
+        if (value_obj->IsHeapObject()) {
+          HeapObject* value = HeapObject::cast(value_obj);
+          MarkCompactCollector::RecordSlot(table, value_slot, value);
 
-            // Revisit ephemerons with both key and value unreachable at end
-            // of concurrent marking cycle.
-            if (marking_state_.IsWhite(value)) {
-              weak_objects_->discovered_ephemerons.Push(task_id_,
-                                                        Ephemeron{key, value});
-            }
+          // Revisit ephemerons with both key and value unreachable at end
+          // of concurrent marking cycle.
+          if (marking_state_.IsWhite(value)) {
+            weak_objects_->discovered_ephemerons.Push(task_id_,
+                                                      Ephemeron{key, value});
           }
         }
       }
@@ -629,7 +606,7 @@ void ConcurrentMarking::Run(int task_id, TaskState* task_state) {
       marked_bytes += current_marked_bytes;
       base::AsAtomicWord::Relaxed_Store<size_t>(&task_state->marked_bytes,
                                                 marked_bytes);
-      if (task_state->preemption_request.Value()) {
+      if (task_state->preemption_request) {
         TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.gc"),
                      "ConcurrentMarking::Run Preempted");
         break;
@@ -650,7 +627,6 @@ void ConcurrentMarking::Run(int task_id, TaskState* task_state) {
     bailout_->FlushToGlobal(task_id);
     on_hold_->FlushToGlobal(task_id);
 
-    weak_objects_->weak_cells.FlushToGlobal(task_id);
     weak_objects_->transition_arrays.FlushToGlobal(task_id);
     weak_objects_->ephemeron_hash_tables.FlushToGlobal(task_id);
     weak_objects_->current_ephemerons.FlushToGlobal(task_id);
@@ -705,7 +681,7 @@ void ConcurrentMarking::ScheduleTasks() {
         heap_->isolate()->PrintWithTimestamp(
             "Scheduling concurrent marking task %d\n", i);
       }
-      task_state_[i].preemption_request.SetValue(false);
+      task_state_[i].preemption_request = false;
       is_pending_[i] = true;
       ++pending_task_count_;
       auto task =
@@ -746,7 +722,7 @@ bool ConcurrentMarking::Stop(StopRequest stop_request) {
           is_pending_[i] = false;
           --pending_task_count_;
         } else if (stop_request == StopRequest::PREEMPT_TASKS) {
-          task_state_[i].preemption_request.SetValue(true);
+          task_state_[i].preemption_request = true;
         }
       }
     }

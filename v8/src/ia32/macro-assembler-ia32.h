@@ -38,6 +38,9 @@ constexpr Register kRuntimeCallFunctionRegister = ebx;
 constexpr Register kRuntimeCallArgCountRegister = eax;
 constexpr Register kWasmInstanceRegister = esi;
 
+// TODO(v8:6666): Implement full support.
+constexpr Register kRootRegister = ebx;
+
 // Convenience for platform-independent signatures.  We do not normally
 // distinguish memory operands from other operands on ia32.
 typedef Operand MemOperand;
@@ -45,19 +48,11 @@ typedef Operand MemOperand;
 enum RememberedSetAction { EMIT_REMEMBERED_SET, OMIT_REMEMBERED_SET };
 enum SmiCheck { INLINE_SMI_CHECK, OMIT_SMI_CHECK };
 
-enum RegisterValueType { REGISTER_VALUE_IS_SMI, REGISTER_VALUE_IS_INT32 };
-
-#ifdef DEBUG
-bool AreAliased(Register reg1, Register reg2, Register reg3 = no_reg,
-                Register reg4 = no_reg, Register reg5 = no_reg,
-                Register reg6 = no_reg, Register reg7 = no_reg,
-                Register reg8 = no_reg);
-#endif
-
-class TurboAssembler : public TurboAssemblerBase {
+class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
  public:
-  TurboAssembler(Isolate* isolate, const Options& options, void* buffer,
-                 int buffer_size, CodeObjectRequired create_code_object)
+  TurboAssembler(Isolate* isolate, const AssemblerOptions& options,
+                 void* buffer, int buffer_size,
+                 CodeObjectRequired create_code_object)
       : TurboAssemblerBase(isolate, options, buffer, buffer_size,
                            create_code_object) {}
 
@@ -253,6 +248,8 @@ class TurboAssembler : public TurboAssemblerBase {
     Pshufd(dst, Operand(src), shuffle);
   }
   void Pshufd(XMMRegister dst, Operand src, uint8_t shuffle);
+  void Psraw(XMMRegister dst, int8_t shift);
+  void Psrlw(XMMRegister dst, int8_t shift);
 
 // SSE/SSE2 instructions with AVX version.
 #define AVX_OP2_WITH_TYPE(macro_name, name, dst_type, src_type) \
@@ -292,12 +289,16 @@ class TurboAssembler : public TurboAssemblerBase {
   AVX_OP3_WITH_TYPE(macro_name, name, XMMRegister, XMMRegister) \
   AVX_OP3_WITH_TYPE(macro_name, name, XMMRegister, Operand)
 
+  AVX_OP3_XO(Packsswb, packsswb)
+  AVX_OP3_XO(Packuswb, packuswb)
   AVX_OP3_XO(Pcmpeqb, pcmpeqb)
   AVX_OP3_XO(Pcmpeqw, pcmpeqw)
   AVX_OP3_XO(Pcmpeqd, pcmpeqd)
   AVX_OP3_XO(Psubb, psubb)
   AVX_OP3_XO(Psubw, psubw)
   AVX_OP3_XO(Psubd, psubd)
+  AVX_OP3_XO(Punpcklbw, punpcklbw)
+  AVX_OP3_XO(Punpckhbw, punpckhbw)
   AVX_OP3_XO(Pxor, pxor)
   AVX_OP3_XO(Andps, andps)
   AVX_OP3_XO(Andpd, andpd)
@@ -439,10 +440,10 @@ class MacroAssembler : public TurboAssembler {
  public:
   MacroAssembler(Isolate* isolate, void* buffer, int size,
                  CodeObjectRequired create_code_object)
-      : MacroAssembler(isolate, Assembler::DefaultOptions(isolate), buffer,
+      : MacroAssembler(isolate, AssemblerOptions::Default(isolate), buffer,
                        size, create_code_object) {}
-  MacroAssembler(Isolate* isolate, const Options& options, void* buffer,
-                 int size, CodeObjectRequired create_code_object);
+  MacroAssembler(Isolate* isolate, const AssemblerOptions& options,
+                 void* buffer, int size, CodeObjectRequired create_code_object);
 
   // Load a register with a long value as efficiently as possible.
   void Set(Register dst, int32_t x) {

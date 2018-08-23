@@ -12,6 +12,8 @@
 #include "src/compiler/osr.h"
 #include "src/heap/heap-inl.h"
 #include "src/optimized-compilation-info.h"
+#include "src/wasm/wasm-code-manager.h"
+#include "src/wasm/wasm-objects.h"
 #include "src/x64/assembler-x64.h"
 #include "src/x64/macro-assembler-x64.h"
 
@@ -1211,6 +1213,12 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
         __ Popcntl(i.OutputRegister(), i.InputOperand(0));
       }
       break;
+    case kX64Bswap:
+      __ bswapq(i.OutputRegister());
+      break;
+    case kX64Bswap32:
+      __ bswapl(i.OutputRegister());
+      break;
     case kSSEFloat32Cmp:
       ASSEMBLE_SSE_BINOP(Ucomiss);
       break;
@@ -1958,9 +1966,10 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       if (i.InputRegister(0) == i.OutputRegister()) {
         if (mode == kMode_MRI) {
           int32_t constant_summand = i.InputInt32(1);
+          DCHECK_NE(0, constant_summand);
           if (constant_summand > 0) {
             __ addl(i.OutputRegister(), Immediate(constant_summand));
-          } else if (constant_summand < 0) {
+          } else {
             __ subl(i.OutputRegister(), Immediate(-constant_summand));
           }
         } else if (mode == kMode_MR1) {
@@ -3087,6 +3096,7 @@ void CodeGenerator::AssembleConstructFrame() {
   const RegList saves_fp = call_descriptor->CalleeSavedFPRegisters();
 
   if (shrink_slots > 0) {
+    DCHECK(frame_access_state()->has_frame());
     if (info()->IsWasm() && shrink_slots > 128) {
       // For WebAssembly functions with big frames we have to do the stack
       // overflow check before we construct the frame. Otherwise we may not
@@ -3098,16 +3108,13 @@ void CodeGenerator::AssembleConstructFrame() {
       // exception unconditionally. Thereby we can avoid the integer overflow
       // check in the condition code.
       if (shrink_slots * kPointerSize < FLAG_stack_size * 1024) {
-        __ Move(kScratchRegister,
-                ExternalReference::address_of_real_stack_limit(__ isolate()));
+        __ movq(kScratchRegister,
+                FieldOperand(kWasmInstanceRegister,
+                             WasmInstanceObject::kRealStackLimitAddressOffset));
         __ movq(kScratchRegister, Operand(kScratchRegister, 0));
         __ addq(kScratchRegister, Immediate(shrink_slots * kPointerSize));
         __ cmpq(rsp, kScratchRegister);
         __ j(above_equal, &done);
-      }
-      if (!frame_access_state()->has_frame()) {
-        __ set_has_frame(true);
-        __ EnterFrame(StackFrame::WASM_COMPILED);
       }
       __ movp(rcx, FieldOperand(kWasmInstanceRegister,
                                 WasmInstanceObject::kCEntryStubOffset));
@@ -3227,7 +3234,7 @@ void CodeGenerator::AssembleReturn(InstructionOperand* pop) {
   }
 }
 
-void CodeGenerator::FinishCode() {}
+void CodeGenerator::FinishCode() { tasm()->PatchConstPool(); }
 
 void CodeGenerator::AssembleMove(InstructionOperand* source,
                                  InstructionOperand* destination) {

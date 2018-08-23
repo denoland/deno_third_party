@@ -1081,7 +1081,7 @@ void Simulator::CheckBreakNext() {
 
 
 void Simulator::PrintInstructionsAt(Instruction* start, uint64_t count) {
-  Instruction* end = start->InstructionAtOffset(count * kInstructionSize);
+  Instruction* end = start->InstructionAtOffset(count * kInstrSize);
   for (Instruction* pc = start; pc < end; pc = pc->following()) {
     disassembler_decoder_->Decode(pc);
   }
@@ -3189,7 +3189,7 @@ void Simulator::Debug() {
             Object* obj = reinterpret_cast<Object*>(value);
             os << arg1 << ": \n";
 #ifdef DEBUG
-            obj->Print(isolate_, os);
+            obj->Print(os);
             os << "\n";
 #else
             os << Brief(obj) << "\n";
@@ -3415,7 +3415,7 @@ void Simulator::VisitException(Instruction* instr) {
         // The stop parameters are inlined in the code. Skip them:
         //  - Skip to the end of the message string.
         size_t size = kDebugMessageOffset + strlen(message) + 1;
-        pc_ = pc_->InstructionAtOffset(RoundUp(size, kInstructionSize));
+        pc_ = pc_->InstructionAtOffset(RoundUp(size, kInstrSize));
         //  - Verify that the unreachable marker is present.
         DCHECK(pc_->Mask(ExceptionMask) == HLT);
         DCHECK_EQ(pc_->ImmException(), kImmExceptionIsUnreachable);

@@ -151,7 +151,9 @@ class V8_EXPORT_PRIVATE EffectControlLinearizer {
   void LowerTransitionElementsKind(Node* node);
   Node* LowerLoadFieldByIndex(Node* node);
   Node* LowerLoadTypedElement(Node* node);
+  Node* LowerLoadDataViewElement(Node* node);
   void LowerStoreTypedElement(Node* node);
+  void LowerStoreDataViewElement(Node* node);
   void LowerStoreSignedSmallElement(Node* node);
   Node* LowerFindOrderedHashMapEntry(Node* node);
   Node* LowerFindOrderedHashMapEntryForInt32Key(Node* node);
@@ -176,8 +178,10 @@ class V8_EXPORT_PRIVATE EffectControlLinearizer {
                                                  const VectorSlotPair& feedback,
                                                  Node* value,
                                                  Node* frame_state);
+  Node* BuildReverseBytes(ExternalArrayType type, Node* value);
   Node* BuildFloat64RoundDown(Node* value);
   Node* BuildFloat64RoundTruncate(Node* input);
+  Node* BuildUint32Mod(Node* lhs, Node* rhs);
   Node* ComputeIntegerHash(Node* value);
   Node* LowerStringComparison(Callable const& callable, Node* node);
   Node* IsElementsKindGreaterThan(Node* kind, ElementsKind reference_kind);

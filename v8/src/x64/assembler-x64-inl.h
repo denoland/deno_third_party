@@ -48,21 +48,6 @@ void Assembler::emitw(uint16_t x) {
   pc_ += sizeof(uint16_t);
 }
 
-void Assembler::emit_code_target(Handle<Code> target, RelocInfo::Mode rmode) {
-  DCHECK(RelocInfo::IsCodeTarget(rmode));
-  RecordRelocInfo(rmode);
-  int current = static_cast<int>(code_targets_.size());
-  if (current > 0 && !target.is_null() &&
-      code_targets_.back().address() == target.address()) {
-    // Optimization if we keep jumping to the same code target.
-    emitl(current - 1);
-  } else {
-    code_targets_.push_back(target);
-    emitl(current);
-  }
-}
-
-
 void Assembler::emit_runtime_entry(Address entry, RelocInfo::Mode rmode) {
   DCHECK(RelocInfo::IsRuntimeEntry(rmode));
   RecordRelocInfo(rmode);
@@ -87,6 +72,10 @@ void Assembler::emit_rex_64(XMMRegister reg, Register rm_reg) {
 
 
 void Assembler::emit_rex_64(Register reg, XMMRegister rm_reg) {
+  emit(0x48 | (reg.code() & 0x8) >> 1 | rm_reg.code() >> 3);
+}
+
+void Assembler::emit_rex_64(XMMRegister reg, XMMRegister rm_reg) {
   emit(0x48 | (reg.code() & 0x8) >> 1 | rm_reg.code() >> 3);
 }
 
@@ -278,7 +267,7 @@ int Assembler::deserialization_special_target_size(
 }
 
 Handle<Code> Assembler::code_target_object_handle_at(Address pc) {
-  return code_targets_[Memory::int32_at(pc)];
+  return GetCodeTarget(Memory::int32_at(pc));
 }
 
 Address Assembler::runtime_entry_at(Address pc) {
@@ -373,8 +362,7 @@ void RelocInfo::set_target_object(Heap* heap, HeapObject* target,
     Assembler::FlushICache(pc_, sizeof(Address));
   }
   if (write_barrier_mode == UPDATE_WRITE_BARRIER && host() != nullptr) {
-    heap->incremental_marking()->RecordWriteIntoCode(host(), this, target);
-    heap->RecordWriteIntoCode(host(), this, target);
+    WriteBarrierForCode(host(), this, target);
   }
 }
 
@@ -400,7 +388,7 @@ Address RelocInfo::target_off_heap_target() {
 
 void RelocInfo::WipeOut() {
   if (IsEmbeddedObject(rmode_) || IsExternalReference(rmode_) ||
-      IsInternalReference(rmode_)) {
+      IsInternalReference(rmode_) || IsOffHeapTarget(rmode_)) {
     Memory::Address_at(pc_) = kNullAddress;
   } else if (IsCodeTarget(rmode_) || IsRuntimeEntry(rmode_)) {
     // Effectively write zero into the relocation.
@@ -417,7 +405,7 @@ void RelocInfo::Visit(ObjectVisitor* visitor) {
   if (mode == RelocInfo::EMBEDDED_OBJECT) {
     visitor->VisitEmbeddedPointer(host(), this);
     Assembler::FlushICache(pc_, sizeof(Address));
-  } else if (RelocInfo::IsCodeTarget(mode)) {
+  } else if (RelocInfo::IsCodeTargetMode(mode)) {
     visitor->VisitCodeTarget(host(), this);
   } else if (mode == RelocInfo::EXTERNAL_REFERENCE) {
     visitor->VisitExternalReference(host(), this);

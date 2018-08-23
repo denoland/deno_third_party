@@ -92,11 +92,12 @@ declare_args() {
   auto_profile_path = ""
 
   # Optimize symbol files for maximizing goma cache hit rate. This is on by
-  # default only when goma is enabled on Linux because setting this to true may
-  # make it harder to debug binaries.
+  # default when goma is enabled on Linux and Windows.
+  # But setting this to true may make it harder to debug binaries on Linux.
   # See below reference for detail.
   # https://chromium.googlesource.com/chromium/src/+/master/docs/linux_debugging.md#Source-level-debug-with-fdebug_compilation_dir
-  strip_absolute_paths_from_debug_symbols = is_linux && use_goma
+  strip_absolute_paths_from_debug_symbols =
+      (is_linux || (is_win && use_lld)) && use_goma
 
   # Allow projects that wish to stay on C++11 to override Chromium's default.
   use_cxx11 = false
@@ -167,7 +168,7 @@ if (gold_path == false) {
 }
 
 if (use_debug_fission == "default") {
-  use_debug_fission = is_debug && !is_android && !is_win &&
+  use_debug_fission = is_debug && !is_android && !is_fuchsia && !is_win &&
                       (use_gold || use_lld) && cc_wrapper == ""
 }
 
@@ -380,7 +381,10 @@ config("compiler") {
       "-Wl,-z,now",
       "-Wl,-z,relro",
     ]
-    if (!using_sanitizer) {
+
+    # Compiler instrumentation can introduce dependencies in DSOs to symbols in
+    # the executable they are loaded into, so they are unresolved at link-time.
+    if (!using_sanitizer && !is_safestack) {
       ldflags += [
         "-Wl,-z,defs",
         "-Wl,--as-needed",
@@ -508,7 +512,6 @@ config("compiler") {
   }
 
   # Makes builds independent of absolute file path.
-  # clang-cl (used if is_win) doesn't expose this flag.
   # Currently disabled for nacl since its toolchain lacks this flag (too old).
   # TODO(zforman): Once nacl's toolchain is updated, remove check.
   if (symbol_level != 0 && is_clang && !is_nacl && !is_mac && !is_ios &&
@@ -524,6 +527,11 @@ config("compiler") {
       "-Xclang",
       ".",
     ]
+
+    if (is_win && use_lld) {
+      # Absolutize source file path for PDB.
+      ldflags += [ "/PDBSourcePath:" + rebase_path(root_build_dir) ]
+    }
   }
 
   # Tells the compiler not to use absolute paths when passing the default
@@ -578,6 +586,10 @@ config("compiler") {
     cflags_cc += [ "-stdlib=libc++" ]
     ldflags += [ "-stdlib=libc++" ]
   }
+  if (is_ios || is_mac) {
+    # Avoid symbol table size growth after libc++ r338122; see crbug.com/872926.
+    defines += [ "_LIBCPP_HIDE_FROM_ABI=_LIBCPP_HIDDEN _LIBCPP_ALWAYS_INLINE" ]
+  }
 
   # Add flags for link-time optimization. These flags enable
   # optimizations/transformations that require whole-program visibility at link
@@ -587,7 +599,10 @@ config("compiler") {
   # example by disabling the optimize configuration.
   # TODO(pcc): Make this conditional on is_official_build rather than on gn
   # flags for specific features.
-  if (!is_debug && use_thin_lto && current_toolchain == default_toolchain) {
+  if (!is_debug && use_thin_lto &&
+      (current_toolchain == default_toolchain ||
+       (is_android && defined(android_secondary_abi_toolchain) &&
+        current_toolchain == android_secondary_abi_toolchain))) {
     assert(use_lld || target_os == "chromeos",
            "gold plugin only supported with ChromeOS")
 
@@ -632,9 +647,13 @@ config("compiler") {
       ldflags += [ "-Wl,--lto-O0" ]
     }
 
-    cflags += [ "-fwhole-program-vtables" ]
-    if (!is_win) {
-      ldflags += [ "-fwhole-program-vtables" ]
+    # TODO(pcc): Re-enable this flag on Android. This will require libc++ to be
+    # built with ThinLTO (see https://crbug.com/767901) as well as the GVR shim.
+    if (!is_android) {
+      cflags += [ "-fwhole-program-vtables" ]
+      if (!is_win) {
+        ldflags += [ "-fwhole-program-vtables" ]
+      }
     }
 
     # Work-around for http://openradar.appspot.com/20356002
@@ -743,6 +762,7 @@ config("compiler_cpu_abi") {
         ldflags += [ "--target=aarch64-linux-gnu" ]
       }
     } else if (current_cpu == "mipsel" && !is_nacl) {
+      ldflags += [ "-Wl,--hash-style=sysv" ]
       if (custom_toolchain == "") {
         if (is_clang) {
           if (is_android) {
@@ -827,6 +847,7 @@ config("compiler_cpu_abi") {
 
       cflags += [ "-m${mips_float_abi}-float" ]
     } else if (current_cpu == "mips" && !is_nacl) {
+      ldflags += [ "-Wl,--hash-style=sysv" ]
       if (custom_toolchain == "") {
         if (is_clang) {
           cflags += [ "--target=mips-linux-gnu" ]
@@ -871,6 +892,7 @@ config("compiler_cpu_abi") {
 
       cflags += [ "-m${mips_float_abi}-float" ]
     } else if (current_cpu == "mips64el") {
+      ldflags += [ "-Wl,--hash-style=sysv" ]
       if (custom_toolchain == "") {
         if (is_clang) {
           if (is_android) {
@@ -933,6 +955,7 @@ config("compiler_cpu_abi") {
         ]
       }
     } else if (current_cpu == "mips64") {
+      ldflags += [ "-Wl,--hash-style=sysv" ]
       if (custom_toolchain == "") {
         if (is_clang) {
           cflags += [ "--target=mips64-linux-gnuabi64" ]
@@ -1064,20 +1087,6 @@ config("compiler_codegen") {
   }
 
   asmflags = cflags
-}
-
-# This is separate from :compiler_codegen (and not even a sub-config there)
-# so that some targets can remove it from the list with:
-#   configs -= [ "//build/config/compiler:clang_stackrealign" ]
-# See https://crbug.com/556393 for details of where it must be avoided.
-config("clang_stackrealign") {
-  if (is_clang && current_cpu == "x86" && is_linux) {
-    cflags = [
-      # Align the stack on 16-byte boundaries, http://crbug.com/418554.
-      "-mstack-alignment=16",
-      "-mstackrealign",
-    ]
-  }
 }
 
 config("clang_revision") {
@@ -1300,7 +1309,6 @@ config("default_warnings") {
 
       # http://crbug.com/588506 - Conversion suppressions waiting on Clang
       # -Wconversion.
-      "/wd4018",  # 'expression' : signed/unsigned mismatch
       "/wd4245",  # 'conversion' : conversion from 'type1' to 'type2',
                   # signed/unsigned mismatch
 
@@ -1439,9 +1447,6 @@ config("default_warnings") {
       cflags += [
         # TODO(thakis): https://crbug.com/604888
         "-Wno-undefined-var-template",
-
-        # TODO(hans): https://crbug.com/637306
-        "-Wno-address-of-packed-member",
       ]
       if (current_toolchain == host_toolchain || !use_xcode_clang ||
           xcode_version_int >= 930) {
@@ -1626,6 +1631,19 @@ config("no_rtti") {
       cflags_cc = [ "-fno-rtti" ]
       cflags_objcc = cflags_cc
     }
+  }
+}
+
+# export_dynamic ---------------------------------------------------------------
+#
+# Ensures all exported symbols are added to the dynamic symbol table.  This is
+# necessary to expose Chrome's custom operator new() and operator delete() (and
+# other memory-related symbols) to libraries.  Otherwise, they might
+# (de)allocate memory on a different heap, which would spell trouble if pointers
+# to heap-allocated memory are passed over shared library boundaries.
+config("export_dynamic") {
+  if (is_desktop_linux || export_libcxxabi_from_executables) {
+    ldflags = [ "-rdynamic" ]
   }
 }
 

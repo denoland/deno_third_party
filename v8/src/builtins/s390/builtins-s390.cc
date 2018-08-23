@@ -11,7 +11,9 @@
 #include "src/deoptimizer.h"
 #include "src/frame-constants.h"
 #include "src/frames.h"
+#include "src/objects/js-generator.h"
 #include "src/runtime/runtime.h"
+#include "src/wasm/wasm-objects.h"
 
 namespace v8 {
 namespace internal {
@@ -1645,7 +1647,28 @@ void Builtins::Generate_CallOrConstructVarargs(MacroAssembler* masm,
   //  -- r5 : new.target (for [[Construct]])
   // -----------------------------------
 
-  __ AssertFixedArray(r4);
+  Register scratch = ip;
+
+  if (masm->emit_debug_code()) {
+    // Allow r4 to be a FixedArray, or a FixedDoubleArray if r6 == 0.
+    Label ok, fail;
+    __ AssertNotSmi(r4);
+    __ LoadP(scratch, FieldMemOperand(r4, HeapObject::kMapOffset));
+    __ LoadHalfWordP(scratch,
+                     FieldMemOperand(scratch, Map::kInstanceTypeOffset));
+    __ CmpP(scratch, Operand(FIXED_ARRAY_TYPE));
+    __ beq(&ok);
+    __ CmpP(scratch, Operand(FIXED_DOUBLE_ARRAY_TYPE));
+    __ bne(&fail);
+    __ CmpP(r6, Operand::Zero());
+    __ beq(&ok);
+    // Fall through.
+    __ bind(&fail);
+    __ Abort(AbortReason::kOperandIsNotAFixedArray);
+
+    __ bind(&ok);
+  }
+
   // Check for stack overflow.
   {
     // Check the stack for overflow. We are not trying to catch interruptions
@@ -2283,7 +2306,7 @@ void Builtins::Generate_WasmCompileLazy(MacroAssembler* masm) {
   // Convert to Smi for the runtime call.
   __ SmiTag(r7, r7);
   {
-    TrapOnAbortScope trap_on_abort_scope(masm);  // Avoid calls to Abort.
+    HardAbortScope hard_abort(masm);  // Avoid calls to Abort.
     FrameAndConstantPoolScope scope(masm, StackFrame::WASM_COMPILE_LAZY);
 
     // Save all parameter registers (see wasm-linkage.cc). They might be
@@ -2503,7 +2526,7 @@ void Builtins::Generate_DoubleToI(MacroAssembler* masm) {
   Label out_of_range, only_low, negate, done, fastpath_done;
   Register result_reg = r2;
 
-  TrapOnAbortScope trap_on_abort_scope(masm);  // Avoid calls to Abort.
+  HardAbortScope hard_abort(masm);  // Avoid calls to Abort.
 
   // Immediate values for this stub fit in instructions, so it's safe to use ip.
   Register scratch = GetRegisterThatIsNotOneOf(result_reg);

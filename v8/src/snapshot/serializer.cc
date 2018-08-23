@@ -5,8 +5,11 @@
 #include "src/snapshot/serializer.h"
 
 #include "src/assembler-inl.h"
+#include "src/heap/heap.h"
 #include "src/interpreter/interpreter.h"
 #include "src/objects/code.h"
+#include "src/objects/js-array-buffer-inl.h"
+#include "src/objects/js-array-inl.h"
 #include "src/objects/map.h"
 #include "src/snapshot/builtin-serializer-allocator.h"
 #include "src/snapshot/natives.h"
@@ -23,21 +26,19 @@ Serializer<AllocatorT>::Serializer(Isolate* isolate)
       allocator_(this) {
 #ifdef OBJECT_PRINT
   if (FLAG_serialization_statistics) {
-    instance_type_count_ = NewArray<int>(kInstanceTypes);
-    instance_type_size_ = NewArray<size_t>(kInstanceTypes);
-    read_only_instance_type_count_ = NewArray<int>(kInstanceTypes);
-    read_only_instance_type_size_ = NewArray<size_t>(kInstanceTypes);
-    for (int i = 0; i < kInstanceTypes; i++) {
-      instance_type_count_[i] = 0;
-      instance_type_size_[i] = 0;
-      read_only_instance_type_count_[i] = 0;
-      read_only_instance_type_size_[i] = 0;
+    for (int space = 0; space < LAST_SPACE; ++space) {
+      instance_type_count_[space] = NewArray<int>(kInstanceTypes);
+      instance_type_size_[space] = NewArray<size_t>(kInstanceTypes);
+      for (int i = 0; i < kInstanceTypes; i++) {
+        instance_type_count_[space][i] = 0;
+        instance_type_size_[space][i] = 0;
+      }
     }
   } else {
-    instance_type_count_ = nullptr;
-    instance_type_size_ = nullptr;
-    read_only_instance_type_count_ = nullptr;
-    read_only_instance_type_size_ = nullptr;
+    for (int space = 0; space < LAST_SPACE; ++space) {
+      instance_type_count_[space] = nullptr;
+      instance_type_size_[space] = nullptr;
+    }
   }
 #endif  // OBJECT_PRINT
 }
@@ -46,11 +47,11 @@ template <class AllocatorT>
 Serializer<AllocatorT>::~Serializer() {
   if (code_address_map_ != nullptr) delete code_address_map_;
 #ifdef OBJECT_PRINT
-  if (instance_type_count_ != nullptr) {
-    DeleteArray(instance_type_count_);
-    DeleteArray(instance_type_size_);
-    DeleteArray(read_only_instance_type_count_);
-    DeleteArray(read_only_instance_type_size_);
+  for (int space = 0; space < LAST_SPACE; ++space) {
+    if (instance_type_count_[space] != nullptr) {
+      DeleteArray(instance_type_count_[space]);
+      DeleteArray(instance_type_size_[space]);
+    }
   }
 #endif  // OBJECT_PRINT
 }
@@ -60,13 +61,8 @@ template <class AllocatorT>
 void Serializer<AllocatorT>::CountInstanceType(Map* map, int size,
                                                AllocationSpace space) {
   int instance_type = map->instance_type();
-  if (space != RO_SPACE) {
-    instance_type_count_[instance_type]++;
-    instance_type_size_[instance_type] += size;
-  } else {
-    read_only_instance_type_count_[instance_type]++;
-    read_only_instance_type_size_[instance_type] += size;
-  }
+  instance_type_count_[space][instance_type]++;
+  instance_type_size_[space][instance_type] += size;
 }
 #endif  // OBJECT_PRINT
 
@@ -79,28 +75,18 @@ void Serializer<AllocatorT>::OutputStatistics(const char* name) {
 
 #ifdef OBJECT_PRINT
   PrintF("  Instance types (count and bytes):\n");
-#define PRINT_INSTANCE_TYPE(Name)                                 \
-  if (instance_type_count_[Name]) {                               \
-    PrintF("%10d %10" PRIuS "  %s\n", instance_type_count_[Name], \
-           instance_type_size_[Name], #Name);                     \
+#define PRINT_INSTANCE_TYPE(Name)                                              \
+  for (int space = 0; space < LAST_SPACE; ++space) {                           \
+    if (instance_type_count_[space][Name]) {                                   \
+      PrintF("%10d %10" PRIuS "  %-10s %s\n",                                  \
+             instance_type_count_[space][Name],                                \
+             instance_type_size_[space][Name],                                 \
+             AllocationSpaceName(static_cast<AllocationSpace>(space)), #Name); \
+    }                                                                          \
   }
   INSTANCE_TYPE_LIST(PRINT_INSTANCE_TYPE)
 #undef PRINT_INSTANCE_TYPE
-  size_t read_only_total = 0;
-#define UPDATE_TOTAL(Name) \
-  read_only_total += read_only_instance_type_size_[Name];
-  INSTANCE_TYPE_LIST(UPDATE_TOTAL)
-#undef UPDATE_TOTAL
-  if (read_only_total > 0) {
-    PrintF("\n  Read Only Instance types (count and bytes):\n");
-#define PRINT_INSTANCE_TYPE(Name)                                           \
-  if (read_only_instance_type_count_[Name]) {                               \
-    PrintF("%10d %10" PRIuS "  %s\n", read_only_instance_type_count_[Name], \
-           read_only_instance_type_size_[Name], #Name);                     \
-  }
-    INSTANCE_TYPE_LIST(PRINT_INSTANCE_TYPE)
-#undef PRINT_INSTANCE_TYPE
-  }
+
   PrintF("\n");
 #endif  // OBJECT_PRINT
 }
@@ -130,11 +116,16 @@ void Serializer<AllocatorT>::VisitRootPointers(Root root,
   if (root == Root::kBuiltins || root == Root::kDispatchTable) return;
 
   for (Object** current = start; current < end; current++) {
-    if ((*current)->IsSmi()) {
-      PutSmi(Smi::cast(*current));
-    } else {
-      SerializeObject(HeapObject::cast(*current), kPlain, kStartOfObject, 0);
-    }
+    SerializeRootObject(*current);
+  }
+}
+
+template <class AllocatorT>
+void Serializer<AllocatorT>::SerializeRootObject(Object* object) {
+  if (object->IsSmi()) {
+    PutSmi(Smi::cast(object));
+  } else {
+    SerializeObject(HeapObject::cast(object), kPlain, kStartOfObject, 0);
   }
 }
 
@@ -142,7 +133,7 @@ void Serializer<AllocatorT>::VisitRootPointers(Root root,
 template <class AllocatorT>
 void Serializer<AllocatorT>::PrintStack() {
   for (const auto o : stack_) {
-    o->Print(isolate());
+    o->Print();
     PrintF("\n");
   }
 }
@@ -177,7 +168,7 @@ bool Serializer<AllocatorT>::SerializeBackReference(HeapObject* obj,
                                                     HowToCode how_to_code,
                                                     WhereToPoint where_to_point,
                                                     int skip) {
-  SerializerReference reference = reference_map_.Lookup(obj);
+  SerializerReference reference = reference_map_.LookupReference(obj);
   if (!reference.is_valid()) return false;
   // Encode the location of an already deserialized object in order to write
   // its location into a later object.  We can encode the location as an
@@ -260,12 +251,11 @@ void Serializer<AllocatorT>::PutRoot(
 
   // Assert that the first 32 root array items are a conscious choice. They are
   // chosen so that the most common ones can be encoded more efficiently.
-  STATIC_ASSERT(Heap::kEmptyDescriptorArrayRootIndex ==
+  STATIC_ASSERT(Heap::kArgumentsMarkerRootIndex ==
                 kNumberOfRootArrayConstants - 1);
 
   if (how_to_code == kPlain && where_to_point == kStartOfObject &&
-      root_index < kNumberOfRootArrayConstants &&
-      !isolate()->heap()->InNewSpace(object)) {
+      root_index < kNumberOfRootArrayConstants && !Heap::InNewSpace(object)) {
     if (skip == 0) {
       sink_.Put(kRootArrayConstants + root_index, "RootConstant");
     } else {
@@ -291,7 +281,21 @@ template <class AllocatorT>
 void Serializer<AllocatorT>::PutBackReference(HeapObject* object,
                                               SerializerReference reference) {
   DCHECK(allocator()->BackReferenceIsAlreadyAllocated(reference));
-  sink_.PutInt(reference.back_reference(), "BackRefValue");
+  switch (reference.space()) {
+    case MAP_SPACE:
+      sink_.PutInt(reference.map_index(), "BackRefMapIndex");
+      break;
+
+    case LO_SPACE:
+      sink_.PutInt(reference.large_object_index(), "BackRefLargeObjectIndex");
+      break;
+
+    default:
+      sink_.PutInt(reference.chunk_index(), "BackRefChunkIndex");
+      sink_.PutInt(reference.chunk_offset(), "BackRefChunkOffset");
+      break;
+  }
+
   hot_objects_.Add(object);
 }
 
@@ -406,7 +410,7 @@ template <class AllocatorT>
 int32_t Serializer<AllocatorT>::ObjectSerializer::SerializeBackingStore(
     void* backing_store, int32_t byte_length) {
   SerializerReference reference =
-      serializer_->reference_map()->Lookup(backing_store);
+      serializer_->reference_map()->LookupReference(backing_store);
 
   // Serialize the off-heap backing store.
   if (!reference.is_valid()) {
@@ -486,7 +490,7 @@ void Serializer<AllocatorT>::ObjectSerializer::SerializeExternalString() {
   // for native native source code strings, we replace the resource field
   // with the native source id.
   // For the rest we serialize them to look like ordinary sequential strings.
-  if (object_->map() != heap->native_source_string_map()) {
+  if (object_->map() != ReadOnlyRoots(heap).native_source_string_map()) {
     ExternalString* string = ExternalString::cast(object_);
     Address resource = string->resource_as_address();
     ExternalReferenceEncoder::Value reference;
@@ -518,9 +522,9 @@ void Serializer<
     AllocatorT>::ObjectSerializer::SerializeExternalStringAsSequentialString() {
   // Instead of serializing this as an external string, we serialize
   // an imaginary sequential string with the same content.
-  Isolate* isolate = serializer_->isolate();
+  ReadOnlyRoots roots(serializer_->isolate());
   DCHECK(object_->IsExternalString());
-  DCHECK(object_->map() != isolate->heap()->native_source_string_map());
+  DCHECK(object_->map() != roots.native_source_string_map());
   ExternalString* string = ExternalString::cast(object_);
   int length = string->length();
   Map* map;
@@ -530,15 +534,14 @@ void Serializer<
   // Find the map and size for the imaginary sequential string.
   bool internalized = object_->IsInternalizedString();
   if (object_->IsExternalOneByteString()) {
-    map = internalized ? isolate->heap()->one_byte_internalized_string_map()
-                       : isolate->heap()->one_byte_string_map();
+    map = internalized ? roots.one_byte_internalized_string_map()
+                       : roots.one_byte_string_map();
     allocation_size = SeqOneByteString::SizeFor(length);
     content_size = length * kCharSize;
     resource = reinterpret_cast<const byte*>(
         ExternalOneByteString::cast(string)->resource()->data());
   } else {
-    map = internalized ? isolate->heap()->internalized_string_map()
-                       : isolate->heap()->string_map();
+    map = internalized ? roots.internalized_string_map() : roots.string_map();
     allocation_size = SeqTwoByteString::SizeFor(length);
     content_size = length * kShortSize;
     resource = reinterpret_cast<const byte*>(
@@ -581,7 +584,8 @@ class UnlinkWeakNextScope {
     if (object->IsAllocationSite()) {
       object_ = object;
       next_ = AllocationSite::cast(object)->weak_next();
-      AllocationSite::cast(object)->set_weak_next(heap->undefined_value());
+      AllocationSite::cast(object)->set_weak_next(
+          ReadOnlyRoots(heap).undefined_value());
     }
   }
 
@@ -634,7 +638,7 @@ void Serializer<AllocatorT>::ObjectSerializer::Serialize() {
 
   if (object_->IsScript()) {
     // Clear cached line ends.
-    Object* undefined = serializer_->isolate()->heap()->undefined_value();
+    Object* undefined = ReadOnlyRoots(serializer_->isolate()).undefined_value();
     Script::cast(object_)->set_line_ends(undefined);
   }
 
@@ -678,7 +682,7 @@ void Serializer<AllocatorT>::ObjectSerializer::SerializeDeferred() {
   int size = object_->Size();
   Map* map = object_->map();
   SerializerReference back_reference =
-      serializer_->reference_map()->Lookup(object_);
+      serializer_->reference_map()->LookupReference(object_);
   DCHECK(back_reference.is_back_reference());
 
   // Serialize the rest of the object.
@@ -743,7 +747,7 @@ void Serializer<AllocatorT>::ObjectSerializer::VisitPointers(
           Heap::RootIsImmortalImmovable(root_index) &&
           *current == current[-1]) {
         DCHECK_EQ(reference_type, HeapObjectReferenceType::STRONG);
-        DCHECK(!serializer_->isolate()->heap()->InNewSpace(current_contents));
+        DCHECK(!Heap::InNewSpace(current_contents));
         int repeat_count = 1;
         while (&current[repeat_count] < end - 1 &&
                current[repeat_count] == *current) {
@@ -994,9 +998,10 @@ void Serializer<AllocatorT>::ObjectSerializer::OutputCode(int size) {
   int mode_mask = RelocInfo::ModeMask(RelocInfo::CODE_TARGET) |
                   RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT) |
                   RelocInfo::ModeMask(RelocInfo::EXTERNAL_REFERENCE) |
-                  RelocInfo::ModeMask(RelocInfo::RUNTIME_ENTRY) |
                   RelocInfo::ModeMask(RelocInfo::INTERNAL_REFERENCE) |
-                  RelocInfo::ModeMask(RelocInfo::INTERNAL_REFERENCE_ENCODED);
+                  RelocInfo::ModeMask(RelocInfo::INTERNAL_REFERENCE_ENCODED) |
+                  RelocInfo::ModeMask(RelocInfo::OFF_HEAP_TARGET) |
+                  RelocInfo::ModeMask(RelocInfo::RUNTIME_ENTRY);
   for (RelocIterator it(code, mode_mask); !it.done(); it.next()) {
     RelocInfo* rinfo = it.rinfo();
     rinfo->WipeOut();

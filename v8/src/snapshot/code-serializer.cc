@@ -31,6 +31,11 @@ ScriptData::ScriptData(const byte* data, int length)
   }
 }
 
+CodeSerializer::CodeSerializer(Isolate* isolate, uint32_t source_hash)
+    : Serializer(isolate), source_hash_(source_hash) {
+  allocator()->UseCustomChunkSize(FLAG_serialization_chunk_size);
+}
+
 // static
 ScriptCompiler::CachedData* CodeSerializer::Serialize(
     Handle<SharedFunctionInfo> info) {
@@ -52,7 +57,6 @@ ScriptCompiler::CachedData* CodeSerializer::Serialize(
   // TODO(7110): Enable serialization of Asm modules once the AsmWasmData is
   // context independent.
   if (script->ContainsAsmModule()) return nullptr;
-  if (isolate->debug()->is_loaded()) return nullptr;
 
   isolate->heap()->read_only_space()->ClearStringPaddingIfNeeded();
 
@@ -159,29 +163,27 @@ void CodeSerializer::SerializeObject(HeapObject* obj, HowToCode how_to_code,
     UNREACHABLE();
   }
 
+  ReadOnlyRoots roots(isolate());
   if (ElideObject(obj)) {
-    return SerializeObject(isolate()->heap()->undefined_value(), how_to_code,
-                           where_to_point, skip);
+    return SerializeObject(roots.undefined_value(), how_to_code, where_to_point,
+                           skip);
   }
 
   if (obj->IsScript()) {
     Script* script_obj = Script::cast(obj);
     DCHECK_NE(script_obj->compilation_type(), Script::COMPILATION_TYPE_EVAL);
-    // Wrapper object is a context-dependent JSValue. Reset it here.
-    script_obj->set_wrapper(isolate()->heap()->undefined_value());
     // We want to differentiate between undefined and uninitialized_symbol for
     // context_data for now. It is hack to allow debugging for scripts that are
     // included as a part of custom snapshot. (see debug::Script::IsEmbedded())
     Object* context_data = script_obj->context_data();
-    if (context_data != isolate()->heap()->undefined_value() &&
-        context_data != isolate()->heap()->uninitialized_symbol()) {
-      script_obj->set_context_data(isolate()->heap()->undefined_value());
+    if (context_data != roots.undefined_value() &&
+        context_data != roots.uninitialized_symbol()) {
+      script_obj->set_context_data(roots.undefined_value());
     }
     // We don't want to serialize host options to avoid serializing unnecessary
     // object graph.
     FixedArray* host_options = script_obj->host_defined_options();
-    script_obj->set_host_defined_options(
-        isolate()->heap()->empty_fixed_array());
+    script_obj->set_host_defined_options(roots.empty_fixed_array());
     SerializeGeneric(obj, how_to_code, where_to_point);
     script_obj->set_host_defined_options(host_options);
     script_obj->set_context_data(context_data);
@@ -203,8 +205,7 @@ void CodeSerializer::SerializeObject(HeapObject* obj, HowToCode how_to_code,
         debug_bytecode_array = debug_info->DebugBytecodeArray();
         sfi->SetDebugBytecodeArray(debug_info->OriginalBytecodeArray());
       }
-      sfi->set_function_identifier_or_debug_info(
-          debug_info->function_identifier());
+      sfi->set_script_or_debug_info(debug_info->script());
     }
     DCHECK(!sfi->HasDebugInfo());
 
@@ -216,7 +217,7 @@ void CodeSerializer::SerializeObject(HeapObject* obj, HowToCode how_to_code,
 
     // Restore debug info
     if (debug_info != nullptr) {
-      sfi->set_function_identifier_or_debug_info(debug_info);
+      sfi->set_script_or_debug_info(debug_info);
       if (debug_bytecode_array != nullptr) {
         sfi->SetDebugBytecodeArray(debug_bytecode_array);
       }
@@ -253,7 +254,7 @@ void CodeSerializer::SerializeGeneric(HeapObject* heap_object,
 void CodeSerializer::SerializeCodeStub(Code* code_stub, HowToCode how_to_code,
                                        WhereToPoint where_to_point) {
   // We only arrive here if we have not encountered this code stub before.
-  DCHECK(!reference_map()->Lookup(code_stub).is_valid());
+  DCHECK(!reference_map()->LookupReference(code_stub).is_valid());
   uint32_t stub_key = code_stub->stub_key();
   DCHECK(CodeStub::MajorKeyFromKey(stub_key) != CodeStub::NoCache);
   DCHECK(!CodeStub::GetCode(isolate(), stub_key).is_null());
@@ -273,7 +274,7 @@ MaybeHandle<SharedFunctionInfo> CodeSerializer::Deserialize(
     Isolate* isolate, ScriptData* cached_data, Handle<String> source,
     ScriptOriginOptions origin_options) {
   base::ElapsedTimer timer;
-  if (FLAG_profile_deserialization) timer.Start();
+  if (FLAG_profile_deserialization || FLAG_log_function_events) timer.Start();
 
   HandleScope scope(isolate);
 
@@ -308,15 +309,24 @@ MaybeHandle<SharedFunctionInfo> CodeSerializer::Deserialize(
     PrintF("[Deserializing from %d bytes took %0.3f ms]\n", length, ms);
   }
 
-  if (isolate->logger()->is_listening_to_code_events() ||
-      isolate->is_profiling()) {
-    String* name = isolate->heap()->empty_string();
+  bool log_code_creation = isolate->logger()->is_listening_to_code_events() ||
+                           isolate->is_profiling();
+  if (log_code_creation || FLAG_log_function_events) {
+    String* name = ReadOnlyRoots(isolate).empty_string();
     if (result->script()->IsScript()) {
       Script* script = Script::cast(result->script());
       if (script->name()->IsString()) name = String::cast(script->name());
+      if (FLAG_log_function_events) {
+        LOG(isolate, FunctionEvent("deserialize", script->id(),
+                                   timer.Elapsed().InMillisecondsF(),
+                                   result->StartPosition(),
+                                   result->EndPosition(), name));
+      }
     }
-    PROFILE(isolate, CodeCreateEvent(CodeEventListener::SCRIPT_TAG,
-                                     result->abstract_code(), *result, name));
+    if (log_code_creation) {
+      PROFILE(isolate, CodeCreateEvent(CodeEventListener::SCRIPT_TAG,
+                                       result->abstract_code(), *result, name));
+    }
   }
 
   if (isolate->NeedsSourcePositionsForProfiling()) {
