@@ -1,0 +1,534 @@
+// Copyright 2013-2016 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+use convert::TryFrom;
+use mem;
+use ops::{self, Add, Sub, Try};
+use usize;
+
+use super::{FusedIterator, TrustedLen};
+
+/// Objects that can be stepped over in both directions.
+///
+/// The `steps_between` function provides a way to efficiently compare
+/// two `Step` objects.
+#[unstable(feature = "step_trait",
+           reason = "likely to be replaced by finer-grained traits",
+           issue = "42168")]
+pub trait Step: Clone + PartialOrd + Sized {
+    /// Returns the number of steps between two step objects. The count is
+    /// inclusive of `start` and exclusive of `end`.
+    ///
+    /// Returns `None` if it is not possible to calculate `steps_between`
+    /// without overflow.
+    fn steps_between(start: &Self, end: &Self) -> Option<usize>;
+
+    /// Replaces this step with `1`, returning itself
+    fn replace_one(&mut self) -> Self;
+
+    /// Replaces this step with `0`, returning itself
+    fn replace_zero(&mut self) -> Self;
+
+    /// Adds one to this step, returning the result
+    fn add_one(&self) -> Self;
+
+    /// Subtracts one to this step, returning the result
+    fn sub_one(&self) -> Self;
+
+    /// Add an usize, returning None on overflow
+    fn add_usize(&self, n: usize) -> Option<Self>;
+}
+
+// These are still macro-generated because the integer literals resolve to different types.
+macro_rules! step_identical_methods {
+    () => {
+        #[inline]
+        fn replace_one(&mut self) -> Self {
+            mem::replace(self, 1)
+        }
+
+        #[inline]
+        fn replace_zero(&mut self) -> Self {
+            mem::replace(self, 0)
+        }
+
+        #[inline]
+        fn add_one(&self) -> Self {
+            Add::add(*self, 1)
+        }
+
+        #[inline]
+        fn sub_one(&self) -> Self {
+            Sub::sub(*self, 1)
+        }
+    }
+}
+
+macro_rules! step_impl_unsigned {
+    ($($t:ty)*) => ($(
+        #[unstable(feature = "step_trait",
+                   reason = "likely to be replaced by finer-grained traits",
+                   issue = "42168")]
+        impl Step for $t {
+            #[inline]
+            #[allow(trivial_numeric_casts)]
+            fn steps_between(start: &$t, end: &$t) -> Option<usize> {
+                if *start < *end {
+                    // Note: We assume $t <= usize here
+                    Some((*end - *start) as usize)
+                } else {
+                    Some(0)
+                }
+            }
+
+            #[inline]
+            #[allow(unreachable_patterns)]
+            fn add_usize(&self, n: usize) -> Option<Self> {
+                match <$t>::private_try_from(n) {
+                    Ok(n_as_t) => self.checked_add(n_as_t),
+                    Err(_) => None,
+                }
+            }
+
+            step_identical_methods!();
+        }
+    )*)
+}
+macro_rules! step_impl_signed {
+    ($( [$t:ty : $unsigned:ty] )*) => ($(
+        #[unstable(feature = "step_trait",
+                   reason = "likely to be replaced by finer-grained traits",
+                   issue = "42168")]
+        impl Step for $t {
+            #[inline]
+            #[allow(trivial_numeric_casts)]
+            fn steps_between(start: &$t, end: &$t) -> Option<usize> {
+                if *start < *end {
+                    // Note: We assume $t <= isize here
+                    // Use .wrapping_sub and cast to usize to compute the
+                    // difference that may not fit inside the range of isize.
+                    Some((*end as isize).wrapping_sub(*start as isize) as usize)
+                } else {
+                    Some(0)
+                }
+            }
+
+            #[inline]
+            #[allow(unreachable_patterns)]
+            fn add_usize(&self, n: usize) -> Option<Self> {
+                match <$unsigned>::private_try_from(n) {
+                    Ok(n_as_unsigned) => {
+                        // Wrapping in unsigned space handles cases like
+                        // `-120_i8.add_usize(200) == Some(80_i8)`,
+                        // even though 200_usize is out of range for i8.
+                        let wrapped = (*self as $unsigned).wrapping_add(n_as_unsigned) as $t;
+                        if wrapped >= *self {
+                            Some(wrapped)
+                        } else {
+                            None  // Addition overflowed
+                        }
+                    }
+                    Err(_) => None,
+                }
+            }
+
+            step_identical_methods!();
+        }
+    )*)
+}
+
+macro_rules! step_impl_no_between {
+    ($($t:ty)*) => ($(
+        #[unstable(feature = "step_trait",
+                   reason = "likely to be replaced by finer-grained traits",
+                   issue = "42168")]
+        impl Step for $t {
+            #[inline]
+            fn steps_between(_start: &Self, _end: &Self) -> Option<usize> {
+                None
+            }
+
+            #[inline]
+            fn add_usize(&self, n: usize) -> Option<Self> {
+                self.checked_add(n as $t)
+            }
+
+            step_identical_methods!();
+        }
+    )*)
+}
+
+step_impl_unsigned!(usize u8 u16 u32);
+step_impl_signed!([isize: usize] [i8: u8] [i16: u16] [i32: u32]);
+#[cfg(target_pointer_width = "64")]
+step_impl_unsigned!(u64);
+#[cfg(target_pointer_width = "64")]
+step_impl_signed!([i64: u64]);
+// If the target pointer width is not 64-bits, we
+// assume here that it is less than 64-bits.
+#[cfg(not(target_pointer_width = "64"))]
+step_impl_no_between!(u64 i64);
+step_impl_no_between!(u128 i128);
+
+macro_rules! range_exact_iter_impl {
+    ($($t:ty)*) => ($(
+        #[stable(feature = "rust1", since = "1.0.0")]
+        impl ExactSizeIterator for ops::Range<$t> { }
+    )*)
+}
+
+macro_rules! range_incl_exact_iter_impl {
+    ($($t:ty)*) => ($(
+        #[stable(feature = "inclusive_range", since = "1.26.0")]
+        impl ExactSizeIterator for ops::RangeInclusive<$t> { }
+    )*)
+}
+
+macro_rules! range_trusted_len_impl {
+    ($($t:ty)*) => ($(
+        #[unstable(feature = "trusted_len", issue = "37572")]
+        unsafe impl TrustedLen for ops::Range<$t> { }
+    )*)
+}
+
+macro_rules! range_incl_trusted_len_impl {
+    ($($t:ty)*) => ($(
+        #[unstable(feature = "trusted_len", issue = "37572")]
+        unsafe impl TrustedLen for ops::RangeInclusive<$t> { }
+    )*)
+}
+
+#[stable(feature = "rust1", since = "1.0.0")]
+impl<A: Step> Iterator for ops::Range<A> {
+    type Item = A;
+
+    #[inline]
+    fn next(&mut self) -> Option<A> {
+        if self.start < self.end {
+            // We check for overflow here, even though it can't actually
+            // happen. Adding this check does however help llvm vectorize loops
+            // for some ranges that don't get vectorized otherwise,
+            // and this won't actually result in an extra check in an optimized build.
+            if let Some(mut n) = self.start.add_usize(1) {
+                mem::swap(&mut n, &mut self.start);
+                Some(n)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match Step::steps_between(&self.start, &self.end) {
+            Some(hint) => (hint, Some(hint)),
+            None => (0, None)
+        }
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<A> {
+        if let Some(plus_n) = self.start.add_usize(n) {
+            if plus_n < self.end {
+                self.start = plus_n.add_one();
+                return Some(plus_n)
+            }
+        }
+
+        self.start = self.end.clone();
+        None
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<A> {
+        self.next_back()
+    }
+
+    #[inline]
+    fn min(mut self) -> Option<A> {
+        self.next()
+    }
+
+    #[inline]
+    fn max(mut self) -> Option<A> {
+        self.next_back()
+    }
+}
+
+// These macros generate `ExactSizeIterator` impls for various range types.
+// Range<{u,i}64> and RangeInclusive<{u,i}{32,64,size}> are excluded
+// because they cannot guarantee having a length <= usize::MAX, which is
+// required by ExactSizeIterator.
+range_exact_iter_impl!(usize u8 u16 u32 isize i8 i16 i32);
+range_incl_exact_iter_impl!(u8 u16 i8 i16);
+
+// These macros generate `TrustedLen` impls.
+//
+// They need to guarantee that .size_hint() is either exact, or that
+// the upper bound is None when it does not fit the type limits.
+range_trusted_len_impl!(usize isize u8 i8 u16 i16 u32 i32 i64 u64);
+range_incl_trusted_len_impl!(usize isize u8 i8 u16 i16 u32 i32 i64 u64);
+
+#[stable(feature = "rust1", since = "1.0.0")]
+impl<A: Step> DoubleEndedIterator for ops::Range<A> {
+    #[inline]
+    fn next_back(&mut self) -> Option<A> {
+        if self.start < self.end {
+            self.end = self.end.sub_one();
+            Some(self.end.clone())
+        } else {
+            None
+        }
+    }
+}
+
+#[stable(feature = "fused", since = "1.26.0")]
+impl<A: Step> FusedIterator for ops::Range<A> {}
+
+#[stable(feature = "rust1", since = "1.0.0")]
+impl<A: Step> Iterator for ops::RangeFrom<A> {
+    type Item = A;
+
+    #[inline]
+    fn next(&mut self) -> Option<A> {
+        let mut n = self.start.add_one();
+        mem::swap(&mut n, &mut self.start);
+        Some(n)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (usize::MAX, None)
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<A> {
+        let plus_n = self.start.add_usize(n).expect("overflow in RangeFrom::nth");
+        self.start = plus_n.add_one();
+        Some(plus_n)
+    }
+}
+
+#[stable(feature = "fused", since = "1.26.0")]
+impl<A: Step> FusedIterator for ops::RangeFrom<A> {}
+
+#[unstable(feature = "trusted_len", issue = "37572")]
+unsafe impl<A: Step> TrustedLen for ops::RangeFrom<A> {}
+
+#[stable(feature = "inclusive_range", since = "1.26.0")]
+impl<A: Step> Iterator for ops::RangeInclusive<A> {
+    type Item = A;
+
+    #[inline]
+    fn next(&mut self) -> Option<A> {
+        if self.start <= self.end {
+            if self.start < self.end {
+                let n = self.start.add_one();
+                Some(mem::replace(&mut self.start, n))
+            } else {
+                let last = self.start.replace_one();
+                self.end.replace_zero();
+                Some(last)
+            }
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if !(self.start <= self.end) {
+            return (0, Some(0));
+        }
+
+        match Step::steps_between(&self.start, &self.end) {
+            Some(hint) => (hint.saturating_add(1), hint.checked_add(1)),
+            None => (0, None),
+        }
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<A> {
+        if let Some(plus_n) = self.start.add_usize(n) {
+            use cmp::Ordering::*;
+
+            match plus_n.partial_cmp(&self.end) {
+                Some(Less) => {
+                    self.start = plus_n.add_one();
+                    return Some(plus_n)
+                }
+                Some(Equal) => {
+                    self.start.replace_one();
+                    self.end.replace_zero();
+                    return Some(plus_n)
+                }
+                _ => {}
+            }
+        }
+
+        self.start.replace_one();
+        self.end.replace_zero();
+        None
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<A> {
+        self.next_back()
+    }
+
+    #[inline]
+    fn min(mut self) -> Option<A> {
+        self.next()
+    }
+
+    #[inline]
+    fn max(mut self) -> Option<A> {
+        self.next_back()
+    }
+
+    #[inline]
+    fn try_fold<B, F, R>(&mut self, init: B, mut f: F) -> R where
+        Self: Sized, F: FnMut(B, Self::Item) -> R, R: Try<Ok=B>
+    {
+        let mut accum = init;
+        if self.start <= self.end {
+            loop {
+                let (x, done) =
+                    if self.start < self.end {
+                        let n = self.start.add_one();
+                        (mem::replace(&mut self.start, n), false)
+                    } else {
+                        self.end.replace_zero();
+                        (self.start.replace_one(), true)
+                    };
+                accum = f(accum, x)?;
+                if done { break }
+            }
+        }
+        Try::from_ok(accum)
+    }
+}
+
+#[stable(feature = "inclusive_range", since = "1.26.0")]
+impl<A: Step> DoubleEndedIterator for ops::RangeInclusive<A> {
+    #[inline]
+    fn next_back(&mut self) -> Option<A> {
+        if self.start <= self.end {
+            if self.start < self.end {
+                let n = self.end.sub_one();
+                Some(mem::replace(&mut self.end, n))
+            } else {
+                let last = self.end.replace_zero();
+                self.start.replace_one();
+                Some(last)
+            }
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn try_rfold<B, F, R>(&mut self, init: B, mut f: F) -> R where
+        Self: Sized, F: FnMut(B, Self::Item) -> R, R: Try<Ok=B>
+    {
+        let mut accum = init;
+        if self.start <= self.end {
+            loop {
+                let (x, done) =
+                    if self.start < self.end {
+                        let n = self.end.sub_one();
+                        (mem::replace(&mut self.end, n), false)
+                    } else {
+                        self.start.replace_one();
+                        (self.end.replace_zero(), true)
+                    };
+                accum = f(accum, x)?;
+                if done { break }
+            }
+        }
+        Try::from_ok(accum)
+    }
+}
+
+#[stable(feature = "fused", since = "1.26.0")]
+impl<A: Step> FusedIterator for ops::RangeInclusive<A> {}
+
+/// Compensate removal of some impls per
+/// https://github.com/rust-lang/rust/pull/49305#issuecomment-376293243
+trait PrivateTryFromUsize: Sized {
+    fn private_try_from(n: usize) -> Result<Self, ()>;
+}
+
+impl<T> PrivateTryFromUsize for T where T: TryFrom<usize> {
+    #[inline]
+    fn private_try_from(n: usize) -> Result<Self, ()> {
+        T::try_from(n).map_err(|_| ())
+    }
+}
+
+// no possible bounds violation
+macro_rules! try_from_unbounded {
+    ($($target:ty),*) => {$(
+        impl PrivateTryFromUsize for $target {
+            #[inline]
+            fn private_try_from(value: usize) -> Result<Self, ()> {
+                Ok(value as $target)
+            }
+        }
+    )*}
+}
+
+// unsigned to signed (only positive bound)
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
+macro_rules! try_from_upper_bounded {
+    ($($target:ty),*) => {$(
+        impl PrivateTryFromUsize for $target {
+            #[inline]
+            fn private_try_from(u: usize) -> Result<$target, ()> {
+                if u > (<$target>::max_value() as usize) {
+                    Err(())
+                } else {
+                    Ok(u as $target)
+                }
+            }
+        }
+    )*}
+}
+
+
+#[cfg(target_pointer_width = "16")]
+mod ptr_try_from_impls {
+    use super::PrivateTryFromUsize;
+
+    try_from_unbounded!(u16, u32, u64, u128);
+    try_from_unbounded!(i32, i64, i128);
+}
+
+#[cfg(target_pointer_width = "32")]
+mod ptr_try_from_impls {
+    use super::PrivateTryFromUsize;
+
+    try_from_upper_bounded!(u16);
+    try_from_unbounded!(u32, u64, u128);
+    try_from_upper_bounded!(i32);
+    try_from_unbounded!(i64, i128);
+}
+
+#[cfg(target_pointer_width = "64")]
+mod ptr_try_from_impls {
+    use super::PrivateTryFromUsize;
+
+    try_from_upper_bounded!(u16, u32);
+    try_from_unbounded!(u64, u128);
+    try_from_upper_bounded!(i32, i64);
+    try_from_unbounded!(i128);
+}

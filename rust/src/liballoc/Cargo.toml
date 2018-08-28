@@ -1,0 +1,25 @@
+[package]
+authors = ["The Rust Project Developers"]
+name = "alloc"
+version = "0.0.0"
+autotests = false
+autobenches = false
+
+[lib]
+name = "alloc"
+path = "lib.rs"
+
+[dependencies]
+core = { path = "../libcore" }
+compiler_builtins = { path = "../rustc/compiler_builtins_shim" }
+
+[dev-dependencies]
+rand = "0.4"
+
+[[test]]
+name = "collectionstests"
+path = "../liballoc/tests/lib.rs"
+
+[[bench]]
+name = "collectionsbenches"
+path = "../liballoc/benches/lib.rs"
