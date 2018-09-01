@@ -504,7 +504,16 @@ class GeneralGenerator : public BaseGenerator {
     // to map directly to how they're used in C/C++ and file formats.
     // That, and Java Enums are expensive, and not universally liked.
     GenComment(enum_def.doc_comment, code_ptr, &lang_.comment_config);
-    code += std::string("public ") + lang_.enum_decl + enum_def.name;
+    if (enum_def.attributes.Lookup("private")) {
+      // For Java, we leave the enum unmarked to indicate package-private
+      // For C# we mark the enum as internal
+      if (lang_.language == IDLOptions::kCSharp) {
+        code += "internal ";
+      }
+    } else {
+      code += "public ";
+    }
+    code += lang_.enum_decl + enum_def.name;
     if (lang_.language == IDLOptions::kCSharp) {
       code += lang_.inheritance_marker +
               GenTypeBasic(enum_def.underlying_type, false);
@@ -773,7 +782,15 @@ class GeneralGenerator : public BaseGenerator {
     //   int o = __offset(offset); return o != 0 ? bb.getType(o + i) : default;
     // }
     GenComment(struct_def.doc_comment, code_ptr, &lang_.comment_config);
-    code += "public ";
+    if (struct_def.attributes.Lookup("private")) {
+      // For Java, we leave the struct unmarked to indicate package-private
+      // For C# we mark the struct as internal
+      if (lang_.language == IDLOptions::kCSharp) {
+        code += "internal ";
+      }
+    } else {
+      code += "public ";
+    }
     if (lang_.language == IDLOptions::kCSharp &&
         struct_def.attributes.Lookup("csharp_partial")) {
       // generate a partial class for this C# struct/table
@@ -1096,12 +1113,21 @@ class GeneralGenerator : public BaseGenerator {
             code += "); }\n";
             break;
           case IDLOptions::kCSharp:
+            code += "#if ENABLE_SPAN_T\n";
+            code += "  public Span<byte> Get";
+            code += MakeCamel(field.name, lang_.first_camel_upper);
+            code += "Bytes() { return ";
+            code += lang_.accessor_prefix + "__vector_as_span(";
+            code += NumToString(field.value.offset);
+            code += "); }\n";
+            code += "#else\n";
             code += "  public ArraySegment<byte>? Get";
             code += MakeCamel(field.name, lang_.first_camel_upper);
             code += "Bytes() { return ";
             code += lang_.accessor_prefix + "__vector_as_arraysegment(";
             code += NumToString(field.value.offset);
             code += "); }\n";
+            code += "#endif\n";
 
             // For direct blockcopying the data into a typed array
             code += "  public ";

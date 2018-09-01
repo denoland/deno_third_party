@@ -55,10 +55,10 @@ namespace flatbuffers {
   TD(FLOAT,  "float",  float,    float,  float32, float,  float32, f32) /* begin float */ \
   TD(DOUBLE, "double", double,   double, float64, double, float64, f64) /* end float/scalar */
 #define FLATBUFFERS_GEN_TYPES_POINTER(TD) \
-  TD(STRING, "string", Offset<void>, int, int, StringOffset, int, StringOffset) \
-  TD(VECTOR, "",       Offset<void>, int, int, VectorOffset, int, VectorOffset) \
-  TD(STRUCT, "",       Offset<void>, int, int, int,          int, StructOffset) \
-  TD(UNION,  "",       Offset<void>, int, int, int,          int, UnionOffset)
+  TD(STRING, "string", Offset<void>, int, int, StringOffset, int, unused) \
+  TD(VECTOR, "",       Offset<void>, int, int, VectorOffset, int, unused) \
+  TD(STRUCT, "",       Offset<void>, int, int, int,          int, unused) \
+  TD(UNION,  "",       Offset<void>, int, int, int,          int, unused)
 
 // The fields are:
 // - enum
@@ -115,6 +115,8 @@ inline bool IsFloat  (BaseType t) { return t == BASE_TYPE_FLOAT ||
 inline bool IsLong   (BaseType t) { return t == BASE_TYPE_LONG ||
                                            t == BASE_TYPE_ULONG; }
 inline bool IsBool   (BaseType t) { return t == BASE_TYPE_BOOL; }
+inline bool IsOneByte(BaseType t) { return t >= BASE_TYPE_UTYPE &&
+                                           t <= BASE_TYPE_UCHAR; }
 // clang-format on
 
 extern const char *const kTypeNames[];
@@ -569,6 +571,7 @@ class Parser : public ParserState {
     known_attributes_["native_type"] = true;
     known_attributes_["native_default"] = true;
     known_attributes_["flexbuffer"] = true;
+    known_attributes_["private"] = true;
   }
 
   ~Parser() {
