@@ -168,6 +168,12 @@ class RustGenerator : public BaseGenerator {
       : BaseGenerator(parser, path, file_name, "", "::"),
         cur_name_space_(nullptr) {
     const char *keywords[] = {
+      // list taken from:
+      // https://doc.rust-lang.org/book/second-edition/appendix-01-keywords.html
+      //
+      // we write keywords one per line so that we can easily compare them with
+      // changes to that webpage in the future.
+
       // currently-used keywords
       "as",
       "break",
@@ -224,7 +230,7 @@ class RustGenerator : public BaseGenerator {
       "virtual",
       "yield",
 
-      // other terms we should not use
+      // other rust terms we should not use
       "std",
       "usize",
       "isize",
@@ -240,6 +246,22 @@ class RustGenerator : public BaseGenerator {
       "i128",
       "f32",
       "f64",
+
+      // These are terms the code generator can implement on types.
+      //
+      // In Rust, the trait resolution rules (as described at
+      // https://github.com/rust-lang/rust/issues/26007) mean that, as long
+      // as we impl table accessors as inherent methods, we'll never create
+      // conflicts with these keywords. However, that's a fairly nuanced
+      // implementation detail, and how we implement methods could change in
+      // the future. as a result, we proactively block these out as reserved
+      // words.
+      "follow",
+      "push",
+      "size",
+      "alignment",
+      "to_little_endian",
+      "from_little_endian",
       nullptr };
     for (auto kw = keywords; *kw; kw++) keywords_.insert(*kw);
   }
@@ -249,6 +271,9 @@ class RustGenerator : public BaseGenerator {
   bool generate() {
     code_.Clear();
     code_ += "// " + std::string(FlatBuffersGeneratedWarning()) + "\n\n";
+    code_ += "#![allow(dead_code)]";
+    code_ += "#![allow(unused_imports)]";
+    code_ += "extern crate flatbuffers;\n";
 
     assert(!cur_name_space_);
 
@@ -332,6 +357,25 @@ class RustGenerator : public BaseGenerator {
       case ftStruct: { return false; }
       default: { return true; }
     }
+  }
+
+  // Determine if a table args rust type needs a lifetime template parameter.
+  bool TableBuilderArgsNeedsLifetime(const StructDef &struct_def) const {
+    FLATBUFFERS_ASSERT(!struct_def.fixed);
+
+    for (auto it = struct_def.fields.vec.begin();
+         it != struct_def.fields.vec.end(); ++it) {
+      const auto &field = **it;
+      if (field.deprecated) {
+        continue;
+      }
+
+      if (TypeNeedsLifetimeParameter(field.value.type)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   // Determine if a Type needs to be copied (for endian safety) when used in a
@@ -987,7 +1031,7 @@ class RustGenerator : public BaseGenerator {
       case ftFloat:
       case ftBool: {
         const auto typname = GetTypeBasic(type);
-        const std::string default_value = GetDefaultScalarValue(field);
+        const auto default_value = GetDefaultScalarValue(field);
         return "self._tab.get::<" + typname + ">(" + offset_name + ", Some(" + \
                default_value + ")).unwrap()";
       }
@@ -1007,9 +1051,9 @@ class RustGenerator : public BaseGenerator {
       }
       case ftUnionKey:
       case ftEnumKey: {
-        const std::string underlying_typname = GetTypeBasic(type);
-        const std::string typname = WrapInNameSpace(*type.enum_def);
-        const std::string default_value = GetDefaultScalarValue(field);
+        const auto underlying_typname = GetTypeBasic(type);
+        const auto typname = WrapInNameSpace(*type.enum_def);
+        const auto default_value = GetDefaultScalarValue(field);
         return "self._tab.get::<" + typname + ">(" + offset_name + \
                ", Some(" + default_value + ")).unwrap()";
       }
@@ -1094,7 +1138,6 @@ class RustGenerator : public BaseGenerator {
     code_ += "";
     code_ += "pub struct {{STRUCT_NAME}}<'a> {";
     code_ += "  pub _tab: flatbuffers::Table<'a>,";
-    code_ += "  _phantom: PhantomData<&'a ()>,";
     code_ += "}";
     code_ += "";
     code_ += "impl<'a> flatbuffers::Follow<'a> for {{STRUCT_NAME}}<'a> {";
@@ -1103,7 +1146,6 @@ class RustGenerator : public BaseGenerator {
     code_ += "    fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {";
     code_ += "        Self {";
     code_ += "            _tab: flatbuffers::Table { buf: buf, loc: loc },";
-    code_ += "            _phantom: PhantomData,";
     code_ += "        }";
     code_ += "    }";
     code_ += "}";
@@ -1114,7 +1156,6 @@ class RustGenerator : public BaseGenerator {
              "Self {";
     code_ += "        {{STRUCT_NAME}} {";
     code_ += "            _tab: table,";
-    code_ += "            _phantom: PhantomData,";
     code_ += "        }";
     code_ += "    }";
 
@@ -1122,12 +1163,14 @@ class RustGenerator : public BaseGenerator {
     // to create a table in one function call.
     code_.SetValue("MAYBE_US",
         struct_def.fields.vec.size() == 0 ? "_" : "");
+    code_.SetValue("MAYBE_LT",
+        TableBuilderArgsNeedsLifetime(struct_def) ? "<'args>" : "");
     code_ += "    #[allow(unused_mut)]";
     code_ += "    pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(";
     code_ += "        _fbb: "
              "&'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,";
-    code_ += "        {{MAYBE_US}}args: &'args {{STRUCT_NAME}}Args<'args>) -> "
-             "flatbuffers::WIPOffset<{{STRUCT_NAME}}<'bldr>> {";
+    code_ += "        {{MAYBE_US}}args: &'args {{STRUCT_NAME}}Args{{MAYBE_LT}})"
+             " -> flatbuffers::WIPOffset<{{STRUCT_NAME}}<'bldr>> {";
 
     code_ += "      let mut builder = {{STRUCT_NAME}}Builder::new(_fbb);";
     for (size_t size = struct_def.sortbysize ? sizeof(largest_scalar_t) : 1;
@@ -1181,7 +1224,7 @@ class RustGenerator : public BaseGenerator {
     //   pub fn name(&'a self) -> user_facing_type {
     //     self._tab.get::<internal_type>(offset, defaultval).unwrap()
     //   }
-    const std::string offset_prefix = Name(struct_def);
+    const auto offset_prefix = Name(struct_def);
     for (auto it = struct_def.fields.vec.begin();
          it != struct_def.fields.vec.end(); ++it) {
       const auto &field = **it;
@@ -1262,17 +1305,17 @@ class RustGenerator : public BaseGenerator {
         code_.SetValue("U_ELEMENT_TABLE_TYPE", table_init_type);
         code_.SetValue("U_ELEMENT_NAME", MakeSnakeCase(Name(ev)));
 
-        code_ += "#[inline]";
-        code_ += "#[allow(non_snake_case)]";
-        code_ += "pub fn {{FIELD_NAME}}_as_{{U_ELEMENT_NAME}}(&'a self) -> "
+        code_ += "  #[inline]";
+        code_ += "  #[allow(non_snake_case)]";
+        code_ += "  pub fn {{FIELD_NAME}}_as_{{U_ELEMENT_NAME}}(&'a self) -> "
                  "Option<{{U_ELEMENT_TABLE_TYPE}}> {";
-        code_ += "  if self.{{FIELD_NAME}}_type() == {{U_ELEMENT_ENUM_TYPE}} {";
-        code_ += "    self.{{FIELD_NAME}}().map(|u| "
+        code_ += "    if self.{{FIELD_NAME}}_type() == {{U_ELEMENT_ENUM_TYPE}} {";
+        code_ += "      self.{{FIELD_NAME}}().map(|u| "
                  "{{U_ELEMENT_TABLE_TYPE}}::init_from_table(u))";
-        code_ += "  } else {";
-        code_ += "    None";
+        code_ += "    } else {";
+        code_ += "      None";
+        code_ += "    }";
         code_ += "  }";
-        code_ += "}";
         code_ += "";
       }
     }
@@ -1281,7 +1324,9 @@ class RustGenerator : public BaseGenerator {
     code_ += "";
 
     // Generate an args struct:
-    code_ += "pub struct {{STRUCT_NAME}}Args<'a> {";
+    code_.SetValue("MAYBE_LT",
+        TableBuilderArgsNeedsLifetime(struct_def) ? "<'a>" : "");
+    code_ += "pub struct {{STRUCT_NAME}}Args{{MAYBE_LT}} {";
     for (auto it = struct_def.fields.vec.begin();
          it != struct_def.fields.vec.end(); ++it) {
       const auto &field = **it;
@@ -1291,11 +1336,11 @@ class RustGenerator : public BaseGenerator {
         code_ += "    pub {{PARAM_NAME}}: {{PARAM_TYPE}},";
       }
     }
-    code_ += "    pub _phantom: PhantomData<&'a ()>, // pub for default trait";
     code_ += "}";
 
     // Generate an impl of Default for the *Args type:
-    code_ += "impl<'a> Default for {{STRUCT_NAME}}Args<'a> {";
+    code_ += "impl<'a> Default for {{STRUCT_NAME}}Args{{MAYBE_LT}} {";
+    code_ += "    #[inline]";
     code_ += "    fn default() -> Self {";
     code_ += "        {{STRUCT_NAME}}Args {";
     for (auto it = struct_def.fields.vec.begin();
@@ -1308,7 +1353,6 @@ class RustGenerator : public BaseGenerator {
         code_ += "            {{PARAM_NAME}}: {{PARAM_VALUE}},{{REQ}}";
       }
     }
-    code_ += "            _phantom: PhantomData,";
     code_ += "        }";
     code_ += "    }";
     code_ += "}";
@@ -1363,6 +1407,7 @@ class RustGenerator : public BaseGenerator {
     }
 
     // Struct initializer (all fields required);
+    code_ += "  #[inline]";
     code_ +=
         "  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> "
         "{{STRUCT_NAME}}Builder<'a, 'b> {";
@@ -1375,6 +1420,7 @@ class RustGenerator : public BaseGenerator {
     code_ += "  }";
 
     // finish() function.
+    code_ += "  #[inline]";
     code_ += "  pub fn finish(self) -> "
              "flatbuffers::WIPOffset<{{STRUCT_NAME}}<'a>> {";
     code_ += "    let o = self.fbb_.end_table(self.start_);";
@@ -1413,11 +1459,13 @@ class RustGenerator : public BaseGenerator {
       code_.SetValue("KEY_TYPE", type);
     }
 
+    code_ += "  #[inline]";
     code_ += "  pub fn key_compare_less_than(&self, o: &{{STRUCT_NAME}}) -> "
              " bool {";
     code_ += "    self.{{FIELD_NAME}}() < o.{{FIELD_NAME}}()";
     code_ += "  }";
     code_ += "";
+    code_ += "  #[inline]";
     code_ += "  pub fn key_compare_with_value(&self, val: {{KEY_TYPE}}) -> "
              " ::std::cmp::Ordering {";
     code_ += "    let key = self.{{FIELD_NAME}}();";
@@ -1542,7 +1590,7 @@ class RustGenerator : public BaseGenerator {
     code_.SetValue("STRUCT_NAME", Name(struct_def));
 
     code_ += "// struct {{STRUCT_NAME}}, aligned to {{ALIGN}}";
-    code_ += "#[repr(C, packed)]";
+    code_ += "#[repr(C, align({{ALIGN}}))]";
 
     // PartialEq is useful to derive because we can correctly compare structs
     // for equality by just comparing their underlying byte data. This doesn't
@@ -1576,7 +1624,6 @@ class RustGenerator : public BaseGenerator {
     code_ += "  #[inline]";
     code_ += "  fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {";
     code_ += "    <&'a {{STRUCT_NAME}}>::follow(buf, loc)";
-    code_ += "    //flatbuffers::follow_cast_ref::<{{STRUCT_NAME}}>(buf, loc)";
     code_ += "  }";
     code_ += "}";
     code_ += "impl<'a> flatbuffers::Follow<'a> for &'a {{STRUCT_NAME}} {";
@@ -1590,11 +1637,11 @@ class RustGenerator : public BaseGenerator {
     code_ += "    type Output = {{STRUCT_NAME}};";
     code_ += "    #[inline]";
     code_ += "    fn push(&self, dst: &mut [u8], _rest: &[u8]) {";
-    code_ += "        (&self).push(dst, _rest)";
-    code_ += "    }";
-    code_ += "    #[inline]";
-    code_ += "    fn size(&self) -> usize {";
-    code_ += "        ::std::mem::size_of::<{{STRUCT_NAME}}>()";
+    code_ += "        let src = unsafe {";
+    code_ += "            ::std::slice::from_raw_parts("
+             "self as *const {{STRUCT_NAME}} as *const u8, Self::size())";
+    code_ += "        };";
+    code_ += "        dst.copy_from_slice(src);";
     code_ += "    }";
     code_ += "}";
     code_ += "impl<'b> flatbuffers::Push for &'b {{STRUCT_NAME}} {";
@@ -1604,13 +1651,9 @@ class RustGenerator : public BaseGenerator {
     code_ += "    fn push(&self, dst: &mut [u8], _rest: &[u8]) {";
     code_ += "        let src = unsafe {";
     code_ += "            ::std::slice::from_raw_parts("
-             "*self as *const {{STRUCT_NAME}} as *const u8, self.size())";
+             "*self as *const {{STRUCT_NAME}} as *const u8, Self::size())";
     code_ += "        };";
     code_ += "        dst.copy_from_slice(src);";
-    code_ += "    }";
-    code_ += "    #[inline]";
-    code_ += "    fn size(&self) -> usize {";
-    code_ += "        ::std::mem::size_of::<{{STRUCT_NAME}}>()";
     code_ += "    }";
     code_ += "}";
     code_ += "";
@@ -1728,7 +1771,6 @@ class RustGenerator : public BaseGenerator {
       code_ += "  #![allow(unused_imports)]";
       code_ += "";
       code_ += "  use std::mem;";
-      code_ += "  use std::marker::PhantomData;";
       code_ += "  use std::cmp::Ordering;";
       code_ += "";
       code_ += "  extern crate flatbuffers;";
@@ -1767,5 +1809,6 @@ std::string RustMakeRule(const Parser &parser, const std::string &path,
 // TODO(rw): Generated code should refer to namespaces in included files in a
 //           way that makes them referrable.
 // TODO(rw): Generated code should indent according to nesting level.
+// TODO(rw): Generated code should generate endian-safe Debug impls.
 // TODO(rw): Generated code could use a Rust-only enum type to access unions,
 //           instead of making the user use _type() to manually switch.

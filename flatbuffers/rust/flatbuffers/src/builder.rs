@@ -18,12 +18,12 @@ extern crate smallvec;
 
 use std::cmp::max;
 use std::marker::PhantomData;
-use std::mem::size_of;
 use std::ptr::write_bytes;
+use std::slice::from_raw_parts;
 
 use endian_scalar::{read_scalar, emplace_scalar};
 use primitives::*;
-use push::{Push, ZeroTerminatedByteSlice};
+use push::{Push, PushAlignment};
 use table::Table;
 use vtable::{VTable, field_index_to_field_offset};
 use vtable_writer::VTableWriter;
@@ -64,8 +64,11 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     ///
     /// The maximum valid value is `FLATBUFFERS_MAX_BUFFER_SIZE`.
     pub fn new_with_capacity(size: usize) -> Self {
+        // we need to check the size here because we create the backing buffer
+        // directly, bypassing the typical way of using grow_owned_buf:
         assert!(size <= FLATBUFFERS_MAX_BUFFER_SIZE,
                 "cannot initialize buffer bigger than 2 gigabytes");
+
         FlatBufferBuilder {
             owned_buf: vec![0u8; size],
             head: size,
@@ -121,11 +124,12 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     /// This function uses traits to provide a unified API for writing
     /// scalars, tables, vectors, and WIPOffsets.
     #[inline]
-    pub fn push<X: Push>(&mut self, x: X) -> WIPOffset<X::Output> {
-        self.align(x.size(), x.alignment());
-        self.make_space(x.size());
+    pub fn push<P: Push>(&mut self, x: P) -> WIPOffset<P::Output> {
+        let sz = P::size();
+        self.align(sz, P::alignment());
+        self.make_space(sz);
         {
-            let (dst, rest) = (&mut self.owned_buf[self.head..]).split_at_mut(x.size());
+            let (dst, rest) = (&mut self.owned_buf[self.head..]).split_at_mut(sz);
             x.push(dst, rest);
         }
         WIPOffset::new(self.used_space() as UOffsetT)
@@ -136,7 +140,7 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     /// the default, then this is a no-op.
     #[inline]
     pub fn push_slot<X: Push + PartialEq>(&mut self, slotoff: VOffsetT, x: X, default: X) {
-        self.assert_nested("push_slot must be called after start_table");
+        self.assert_nested("push_slot");
         if x == default {
             return;
         }
@@ -147,7 +151,7 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     /// store a reference to it in the in-progress vtable.
     #[inline]
     pub fn push_slot_always<X: Push>(&mut self, slotoff: VOffsetT, x: X) {
-        self.assert_nested("push_slot_always must be called after start_table");
+        self.assert_nested("push_slot_always");
         let off = self.push(x);
         self.track_field(slotoff, off.value());
     }
@@ -177,7 +181,7 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     /// Asserts that the builder is in a nested state.
     #[inline]
     pub fn end_table(&mut self, off: WIPOffset<TableUnfinishedWIPOffset>) -> WIPOffset<TableFinishedWIPOffset> {
-        self.assert_nested("end_table must be called after a call to start_table");
+        self.assert_nested("end_table");
 
         let o = self.write_vtable(off);
 
@@ -195,11 +199,10 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     /// Speed optimizing users who choose to create vectors manually using this
     /// function will want to use `push` to add values.
     #[inline]
-    pub fn start_vector(&mut self, len: usize, elem_size: usize) {
+    pub fn start_vector<T: Push>(&mut self, num_items: usize) {
         self.assert_not_nested("start_vector can not be called when a table or vector is under construction");
         self.nested = true;
-        self.align(len * elem_size, SIZE_UOFFSET);
-        self.align(len * elem_size, elem_size); // Just in case elemsize > uoffset_t.
+        self.align(num_items * T::size(), T::alignment().max_of(SIZE_UOFFSET));
     }
 
     /// End a Vector write.
@@ -209,8 +212,8 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     ///
     /// Asserts that the builder is in a nested state.
     #[inline]
-    pub fn end_vector<T: 'fbb>(&mut self, num_elems: usize) -> WIPOffset<Vector<'fbb, T>> {
-        self.assert_nested("end_vector must be called after a call to start_vector");
+    pub fn end_vector<T: Push>(&mut self, num_elems: usize) -> WIPOffset<Vector<'fbb, T>> {
+        self.assert_nested("end_vector");
         self.nested = false;
         let o = self.push::<UOffsetT>(num_elems as UOffsetT);
         WIPOffset::new(o.value())
@@ -220,17 +223,19 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     ///
     /// The wire format represents this as a zero-terminated byte vector.
     #[inline]
-    pub fn create_string(&mut self, s: &str) -> WIPOffset<&'fbb str> {
+    pub fn create_string<'a: 'b, 'b>(&'a mut self, s: &'b str) -> WIPOffset<&'fbb str> {
         self.assert_not_nested("create_string can not be called when a table or vector is under construction");
-        self.push(ZeroTerminatedByteSlice::new(s.as_bytes()));
-        WIPOffset::new(self.used_space() as UOffsetT)
+        WIPOffset::new(self.create_byte_string(s.as_bytes()).value())
     }
 
     /// Create a zero-terminated byte vector.
     #[inline]
     pub fn create_byte_string(&mut self, data: &[u8]) -> WIPOffset<&'fbb [u8]> {
         self.assert_not_nested("create_byte_string can not be called when a table or vector is under construction");
-        self.push(ZeroTerminatedByteSlice::new(data));
+        self.align(data.len() + 1, PushAlignment::new(SIZE_UOFFSET));
+        self.push(0u8);
+        self.push_bytes_unprefixed(data);
+        self.push(data.len() as UOffsetT);
         WIPOffset::new(self.used_space() as UOffsetT)
     }
 
@@ -241,9 +246,18 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     /// always safe, on any platform: bool, u8, i8, and any
     /// FlatBuffers-generated struct.
     #[inline]
-    pub fn create_vector_direct<T: SafeSliceAccess + Push + Sized>(&mut self, data: &[T]) -> WIPOffset<Vector<'fbb, T>> {
+    pub fn create_vector_direct<'a: 'b, 'b, T: SafeSliceAccess + Push + Sized + 'b>(&'a mut self, items: &'b [T]) -> WIPOffset<Vector<'fbb, T>> {
         self.assert_not_nested("create_vector_direct can not be called when a table or vector is under construction");
-        self.push(data);
+        let elem_size = T::size();
+        self.align(items.len() * elem_size, T::alignment().max_of(SIZE_UOFFSET));
+
+        let bytes = {
+            let ptr = items.as_ptr() as *const T as *const u8;
+            unsafe { from_raw_parts(ptr, items.len() * elem_size) }
+        };
+        self.push_bytes_unprefixed(bytes);
+        self.push(items.len() as UOffsetT);
+
         WIPOffset::new(self.used_space() as UOffsetT)
     }
 
@@ -270,14 +284,13 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
     /// Speed-sensitive users may wish to reduce memory usage by creating the
     /// vector manually: use `create_vector`, `push`, and `end_vector`.
     #[inline]
-    pub fn create_vector<'a, T: Push + Copy + 'fbb>(&'a mut self, items: &'a [T]) -> WIPOffset<Vector<'fbb, T::Output>> {
-        let elemsize = size_of::<T>();
-        self.start_vector(elemsize, items.len());
-        // TODO(rw): precompute the space needed and call `make_space` only once
+    pub fn create_vector<'a: 'b, 'b, T: Push + Copy + 'b>(&'a mut self, items: &'b [T]) -> WIPOffset<Vector<'fbb, T::Output>> {
+        let elem_size = T::size();
+        self.align(items.len() * elem_size, T::alignment().max_of(SIZE_UOFFSET));
         for i in (0..items.len()).rev() {
             self.push(items[i]);
         }
-        WIPOffset::new(self.end_vector::<T::Output>(items.len()).value())
+        WIPOffset::new(self.push::<UOffsetT>(items.len() as UOffsetT).value())
     }
 
     /// Get the byte slice for the data that has been written, regardless of
@@ -347,19 +360,13 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
         self.field_locs.push(fl);
     }
 
-    #[inline]
-    fn fill(&mut self, zero_pad_bytes: usize) {
-        self.make_space(zero_pad_bytes);
-    }
-
-    /// Write the VTable, if needed.
-    // TODO(rw): simplify this function
+    /// Write the VTable, if it is new.
     fn write_vtable(&mut self, table_tail_revloc: WIPOffset<TableUnfinishedWIPOffset>) -> WIPOffset<VTableWIPOffset> {
-        self.assert_nested("write_vtable must be called after a call to start_table");
+        self.assert_nested("write_vtable");
 
         // Write the vtable offset, which is the start of any Table.
         // We fill its value later.
-        let object_vtable_revloc: WIPOffset<VTableWIPOffset> =
+        let object_revloc_to_vtable: WIPOffset<VTableWIPOffset> =
             WIPOffset::new(self.push::<UOffsetT>(0xF0F0F0F0 as UOffsetT).value());
 
         // Layout of the data this function will create when a new vtable is
@@ -401,75 +408,79 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
         // table starts here: aka "table_start"
         // --------------------------------------------------------------------
 
-        // Include space for the last offset and ensure empty tables have a
-        // minimum size.
-        let max_voffset = self.field_locs.iter().map(|fl| fl.id).max();
-        let vtable_len = match max_voffset {
-            None => { field_index_to_field_offset(0) as usize }
-            Some(mv) => { mv as usize + SIZE_VOFFSET }
-        };
-        self.fill(vtable_len);
-        let table_object_size = object_vtable_revloc.value() - table_tail_revloc.value();
-        debug_assert!(table_object_size < 0x10000); // Vtable use 16bit offsets.
+        // fill the WIP vtable with zeros:
+        let vtable_byte_len = get_vtable_byte_len(&self.field_locs);
+        self.make_space(vtable_byte_len);
 
+        // compute the length of the table (not vtable!) in bytes:
+        let table_object_size = object_revloc_to_vtable.value() - table_tail_revloc.value();
+        debug_assert!(table_object_size < 0x10000); // vTable use 16bit offsets.
+
+        // Write the VTable (we may delete it afterwards, if it is a duplicate):
         let vt_start_pos = self.head;
-        let vt_end_pos = self.head + vtable_len;
+        let vt_end_pos = self.head + vtable_byte_len;
         {
+            // write the vtable header:
             let vtfw = &mut VTableWriter::init(&mut self.owned_buf[vt_start_pos..vt_end_pos]);
-            vtfw.write_vtable_byte_length(vtable_len as VOffsetT);
+            vtfw.write_vtable_byte_length(vtable_byte_len as VOffsetT);
             vtfw.write_object_inline_size(table_object_size as VOffsetT);
+
+            // serialize every FieldLoc to the vtable:
             for &fl in self.field_locs.iter() {
-                let pos: VOffsetT = (object_vtable_revloc.value() - fl.off) as VOffsetT;
+                let pos: VOffsetT = (object_revloc_to_vtable.value() - fl.off) as VOffsetT;
                 debug_assert_eq!(vtfw.get_field_offset(fl.id),
                                  0,
                                  "tried to write a vtable field multiple times");
                 vtfw.write_field_offset(fl.id, pos);
             }
         }
-        let vt_use = {
-            let mut ret: usize = self.used_space();
-
-            // LIFO order
-            for &vt_rev_pos in self.written_vtable_revpos.iter().rev() {
-                let eq = {
-                    let this_vt = VTable::init(&self.owned_buf[..], self.head);
-                    let other_vt = VTable::init(&self.owned_buf[..], self.head + self.used_space() - vt_rev_pos as usize);
-                    other_vt == this_vt
-                };
-                if eq {
-                    VTableWriter::init(&mut self.owned_buf[vt_start_pos..vt_end_pos]).clear();
-                    self.head += vtable_len;
-                    ret = vt_rev_pos as usize;
-                    break;
-                }
-            }
-            ret
+        let dup_vt_use = {
+            let this_vt = VTable::init(&self.owned_buf[..], self.head);
+            self.find_duplicate_stored_vtable_revloc(this_vt)
         };
 
-        if vt_use == self.used_space() {
-            self.written_vtable_revpos.push(vt_use as UOffsetT);
-        }
+        let vt_use = match dup_vt_use {
+            Some(n) => {
+                VTableWriter::init(&mut self.owned_buf[vt_start_pos..vt_end_pos]).clear();
+                self.head += vtable_byte_len;
+                n
+            }
+            None => {
+                let new_vt_use = self.used_space() as UOffsetT;
+                self.written_vtable_revpos.push(new_vt_use);
+                new_vt_use
+            }
+        };
 
         {
-            let n = self.head + self.used_space() - object_vtable_revloc.value() as usize;
+            let n = self.head + self.used_space() - object_revloc_to_vtable.value() as usize;
             let saw = read_scalar::<UOffsetT>(&self.owned_buf[n..n + SIZE_SOFFSET]);
             debug_assert_eq!(saw, 0xF0F0F0F0);
-            emplace_scalar::<SOffsetT>(
-                &mut self.owned_buf[n..n + SIZE_SOFFSET],
-                vt_use as SOffsetT - object_vtable_revloc.value() as SOffsetT,
-            );
+            emplace_scalar::<SOffsetT>(&mut self.owned_buf[n..n + SIZE_SOFFSET],
+                                       vt_use as SOffsetT - object_revloc_to_vtable.value() as SOffsetT);
         }
 
         self.field_locs.clear();
 
-        object_vtable_revloc
+        object_revloc_to_vtable
     }
+
+    #[inline]
+    fn find_duplicate_stored_vtable_revloc(&self, needle: VTable) -> Option<UOffsetT> {
+        for &revloc in self.written_vtable_revpos.iter().rev() {
+            let o = VTable::init(&self.owned_buf[..], self.head + self.used_space() - revloc as usize);
+            if needle == o {
+                return Some(revloc);
+            }
+        }
+        None
+    }
+
+    // Only call this when you know it is safe to double the size of the buffer.
+    #[inline]
     fn grow_owned_buf(&mut self) {
         let old_len = self.owned_buf.len();
         let new_len = max(1, old_len * 2);
-
-        assert!(new_len <= FLATBUFFERS_MAX_BUFFER_SIZE,
-                "cannot grow buffer beyond 2 gigabytes");
 
         let starting_active_size = self.used_space();
 
@@ -497,6 +508,7 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
             unsafe { write_bytes(ptr, 0, middle); }
         }
     }
+
     // with or without a size prefix changes how we load the data, so finish*
     // functions are split along those lines.
     fn finish_with_opts<T>(&mut self,
@@ -522,7 +534,7 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
         };
 
         {
-            let ma = self.min_align;
+            let ma = PushAlignment::new(self.min_align);
             self.align(to_align, ma);
         }
 
@@ -540,33 +552,41 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
         self.finished = true;
     }
 
-    fn align(&mut self, len: usize, alignment: usize) {
-        self.track_min_align(alignment);
+    #[inline]
+    fn align(&mut self, len: usize, alignment: PushAlignment) {
+        self.track_min_align(alignment.value());
         let s = self.used_space() as usize;
-        self.fill(padding_bytes(s + len, alignment));
+        self.make_space(padding_bytes(s + len, alignment.value()));
     }
+
+    #[inline]
     fn track_min_align(&mut self, alignment: usize) {
         self.min_align = max(self.min_align, alignment);
     }
+
+    #[inline]
     fn push_bytes_unprefixed(&mut self, x: &[u8]) -> UOffsetT {
         let n = self.make_space(x.len());
         &mut self.owned_buf[n..n + x.len()].copy_from_slice(x);
 
         n as UOffsetT
     }
+
+    #[inline]
     fn make_space(&mut self, want: usize) -> usize {
         self.ensure_capacity(want);
         self.head -= want;
         self.head
     }
+
+    #[inline]
     fn ensure_capacity(&mut self, want: usize) -> usize {
         if self.unused_ready_space() >= want {
             return want;
         }
-        assert!(
-            want <= FLATBUFFERS_MAX_BUFFER_SIZE,
-            "cannot grow buffer beyond 2 gigabytes"
-        );
+        assert!(want <= FLATBUFFERS_MAX_BUFFER_SIZE,
+                "cannot grow buffer beyond 2 gigabytes");
+
         while self.unused_ready_space() < want {
             self.grow_owned_buf();
         }
@@ -577,10 +597,10 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
         self.head
     }
     #[inline]
-    fn assert_nested(&self, msg: &'static str) {
+    fn assert_nested(&self, fn_name: &'static str) {
         // we don't assert that self.field_locs.len() >0 because the vtable
         // could be empty (e.g. for empty tables, or for all-default values).
-        debug_assert!(self.nested, msg);
+        debug_assert!(self.nested, format!("incorrect FlatBufferBuilder usage: {} must be called while in a nested state", fn_name));
     }
     #[inline]
     fn assert_not_nested(&self, msg: &'static str) {
@@ -595,6 +615,18 @@ impl<'fbb> FlatBufferBuilder<'fbb> {
         debug_assert!(!self.finished, msg);
     }
 
+}
+
+/// Compute the length of the vtable needed to represent the provided FieldLocs.
+/// If there are no FieldLocs, then provide the minimum number of bytes
+/// required: enough to write the VTable header.
+#[inline]
+fn get_vtable_byte_len(field_locs: &[FieldLoc]) -> usize {
+    let max_voffset = field_locs.iter().map(|fl| fl.id).max();
+    match max_voffset {
+        None => { field_index_to_field_offset(0) as usize }
+        Some(mv) => { mv as usize + SIZE_VOFFSET }
+    }
 }
 
 #[inline]

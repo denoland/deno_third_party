@@ -41,15 +41,53 @@ impl LCG {
     }
 }
 
+// test helper macro to return an error if two expressions are not equal
+macro_rules! check_eq {
+    ($field_call:expr, $want:expr) => (
+        if $field_call == $want {
+            Ok(())
+        } else {
+            Err(stringify!($field_call))
+        }
+    )
+}
+
+#[test]
+fn macro_check_eq() {
+    assert!(check_eq!(1, 1).is_ok());
+    assert!(check_eq!(1, 2).is_err());
+}
+
+// test helper macro to return an error if two expressions are equal
+macro_rules! check_is_some {
+    ($field_call:expr) => (
+        if $field_call.is_some() {
+            Ok(())
+        } else {
+            Err(stringify!($field_call))
+        }
+    )
+}
+
+#[test]
+fn macro_check_is_some() {
+    let some: Option<usize> = Some(0);
+    let none: Option<usize> = None;
+    assert!(check_is_some!(some).is_ok());
+    assert!(check_is_some!(none).is_err());
+}
+
+
 fn create_serialized_example_with_generated_code(builder: &mut flatbuffers::FlatBufferBuilder) {
     let mon = {
         let s0 = builder.create_string("test1");
         let s1 = builder.create_string("test2");
         let fred_name = builder.create_string("Fred");
-        let inventory = builder.create_vector_direct(&[0u8, 1, 2, 3, 4][..]);
-        let test4 = builder.create_vector_direct(&[my_game::example::Test::new(10, 20),
-                                                   my_game::example::Test::new(30, 40)]);
+
+        // can't inline creation of this Vec3 because we refer to it by reference, so it must live
+        // long enough to be used by MonsterArgs.
         let pos = my_game::example::Vec3::new(1.0, 2.0, 3.0, 3.0, my_game::example::Color::Green, &my_game::example::Test::new(5i16, 6i8));
+
         let args = my_game::example::MonsterArgs{
             hp: 80,
             mana: 150,
@@ -60,8 +98,9 @@ fn create_serialized_example_with_generated_code(builder: &mut flatbuffers::Flat
                 name: Some(fred_name),
                 ..Default::default()
             }).as_union_value()),
-            inventory: Some(inventory),
-            test4: Some(test4),
+            inventory: Some(builder.create_vector_direct(&[0u8, 1, 2, 3, 4][..])),
+            test4: Some(builder.create_vector_direct(&[my_game::example::Test::new(10, 20),
+                                                       my_game::example::Test::new(30, 40)])),
             testarrayofstring: Some(builder.create_vector(&[s0, s1])),
             ..Default::default()
         };
@@ -69,6 +108,7 @@ fn create_serialized_example_with_generated_code(builder: &mut flatbuffers::Flat
     };
     my_game::example::finish_monster_buffer(builder, mon);
 }
+
 fn create_serialized_example_with_library_code(builder: &mut flatbuffers::FlatBufferBuilder) {
     let nested_union_mon = {
         let name = builder.create_string("Fred");
@@ -101,109 +141,62 @@ fn create_serialized_example_with_library_code(builder: &mut flatbuffers::FlatBu
 }
 
 fn serialized_example_is_accessible_and_correct(bytes: &[u8], identifier_required: bool, size_prefixed: bool) -> Result<(), &'static str> {
+
     if identifier_required {
         let correct = if size_prefixed {
             my_game::example::monster_size_prefixed_buffer_has_identifier(bytes)
         } else {
             my_game::example::monster_buffer_has_identifier(bytes)
         };
-        if !correct {
-            return Err("incorrect buffer identifier");
-        }
+        check_eq!(correct, true)?;
     }
-    let monster1 = if size_prefixed {
+
+    let m = if size_prefixed {
         my_game::example::get_size_prefixed_root_as_monster(bytes)
     } else {
         my_game::example::get_root_as_monster(bytes)
     };
-    for m in vec![monster1] {
-        if m.hp() != 80 { assert_eq!(80, m.hp()); return Err("bad m.hp"); }
-        if m.mana() != 150 { return Err("bad m.mana"); }
-        match m.name() {
-            Some("MyMonster") => { }
-            _ => { return Err("bad m.name"); }
-        }
-        let pos = match m.pos() {
-            None => { return Err("bad m.pos"); }
-            Some(x) => { x }
-        };
-        if pos.x() != 1.0f32 { return Err("bad pos.x"); }
-        if pos.y() != 2.0f32 { return Err("bad pos.y"); }
-        if pos.z() != 3.0f32 { return Err("bad pos.z"); }
-        if pos.test1() != 3.0f64 { return Err("bad pos.test1"); }
-        if pos.test2() != my_game::example::Color::Green { return Err("bad pos.test2"); }
 
-        let pos_test3 = pos.test3();
-        if pos_test3.a() != 5i16 { return Err("bad pos_test3.a"); }
-        if pos_test3.b() != 6i8 { return Err("bad pos_test3.b"); }
+    check_eq!(m.hp(), 80)?;
+    check_eq!(m.mana(), 150)?;
+    check_eq!(m.name(), Some("MyMonster"))?;
+    check_is_some!(m.name())?;
 
-        match m.enemy() {
-            None => {
-                println!("missing m.enemy, most language ports do not generate this yet");
-            }
-            Some(e) => {
-                match e.name() {
-                    Some("Fred") => { /* woot */ }
-                    _ => { println!("missing m.enemy.name, most language ports do not generate this yet") }
-                }
-            }
-        }
+    let pos = m.pos().unwrap();
+    check_eq!(pos.x(), 1.0f32)?;
+    check_eq!(pos.y(), 2.0f32)?;
+    check_eq!(pos.z(), 3.0f32)?;
+    check_eq!(pos.test1(), 3.0f64)?;
+    check_eq!(pos.test2(), my_game::example::Color::Green)?;
 
-        if m.test_type() != my_game::example::Any::Monster { return Err("bad m.test_type"); }
+    let pos_test3 = pos.test3();
+    check_eq!(pos_test3.a(), 5i16)?;
+    check_eq!(pos_test3.b(), 6i8)?;
 
-        let table2 = match m.test() {
-            None => { return Err("bad m.test"); }
-            Some(x) => { x }
-        };
+    check_eq!(m.test_type(), my_game::example::Any::Monster)?;
+    check_is_some!(m.test())?;
+    let table2 = m.test().unwrap();
+    let monster2 = my_game::example::Monster::init_from_table(table2);
 
-        let monster2 = my_game::example::Monster::init_from_table(table2);
+    check_eq!(monster2.name(), Some("Fred"))?;
 
-        match monster2.name() {
-            Some("Fred") => { }
-            _ => { return Err("bad monster2.name"); }
-        }
+    check_is_some!(m.inventory())?;
+    let inv = m.inventory().unwrap();
+    check_eq!(inv.len(), 5)?;
+    check_eq!(inv.iter().sum::<u8>(), 10u8)?;
 
-        let inv: &[u8] = match m.inventory() {
-            None => { return Err("bad m.inventory"); }
-            Some(x) => { x }
-        };
-        if inv.len() != 5 {  return Err("bad m.inventory len"); }
-        let invsum: u8 = inv.iter().sum();
-        if invsum != 10 { return Err("bad m.inventory sum"); }
+    check_is_some!(m.test4())?;
+    let test4 = m.test4().unwrap();
+    check_eq!(test4.len(), 2)?;
+    check_eq!(test4[0].a() as i32 + test4[0].b() as i32 +
+              test4[1].a() as i32 + test4[1].b() as i32, 100)?;
 
-        {
-            let test4 = match m.test4() {
-                None => { return Err("bad m.test4"); }
-                Some(x) => { x }
-            };
-            if test4.len() != 2 { return Err("bad m.test4 len"); }
+    check_is_some!(m.testarrayofstring())?;
+    let testarrayofstring = m.testarrayofstring().unwrap();
+    check_eq!(testarrayofstring.len(), 2)?;
+    check_eq!(testarrayofstring.get(0), "test1")?;
+    check_eq!(testarrayofstring.get(1), "test2")?;
 
-            let x = test4[0];
-            let y = test4[1];
-            let xy_sum = x.a() as i32 + x.b() as i32 + y.a() as i32 + y.b() as i32;
-            if xy_sum != 100 { return Err("bad m.test4 item sum"); }
-        }
-
-        {
-            match m.testarrayoftables() {
-                None => { println!("not all monster examples have testarrayoftables, skipping"); }
-                Some(x) => {
-                    println!("foo: {:?}", x.get(0).name());
-                    if x.get(0).name() != Some("Barney") { return Err("bad testarrayoftables.get(0).name()") }
-                    if x.get(1).name() != Some("Frodo") { return Err("bad testarrayoftables.get(1).name()") }
-                    if x.get(2).name() != Some("Wilma") { return Err("bad testarrayoftables.get(2).name()") }
-                }
-            }
-        }
-
-        let testarrayofstring = match m.testarrayofstring() {
-            None => { return Err("bad m.testarrayofstring"); }
-            Some(x) => { x }
-        };
-        if testarrayofstring.len() != 2 { return Err("bad monster.testarrayofstring len"); }
-        if testarrayofstring.get(0) != "test1" { return Err("bad monster.testarrayofstring.get(0)"); }
-        if testarrayofstring.get(1) != "test2" { return Err("bad monster.testarrayofstring.get(1)"); }
-    }
     Ok(())
 }
 
@@ -495,7 +488,7 @@ mod roundtrip_generated_code {
     #[test]
     fn vector_of_bool_store() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
-        let v = b.create_vector::<bool>(&[false, true, false, true][..]);
+        let v = b.create_vector(&[false, true, false, true][..]);
         let name = b.create_string("foo");
         let m = build_mon(&mut b, &my_game::example::MonsterArgs{
             name: Some(name),
@@ -505,7 +498,7 @@ mod roundtrip_generated_code {
     #[test]
     fn vector_of_f64_store() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
-        let v = b.create_vector::<f64>(&[3.14159265359][..]);
+        let v = b.create_vector(&[3.14159265359f64][..]);
         let name = b.create_string("foo");
         let m = build_mon(&mut b, &my_game::example::MonsterArgs{
             name: Some(name),
@@ -516,12 +509,24 @@ mod roundtrip_generated_code {
     #[test]
     fn vector_of_struct_store() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
-        let v = b.create_vector::<my_game::example::Test>(&[my_game::example::Test::new(127, -128), my_game::example::Test::new(3, 123)][..]);
+        let v = b.create_vector(&[my_game::example::Test::new(127, -128), my_game::example::Test::new(3, 123)][..]);
         let name = b.create_string("foo");
         let m = build_mon(&mut b, &my_game::example::MonsterArgs{
             name: Some(name),
             test4: Some(v), ..Default::default()});
         assert_eq!(m.test4().unwrap(), &[my_game::example::Test::new(127, -128), my_game::example::Test::new(3, 123)][..]);
+    }
+    #[test]
+    fn vector_of_struct_store_with_type_inference() {
+        let mut b = flatbuffers::FlatBufferBuilder::new();
+        let v = b.create_vector(&[my_game::example::Test::new(127, -128),
+                                  my_game::example::Test::new(3, 123),
+                                  my_game::example::Test::new(100, 101)]);
+        let name = b.create_string("foo");
+        let m = build_mon(&mut b, &my_game::example::MonsterArgs{
+            name: Some(name),
+            test4: Some(v), ..Default::default()});
+        assert_eq!(m.test4().unwrap(), &[my_game::example::Test::new(127, -128), my_game::example::Test::new(3, 123), my_game::example::Test::new(100, 101)][..]);
     }
     // TODO(rw) this passes, but I don't want to change the monster test schema right now
     // #[test]
@@ -568,12 +573,47 @@ mod generated_code_alignment_and_padding {
     use super::my_game;
 
     #[test]
-    fn vec3_is_padded_to_mod_16() {
-        assert_eq!(::std::mem::size_of::<my_game::example::Vec3>() % 16, 0);
+    fn enum_color_is_1_byte() {
+        assert_eq!(1, ::std::mem::size_of::<my_game::example::Color>());
     }
 
     #[test]
-    fn vec3_is_aligned_to_mod_16() {
+    fn enum_color_is_aligned_to_1() {
+        assert_eq!(1, ::std::mem::align_of::<my_game::example::Color>());
+    }
+
+    #[test]
+    fn union_any_is_1_byte() {
+        assert_eq!(1, ::std::mem::size_of::<my_game::example::Any>());
+    }
+
+    #[test]
+    fn union_any_is_aligned_to_1() {
+        assert_eq!(1, ::std::mem::align_of::<my_game::example::Any>());
+    }
+
+    #[test]
+    fn struct_test_is_4_bytes() {
+        assert_eq!(4, ::std::mem::size_of::<my_game::example::Test>());
+    }
+
+    #[test]
+    fn struct_test_is_aligned_to_2() {
+        assert_eq!(2, ::std::mem::align_of::<my_game::example::Test>());
+    }
+
+    #[test]
+    fn struct_vec3_is_32_bytes() {
+        assert_eq!(32, ::std::mem::size_of::<my_game::example::Vec3>());
+    }
+
+    #[test]
+    fn struct_vec3_is_aligned_to_16() {
+        assert_eq!(16, ::std::mem::align_of::<my_game::example::Vec3>());
+    }
+
+    #[test]
+    fn struct_vec3_is_written_with_correct_alignment_in_table() {
         let b = &mut flatbuffers::FlatBufferBuilder::new();
         {
             let name = b.create_string("foo");
@@ -593,7 +633,45 @@ mod generated_code_alignment_and_padding {
         let vec3_ptr = vec3 as *const my_game::example::Vec3 as usize;
 
         assert!(vec3_ptr > start_ptr);
-        assert_eq!((vec3_ptr - start_ptr) % 16, 0);
+        let aln = ::std::mem::align_of::<my_game::example::Vec3>();
+        assert_eq!((vec3_ptr - start_ptr) % aln, 0);
+    }
+
+    #[test]
+    fn struct_ability_is_8_bytes() {
+        assert_eq!(8, ::std::mem::size_of::<my_game::example::Ability>());
+    }
+
+    #[test]
+    fn struct_ability_is_aligned_to_4() {
+        assert_eq!(4, ::std::mem::align_of::<my_game::example::Ability>());
+    }
+
+    #[test]
+    fn struct_ability_is_written_with_correct_alignment_in_table_vector() {
+        let b = &mut flatbuffers::FlatBufferBuilder::new();
+        {
+            let name = b.create_string("foo");
+            let v = b.create_vector(&[my_game::example::Ability::new(1, 2),
+                                      my_game::example::Ability::new(3, 4),
+                                      my_game::example::Ability::new(5, 6)]);
+            let mon = my_game::example::Monster::create(b, &my_game::example::MonsterArgs{
+                name: Some(name),
+                testarrayofsortedstruct: Some(v),
+                ..Default::default()});
+            my_game::example::finish_monster_buffer(b, mon);
+        }
+        let buf = b.finished_data();
+        let mon = my_game::example::get_root_as_monster(buf);
+        let abilities = mon.testarrayofsortedstruct().unwrap();
+
+        let start_ptr = buf.as_ptr() as usize;
+        for a in abilities.iter() {
+            let a_ptr = a as *const my_game::example::Ability as usize;
+            assert!(a_ptr > start_ptr);
+            let aln = ::std::mem::align_of::<my_game::example::Ability>();
+            assert_eq!((a_ptr - start_ptr) % aln, 0);
+        }
     }
 }
 
@@ -658,7 +736,7 @@ mod roundtrip_vectors {
             use flatbuffers::Follow;
 
             let mut b = flatbuffers::FlatBufferBuilder::new();
-            b.start_vector(xs.len(), ::std::mem::size_of::<T>());
+            b.start_vector::<T>(xs.len());
             for i in (0..xs.len()).rev() {
                 b.push::<T>(xs[i]);
             }
@@ -765,7 +843,7 @@ mod roundtrip_vectors {
                 offsets.push(b.create_string(s.as_str()));
             }
 
-            b.start_vector(flatbuffers::SIZE_UOFFSET, xs.len());
+            b.start_vector::<flatbuffers::WIPOffset<&str>>(xs.len());
             for &i in offsets.iter() {
                 b.push(i);
             }
@@ -814,7 +892,7 @@ mod roundtrip_vectors {
 
         #[test]
         fn fuzz() {
-            quickcheck::QuickCheck::new().max_tests(20).quickcheck(prop as fn(Vec<_>));
+            quickcheck::QuickCheck::new().max_tests(100).quickcheck(prop as fn(Vec<_>));
         }
     }
 
@@ -829,18 +907,18 @@ mod roundtrip_vectors {
                 let xs = &vec[..];
 
                 let mut b1 = flatbuffers::FlatBufferBuilder::new();
-                b1.start_vector(flatbuffers::SIZE_U8, xs.len());
+                b1.start_vector::<u8>(xs.len());
 
                 for i in (0..xs.len()).rev() {
                     b1.push(xs[i]);
                 }
-                b1.end_vector::<&u8>(xs.len());
+                b1.end_vector::<u8>(xs.len());
 
                 let mut b2 = flatbuffers::FlatBufferBuilder::new();
                 b2.create_vector(xs);
                 assert_eq!(b1.unfinished_data(), b2.unfinished_data());
             }
-            quickcheck::QuickCheck::new().max_tests(20).quickcheck(prop as fn(Vec<_>));
+            quickcheck::QuickCheck::new().max_tests(100).quickcheck(prop as fn(Vec<_>));
         }
     }
 }
@@ -1069,7 +1147,7 @@ mod roundtrip_table {
             let mut b = flatbuffers::FlatBufferBuilder::new();
             let mut offs = vec![];
             for vec in &vecs {
-                b.start_vector(vec.len(), ::std::mem::size_of::<T>());
+                b.start_vector::<T>(vec.len());
 
                 let xs = &vec[..];
                 for i in (0..xs.len()).rev() {
@@ -1822,25 +1900,38 @@ mod push_impls {
     }
 
     #[test]
-    fn push_string() {
-        let mut b = flatbuffers::FlatBufferBuilder::new();
-        b.push("foo");
-        check(&b, &[3, 0, 0, 0, 102, 111, 111, 0]);
-    }
-
-    #[test]
-    fn push_u8_slice_with_alignment() {
-        let mut b = flatbuffers::FlatBufferBuilder::new();
-        b.push(&[1u8, 2, 3, 4, 5][..]);
-        check(&b, &[5, 0, 0, 0, 1, 2, 3, 4, 5, 0, 0, 0]);
-    }
-
-    #[test]
-    fn push_u8_slice_with_offset_with_alignment() {
+    fn push_u8_vector_with_offset_with_alignment() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
         let off = b.create_vector(&[1u8, 2, 3, 4, 5, 6, 7, 8, 9][..]);
         b.push(off);
         check(&b, &[/* loc */ 4, 0, 0, 0, /* len */ 9, 0, 0, 0, /* val */ 1, 2, 3, 4, 5, 6, 7, 8, 9, /* padding */ 0, 0, 0]);
+    }
+
+    #[test]
+    fn push_u8_u16_alignment() {
+        let mut b = flatbuffers::FlatBufferBuilder::new();
+        b.push(1u8);
+        b.push(2u16);
+        check(&b, &[2, 0, 0, 1]);
+    }
+
+    #[test]
+    fn push_u8_u32_alignment() {
+        let mut b = flatbuffers::FlatBufferBuilder::new();
+        b.push(1u8);
+        b.push(2u32);
+        check(&b, &[2, 0, 0, 0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn push_u8_u64_alignment() {
+        let mut b = flatbuffers::FlatBufferBuilder::new();
+        b.push(1u8);
+        b.push(2u64);
+        check(&b, &[2, 0, 0, 0,
+                    0, 0, 0, 0,
+                    0, 0, 0, 0,
+                    0, 0, 0, 1]);
     }
 }
 
@@ -1965,31 +2056,31 @@ mod byte_layouts {
     fn layout_02_1xbyte_vector() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
         check(&b, &[]);
-        b.start_vector(flatbuffers::SIZE_U8, 1);
+        b.start_vector::<u8>(1);
         check(&b, &[0, 0, 0]); // align to 4bytes
         b.push(1u8);
         check(&b, &[1, 0, 0, 0]);
-        b.end_vector::<&u8>(1);
+        b.end_vector::<u8>(1);
         check(&b, &[1, 0, 0, 0, 1, 0, 0, 0]); // padding
     }
 
     #[test]
     fn layout_03_2xbyte_vector() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
-        b.start_vector(flatbuffers::SIZE_U8, 2);
+        b.start_vector::<u8>(2);
         check(&b, &[0, 0]); // align to 4bytes
         b.push(1u8);
         check(&b, &[1, 0, 0]);
         b.push(2u8);
         check(&b, &[2, 1, 0, 0]);
-        b.end_vector::<&u8>(2);
+        b.end_vector::<u8>(2);
         check(&b, &[2, 0, 0, 0, 2, 1, 0, 0]); // padding
     }
 
     #[test]
     fn layout_03b_11xbyte_vector_matches_builder_size() {
         let mut b = flatbuffers::FlatBufferBuilder::new_with_capacity(12);
-        b.start_vector(flatbuffers::SIZE_U8, 8);
+        b.start_vector::<u8>(8);
 
         let mut gold = vec![0u8; 0];
         check(&b, &gold[..]);
@@ -1999,31 +2090,31 @@ mod byte_layouts {
             gold.insert(0, i);
             check(&b, &gold[..]);
         }
-        b.end_vector::<&u8>(8);
+        b.end_vector::<u8>(8);
         let want = vec![8u8, 0, 0, 0,  8, 7, 6, 5, 4, 3, 2, 1];
         check(&b, &want[..]);
     }
     #[test]
     fn layout_04_1xuint16_vector() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
-        b.start_vector(flatbuffers::SIZE_U16, 1);
+        b.start_vector::<u16>(1);
         check(&b, &[0, 0]); // align to 4bytes
         b.push(1u16);
         check(&b, &[1, 0, 0, 0]);
-        b.end_vector::<&u16>(1);
+        b.end_vector::<u16>(1);
         check(&b, &[1, 0, 0, 0, 1, 0, 0, 0]); // padding
     }
 
     #[test]
     fn layout_05_2xuint16_vector() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
-        let _off = b.start_vector(flatbuffers::SIZE_U16, 2);
+        let _off = b.start_vector::<u16>(2);
         check(&b, &[]); // align to 4bytes
         b.push(0xABCDu16);
         check(&b, &[0xCD, 0xAB]);
         b.push(0xDCBAu16);
         check(&b, &[0xBA, 0xDC, 0xCD, 0xAB]);
-        b.end_vector::<&u16>(2);
+        b.end_vector::<u16>(2);
         check(&b, &[2, 0, 0, 0, 0xBA, 0xDC, 0xCD, 0xAB]);
     }
 
@@ -2169,8 +2260,8 @@ mod byte_layouts {
     #[test]
     fn layout_12b_vtable_with_empty_vector() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
-        b.start_vector(flatbuffers::SIZE_U8, 0);
-        let vecend = b.end_vector::<&u8>(0);
+        b.start_vector::<u8>(0);
+        let vecend = b.end_vector::<u8>(0);
         let off = b.start_table();
         b.push_slot_always(fi2fo(0), vecend);
         b.end_table(off);
@@ -2187,8 +2278,8 @@ mod byte_layouts {
     #[test]
     fn layout_12c_vtable_with_empty_vector_of_byte_and_some_scalars() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
-        b.start_vector(flatbuffers::SIZE_U8, 0);
-        let vecend = b.end_vector::<&u8>(0);
+        b.start_vector::<u8>(0);
+        let vecend = b.end_vector::<u8>(0);
         let off = b.start_table();
         b.push_slot::<i16>(fi2fo(0), 55i16, 0);
         b.push_slot_always::<flatbuffers::WIPOffset<_>>(fi2fo(1), vecend);
@@ -2208,10 +2299,10 @@ mod byte_layouts {
     #[test]
     fn layout_13_vtable_with_1_int16_and_2_vector_of_i16() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
-        b.start_vector(flatbuffers::SIZE_I16, 2);
+        b.start_vector::<i16>(2);
         b.push(0x1234i16);
         b.push(0x5678i16);
-        let vecend = b.end_vector::<&i16>(2);
+        let vecend = b.end_vector::<i16>(2);
         let off = b.start_table();
         b.push_slot_always(fi2fo(1), vecend);
         b.push_slot(fi2fo(0), 55i16, 0);
@@ -2247,15 +2338,9 @@ mod byte_layouts {
             type Output = foo;
             fn push<'a>(&'a self, dst: &'a mut [u8], _rest: &'a [u8]) {
                 let src = unsafe {
-                    ::std::slice::from_raw_parts(*self as *const foo as *const u8, self.size())
+                    ::std::slice::from_raw_parts(*self as *const foo as *const u8, ::std::mem::size_of::<foo>())
                 };
                 dst.copy_from_slice(src);
-            }
-            fn size(&self) -> usize {
-                ::std::mem::size_of::<foo>()
-            }
-            fn alignment(&self) -> usize {
-                self.size()
             }
         }
 
@@ -2278,21 +2363,15 @@ mod byte_layouts {
               0, 0, 0, 0, // padding
         ]);
     }
-    // test 15: vtable with 1 vector of 2 struct of 2 int8
     #[test]
-    fn layout_15_vtable_with_1_vector_of_2_struct_2_int8() {
-        #[allow(dead_code)]
-        struct FooStruct {
-            a: i8,
-            b: i8,
-        }
+    fn layout_15_vtable_with_1_vector_of_4_int8() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
-        b.start_vector(::std::mem::size_of::<FooStruct>(), 2);
+        b.start_vector::<i8>(4);
         b.push(33i8);
         b.push(44i8);
         b.push(55i8);
         b.push(66i8);
-        let vecend = b.end_vector::<&FooStruct>(2);
+        let vecend = b.end_vector::<i8>(4);
         let off = b.start_table();
         b.push_slot_always(fi2fo(0), vecend);
         b.end_table(off);
@@ -2303,7 +2382,7 @@ mod byte_layouts {
               6, 0, 0, 0, // offset for start of vtable (int32)
               4, 0, 0, 0, // vector start offset
 
-              2, 0, 0, 0, // vector length
+              4, 0, 0, 0, // vector length
               66, // vector value 1,1
               55, // vector value 1,0
               44, // vector value 0,1
@@ -2536,6 +2615,19 @@ mod byte_layouts {
               1, 0, // value #0 => 1 (int16)
         ]);
     }
+}
+
+// this is not technically a test, but we want to always keep this generated
+// file up-to-date, and the simplest way to do that is to make sure that when
+// tests are run, the file is generated.
+#[test]
+fn write_example_wire_data_to_file() {
+    let b = &mut flatbuffers::FlatBufferBuilder::new();
+    create_serialized_example_with_generated_code(b);
+
+    use ::std::io::Write;
+    let mut f = std::fs::File::create("../monsterdata_rust_wire.mon").unwrap();
+    f.write_all(b.finished_data()).unwrap();
 }
 
 fn load_file(filename: &str) -> Vec<u8> {
