@@ -1,5 +1,9 @@
 # rollup-pluginutils changelog
 
+## 2.3.1
+*2017-08-06*
+* Fixed ObjectPattern scope in attachScopes to recognise { ...rest } syntax ([#37](https://github.com/rollup/rollup-pluginutils/issues/37))
+
 ## 2.3.0
 *2017-05-21*
 * Add option to not generate named exports ([#32](https://github.com/rollup/rollup-pluginutils/issues/32))
