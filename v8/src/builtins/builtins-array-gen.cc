@@ -18,8 +18,6 @@ namespace v8 {
 namespace internal {
 
 using Node = compiler::Node;
-template <class T>
-using TNode = compiler::TNode<T>;
 
 ArrayBuiltinsAssembler::ArrayBuiltinsAssembler(
     compiler::CodeAssemblerState* state)
@@ -381,6 +379,28 @@ Node* ArrayBuiltinsAssembler::FindProcessor(Node* k_value, Node* k) {
   }
 
   void ArrayBuiltinsAssembler::NullPostLoopAction() {}
+
+  void ArrayBuiltinsAssembler::FillFixedArrayWithSmiZero(
+      TNode<FixedArray> array, TNode<Smi> smi_length) {
+    CSA_ASSERT(this, Word32BinaryNot(IsFixedDoubleArray(array)));
+
+    TNode<IntPtrT> length = SmiToIntPtr(smi_length);
+    TNode<WordT> byte_length = TimesPointerSize(length);
+    CSA_ASSERT(this, UintPtrLessThan(length, byte_length));
+
+    static const int32_t fa_base_data_offset =
+        FixedArray::kHeaderSize - kHeapObjectTag;
+    TNode<IntPtrT> backing_store = IntPtrAdd(
+        BitcastTaggedToWord(array), IntPtrConstant(fa_base_data_offset));
+
+    // Call out to memset to perform initialization.
+    TNode<ExternalReference> memset =
+        ExternalConstant(ExternalReference::libc_memset_function());
+    STATIC_ASSERT(kSizetSize == kIntptrSize);
+    CallCFunction3(MachineType::Pointer(), MachineType::Pointer(),
+                   MachineType::IntPtr(), MachineType::UintPtr(), memset,
+                   backing_store, IntPtrConstant(0), byte_length);
+  }
 
   void ArrayBuiltinsAssembler::ReturnFromBuiltin(Node* value) {
     if (argc_ == nullptr) {
@@ -1478,9 +1498,17 @@ TF_BUILTIN(ArrayPrototypeSlice, ArrayPrototypeSliceCodeStubAssembler) {
   args.PopAndReturn(a);
 }
 
-TNode<Object> ArrayBuiltinsAssembler::GenerateFastArrayShift(
-    TNode<Context> context, TNode<Object> receiver, Label* slow) {
-  Label fast(this), done(this);
+TF_BUILTIN(ArrayPrototypeShift, CodeStubAssembler) {
+  TNode<Int32T> argc =
+      UncheckedCast<Int32T>(Parameter(Descriptor::kJSActualArgumentsCount));
+  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
+  CSA_ASSERT(this, IsUndefined(Parameter(Descriptor::kJSNewTarget)));
+
+  CodeStubArguments args(this, ChangeInt32ToIntPtr(argc));
+  TNode<Object> receiver = args.GetReceiver();
+
+  Label runtime(this, Label::kDeferred);
+  Label fast(this);
 
   // Only shift in this stub if
   // 1) the array has fast elements
@@ -1490,11 +1518,10 @@ TNode<Object> ArrayBuiltinsAssembler::GenerateFastArrayShift(
   // 5) we aren't supposed to left-trim the backing store.
 
   // 1) Check that the array has fast elements.
-  BranchIfFastJSArray(receiver, context, &fast, slow);
+  BranchIfFastJSArray(receiver, context, &fast, &runtime);
 
   BIND(&fast);
   {
-    TVARIABLE(Object, result, UndefinedConstant());
     TNode<JSArray> array_receiver = CAST(receiver);
     CSA_ASSERT(this, TaggedIsPositiveSmi(LoadJSArrayLength(array_receiver)));
     Node* length =
@@ -1504,13 +1531,13 @@ TNode<Object> ArrayBuiltinsAssembler::GenerateFastArrayShift(
     GotoIf(IntPtrEqual(length, IntPtrConstant(0)), &return_undefined);
 
     // 2) Ensure that the length is writable.
-    EnsureArrayLengthWritable(LoadMap(array_receiver), slow);
+    EnsureArrayLengthWritable(LoadMap(array_receiver), &runtime);
 
     // 3) Check that the elements backing store isn't copy-on-write.
     Node* elements = LoadElements(array_receiver);
     GotoIf(WordEqual(LoadMap(elements),
                      LoadRoot(Heap::kFixedCOWArrayMapRootIndex)),
-           slow);
+           &runtime);
 
     Node* new_length = IntPtrSub(length, IntPtrConstant(1));
 
@@ -1521,13 +1548,13 @@ TNode<Object> ArrayBuiltinsAssembler::GenerateFastArrayShift(
                IntPtrAdd(IntPtrAdd(new_length, new_length),
                          IntPtrConstant(JSObject::kMinAddedElementsCapacity)),
                capacity),
-           slow);
+           &runtime);
 
     // 5) Check that we're not supposed to left-trim the backing store, as
     //    implemented in elements.cc:FastElementsAccessor::MoveElements.
     GotoIf(IntPtrGreaterThan(new_length,
                              IntPtrConstant(JSArray::kMaxCopyElements)),
-           slow);
+           &runtime);
 
     StoreObjectFieldNoWriteBarrier(array_receiver, JSArray::kLengthOffset,
                                    SmiTag(new_length));
@@ -1545,10 +1572,12 @@ TNode<Object> ArrayBuiltinsAssembler::GenerateFastArrayShift(
                  Int32LessThanOrEqual(elements_kind,
                                       Int32Constant(HOLEY_DOUBLE_ELEMENTS)));
 
+      VARIABLE(result, MachineRepresentation::kTagged, UndefinedConstant());
+
       Label move_elements(this);
-      result = AllocateHeapNumberWithValue(LoadFixedDoubleArrayElement(
+      result.Bind(AllocateHeapNumberWithValue(LoadFixedDoubleArrayElement(
           elements, IntPtrConstant(0), MachineType::Float64(), 0,
-          INTPTR_PARAMETERS, &move_elements));
+          INTPTR_PARAMETERS, &move_elements)));
       Goto(&move_elements);
       BIND(&move_elements);
 
@@ -1578,14 +1607,13 @@ TNode<Object> ArrayBuiltinsAssembler::GenerateFastArrayShift(
                             IntPtrAdd(offset, IntPtrConstant(kPointerSize)),
                             double_hole);
       }
-
-      Goto(&done);
+      args.PopAndReturn(result.value());
     }
 
     BIND(&fast_elements_tagged);
     {
       TNode<FixedArray> elements_fixed_array = CAST(elements);
-      TNode<Object> value = LoadFixedArrayElement(elements_fixed_array, 0);
+      Node* value = LoadFixedArrayElement(elements_fixed_array, 0);
       BuildFastLoop(
           IntPtrConstant(0), new_length,
           [&](Node* index) {
@@ -1598,15 +1626,13 @@ TNode<Object> ArrayBuiltinsAssembler::GenerateFastArrayShift(
       StoreFixedArrayElement(elements_fixed_array, new_length,
                              TheHoleConstant());
       GotoIf(WordEqual(value, TheHoleConstant()), &return_undefined);
-
-      result = value;
-      Goto(&done);
+      args.PopAndReturn(value);
     }
 
     BIND(&fast_elements_smi);
     {
       TNode<FixedArray> elements_fixed_array = CAST(elements);
-      TNode<Object> value = LoadFixedArrayElement(elements_fixed_array, 0);
+      Node* value = LoadFixedArrayElement(elements_fixed_array, 0);
       BuildFastLoop(
           IntPtrConstant(0), new_length,
           [&](Node* index) {
@@ -1620,19 +1646,21 @@ TNode<Object> ArrayBuiltinsAssembler::GenerateFastArrayShift(
       StoreFixedArrayElement(elements_fixed_array, new_length,
                              TheHoleConstant());
       GotoIf(WordEqual(value, TheHoleConstant()), &return_undefined);
-
-      result = value;
-      Goto(&done);
+      args.PopAndReturn(value);
     }
 
     BIND(&return_undefined);
-    {
-      result = UndefinedConstant();
-      Goto(&done);
-    }
+    { args.PopAndReturn(UndefinedConstant()); }
+  }
 
-    BIND(&done);
-    return result.value();
+  BIND(&runtime);
+  {
+    // We are not using Parameter(Descriptor::kJSTarget) and loading the value
+    // from the current frame here in order to reduce register pressure on the
+    // fast path.
+    TNode<JSFunction> target = LoadTargetFromFrame();
+    TailCallBuiltin(Builtins::kArrayShift, context, target, UndefinedConstant(),
+                    argc);
   }
 }
 
@@ -3512,7 +3540,6 @@ TF_BUILTIN(ArrayIteratorPrototypeNext, CodeStubAssembler) {
   TNode<Number> index =
       CAST(LoadObjectField(iterator, JSArrayIterator::kNextIndexOffset));
   CSA_ASSERT(this, IsNumberNonNegativeSafeInteger(index));
-  GotoIfNot(TaggedIsSmi(index), &if_other);
 
   // Dispatch based on the type of the {array}.
   TNode<Map> array_map = LoadMap(array);
@@ -3523,11 +3550,18 @@ TF_BUILTIN(ArrayIteratorPrototypeNext, CodeStubAssembler) {
 
   BIND(&if_array);
   {
-    // Check that the {index} is within range for the {array}.
-    TNode<Number> length = LoadJSArrayLength(CAST(array));
-    GotoIfNumberGreaterThanOrEqual(index, length, &set_done);
-    StoreObjectFieldNoWriteBarrier(iterator, JSArrayIterator::kNextIndexOffset,
-                                   SmiInc(CAST(index)));
+    // If {array} is a JSArray, then the {index} must be in Unsigned32 range.
+    CSA_ASSERT(this, IsNumberArrayIndex(index));
+
+    // Check that the {index} is within range for the {array}. We handle all
+    // kinds of JSArray's here, so we do the computation on Uint32.
+    TNode<Uint32T> index32 = ChangeNumberToUint32(index);
+    TNode<Uint32T> length32 =
+        ChangeNumberToUint32(LoadJSArrayLength(CAST(array)));
+    GotoIfNot(Uint32LessThan(index32, length32), &set_done);
+    StoreObjectField(
+        iterator, JSArrayIterator::kNextIndexOffset,
+        ChangeUint32ToTagged(Unsigned(Int32Add(index32, Int32Constant(1)))));
 
     var_done.Bind(FalseConstant());
     var_value.Bind(index);
@@ -3541,7 +3575,8 @@ TF_BUILTIN(ArrayIteratorPrototypeNext, CodeStubAssembler) {
     TNode<Int32T> elements_kind = LoadMapElementsKind(array_map);
     TNode<FixedArrayBase> elements = LoadElements(CAST(array));
     var_value.Bind(LoadFixedArrayBaseElementAsTagged(
-        elements, CAST(index), elements_kind, &if_generic, &if_hole));
+        elements, Signed(ChangeUint32ToWord(index32)), elements_kind,
+        &if_generic, &if_hole));
     Goto(&allocate_entry_if_needed);
 
     BIND(&if_hole);
@@ -3554,17 +3589,9 @@ TF_BUILTIN(ArrayIteratorPrototypeNext, CodeStubAssembler) {
 
   BIND(&if_other);
   {
-    // If the {array} is actually a JSArray the {index} must be a valid
-    // array index, as the TurboFan fast-path inlining relies on the fact
-    // that the [[ArrayIteratorNextIndex]] field always contains a valid
-    // Unsigned32 value as long as the [[ArrayIteratorIteratedObject]]
-    // field contains a JSArray instance. Also rule out JSTypedArray's
-    // here as they should never reach here (both because the {index}
-    // in that case must always be a Smi, and second because loading
-    // the "length" property would be wrong for JSTypedArray's).
+    // We cannot enter here with either JSArray's or JSTypedArray's.
+    CSA_ASSERT(this, Word32BinaryNot(IsJSArray(array)));
     CSA_ASSERT(this, Word32BinaryNot(IsJSTypedArray(array)));
-    CSA_ASSERT(this, Word32Or(Word32BinaryNot(IsJSArray(array)),
-                              IsNumberArrayIndex(index)));
 
     // Check that the {index} is within the bounds of the {array}s "length".
     TNode<Number> length = CAST(
@@ -3617,6 +3644,9 @@ TF_BUILTIN(ArrayIteratorPrototypeNext, CodeStubAssembler) {
 
   BIND(&if_typedarray);
   {
+    // If {array} is a JSTypedArray, the {index} must always be a Smi.
+    CSA_ASSERT(this, TaggedIsSmi(index));
+
     // Check that the {array}s buffer wasn't neutered.
     ThrowIfArrayBufferViewBufferIsDetached(context, CAST(array), method_name);
 

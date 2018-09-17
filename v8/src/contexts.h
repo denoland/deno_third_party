@@ -10,6 +10,7 @@
 namespace v8 {
 namespace internal {
 
+class NativeContext;
 class RegExpMatchInfo;
 
 enum ContextLookupFlags {
@@ -216,6 +217,8 @@ enum ContextLookupFlags {
   V(INTL_PLURAL_RULES_FUNCTION_INDEX, JSFunction, intl_plural_rules_function)  \
   V(INTL_V8_BREAK_ITERATOR_FUNCTION_INDEX, JSFunction,                         \
     intl_v8_break_iterator_function)                                           \
+  V(INTL_V8_BREAK_ITERATOR_INTERNAL_ADOPT_TEXT_SHARED_FUN, SharedFunctionInfo, \
+    break_iterator_internal_adopt_text_shared_fun)                             \
   V(JS_ARRAY_PACKED_SMI_ELEMENTS_MAP_INDEX, Map,                               \
     js_array_packed_smi_elements_map)                                          \
   V(JS_ARRAY_HOLEY_SMI_ELEMENTS_MAP_INDEX, Map,                                \
@@ -537,13 +540,11 @@ class Context : public FixedArray, public NeverReadOnlySpaceObject {
   Context* script_context();
 
   // Compute the native context.
-  inline Context* native_context() const;
-  inline void set_native_context(Context* context);
+  inline NativeContext* native_context() const;
+  inline void set_native_context(NativeContext* context);
 
-  // Predicates for context types.  IsNativeContext is also defined on Object
-  // because we frequently have to know if arbitrary objects are natives
-  // contexts.
-  inline bool IsNativeContext() const;
+  // Predicates for context types.  IsNativeContext is already defined on
+  // Object.
   inline bool IsFunctionContext() const;
   inline bool IsCatchContext() const;
   inline bool IsWithContext() const;
@@ -640,6 +641,15 @@ class Context : public FixedArray, public NeverReadOnlySpaceObject {
 
   STATIC_ASSERT(kHeaderSize == Internals::kContextHeaderSize);
   STATIC_ASSERT(EMBEDDER_DATA_INDEX == Internals::kContextEmbedderDataIndex);
+};
+
+class NativeContext : public Context {
+ public:
+  static inline NativeContext* cast(Object* context);
+  // TODO(neis): Move some stuff from Context here.
+
+ private:
+  DISALLOW_IMPLICIT_CONSTRUCTORS(NativeContext);
 };
 
 typedef Context::Field ContextField;

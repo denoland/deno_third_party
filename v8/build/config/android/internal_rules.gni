@@ -603,7 +603,10 @@ template("test_runner_script") {
         }
         test_runner_args += [ "--apk-under-test=$_apk_under_test" ]
       }
-      if (defined(invoker.proguard_enabled) && invoker.proguard_enabled) {
+      if (defined(invoker.proguard_enabled) && invoker.proguard_enabled &&
+          # TODO(crbug.com/876539): Reenable deobfuscation once it stops killing
+          # bots.
+          false) {
         test_runner_args += [ "--enable-java-deobfuscation" ]
       }
       if (emma_coverage) {
@@ -2332,9 +2335,6 @@ if (enable_java_templates) {
                                  "secondary_abi_loadable_modules",
                                  "uncompress_shared_libraries",
                                ])
-        if (!defined(uncompress_shared_libraries)) {
-          uncompress_shared_libraries = _load_library_from_apk
-        }
         _dex_target = "//build/android/incremental_install:bootstrap_java__dex"
         deps = _incremental_deps + [
                  ":${_incremental_compile_resources_target_name}",
@@ -2984,6 +2984,7 @@ if (enable_java_templates) {
     # TODO(agrieve): Enable lint for _has_sources rather than just _java_files.
     _lint_enabled = _java_files != [] && _supports_android && _chromium_code &&
                     !disable_android_lint
+
     if (_has_sources) {
       _compile_java_target = "${_main_target_name}__compile_java"
       compile_java(_compile_java_target) {
@@ -3175,11 +3176,15 @@ if (enable_java_templates) {
         deps = _accumulated_public_deps
       }
       _accumulated_public_deps += [ ":${target_name}__java_binary_script" ]
+    }
 
+    if (_is_java_binary ||
+        (_is_annotation_processor && !defined(_final_jar_path))) {
       group(target_name) {
         forward_variables_from(invoker,
                                [
                                  "data",
+                                 "deps",
                                  "data_deps",
                                  "visibility",
                                ])

@@ -909,11 +909,10 @@ void TurboAssembler::LoadPC(Register dst) {
 }
 
 void TurboAssembler::ComputeCodeStartAddress(Register dst) {
-  Label current_pc;
-  mov_label_addr(dst, &current_pc);
-
-  bind(&current_pc);
-  subi(dst, dst, Operand(pc_offset()));
+  mflr(r0);
+  LoadPC(dst);
+  subi(dst, dst, Operand(pc_offset() - kInstrSize));
+  mtlr(r0);
 }
 
 void TurboAssembler::LoadConstantPoolPointerRegister() {
@@ -2898,8 +2897,10 @@ void TurboAssembler::SwapP(Register src, Register dst, Register scratch) {
 }
 
 void TurboAssembler::SwapP(Register src, MemOperand dst, Register scratch) {
-  if (dst.ra() != r0) DCHECK(!AreAliased(src, dst.ra(), scratch));
-  if (dst.rb() != r0) DCHECK(!AreAliased(src, dst.rb(), scratch));
+  if (dst.ra() != r0 && dst.ra().is_valid())
+    DCHECK(!AreAliased(src, dst.ra(), scratch));
+  if (dst.rb() != r0 && dst.rb().is_valid())
+    DCHECK(!AreAliased(src, dst.rb(), scratch));
   DCHECK(!AreAliased(src, scratch));
   mr(scratch, src);
   LoadP(src, dst, r0);
@@ -2908,10 +2909,14 @@ void TurboAssembler::SwapP(Register src, MemOperand dst, Register scratch) {
 
 void TurboAssembler::SwapP(MemOperand src, MemOperand dst, Register scratch_0,
                            Register scratch_1) {
-  if (src.ra() != r0) DCHECK(!AreAliased(src.ra(), scratch_0, scratch_1));
-  if (src.rb() != r0) DCHECK(!AreAliased(src.rb(), scratch_0, scratch_1));
-  if (dst.ra() != r0) DCHECK(!AreAliased(dst.ra(), scratch_0, scratch_1));
-  if (dst.rb() != r0) DCHECK(!AreAliased(dst.rb(), scratch_0, scratch_1));
+  if (src.ra() != r0 && src.ra().is_valid())
+    DCHECK(!AreAliased(src.ra(), scratch_0, scratch_1));
+  if (src.rb() != r0 && src.rb().is_valid())
+    DCHECK(!AreAliased(src.rb(), scratch_0, scratch_1));
+  if (dst.ra() != r0 && dst.ra().is_valid())
+    DCHECK(!AreAliased(dst.ra(), scratch_0, scratch_1));
+  if (dst.rb() != r0 && dst.rb().is_valid())
+    DCHECK(!AreAliased(dst.rb(), scratch_0, scratch_1));
   DCHECK(!AreAliased(scratch_0, scratch_1));
   if (is_int16(src.offset()) || is_int16(dst.offset())) {
     if (!is_int16(src.offset())) {

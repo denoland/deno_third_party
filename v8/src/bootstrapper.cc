@@ -168,7 +168,7 @@ class Genesis BASE_EMBEDDED {
   Handle<JSGlobalProxy> global_proxy() { return global_proxy_; }
 
  private:
-  Handle<Context> native_context() { return native_context_; }
+  Handle<NativeContext> native_context() { return native_context_; }
 
   // Creates some basic objects. Used for creating a context from scratch.
   void CreateRoots();
@@ -297,7 +297,7 @@ class Genesis BASE_EMBEDDED {
 
   Isolate* isolate_;
   Handle<Context> result_;
-  Handle<Context> native_context_;
+  Handle<NativeContext> native_context_;
   Handle<JSGlobalProxy> global_proxy_;
 
   // Temporary function maps needed only during bootstrapping.
@@ -1735,12 +1735,16 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
                           0, false);
     SimpleInstallFunction(isolate_, proto, "push",
                           Builtins::kArrayPrototypePush, 1, false);
+    SimpleInstallFunction(isolate_, proto, "reverse",
+                          Builtins::kArrayPrototypeReverse, 0, false);
     SimpleInstallFunction(isolate_, proto, "shift",
                           Builtins::kArrayPrototypeShift, 0, false);
     SimpleInstallFunction(isolate_, proto, "unshift", Builtins::kArrayUnshift,
                           1, false);
     SimpleInstallFunction(isolate_, proto, "slice",
                           Builtins::kArrayPrototypeSlice, 2, false);
+    SimpleInstallFunction(isolate_, proto, "sort",
+                          Builtins::kArrayPrototypeSort, 1, false);
     if (FLAG_enable_experimental_builtins) {
       SimpleInstallFunction(isolate_, proto, "splice",
                             Builtins::kArraySpliceTorque, 2, false);
@@ -2993,6 +2997,18 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
           isolate_, prototype, factory->to_string_tag_symbol(),
           factory->Object_string(),
           static_cast<PropertyAttributes>(DONT_ENUM | READ_ONLY));
+
+      SimpleInstallGetter(isolate_, prototype,
+                          factory->InternalizeUtf8String("adoptText"),
+                          Builtins::kBreakIteratorPrototypeAdoptText, false);
+
+      {
+        Handle<SharedFunctionInfo> info = SimpleCreateBuiltinSharedFunctionInfo(
+            isolate_, Builtins::kBreakIteratorInternalAdoptText,
+            factory->empty_string(), 1);
+        native_context()->set_break_iterator_internal_adopt_text_shared_fun(
+            *info);
+      }
     }
 
     {
@@ -3958,7 +3974,7 @@ void Bootstrapper::ExportFromRuntime(Isolate* isolate,
                                      Handle<JSObject> container) {
   Factory* factory = isolate->factory();
   HandleScope scope(isolate);
-  Handle<Context> native_context = isolate->native_context();
+  Handle<NativeContext> native_context = isolate->native_context();
 #define EXPORT_PRIVATE_SYMBOL(NAME)                                       \
   Handle<String> NAME##_name = factory->NewStringFromAsciiChecked(#NAME); \
   JSObject::AddProperty(isolate, container, NAME##_name, factory->NAME(), NONE);
@@ -5659,12 +5675,15 @@ Genesis::Genesis(
   // We can only de-serialize a context if the isolate was initialized from
   // a snapshot. Otherwise we have to build the context from scratch.
   // Also create a context from scratch to expose natives, if required by flag.
-  if (!isolate->initialized_from_snapshot() ||
-      !Snapshot::NewContextFromSnapshot(isolate, global_proxy,
-                                        context_snapshot_index,
-                                        embedder_fields_deserializer)
-           .ToHandle(&native_context_)) {
-    native_context_ = Handle<Context>();
+  DCHECK(native_context_.is_null());
+  if (isolate->initialized_from_snapshot()) {
+    Handle<Context> context;
+    if (Snapshot::NewContextFromSnapshot(isolate, global_proxy,
+                                         context_snapshot_index,
+                                         embedder_fields_deserializer)
+            .ToHandle(&context)) {
+      native_context_ = Handle<NativeContext>::cast(context);
+    }
   }
 
   if (!native_context().is_null()) {

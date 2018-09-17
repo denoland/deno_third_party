@@ -3034,6 +3034,29 @@ Node* WasmGraphBuilder::SetGlobal(uint32_t index, Node* val) {
       graph()->NewNode(op, base, offset, val, Effect(), Control()));
 }
 
+Node* WasmGraphBuilder::CheckBoundsAndAlignment(
+    uint8_t access_size, Node* index, uint32_t offset,
+    wasm::WasmCodePosition position) {
+  // Atomic operations access the memory, need to be bound checked till
+  // TrapHandlers are enabled on atomic operations
+  index =
+      BoundsCheckMem(access_size, index, offset, position, kNeedsBoundsCheck);
+  Node* effective_address =
+      graph()->NewNode(mcgraph()->machine()->IntAdd(), MemBuffer(offset),
+                       Uint32ToUintptr(index));
+  // Unlike regular memory accesses, unaligned memory accesses for atomic
+  // operations should trap
+  // Access sizes are in powers of two, calculate mod without using division
+  Node* cond =
+      graph()->NewNode(mcgraph()->machine()->WordAnd(), effective_address,
+                       IntPtrConstant(access_size - 1));
+  TrapIfFalse(wasm::kTrapUnalignedAccess,
+              graph()->NewNode(mcgraph()->machine()->Word32Equal(), cond,
+                               mcgraph()->Int32Constant(0)),
+              position);
+  return index;
+}
+
 Node* WasmGraphBuilder::BoundsCheckMem(uint8_t access_size, Node* index,
                                        uint32_t offset,
                                        wasm::WasmCodePosition position,
@@ -3875,14 +3898,13 @@ Node* WasmGraphBuilder::Simd8x16ShuffleOp(const uint8_t shuffle[16],
 Node* WasmGraphBuilder::AtomicOp(wasm::WasmOpcode opcode, Node* const* inputs,
                                  uint32_t alignment, uint32_t offset,
                                  wasm::WasmCodePosition position) {
-  // TODO(gdeepti): Add alignment validation, traps on misalignment
   Node* node;
   switch (opcode) {
 #define BUILD_ATOMIC_BINOP(Name, Operation, Type, Prefix)                     \
   case wasm::kExpr##Name: {                                                   \
-    Node* index =                                                             \
-        BoundsCheckMem(wasm::ValueTypes::MemSize(MachineType::Type()),        \
-                       inputs[0], offset, position, kNeedsBoundsCheck);       \
+    Node* index = CheckBoundsAndAlignment(                                    \
+        wasm::ValueTypes::MemSize(MachineType::Type()), inputs[0], offset,    \
+        position);                                                            \
     node = graph()->NewNode(                                                  \
         mcgraph()->machine()->Prefix##Atomic##Operation(MachineType::Type()), \
         MemBuffer(offset), index, inputs[1], Effect(), Control());            \
@@ -3893,9 +3915,9 @@ Node* WasmGraphBuilder::AtomicOp(wasm::WasmOpcode opcode, Node* const* inputs,
 
 #define BUILD_ATOMIC_CMP_EXCHG(Name, Type, Prefix)                            \
   case wasm::kExpr##Name: {                                                   \
-    Node* index =                                                             \
-        BoundsCheckMem(wasm::ValueTypes::MemSize(MachineType::Type()),        \
-                       inputs[0], offset, position, kNeedsBoundsCheck);       \
+    Node* index = CheckBoundsAndAlignment(                                    \
+        wasm::ValueTypes::MemSize(MachineType::Type()), inputs[0], offset,    \
+        position);                                                            \
     node = graph()->NewNode(                                                  \
         mcgraph()->machine()->Prefix##AtomicCompareExchange(                  \
             MachineType::Type()),                                             \
@@ -3905,24 +3927,24 @@ Node* WasmGraphBuilder::AtomicOp(wasm::WasmOpcode opcode, Node* const* inputs,
     ATOMIC_CMP_EXCHG_LIST(BUILD_ATOMIC_CMP_EXCHG)
 #undef BUILD_ATOMIC_CMP_EXCHG
 
-#define BUILD_ATOMIC_LOAD_OP(Name, Type, Prefix)                        \
-  case wasm::kExpr##Name: {                                             \
-    Node* index =                                                       \
-        BoundsCheckMem(wasm::ValueTypes::MemSize(MachineType::Type()),  \
-                       inputs[0], offset, position, kNeedsBoundsCheck); \
-    node = graph()->NewNode(                                            \
-        mcgraph()->machine()->Prefix##AtomicLoad(MachineType::Type()),  \
-        MemBuffer(offset), index, Effect(), Control());                 \
-    break;                                                              \
+#define BUILD_ATOMIC_LOAD_OP(Name, Type, Prefix)                           \
+  case wasm::kExpr##Name: {                                                \
+    Node* index = CheckBoundsAndAlignment(                                 \
+        wasm::ValueTypes::MemSize(MachineType::Type()), inputs[0], offset, \
+        position);                                                         \
+    node = graph()->NewNode(                                               \
+        mcgraph()->machine()->Prefix##AtomicLoad(MachineType::Type()),     \
+        MemBuffer(offset), index, Effect(), Control());                    \
+    break;                                                                 \
   }
     ATOMIC_LOAD_LIST(BUILD_ATOMIC_LOAD_OP)
 #undef BUILD_ATOMIC_LOAD_OP
 
 #define BUILD_ATOMIC_STORE_OP(Name, Type, Rep, Prefix)                         \
   case wasm::kExpr##Name: {                                                    \
-    Node* index =                                                              \
-        BoundsCheckMem(wasm::ValueTypes::MemSize(MachineType::Type()),         \
-                       inputs[0], offset, position, kNeedsBoundsCheck);        \
+    Node* index = CheckBoundsAndAlignment(                                     \
+        wasm::ValueTypes::MemSize(MachineType::Type()), inputs[0], offset,     \
+        position);                                                             \
     node = graph()->NewNode(                                                   \
         mcgraph()->machine()->Prefix##AtomicStore(MachineRepresentation::Rep), \
         MemBuffer(offset), index, inputs[1], Effect(), Control());             \
@@ -5025,14 +5047,14 @@ MaybeHandle<Code> CompileCWasmEntry(Isolate* isolate, wasm::FunctionSig* sig) {
 
 TurbofanWasmCompilationUnit::TurbofanWasmCompilationUnit(
     wasm::WasmCompilationUnit* wasm_unit)
-    : wasm_unit_(wasm_unit),
-      wasm_compilation_data_(wasm_unit->env_->runtime_exception_support) {}
+    : wasm_unit_(wasm_unit) {}
 
 // Clears unique_ptrs, but (part of) the type is forward declared in the header.
 TurbofanWasmCompilationUnit::~TurbofanWasmCompilationUnit() = default;
 
 SourcePositionTable* TurbofanWasmCompilationUnit::BuildGraphForWasmFunction(
-    double* decode_ms, MachineGraph* mcgraph, NodeOriginTable* node_origins) {
+    wasm::WasmFeatures* detected, double* decode_ms, MachineGraph* mcgraph,
+    NodeOriginTable* node_origins) {
   base::ElapsedTimer decode_timer;
   if (FLAG_trace_wasm_decode_time) {
     decode_timer.Start();
@@ -5043,14 +5065,10 @@ SourcePositionTable* TurbofanWasmCompilationUnit::BuildGraphForWasmFunction(
       new (mcgraph->zone()) SourcePositionTable(mcgraph->graph());
   WasmGraphBuilder builder(wasm_unit_->env_, mcgraph->zone(), mcgraph,
                            wasm_unit_->func_body_.sig, source_position_table);
-  // TODO(titzer): gather detected features into a per-module location
-  // in order to increment an embedder feature use count.
-  wasm::WasmFeatures unused_detected_features;
   graph_construction_result_ = wasm::BuildTFGraph(
       wasm_unit_->wasm_engine_->allocator(),
       wasm_unit_->native_module_->enabled_features(), wasm_unit_->env_->module,
-      &builder, &unused_detected_features, wasm_unit_->func_body_,
-      node_origins);
+      &builder, detected, wasm_unit_->func_body_, node_origins);
   if (graph_construction_result_.failed()) {
     if (FLAG_trace_wasm_compiler) {
       StdoutStream{} << "Compilation failed: "
@@ -5103,7 +5121,8 @@ Vector<const char> GetDebugName(Zone* zone, wasm::WasmName name, int index) {
 
 }  // namespace
 
-void TurbofanWasmCompilationUnit::ExecuteCompilation() {
+void TurbofanWasmCompilationUnit::ExecuteCompilation(
+    wasm::WasmFeatures* detected) {
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.wasm"),
                "ExecuteTurbofanCompilation");
   double decode_ms = 0;
@@ -5126,13 +5145,16 @@ void TurbofanWasmCompilationUnit::ExecuteCompilation() {
         GetDebugName(&compilation_zone, wasm_unit_->func_name_,
                      wasm_unit_->func_index_),
         &compilation_zone, Code::WASM_FUNCTION);
+    if (wasm_unit_->env_->runtime_exception_support) {
+      info.SetWasmRuntimeExceptionSupport();
+    }
 
     NodeOriginTable* node_origins = info.trace_turbo_json_enabled()
                                         ? new (&graph_zone)
                                               NodeOriginTable(mcgraph->graph())
                                         : nullptr;
     SourcePositionTable* source_positions =
-        BuildGraphForWasmFunction(&decode_ms, mcgraph, node_origins);
+        BuildGraphForWasmFunction(detected, &decode_ms, mcgraph, node_origins);
 
     if (graph_construction_result_.failed()) {
       ok_ = false;
@@ -5160,8 +5182,7 @@ void TurbofanWasmCompilationUnit::ExecuteCompilation() {
     std::unique_ptr<OptimizedCompilationJob> job(
         Pipeline::NewWasmCompilationJob(
             &info, wasm_unit_->wasm_engine_, mcgraph, call_descriptor,
-            source_positions, node_origins, &wasm_compilation_data_,
-            wasm_unit_->func_body_,
+            source_positions, node_origins, wasm_unit_->func_body_,
             const_cast<wasm::WasmModule*>(wasm_unit_->env_->module),
             wasm_unit_->native_module_, wasm_unit_->func_index_,
             wasm_unit_->env_->module->origin));

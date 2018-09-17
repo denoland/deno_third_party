@@ -68,6 +68,16 @@ class DateFormat {
   V8_WARN_UNUSED_RESULT static MaybeHandle<JSObject> Unwrap(
       Isolate* isolate, Handle<JSReceiver> receiver, const char* method_name);
 
+  // ecma-402/#sec-todatetimeoptions
+  V8_WARN_UNUSED_RESULT static MaybeHandle<JSObject> ToDateTimeOptions(
+      Isolate* isolate, Handle<Object> input_options, const char* required,
+      const char* defaults);
+
+  V8_WARN_UNUSED_RESULT static MaybeHandle<String> ToLocaleDateTime(
+      Isolate* isolate, Handle<Object> date, Handle<Object> locales,
+      Handle<Object> options, const char* required, const char* defaults,
+      const char* service);
+
   // Layout description.
 #define DATE_FORMAT_FIELDS(V)        \
   V(kSimpleDateFormat, kPointerSize) \
@@ -174,10 +184,36 @@ class V8BreakIterator {
   // holds the pointer gets garbage collected.
   static void DeleteBreakIterator(const v8::WeakCallbackInfo<void>& data);
 
+  static void AdoptText(Isolate* isolate,
+                        Handle<JSObject> break_iterator_holder,
+                        Handle<String> text);
+
   // Layout description.
-  static const int kBreakIterator = JSObject::kHeaderSize;
-  static const int kUnicodeString = kBreakIterator + kPointerSize;
-  static const int kSize = kUnicodeString + kPointerSize;
+#define BREAK_ITERATOR_FIELDS(V)   \
+  /* Pointer fields. */            \
+  V(kBreakIterator, kPointerSize)  \
+  V(kUnicodeString, kPointerSize)  \
+  V(kBoundAdoptText, kPointerSize) \
+  V(kSize, 0)
+
+  DEFINE_FIELD_OFFSET_CONSTANTS(JSObject::kHeaderSize, BREAK_ITERATOR_FIELDS)
+#undef BREAK_ITERATOR_FIELDS
+
+  // ContextSlot defines the context structure for the bound
+  // v8BreakIterator.prototype.adoptText function
+  enum class ContextSlot {
+    kV8BreakIterator = Context::MIN_CONTEXT_SLOTS,
+
+    kLength
+  };
+
+  // TODO(ryzokuken): Remove this and use regular accessors once v8BreakIterator
+  // is a subclass of JSObject
+  //
+  // This needs to be consistent with the above Layour Description
+  static const int kBreakIteratorIndex = 0;
+  static const int kUnicodeStringIndex = 1;
+  static const int kBoundAdoptTextIndex = 2;
 
  private:
   V8BreakIterator();

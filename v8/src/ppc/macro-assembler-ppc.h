@@ -37,6 +37,7 @@ constexpr Register kJavaScriptCallExtraArg1Register = r5;
 constexpr Register kOffHeapTrampolineRegister = ip;
 constexpr Register kRuntimeCallFunctionRegister = r4;
 constexpr Register kRuntimeCallArgCountRegister = r3;
+constexpr Register kRuntimeCallArgvRegister = r5;
 constexpr Register kWasmInstanceRegister = r10;
 
 // ----------------------------------------------------------------------------
@@ -72,8 +73,6 @@ Register GetRegisterThatIsNotOneOf(Register reg1, Register reg2 = no_reg,
 #define ShiftLeft_ sld
 #define ShiftRight_ srd
 #define ShiftRightArith srad
-#define Mul mulld
-#define Div divd
 #else
 #define LoadPX lwzx
 #define LoadPUX lwzux
@@ -87,8 +86,6 @@ Register GetRegisterThatIsNotOneOf(Register reg1, Register reg2 = no_reg,
 #define ShiftLeft_ slw
 #define ShiftRight_ srw
 #define ShiftRightArith sraw
-#define Mul mullw
-#define Div divw
 #endif
 
 class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {

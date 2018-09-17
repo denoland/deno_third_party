@@ -1078,7 +1078,6 @@ enum InitializationFlag : uint8_t { kNeedsInitialization, kCreatedInitialized };
 
 enum MaybeAssignedFlag : uint8_t { kNotAssigned, kMaybeAssigned };
 
-// Serialized in PreparseData, so numeric values should not be changed.
 enum ParseErrorType { kSyntaxError = 0, kReferenceError = 1 };
 
 enum FunctionKind : uint8_t {
@@ -1571,6 +1570,7 @@ enum class LoadSensitivity {
 #define FOREACH_WASM_TRAPREASON(V) \
   V(TrapUnreachable)               \
   V(TrapMemOutOfBounds)            \
+  V(TrapUnalignedAccess)           \
   V(TrapDivByZero)                 \
   V(TrapDivUnrepresentable)        \
   V(TrapRemByZero)                 \

@@ -257,7 +257,7 @@ bool IntrinsicHasNoSideEffect(Runtime::FunctionId id) {
 // Use macro to include both inlined and non-inlined version of an intrinsic.
 #define INTRINSIC_WHITELIST(V)                \
   /* Conversions */                           \
-  V(NumberToStringSkipCache)                  \
+  V(NumberToString)                           \
   V(ToBigInt)                                 \
   V(ToInteger)                                \
   V(ToLength)                                 \
@@ -309,6 +309,7 @@ bool IntrinsicHasNoSideEffect(Runtime::FunctionId id) {
   V(BigIntToNumber)                           \
   /* Literals */                              \
   V(CreateArrayLiteral)                       \
+  V(CreateArrayLiteralWithoutAllocationSite)  \
   V(CreateObjectLiteral)                      \
   V(CreateObjectLiteralWithoutAllocationSite) \
   V(CreateRegExpLiteral)                      \
@@ -561,6 +562,7 @@ DebugInfo::SideEffectState BuiltinGetSideEffectState(Builtins::Name id) {
     case Builtins::kArrayPrototypeFlatMap:
     case Builtins::kArrayPrototypeKeys:
     case Builtins::kArrayPrototypeSlice:
+    case Builtins::kArrayPrototypeSort:
     case Builtins::kArrayForEach:
     case Builtins::kArrayEvery:
     case Builtins::kArraySome:
@@ -815,6 +817,7 @@ DebugInfo::SideEffectState BuiltinGetSideEffectState(Builtins::Name id) {
     case Builtins::kArrayIteratorPrototypeNext:
     case Builtins::kArrayPrototypePop:
     case Builtins::kArrayPrototypePush:
+    case Builtins::kArrayPrototypeReverse:
     case Builtins::kArrayPrototypeShift:
     case Builtins::kArraySplice:
     case Builtins::kArrayUnshift:

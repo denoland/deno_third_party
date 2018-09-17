@@ -1342,6 +1342,27 @@ MaybeHandle<JSObject> JSObject::New(Handle<JSFunction> constructor,
   return result;
 }
 
+// 9.1.12 ObjectCreate ( proto [ , internalSlotsList ] )
+// Notice: This is NOT 19.1.2.2 Object.create ( O, Properties )
+MaybeHandle<JSObject> JSObject::ObjectCreate(Isolate* isolate,
+                                             Handle<Object> prototype) {
+  // Generate the map with the specified {prototype} based on the Object
+  // function's initial map from the current native context.
+  // TODO(bmeurer): Use a dedicated cache for Object.create; think about
+  // slack tracking for Object.create.
+  Handle<Map> map =
+      Map::GetObjectCreateMap(isolate, Handle<HeapObject>::cast(prototype));
+
+  // Actually allocate the object.
+  Handle<JSObject> object;
+  if (map->is_dictionary_map()) {
+    object = isolate->factory()->NewSlowJSObjectFromMap(map);
+  } else {
+    object = isolate->factory()->NewJSObjectFromMap(map);
+  }
+  return object;
+}
+
 void JSObject::EnsureWritableFastElements(Handle<JSObject> object) {
   DCHECK(object->HasSmiOrObjectElements() ||
          object->HasFastStringWrapperElements());
@@ -3794,8 +3815,9 @@ void HeapObject::RehashBasedOnMap(Isolate* isolate) {
   }
 }
 
-// static
-Handle<String> JSReceiver::GetConstructorName(Handle<JSReceiver> receiver) {
+namespace {
+std::pair<MaybeHandle<JSFunction>, Handle<String>> GetConstructorHelper(
+    Handle<JSReceiver> receiver) {
   Isolate* isolate = receiver->GetIsolate();
 
   // If the object was instantiated simply with base == new.target, the
@@ -3810,37 +3832,61 @@ Handle<String> JSReceiver::GetConstructorName(Handle<JSReceiver> receiver) {
       String* name = constructor->shared()->DebugName();
       if (name->length() != 0 &&
           !name->Equals(ReadOnlyRoots(isolate).Object_string())) {
-        return handle(name, isolate);
+        return std::make_pair(handle(constructor, isolate),
+                              handle(name, isolate));
       }
     } else if (maybe_constructor->IsFunctionTemplateInfo()) {
       FunctionTemplateInfo* info =
           FunctionTemplateInfo::cast(maybe_constructor);
       if (info->class_name()->IsString()) {
-        return handle(String::cast(info->class_name()), isolate);
+        return std::make_pair(
+            MaybeHandle<JSFunction>(),
+            handle(String::cast(info->class_name()), isolate));
       }
     }
   }
 
   Handle<Object> maybe_tag = JSReceiver::GetDataProperty(
       receiver, isolate->factory()->to_string_tag_symbol());
-  if (maybe_tag->IsString()) return Handle<String>::cast(maybe_tag);
+  if (maybe_tag->IsString())
+    return std::make_pair(MaybeHandle<JSFunction>(),
+                          Handle<String>::cast(maybe_tag));
 
   PrototypeIterator iter(isolate, receiver);
-  if (iter.IsAtEnd()) return handle(receiver->class_name(), isolate);
+  if (iter.IsAtEnd()) {
+    return std::make_pair(MaybeHandle<JSFunction>(),
+                          handle(receiver->class_name(), isolate));
+  }
+
   Handle<JSReceiver> start = PrototypeIterator::GetCurrent<JSReceiver>(iter);
   LookupIterator it(receiver, isolate->factory()->constructor_string(), start,
                     LookupIterator::PROTOTYPE_CHAIN_SKIP_INTERCEPTOR);
   Handle<Object> maybe_constructor = JSReceiver::GetDataProperty(&it);
-  Handle<String> result = isolate->factory()->Object_string();
   if (maybe_constructor->IsJSFunction()) {
     JSFunction* constructor = JSFunction::cast(*maybe_constructor);
     String* name = constructor->shared()->DebugName();
-    if (name->length() > 0) result = handle(name, isolate);
+
+    if (name->length() != 0 &&
+        !name->Equals(ReadOnlyRoots(isolate).Object_string())) {
+      return std::make_pair(handle(constructor, isolate),
+                            handle(name, isolate));
+    }
   }
 
-  return result.is_identical_to(isolate->factory()->Object_string())
-             ? handle(receiver->class_name(), isolate)
-             : result;
+  return std::make_pair(MaybeHandle<JSFunction>(),
+                        handle(receiver->class_name(), isolate));
+}
+}  // anonymous namespace
+
+// static
+MaybeHandle<JSFunction> JSReceiver::GetConstructor(
+    Handle<JSReceiver> receiver) {
+  return GetConstructorHelper(receiver).first;
+}
+
+// static
+Handle<String> JSReceiver::GetConstructorName(Handle<JSReceiver> receiver) {
+  return GetConstructorHelper(receiver).second;
 }
 
 Handle<Context> JSReceiver::GetCreationContext() {
@@ -13082,7 +13128,9 @@ bool CanSubclassHaveInobjectProperties(InstanceType instance_type) {
     case JS_GENERATOR_OBJECT_TYPE:
 #ifdef V8_INTL_SUPPORT
     case JS_INTL_COLLATOR_TYPE:
+    case JS_INTL_LIST_FORMAT_TYPE:
     case JS_INTL_PLURAL_RULES_TYPE:
+    case JS_INTL_RELATIVE_TIME_FORMAT_TYPE:
 #endif
     case JS_ASYNC_GENERATOR_OBJECT_TYPE:
     case JS_MAP_TYPE:

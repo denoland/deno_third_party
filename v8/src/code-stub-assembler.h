@@ -382,6 +382,12 @@ class V8_EXPORT_PRIVATE CodeStubAssembler : public compiler::CodeAssembler {
     return p_o;
   }
 
+  TNode<Object> UnsafeCastObjectToLoadFn(TNode<Object> p_o) { return p_o; }
+  TNode<Object> UnsafeCastObjectToStoreFn(TNode<Object> p_o) { return p_o; }
+  TNode<Object> UnsafeCastObjectToCanUseSameAccessorFn(TNode<Object> p_o) {
+    return p_o;
+  }
+
   TNode<NumberDictionary> UnsafeCastObjectToNumberDictionary(
       TNode<Object> p_o) {
     return CAST(p_o);
@@ -748,7 +754,7 @@ class V8_EXPORT_PRIVATE CodeStubAssembler : public compiler::CodeAssembler {
   void BranchIfJSReceiver(Node* object, Label* if_true, Label* if_false);
 
   void BranchIfFastJSArray(Node* object, Node* context, Label* if_true,
-                           Label* if_false);
+                           Label* if_false, bool iteration_only = false);
   void BranchIfNotFastJSArray(Node* object, Node* context, Label* if_true,
                               Label* if_false) {
     BranchIfFastJSArray(object, context, if_false, if_true);
@@ -1057,7 +1063,7 @@ class V8_EXPORT_PRIVATE CodeStubAssembler : public compiler::CodeAssembler {
   // was found is an accessor, or to |if_hole| if the element at
   // the given |index| is not found in |elements|.
   TNode<Object> LoadFixedArrayBaseElementAsTagged(
-      TNode<FixedArrayBase> elements, TNode<Smi> index,
+      TNode<FixedArrayBase> elements, TNode<IntPtrT> index,
       TNode<Int32T> elements_kind, Label* if_accessor, Label* if_hole);
 
   // Load a feedback slot from a FeedbackVector.
@@ -1648,9 +1654,14 @@ class V8_EXPORT_PRIVATE CodeStubAssembler : public compiler::CodeAssembler {
   Node* TruncateHeapNumberValueToWord32(Node* object);
 
   // Conversions.
+  void TryHeapNumberToSmi(TNode<HeapNumber> number, TVariable<Smi>& output,
+                          Label* if_smi);
+  void TryFloat64ToSmi(TNode<Float64T> number, TVariable<Smi>& output,
+                       Label* if_smi);
   TNode<Number> ChangeFloat64ToTagged(SloppyTNode<Float64T> value);
   TNode<Number> ChangeInt32ToTagged(SloppyTNode<Int32T> value);
   TNode<Number> ChangeUint32ToTagged(SloppyTNode<Uint32T> value);
+  TNode<Uint32T> ChangeNumberToUint32(TNode<Number> value);
   TNode<Float64T> ChangeNumberToFloat64(SloppyTNode<Number> value);
   TNode<UintPtrT> ChangeNonnegativeNumberToUintPtr(TNode<Number> value);
 
@@ -1732,9 +1743,8 @@ class V8_EXPORT_PRIVATE CodeStubAssembler : public compiler::CodeAssembler {
   TNode<BoolT> IsExternalStringInstanceType(SloppyTNode<Int32T> instance_type);
   TNode<BoolT> IsFastJSArray(SloppyTNode<Object> object,
                              SloppyTNode<Context> context);
-  TNode<BoolT> IsFastJSArrayWithNoCustomIteration(
-      TNode<Object> object, TNode<Context> context,
-      TNode<Context> native_context);
+  TNode<BoolT> IsFastJSArrayWithNoCustomIteration(TNode<Object> object,
+                                                  TNode<Context> context);
   TNode<BoolT> IsFeedbackCell(SloppyTNode<HeapObject> object);
   TNode<BoolT> IsFeedbackVector(SloppyTNode<HeapObject> object);
   TNode<BoolT> IsContext(SloppyTNode<HeapObject> object);

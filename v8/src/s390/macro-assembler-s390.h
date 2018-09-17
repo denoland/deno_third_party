@@ -36,6 +36,7 @@ constexpr Register kJavaScriptCallExtraArg1Register = r4;
 constexpr Register kOffHeapTrampolineRegister = ip;
 constexpr Register kRuntimeCallFunctionRegister = r3;
 constexpr Register kRuntimeCallArgCountRegister = r2;
+constexpr Register kRuntimeCallArgvRegister = r4;
 constexpr Register kWasmInstanceRegister = r6;
 
 // ----------------------------------------------------------------------------
@@ -68,7 +69,6 @@ Register GetRegisterThatIsNotOneOf(Register reg1, Register reg2 = no_reg,
 
 // These exist to provide portability between 32 and 64bit
 #if V8_TARGET_ARCH_S390X
-#define Div divd
 
 // The length of the arithmetic operation is the length
 // of the register.

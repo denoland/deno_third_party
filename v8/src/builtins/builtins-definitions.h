@@ -316,6 +316,7 @@ namespace internal {
   TFJ(ArrayPrototypePush, SharedFunctionInfo::kDontAdaptArgumentsSentinel)     \
   /* ES6 #sec-array.prototype.shift */                                         \
   CPP(ArrayShift)                                                              \
+  TFJ(ArrayPrototypeShift, SharedFunctionInfo::kDontAdaptArgumentsSentinel)    \
   /* ES6 #sec-array.prototype.slice */                                         \
   TFJ(ArrayPrototypeSlice, SharedFunctionInfo::kDontAdaptArgumentsSentinel)    \
   /* ES6 #sec-array.prototype.splice */                                        \
@@ -1214,6 +1215,7 @@ namespace internal {
   TFC(WasmToNumber, TypeConversion, 1)                                         \
   TFS(ThrowWasmTrapUnreachable)                                                \
   TFS(ThrowWasmTrapMemOutOfBounds)                                             \
+  TFS(ThrowWasmTrapUnalignedAccess)                                            \
   TFS(ThrowWasmTrapDivByZero)                                                  \
   TFS(ThrowWasmTrapDivUnrepresentable)                                         \
   TFS(ThrowWasmTrapRemByZero)                                                  \
@@ -1390,7 +1392,9 @@ namespace internal {
   /* ecma402 #sec-intl.collator.prototype.compare */                   \
   CPP(CollatorPrototypeCompare)                                        \
   /* ecma 402 #sec-collator-compare-functions*/                        \
-  CPP(CollatorInternalCompare)
+  CPP(CollatorInternalCompare)                                         \
+  CPP(BreakIteratorInternalAdoptText)                                  \
+  CPP(BreakIteratorPrototypeAdoptText)
 #else
 #define BUILTIN_LIST_INTL(CPP, TFJ, TFS)      \
   /* no-op fallback version */                \

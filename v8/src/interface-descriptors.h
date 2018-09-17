@@ -109,8 +109,8 @@ class V8_EXPORT_PRIVATE CallInterfaceDescriptorData {
   void Reset();
 
   bool IsInitialized() const {
-    return register_param_count_ >= 0 && return_count_ >= 0 &&
-           param_count_ >= 0;
+    return IsInitializedPlatformSpecific() &&
+           IsInitializedPlatformIndependent();
   }
 
   Flags flags() const { return flags_; }
@@ -139,6 +139,23 @@ class V8_EXPORT_PRIVATE CallInterfaceDescriptorData {
   RegList allocatable_registers() const { return allocatable_registers_; }
 
  private:
+  bool IsInitializedPlatformSpecific() const {
+    const bool initialized =
+        register_param_count_ >= 0 && register_params_ != nullptr;
+    // Platform-specific initialization happens before platform-independent.
+    return initialized;
+  }
+  bool IsInitializedPlatformIndependent() const {
+    const bool initialized =
+        return_count_ >= 0 && param_count_ >= 0 && machine_types_ != nullptr;
+    // Platform-specific initialization happens before platform-independent.
+    return initialized;
+  }
+
+#ifdef DEBUG
+  bool AllStackParametersAreTagged() const;
+#endif  // DEBUG
+
   int register_param_count_ = -1;
   int return_count_ = -1;
   int param_count_ = -1;
@@ -289,7 +306,12 @@ class V8_EXPORT_PRIVATE CallInterfaceDescriptor {
   explicit name() : base(key()) {}               \
   static inline CallDescriptors::Key key();
 
+#if defined(V8_TARGET_ARCH_IA32) && defined(V8_EMBEDDED_BUILTINS)
+// TODO(jgruber,v8:6666): Keep kRootRegister free unconditionally.
+constexpr int kMaxBuiltinRegisterParams = 4;
+#else
 constexpr int kMaxBuiltinRegisterParams = 5;
+#endif
 
 #define DECLARE_DEFAULT_DESCRIPTOR(name, base)                                 \
   DECLARE_DESCRIPTOR_WITH_BASE(name, base)                                     \

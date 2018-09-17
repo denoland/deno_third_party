@@ -54,39 +54,64 @@ class HeapObjectData : public ObjectData {
                                    Handle<HeapObject> object);
 
   HeapObjectType const type;
-  ObjectData* const map;
+  MapData* const map;
 
   HeapObjectData(JSHeapBroker* broker_, Handle<HeapObject> object_,
                  HeapObjectType type_)
       : ObjectData(broker_, object_, false),
         type(type_),
-        map(GET_OR_CREATE(map)) {
+        map(GET_OR_CREATE(map)->AsMap()) {
     CHECK(broker_->SerializingAllowed());
   }
 };
 
-class PropertyCellData : public HeapObjectData {};
+class PropertyCellData : public HeapObjectData {
+ public:
+  PropertyCellData(JSHeapBroker* broker_, Handle<PropertyCell> object_,
+                   HeapObjectType type_)
+      : HeapObjectData(broker_, object_, type_) {}
+};
+
 class JSObjectData : public HeapObjectData {
  public:
-  using HeapObjectData::HeapObjectData;
+  JSObjectData(JSHeapBroker* broker_, Handle<JSObject> object_,
+               HeapObjectType type_)
+      : HeapObjectData(broker_, object_, type_) {}
 };
 
 class JSFunctionData : public JSObjectData {
  public:
-  ObjectData* const global_proxy;
-  ObjectData* const initial_map;  // Can be nullptr.
+  JSGlobalProxyData* const global_proxy;
+  MapData* const initial_map;  // Can be nullptr.
   bool const has_prototype;
   ObjectData* const prototype;  // Can be nullptr.
   bool const PrototypeRequiresRuntimeLookup;
-  ObjectData* const shared;
+  SharedFunctionInfoData* const shared;
 
   JSFunctionData(JSHeapBroker* broker_, Handle<JSFunction> object_,
                  HeapObjectType type_);
 };
 
-class JSRegExpData : public JSObjectData {};
-class HeapNumberData : public HeapObjectData {};
-class MutableHeapNumberData : public HeapObjectData {};
+class JSRegExpData : public JSObjectData {
+ public:
+  JSRegExpData(JSHeapBroker* broker_, Handle<JSRegExp> object_,
+               HeapObjectType type_)
+      : JSObjectData(broker_, object_, type_) {}
+};
+
+class HeapNumberData : public HeapObjectData {
+ public:
+  HeapNumberData(JSHeapBroker* broker_, Handle<HeapNumber> object_,
+                 HeapObjectType type_)
+      : HeapObjectData(broker_, object_, type_) {}
+};
+
+class MutableHeapNumberData : public HeapObjectData {
+ public:
+  MutableHeapNumberData(JSHeapBroker* broker_,
+                        Handle<MutableHeapNumber> object_, HeapObjectType type_)
+      : HeapObjectData(broker_, object_, type_) {}
+};
 
 class ContextData : public HeapObjectData {
  public:
@@ -97,19 +122,17 @@ class ContextData : public HeapObjectData {
 
 class NativeContextData : public ContextData {
  public:
-#define DECL_MEMBER(type, name) ObjectData* const name;
+#define DECL_MEMBER(type, name) type##Data* const name;
   BROKER_NATIVE_CONTEXT_FIELDS(DECL_MEMBER)
 #undef DECL_MEMBER
 
-  // There's no NativeContext class, so we take object_ as Context.
-  NativeContextData(JSHeapBroker* broker_, Handle<Context> object_,
+  NativeContextData(JSHeapBroker* broker_, Handle<NativeContext> object_,
                     HeapObjectType type_)
       : ContextData(broker_, object_, type_)
-#define INIT_MEMBER(type, name) , name(GET_OR_CREATE(name))
+#define INIT_MEMBER(type, name) , name(GET_OR_CREATE(name)->As##type())
             BROKER_NATIVE_CONTEXT_FIELDS(INIT_MEMBER)
 #undef INIT_MEMBER
   {
-    CHECK(object_->IsNativeContext());
   }
 };
 
@@ -142,7 +165,9 @@ class StringData : public NameData {
 
 class InternalizedStringData : public StringData {
  public:
-  using StringData::StringData;
+  InternalizedStringData(JSHeapBroker* broker,
+                         Handle<InternalizedString> object, HeapObjectType type)
+      : StringData(broker, object, type) {}
 };
 
 namespace {
@@ -240,9 +265,8 @@ class AllocationSiteData : public HeapObjectData {
         GetPretenureMode(object_->GetPretenureMode()),
         nested_site(GET_OR_CREATE(nested_site)) {
     if (PointsToLiteral) {
-      IsFastLiteral = IsInlinableFastLiteral(
-          handle(object_->boilerplate(), broker->isolate()));
-      if (IsFastLiteral) {
+      if (IsInlinableFastLiteral(
+              handle(object_->boilerplate(), broker->isolate()))) {
         boilerplate = GET_OR_CREATE(boilerplate)->AsJSObject();
       }
     } else {
@@ -254,9 +278,6 @@ class AllocationSiteData : public HeapObjectData {
   bool const PointsToLiteral;
   PretenureFlag const GetPretenureMode;
   ObjectData* const nested_site;
-
-  // These are only valid if PointsToLiteral is true.
-  bool IsFastLiteral = false;
   JSObjectData* boilerplate = nullptr;
 
   // These are only valid if PointsToLiteral is false.
@@ -264,8 +285,14 @@ class AllocationSiteData : public HeapObjectData {
   bool CanInlineCall = false;
 };
 
-// Only used in JS native context specialization.
-class ScriptContextTableData : public HeapObjectData {};
+// Only used in JSNativeContextSpecialization.
+class ScriptContextTableData : public HeapObjectData {
+ public:
+  ScriptContextTableData(JSHeapBroker* broker_,
+                         Handle<ScriptContextTable> object_,
+                         HeapObjectType type_)
+      : HeapObjectData(broker_, object_, type_) {}
+};
 
 class MapData : public HeapObjectData {
  public:
@@ -300,17 +327,16 @@ MapData::MapData(JSHeapBroker* broker_, Handle<Map> object_,
 JSFunctionData::JSFunctionData(JSHeapBroker* broker_,
                                Handle<JSFunction> object_, HeapObjectType type_)
     : JSObjectData(broker_, object_, type_),
-      global_proxy(GET_OR_CREATE(global_proxy)),
+      global_proxy(GET_OR_CREATE(global_proxy)->AsJSGlobalProxy()),
       initial_map(object_->has_prototype_slot() && object_->has_initial_map()
-                      ? GET_OR_CREATE(initial_map)
+                      ? GET_OR_CREATE(initial_map)->AsMap()
                       : nullptr),
       has_prototype(object_->has_prototype_slot() && object_->has_prototype()),
       prototype(has_prototype ? GET_OR_CREATE(prototype) : nullptr),
       PrototypeRequiresRuntimeLookup(object_->PrototypeRequiresRuntimeLookup()),
-      shared(GET_OR_CREATE(shared)) {
-  if (initial_map != nullptr &&
-      initial_map->AsMap()->instance_type == JS_ARRAY_TYPE) {
-    initial_map->AsMap()->SerializeElementsKindGeneralizations();
+      shared(GET_OR_CREATE(shared)->AsSharedFunctionInfo()) {
+  if (initial_map != nullptr && initial_map->instance_type == JS_ARRAY_TYPE) {
+    initial_map->SerializeElementsKindGeneralizations();
   }
 }
 
@@ -365,8 +391,19 @@ class FixedArrayBaseData : public HeapObjectData {
       : HeapObjectData(broker_, object_, type_), length(object_->length()) {}
 };
 
-class FixedArrayData : public FixedArrayBaseData {};
-class FixedDoubleArrayData : public FixedArrayBaseData {};
+class FixedArrayData : public FixedArrayBaseData {
+ public:
+  FixedArrayData(JSHeapBroker* broker_, Handle<FixedArray> object_,
+                 HeapObjectType type_)
+      : FixedArrayBaseData(broker_, object_, type_) {}
+};
+
+class FixedDoubleArrayData : public FixedArrayBaseData {
+ public:
+  FixedDoubleArrayData(JSHeapBroker* broker_, Handle<FixedDoubleArray> object_,
+                       HeapObjectType type_)
+      : FixedArrayBaseData(broker_, object_, type_) {}
+};
 
 class BytecodeArrayData : public FixedArrayBaseData {
  public:
@@ -378,13 +415,24 @@ class BytecodeArrayData : public FixedArrayBaseData {
         register_count(object_->register_count()) {}
 };
 
-class JSArrayData : public JSObjectData {};
-class ScopeInfoData : public HeapObjectData {};
+class JSArrayData : public JSObjectData {
+ public:
+  JSArrayData(JSHeapBroker* broker_, Handle<JSArray> object_,
+              HeapObjectType type_)
+      : JSObjectData(broker_, object_, type_) {}
+};
+
+class ScopeInfoData : public HeapObjectData {
+ public:
+  ScopeInfoData(JSHeapBroker* broker_, Handle<ScopeInfo> object_,
+                HeapObjectType type_)
+      : HeapObjectData(broker_, object_, type_) {}
+};
 
 class SharedFunctionInfoData : public HeapObjectData {
  public:
   int const builtin_id;
-  ObjectData* const GetBytecodeArray;  // Can be nullptr.
+  BytecodeArrayData* const GetBytecodeArray;  // Can be nullptr.
 #define DECL_MEMBER(type, name) type const name;
   BROKER_SFI_FIELDS(DECL_MEMBER)
 #undef DECL_MEMBER
@@ -395,9 +443,10 @@ class SharedFunctionInfoData : public HeapObjectData {
       : HeapObjectData(broker_, object_, type_),
         builtin_id(object_->HasBuiltinId() ? object_->builtin_id()
                                            : Builtins::kNoBuiltinId),
-        GetBytecodeArray(object_->HasBytecodeArray()
-                             ? GET_OR_CREATE(GetBytecodeArray)
-                             : nullptr)
+        GetBytecodeArray(
+            object_->HasBytecodeArray()
+                ? GET_OR_CREATE(GetBytecodeArray)->AsBytecodeArray()
+                : nullptr)
 #define INIT_MEMBER(type, name) , name(object_->name())
             BROKER_SFI_FIELDS(INIT_MEMBER)
 #undef INIT_MEMBER
@@ -407,10 +456,31 @@ class SharedFunctionInfoData : public HeapObjectData {
   }
 };
 
-class ModuleData : public HeapObjectData {};
-class CellData : public HeapObjectData {};
-class JSGlobalProxyData : public JSObjectData {};
-class CodeData : public HeapObjectData {};
+class ModuleData : public HeapObjectData {
+ public:
+  ModuleData(JSHeapBroker* broker_, Handle<Module> object_,
+             HeapObjectType type_)
+      : HeapObjectData(broker_, object_, type_) {}
+};
+
+class CellData : public HeapObjectData {
+ public:
+  CellData(JSHeapBroker* broker_, Handle<Cell> object_, HeapObjectType type_)
+      : HeapObjectData(broker_, object_, type_) {}
+};
+
+class JSGlobalProxyData : public JSObjectData {
+ public:
+  JSGlobalProxyData(JSHeapBroker* broker_, Handle<JSGlobalProxy> object_,
+                    HeapObjectType type_)
+      : JSObjectData(broker_, object_, type_) {}
+};
+
+class CodeData : public HeapObjectData {
+ public:
+  CodeData(JSHeapBroker* broker_, Handle<Code> object_, HeapObjectType type_)
+      : HeapObjectData(broker_, object_, type_) {}
+};
 
 #define DEFINE_IS_AND_AS(Name)                                          \
   bool ObjectData::Is##Name() const {                                   \
@@ -444,45 +514,14 @@ HeapObjectData* HeapObjectData::Serialize(JSHeapBroker* broker,
   Handle<Map> map(object->map(), broker->isolate());
   HeapObjectType type = broker->HeapObjectTypeFromMap(map);
 
-  HeapObjectData* result;
-  // TODO(neis): Do a switch on instance type here.
-  if (object->IsJSFunction()) {
-    result = new (broker->zone())
-        JSFunctionData(broker, Handle<JSFunction>::cast(object), type);
-  } else if (object->IsAllocationSite()) {
-    result = new (broker->zone())
-        AllocationSiteData(broker, Handle<AllocationSite>::cast(object), type);
-  } else if (object->IsNativeContext()) {
-    result = new (broker->zone())
-        NativeContextData(broker, Handle<Context>::cast(object), type);
-  } else if (object->IsMap()) {
-    result =
-        new (broker->zone()) MapData(broker, Handle<Map>::cast(object), type);
-  } else if (object->IsInternalizedString()) {
-    result = new (broker->zone())
-        InternalizedStringData(broker, Handle<String>::cast(object), type);
-  } else if (object->IsBytecodeArray()) {
-    result = new (broker->zone())
-        BytecodeArrayData(broker, Handle<BytecodeArray>::cast(object), type);
-  } else if (object->IsString()) {
-    result = new (broker->zone())
-        StringData(broker, Handle<String>::cast(object), type);
-  } else if (object->IsName()) {
-    result =
-        new (broker->zone()) NameData(broker, Handle<Name>::cast(object), type);
-  } else if (object->IsSharedFunctionInfo()) {
-    result = new (broker->zone()) SharedFunctionInfoData(
-        broker, Handle<SharedFunctionInfo>::cast(object), type);
-  } else if (object->IsFeedbackVector()) {
-    result = new (broker->zone())
-        FeedbackVectorData(broker, Handle<FeedbackVector>::cast(object), type);
-  } else if (object->IsFixedArrayBase()) {
-    result = new (broker->zone())
-        FixedArrayBaseData(broker, Handle<FixedArrayBase>::cast(object), type);
-  } else {
-    result = new (broker->zone()) HeapObjectData(broker, object, type);
+#define RETURN_CREATE_DATA_IF_MATCH(name)                     \
+  if (object->Is##name()) {                                   \
+    return new (broker->zone())                               \
+        name##Data(broker, Handle<name>::cast(object), type); \
   }
-  return result;
+  HEAP_BROKER_OBJECT_LIST(RETURN_CREATE_DATA_IF_MATCH)
+#undef RETURN_CREATE_DATA_IF_MATCH
+  UNREACHABLE();
 }
 
 bool ObjectRef::equals(const ObjectRef& other) const {
@@ -778,7 +817,7 @@ bool AllocationSiteRef::IsFastLiteral() const {
     return IsInlinableFastLiteral(
         handle(object<AllocationSite>()->boilerplate(), broker()->isolate()));
   } else {
-    return data()->AsAllocationSite()->IsFastLiteral;
+    return data()->AsAllocationSite()->boilerplate != nullptr;
   }
 }
 
@@ -904,19 +943,17 @@ double FixedDoubleArrayRef::get_scalar(int i) const {
 // either looks into the handle or into the serialized data. The first one is
 // used for the rare case of a XYZRef class that does not have a corresponding
 // XYZ class in objects.h. The second one is used otherwise.
-#define BIMODAL_ACCESSOR_(holder, v8class, result, name)                     \
-  result##Ref holder##Ref::name() const {                                    \
-    if (broker()->mode() == JSHeapBroker::kDisabled) {                       \
-      AllowHandleAllocation handle_allocation;                               \
-      AllowHandleDereference allow_handle_dereference;                       \
-      return result##Ref(                                                    \
-          broker(), handle(object<v8class>()->name(), broker()->isolate())); \
-    } else {                                                                 \
-      return result##Ref(data()->As##holder()->name);                        \
-    }                                                                        \
+#define BIMODAL_ACCESSOR(holder, result, name)                              \
+  result##Ref holder##Ref::name() const {                                   \
+    if (broker()->mode() == JSHeapBroker::kDisabled) {                      \
+      AllowHandleAllocation handle_allocation;                              \
+      AllowHandleDereference allow_handle_dereference;                      \
+      return result##Ref(                                                   \
+          broker(), handle(object<holder>()->name(), broker()->isolate())); \
+    } else {                                                                \
+      return result##Ref(data()->As##holder()->name);                       \
+    }                                                                       \
   }
-#define BIMODAL_ACCESSOR(holder, result, name) \
-  BIMODAL_ACCESSOR_(holder, holder, result, name)
 
 // Like HANDLE_ACCESSOR except that the result type is not an XYZRef.
 #define BIMODAL_ACCESSOR_C(holder, result, name)      \
@@ -936,15 +973,13 @@ double FixedDoubleArrayRef::get_scalar(int i) const {
 // (These will go away once we serialize everything.) The first one is used for
 // the rare case of a XYZRef class that does not have a corresponding XYZ class
 // in objects.h. The second one is used otherwise.
-#define HANDLE_ACCESSOR_(holder, v8class, result, name)                    \
-  result##Ref holder##Ref::name() const {                                  \
-    AllowHandleAllocation handle_allocation;                               \
-    AllowHandleDereference allow_handle_dereference;                       \
-    return result##Ref(                                                    \
-        broker(), handle(object<v8class>()->name(), broker()->isolate())); \
+#define HANDLE_ACCESSOR(holder, result, name)                                  \
+  result##Ref holder##Ref::name() const {                                      \
+    AllowHandleAllocation handle_allocation;                                   \
+    AllowHandleDereference allow_handle_dereference;                           \
+    return result##Ref(broker(),                                               \
+                       handle(object<holder>()->name(), broker()->isolate())); \
   }
-#define HANDLE_ACCESSOR(holder, result, name) \
-  HANDLE_ACCESSOR_(holder, holder, result, name)
 
 // Like HANDLE_ACCESSOR except that the result type is not an XYZRef.
 #define HANDLE_ACCESSOR_C(holder, result, name)      \
@@ -1007,7 +1042,7 @@ HANDLE_ACCESSOR(Map, Object, constructor_or_backpointer)
 HANDLE_ACCESSOR_C(MutableHeapNumber, double, value)
 
 #define DEF_NATIVE_CONTEXT_ACCESSOR(type, name) \
-  BIMODAL_ACCESSOR_(NativeContext, Context, type, name)
+  BIMODAL_ACCESSOR(NativeContext, type, name)
 BROKER_NATIVE_CONTEXT_FIELDS(DEF_NATIVE_CONTEXT_ACCESSOR)
 #undef DEF_NATIVE_CONTEXT_ACCESSOR
 
@@ -1151,12 +1186,10 @@ Reduction NoChangeBecauseOfMissingData(JSHeapBroker* broker,
 }
 
 #undef BIMODAL_ACCESSOR
-#undef BIMODAL_ACCESSOR_
 #undef BIMODAL_ACCESSOR_B
 #undef BIMODAL_ACCESSOR_C
 #undef GET_OR_CREATE
 #undef HANDLE_ACCESSOR
-#undef HANDLE_ACCESSOR_
 #undef HANDLE_ACCESSOR_C
 #undef IF_BROKER_DISABLED_ACCESS_HANDLE_C
 

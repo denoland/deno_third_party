@@ -307,18 +307,6 @@ def CreateChromeToolsShim():
     f.write('endif (CHROMIUM_TOOLS_SRC)\n')
 
 
-def DownloadHostGcc(args):
-  """Downloads gcc 4.8.5 and makes sure args.gcc_toolchain is set."""
-  if not sys.platform.startswith('linux') or args.gcc_toolchain:
-    return
-  gcc_dir = os.path.join(LLVM_BUILD_TOOLS_DIR, 'gcc485precise')
-  if not os.path.exists(gcc_dir):
-    print 'Downloading pre-built GCC 4.8.5...'
-    DownloadAndUnpack(
-        CDS_URL + '/tools/gcc485precise.tgz', LLVM_BUILD_TOOLS_DIR)
-  args.gcc_toolchain = gcc_dir
-
-
 def AddSvnToPathOnWin():
   """Download svn.exe and add it to PATH."""
   if sys.platform != 'win32':
@@ -334,14 +322,18 @@ def AddCMakeToPath(args):
   """Download CMake and add it to PATH."""
   if args.use_system_cmake:
     return
+
   if sys.platform == 'win32':
-    zip_name = 'cmake-3.4.3-win32-x86.zip'
-    cmake_dir = os.path.join(LLVM_BUILD_TOOLS_DIR,
-                             'cmake-3.4.3-win32-x86', 'bin')
+    zip_name = 'cmake-3.12.1-win32-x86.zip'
+    dir_name = ['cmake-3.12.1-win32-x86', 'bin']
+  elif sys.platform == 'darwin':
+    zip_name = 'cmake-3.12.1-Darwin-x86_64.tar.gz'
+    dir_name = ['cmake-3.12.1-Darwin-x86_64', 'CMake.app', 'Contents', 'bin']
   else:
-    suffix = 'Darwin' if sys.platform == 'darwin' else 'Linux'
-    zip_name = 'cmake343_%s.tgz' % suffix
-    cmake_dir = os.path.join(LLVM_BUILD_TOOLS_DIR, 'cmake343', 'bin')
+    zip_name = 'cmake-3.12.1-Linux-x86_64.tar.gz'
+    dir_name = ['cmake-3.12.1-Linux-x86_64', 'bin']
+
+  cmake_dir = os.path.join(LLVM_BUILD_TOOLS_DIR, *dir_name)
   if not os.path.exists(cmake_dir):
     DownloadAndUnpack(CDS_URL + '/tools/' + zip_name, LLVM_BUILD_TOOLS_DIR)
   os.environ['PATH'] = cmake_dir + os.pathsep + os.environ.get('PATH', '')
@@ -353,7 +345,7 @@ def AddGnuWinToPath():
     return
 
   gnuwin_dir = os.path.join(LLVM_BUILD_TOOLS_DIR, 'gnuwin')
-  GNUWIN_VERSION = '7'
+  GNUWIN_VERSION = '8'
   GNUWIN_STAMP = os.path.join(gnuwin_dir, 'stamp')
   if ReadStampFile(GNUWIN_STAMP) == GNUWIN_VERSION:
     print 'GNU Win tools already up to date.'
@@ -501,7 +493,6 @@ def UpdateClang(args):
       print 'Removing old lib dir: %s' % old_lib_dir
       RmTree(old_lib_dir)
 
-  DownloadHostGcc(args)
   AddCMakeToPath(args)
   AddGnuWinToPath()
 
@@ -514,21 +505,6 @@ def UpdateClang(args):
 
   cc, cxx = None, None
   libstdcpp = None
-  if args.gcc_toolchain:  # This option is only used on Linux.
-    # Use the specified gcc installation for building.
-    cc = os.path.join(args.gcc_toolchain, 'bin', 'gcc')
-    cxx = os.path.join(args.gcc_toolchain, 'bin', 'g++')
-
-    if not os.access(cc, os.X_OK):
-      print 'Invalid --gcc-toolchain: "%s"' % args.gcc_toolchain
-      print '"%s" does not appear to be valid.' % cc
-      return 1
-
-    # Set LD_LIBRARY_PATH to make auxiliary targets (tablegen, bootstrap
-    # compiler, etc.) find the .so.
-    libstdcpp = subprocess.check_output(
-        [cxx, '-print-file-name=libstdc++.so.6']).rstrip()
-    os.environ['LD_LIBRARY_PATH'] = os.path.dirname(libstdcpp)
 
   cflags = []
   cxxflags = []
@@ -578,11 +554,6 @@ def UpdateClang(args):
       cc = os.path.join(LLVM_BOOTSTRAP_INSTALL_DIR, 'bin', 'clang')
       cxx = os.path.join(LLVM_BOOTSTRAP_INSTALL_DIR, 'bin', 'clang++')
 
-    if args.gcc_toolchain:
-      # Tell the bootstrap compiler to use a specific gcc prefix to search
-      # for standard library headers and shared object files.
-      cflags = ['--gcc-toolchain=' + args.gcc_toolchain]
-      cxxflags = ['--gcc-toolchain=' + args.gcc_toolchain]
     print 'Building final compiler'
 
   # LLVM uses C++11 starting in llvm 3.5. On Linux, this means libstdc++4.7+ is
@@ -836,8 +807,9 @@ def UpdateClang(args):
       RunCommand(['ninja', 'asan', 'ubsan', 'profile'])
 
       # And copy them into the main build tree.
+      asan_lib_path_format = 'lib/linux/libclang_rt.asan-{0}-android.so'
       libs_want = [
-          'lib/linux/libclang_rt.asan-{0}-android.so',
+          asan_lib_path_format,
           'lib/linux/libclang_rt.ubsan_standalone-{0}-android.so',
           'lib/linux/libclang_rt.profile-{0}-android.a',
       ]
@@ -846,6 +818,11 @@ def UpdateClang(args):
           lib_path = os.path.join(build_dir, p.format(arch))
           if os.path.exists(lib_path):
             shutil.copy(lib_path, rt_lib_dst_dir)
+
+      # We also use ASan i686 build for fuzzing.
+      lib_path = os.path.join(build_dir, asan_lib_path_format.format('i686'))
+      if os.path.exists(lib_path):
+        shutil.copy(lib_path, rt_lib_dst_dir)
 
   # Run tests.
   if args.run_tests or use_head_revision:

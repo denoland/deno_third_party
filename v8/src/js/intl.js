@@ -26,7 +26,6 @@ var GlobalIntlNumberFormat = GlobalIntl.NumberFormat;
 var GlobalIntlCollator = GlobalIntl.Collator;
 var GlobalIntlPluralRules = GlobalIntl.PluralRules;
 var GlobalIntlv8BreakIterator = GlobalIntl.v8BreakIterator;
-var GlobalNumber = global.Number;
 var GlobalRegExp = global.RegExp;
 var GlobalString = global.String;
 var GlobalArray = global.Array;
@@ -39,7 +38,6 @@ var patternSymbol = utils.ImportNow("intl_pattern_symbol");
 var resolvedSymbol = utils.ImportNow("intl_resolved_symbol");
 var StringSubstr = GlobalString.prototype.substr;
 var StringSubstring = GlobalString.prototype.substring;
-var ArraySlice = GlobalArray.prototype.slice;
 
 utils.Import(function(from) {
   ArrayJoin = from.ArrayJoin;
@@ -48,16 +46,8 @@ utils.Import(function(from) {
 
 // Utilities for definitions
 
-macro IS_OBJECT(arg)
-(typeof(arg) === 'object')
-endmacro
-
 macro NUMBER_IS_NAN(arg)
 (%IS_VAR(arg) !== arg)
-endmacro
-
-macro NUMBER_IS_FINITE(arg)
-(%_IsSmi(%IS_VAR(arg)) || ((arg == arg) && (arg != 1/0) && (arg != -1/0)))
 endmacro
 
 // To avoid ES2015 Function name inference.
@@ -525,17 +515,6 @@ function getAvailableLocalesOf(service) {
 
 
 /**
- * Adds property to an object if the value is not undefined.
- * Sets configurable descriptor to false.
- */
-function addWEPropertyIfDefined(object, property, value) {
-  if (!IS_UNDEFINED(value)) {
-    %DefineWEProperty(object, property, value);
-  }
-}
-
-
-/**
  * Defines a property and sets writable, enumerable and configurable to true.
  */
 function defineWECProperty(object, property, value) {
@@ -731,6 +710,8 @@ function SetNumberFormatDigitOptions(internalOptions, options,
 function CreateNumberFormat(locales, options) {
   if (IS_UNDEFINED(options)) {
     options = {__proto__: null};
+  } else {
+    options = TO_OBJECT(options);
   }
 
   var getOption = getGetOption(options, 'numberformat');
@@ -1102,7 +1083,7 @@ function CreateDateTimeFormat(locales, options) {
 
   var locale = resolveLocale('dateformat', locales, options);
 
-  options = toDateTimeOptions(options, 'any', 'date');
+  options = %ToDateTimeOptions(options, 'any', 'date');
 
   var getOption = getGetOption(options, 'dateformat');
 
@@ -1397,15 +1378,6 @@ DEFINE_METHOD(
 
 
 /**
- * Adopts text to segment using the iterator. Old text, if present,
- * gets discarded.
- */
-function adoptText(iterator, text) {
-  %BreakIteratorAdoptText(iterator, TO_STRING(text));
-}
-
-
-/**
  * Returns index of the first break in the string and moves current pointer.
  */
 function first(iterator) {
@@ -1437,8 +1409,6 @@ function breakType(iterator) {
 }
 
 
-AddBoundMethod(GlobalIntlv8BreakIterator, 'adoptText', adoptText, 1,
-               BREAK_ITERATOR_TYPE, false);
 AddBoundMethod(GlobalIntlv8BreakIterator, 'first', first, 0,
                BREAK_ITERATOR_TYPE, false);
 AddBoundMethod(GlobalIntlv8BreakIterator, 'next', next, 0,
@@ -1511,26 +1481,6 @@ function cachedOrNewService(service, locales, options, defaults) {
 ]);
 
 /**
- * Returns actual formatted date or fails if date parameter is invalid.
- */
-function toLocaleDateTime(date, locales, options, required, defaults, service) {
-  if (!(date instanceof GlobalDate)) {
-    throw %make_type_error(kMethodInvokedOnWrongType, "Date");
-  }
-
-  var dateValue = TO_NUMBER(date);
-  if (NUMBER_IS_NAN(dateValue)) return 'Invalid Date';
-
-  var internalOptions = toDateTimeOptions(options, required, defaults);
-
-  var dateFormat =
-      cachedOrNewService(service, locales, options, internalOptions);
-
-  return %FormatDate(dateFormat, date);
-}
-
-
-/**
  * Formats a Date object (this) using locale and options values.
  * If locale or options are omitted, defaults are used - both date and time are
  * present in the output.
@@ -1540,7 +1490,7 @@ DEFINE_METHOD(
   toLocaleString() {
     var locales = arguments[0];
     var options = arguments[1];
-    return toLocaleDateTime(
+    return %ToLocaleDateTime(
         this, locales, options, 'any', 'all', 'dateformatall');
   }
 );
@@ -1556,7 +1506,7 @@ DEFINE_METHOD(
   toLocaleDateString() {
     var locales = arguments[0];
     var options = arguments[1];
-    return toLocaleDateTime(
+    return %ToLocaleDateTime(
         this, locales, options, 'date', 'date', 'dateformatdate');
   }
 );
@@ -1572,7 +1522,7 @@ DEFINE_METHOD(
   toLocaleTimeString() {
     var locales = arguments[0];
     var options = arguments[1];
-    return toLocaleDateTime(
+    return %ToLocaleDateTime(
         this, locales, options, 'time', 'time', 'dateformattime');
   }
 );

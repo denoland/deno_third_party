@@ -2147,6 +2147,10 @@ class JSReceiver : public HeapObject, public NeverReadOnlySpaceObject {
   // Returns the class name ([[Class]] property in the specification).
   V8_EXPORT_PRIVATE String* class_name();
 
+  // Returns the constructor (the function that was used to instantiate the
+  // object).
+  static MaybeHandle<JSFunction> GetConstructor(Handle<JSReceiver> receiver);
+
   // Returns the constructor name (the name (possibly, inferred name) of the
   // function that was used to instantiate the object).
   static Handle<String> GetConstructorName(Handle<JSReceiver> receiver);
@@ -2234,6 +2238,11 @@ class JSObject: public JSReceiver {
       Handle<AllocationSite> site = Handle<AllocationSite>::null());
 
   static MaybeHandle<Context> GetFunctionRealm(Handle<JSObject> object);
+
+  // 9.1.12 ObjectCreate ( proto [ , internalSlotsList ] )
+  // Notice: This is NOT 19.1.2.2 Object.create ( O, Properties )
+  static V8_WARN_UNUSED_RESULT MaybeHandle<JSObject> ObjectCreate(
+      Isolate* isolate, Handle<Object> prototype);
 
   // [elements]: The elements (properties with names that are integers).
   //

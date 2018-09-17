@@ -55,7 +55,6 @@
 #include "src/objects/js-array-buffer-inl.h"
 #include "src/objects/js-array-inl.h"
 #include "src/objects/js-promise-inl.h"
-#include "src/parsing/preparse-data.h"
 #include "src/profiler/cpu-profiler.h"
 #include "src/unicode-inl.h"
 #include "src/utils.h"
@@ -10618,7 +10617,7 @@ THREADED_TEST(GlobalObjectInstanceProperties) {
                          v8::FunctionTemplate::New(isolate,
                                                    InstanceFunctionCallback));
 
-  // The script to check how Crankshaft compiles missing global function
+  // The script to check how TurboFan compiles missing global function
   // invocations.  function g is not defined and should throw on call.
   const char* script =
       "function wrapper(call) {"

@@ -200,7 +200,6 @@ namespace internal {
 #ifdef V8_INTL_SUPPORT
 #define FOR_EACH_INTRINSIC_INTL(F)           \
   F(AvailableLocalesOf, 1, 1)                \
-  F(BreakIteratorAdoptText, 2, 1)            \
   F(BreakIteratorBreakType, 1, 1)            \
   F(BreakIteratorCurrent, 1, 1)              \
   F(BreakIteratorFirst, 1, 1)                \
@@ -216,7 +215,6 @@ namespace internal {
   F(DefineWEProperty, 3, 1)                  \
   F(FormatList, 2, 1)                        \
   F(FormatListToParts, 2, 1)                 \
-  F(FormatDate, 2, 1)                        \
   F(GetDefaultICULocale, 0, 1)               \
   F(GetNumberOption, 5, 1)                   \
   F(IntlUnwrapReceiver, 5, 1)                \
@@ -226,6 +224,8 @@ namespace internal {
   F(ParseExtension, 1, 1)                    \
   F(PluralRulesResolvedOptions, 1, 1)        \
   F(PluralRulesSelect, 2, 1)                 \
+  F(ToDateTimeOptions, 3, 1)                 \
+  F(ToLocaleDateTime, 6, 1)                  \
   F(StringToLowerCaseIntl, 1, 1)             \
   F(StringToUpperCaseIntl, 1, 1)             \
   F(SupportedLocalesOf, 3, 1)                \
@@ -282,6 +282,7 @@ namespace internal {
 
 #define FOR_EACH_INTRINSIC_LITERALS(F)              \
   F(CreateArrayLiteral, 4, 1)                       \
+  F(CreateArrayLiteralWithoutAllocationSite, 2, 1)  \
   F(CreateObjectLiteral, 4, 1)                      \
   F(CreateObjectLiteralWithoutAllocationSite, 2, 1) \
   F(CreateRegExpLiteral, 4, 1)
@@ -299,7 +300,7 @@ namespace internal {
   F(IsSmi, 1, 1)                      \
   F(IsValidSmi, 1, 1)                 \
   F(MaxSmi, 0, 1)                     \
-  F(NumberToStringSkipCache, 1, 1)    \
+  F(NumberToString, 1, 1)             \
   F(SmiLexicographicCompare, 2, 1)    \
   F(StringParseFloat, 1, 1)           \
   F(StringParseInt, 2, 1)             \
@@ -334,7 +335,6 @@ namespace internal {
   F(HasProperty, 2, 1)                                          \
   F(InternalSetPrototype, 2, 1)                                 \
   F(IsJSReceiver, 1, 1)                                         \
-  F(IterableToListCanBeElided, 1, 1)                            \
   F(KeyedGetProperty, 2, 1)                                     \
   F(NewObject, 2, 1)                                            \
   F(ObjectCreate, 2, 1)                                         \
@@ -532,7 +532,6 @@ namespace internal {
   F(RunningInSimulator, 0, 1)                 \
   F(SerializeWasmModule, 1, 1)                \
   F(SetAllocationTimeout, -1 /* 2 || 3 */, 1) \
-  F(SetFlags, 1, 1)                           \
   F(SetForceSlowPath, 1, 1)                   \
   F(SetWasmCompileControls, 2, 1)             \
   F(SetWasmInstantiateControls, 0, 1)         \
