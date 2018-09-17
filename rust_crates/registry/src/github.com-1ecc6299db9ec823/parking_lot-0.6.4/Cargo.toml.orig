@@ -1,0 +1,26 @@
+[package]
+name = "parking_lot"
+version = "0.6.4"
+authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
+description = "More compact and efficient implementations of the standard synchronization primitives."
+license = "Apache-2.0/MIT"
+repository = "https://github.com/Amanieu/parking_lot"
+readme = "README.md"
+keywords = ["mutex", "condvar", "rwlock", "once", "thread"]
+categories = ["concurrency"]
+
+[dependencies]
+parking_lot_core = { path = "core", version = "0.3" }
+lock_api = { path = "lock_api", version = "0.1" }
+
+[dev-dependencies]
+rand = "0.5"
+
+[features]
+default = ["owning_ref"]
+owning_ref = ["lock_api/owning_ref"]
+nightly = ["parking_lot_core/nightly", "lock_api/nightly"]
+deadlock_detection = ["parking_lot_core/deadlock_detection"]
+
+[workspace]
+exclude = ["benchmark"]
