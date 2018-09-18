@@ -1,0 +1,58 @@
+[submodule "src/llvm"]
+	path = src/llvm
+	url = https://github.com/rust-lang/llvm.git
+	branch = master
+[submodule "src/jemalloc"]
+	path = src/jemalloc
+	url = https://github.com/rust-lang/jemalloc.git
+[submodule "src/rust-installer"]
+	path = src/tools/rust-installer
+	url = https://github.com/rust-lang/rust-installer.git
+[submodule "src/liblibc"]
+	path = src/liblibc
+	url = https://github.com/rust-lang/libc.git
+[submodule "src/doc/nomicon"]
+	path = src/doc/nomicon
+	url = https://github.com/rust-lang-nursery/nomicon.git
+[submodule "src/tools/cargo"]
+	path = src/tools/cargo
+	url = https://github.com/rust-lang/cargo.git
+[submodule "src/doc/reference"]
+	path = src/doc/reference
+	url = https://github.com/rust-lang-nursery/reference.git
+[submodule "src/doc/book"]
+	path = src/doc/book
+	url = https://github.com/rust-lang/book.git
+[submodule "src/tools/rls"]
+	path = src/tools/rls
+	url = https://github.com/rust-lang-nursery/rls.git
+[submodule "src/libcompiler_builtins"]
+	path = src/libcompiler_builtins
+	url = https://github.com/rust-lang-nursery/compiler-builtins
+[submodule "src/tools/clippy"]
+	path = src/tools/clippy
+	url = https://github.com/rust-lang-nursery/rust-clippy.git
+[submodule "src/tools/rustfmt"]
+	path = src/tools/rustfmt
+	url = https://github.com/rust-lang-nursery/rustfmt.git
+[submodule "src/tools/miri"]
+	path = src/tools/miri
+	url = https://github.com/solson/miri.git
+[submodule "src/dlmalloc"]
+	path = src/dlmalloc
+	url = https://github.com/alexcrichton/dlmalloc-rs.git
+[submodule "src/doc/rust-by-example"]
+	path = src/doc/rust-by-example
+	url = https://github.com/rust-lang/rust-by-example
+[submodule "src/llvm-emscripten"]
+	path = src/llvm-emscripten
+	url = https://github.com/rust-lang/llvm
+[submodule "src/stdsimd"]
+	path = src/stdsimd
+	url = https://github.com/rust-lang-nursery/stdsimd
+[submodule "src/tools/lld"]
+	path = src/tools/lld
+	url = https://github.com/rust-lang/lld.git
+[submodule "src/libbacktrace"]
+	path = src/libbacktrace
+	url = https://github.com/rust-lang-nursery/libbacktrace

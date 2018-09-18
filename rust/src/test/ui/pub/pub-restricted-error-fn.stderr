@@ -1,0 +1,8 @@
+error: unmatched visibility `pub`
+  --> $DIR/pub-restricted-error-fn.rs:13:10
+   |
+LL | pub(crate) () fn foo() {} //~ unmatched visibility
+   |          ^
+
+error: aborting due to previous error
+

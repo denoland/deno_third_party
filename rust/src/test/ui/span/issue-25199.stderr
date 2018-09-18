@@ -1,0 +1,25 @@
+error[E0597]: `container` does not live long enough
+  --> $DIR/issue-25199.rs:80:28
+   |
+LL |     let test = Test{test: &container};
+   |                            ^^^^^^^^^ borrowed value does not live long enough
+...
+LL | }
+   | - `container` dropped here while still borrowed
+   |
+   = note: values in a scope are dropped in the opposite order they are created
+
+error[E0597]: `container` does not live long enough
+  --> $DIR/issue-25199.rs:83:5
+   |
+LL |     container.store(test);
+   |     ^^^^^^^^^ borrowed value does not live long enough
+LL |     //~^ ERROR `container` does not live long enough
+LL | }
+   | - `container` dropped here while still borrowed
+   |
+   = note: values in a scope are dropped in the opposite order they are created
+
+error: aborting due to 2 previous errors
+
+For more information about this error, try `rustc --explain E0597`.
