@@ -355,9 +355,22 @@ class JsGenerator : public BaseGenerator {
         if (it != enum_def.vals.vec.begin()) { code += '\n'; }
         GenDocComment(ev.doc_comment, code_ptr, "", "  ");
       }
+
+      // Generate mapping between EnumName: EnumValue(int)
       code += "  " + ev.name;
       code += lang_.language == IDLOptions::kTs ? "= " : ": ";
       code += NumToString(ev.value);
+
+      if (lang_.language == IDLOptions::kJs) {
+        // In pure Javascript, generate mapping between EnumValue(int):
+        // 'EnumName' so enums can be looked up by their ID.
+        code += ", ";
+
+        code += NumToString(ev.value);
+        code += lang_.language == IDLOptions::kTs ? "= " : ": ";
+        code += "'" + ev.name + "'";
+      }
+
       code += (it + 1) != enum_def.vals.vec.end() ? ",\n" : "\n";
 
       if (ev.union_type.struct_def) {
@@ -507,8 +520,7 @@ class JsGenerator : public BaseGenerator {
   }
 
   static std::string GenFileNamespacePrefix(const std::string &file) {
-    return "NS" + std::to_string(static_cast<unsigned long long>(
-                      std::hash<std::string>()(file)));
+    return "NS" + std::to_string(HashFnv1a<uint64_t>(file.c_str()));
   }
 
   static std::string GenPrefixedImport(const std::string &full_file_name,

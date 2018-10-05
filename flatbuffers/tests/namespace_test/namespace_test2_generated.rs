@@ -42,7 +42,7 @@ impl<'a> TableInFirstNS<'a> {
     #[allow(unused_mut)]
     pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
         _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
-        args: &'args TableInFirstNSArgs) -> flatbuffers::WIPOffset<TableInFirstNS<'bldr>> {
+        args: &'args TableInFirstNSArgs<'args>) -> flatbuffers::WIPOffset<TableInFirstNS<'bldr>> {
       let mut builder = TableInFirstNSBuilder::new(_fbb);
       if let Some(x) = args.foo_struct { builder.add_foo_struct(x); }
       if let Some(x) = args.foo_table { builder.add_foo_table(x); }
@@ -55,25 +55,25 @@ impl<'a> TableInFirstNS<'a> {
     pub const VT_FOO_STRUCT: flatbuffers::VOffsetT = 8;
 
   #[inline]
-  pub fn foo_table(&'a self) -> Option<namespace_b::TableInNestedNS<'a>> {
+  pub fn foo_table(&self) -> Option<namespace_b::TableInNestedNS<'a>> {
     self._tab.get::<flatbuffers::ForwardsUOffset<namespace_b::TableInNestedNS<'a>>>(TableInFirstNS::VT_FOO_TABLE, None)
   }
   #[inline]
-  pub fn foo_enum(&'a self) -> namespace_b::EnumInNestedNS {
+  pub fn foo_enum(&self) -> namespace_b::EnumInNestedNS {
     self._tab.get::<namespace_b::EnumInNestedNS>(TableInFirstNS::VT_FOO_ENUM, Some(namespace_b::EnumInNestedNS::A)).unwrap()
   }
   #[inline]
-  pub fn foo_struct(&'a self) -> Option<&'a namespace_b::StructInNestedNS> {
+  pub fn foo_struct(&self) -> Option<&'a namespace_b::StructInNestedNS> {
     self._tab.get::<namespace_b::StructInNestedNS>(TableInFirstNS::VT_FOO_STRUCT, None)
   }
 }
 
-pub struct TableInFirstNSArgs {
+pub struct TableInFirstNSArgs<'a> {
     pub foo_table: Option<flatbuffers::WIPOffset<namespace_b::TableInNestedNS<'a >>>,
     pub foo_enum: namespace_b::EnumInNestedNS,
     pub foo_struct: Option<&'a  namespace_b::StructInNestedNS>,
 }
-impl<'a> Default for TableInFirstNSArgs {
+impl<'a> Default for TableInFirstNSArgs<'a> {
     #[inline]
     fn default() -> Self {
         TableInFirstNSArgs {
@@ -142,7 +142,7 @@ impl<'a> SecondTableInA<'a> {
     #[allow(unused_mut)]
     pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
         _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
-        args: &'args SecondTableInAArgs) -> flatbuffers::WIPOffset<SecondTableInA<'bldr>> {
+        args: &'args SecondTableInAArgs<'args>) -> flatbuffers::WIPOffset<SecondTableInA<'bldr>> {
       let mut builder = SecondTableInABuilder::new(_fbb);
       if let Some(x) = args.refer_to_c { builder.add_refer_to_c(x); }
       builder.finish()
@@ -151,15 +151,15 @@ impl<'a> SecondTableInA<'a> {
     pub const VT_REFER_TO_C: flatbuffers::VOffsetT = 4;
 
   #[inline]
-  pub fn refer_to_c(&'a self) -> Option<super::namespace_c::TableInC<'a>> {
+  pub fn refer_to_c(&self) -> Option<super::namespace_c::TableInC<'a>> {
     self._tab.get::<flatbuffers::ForwardsUOffset<super::namespace_c::TableInC<'a>>>(SecondTableInA::VT_REFER_TO_C, None)
   }
 }
 
-pub struct SecondTableInAArgs {
+pub struct SecondTableInAArgs<'a> {
     pub refer_to_c: Option<flatbuffers::WIPOffset<super::namespace_c::TableInC<'a >>>,
 }
-impl<'a> Default for SecondTableInAArgs {
+impl<'a> Default for SecondTableInAArgs<'a> {
     #[inline]
     fn default() -> Self {
         SecondTableInAArgs {
@@ -230,7 +230,7 @@ impl<'a> TableInC<'a> {
     #[allow(unused_mut)]
     pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
         _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
-        args: &'args TableInCArgs) -> flatbuffers::WIPOffset<TableInC<'bldr>> {
+        args: &'args TableInCArgs<'args>) -> flatbuffers::WIPOffset<TableInC<'bldr>> {
       let mut builder = TableInCBuilder::new(_fbb);
       if let Some(x) = args.refer_to_a2 { builder.add_refer_to_a2(x); }
       if let Some(x) = args.refer_to_a1 { builder.add_refer_to_a1(x); }
@@ -241,20 +241,20 @@ impl<'a> TableInC<'a> {
     pub const VT_REFER_TO_A2: flatbuffers::VOffsetT = 6;
 
   #[inline]
-  pub fn refer_to_a1(&'a self) -> Option<super::namespace_a::TableInFirstNS<'a>> {
+  pub fn refer_to_a1(&self) -> Option<super::namespace_a::TableInFirstNS<'a>> {
     self._tab.get::<flatbuffers::ForwardsUOffset<super::namespace_a::TableInFirstNS<'a>>>(TableInC::VT_REFER_TO_A1, None)
   }
   #[inline]
-  pub fn refer_to_a2(&'a self) -> Option<super::namespace_a::SecondTableInA<'a>> {
+  pub fn refer_to_a2(&self) -> Option<super::namespace_a::SecondTableInA<'a>> {
     self._tab.get::<flatbuffers::ForwardsUOffset<super::namespace_a::SecondTableInA<'a>>>(TableInC::VT_REFER_TO_A2, None)
   }
 }
 
-pub struct TableInCArgs {
+pub struct TableInCArgs<'a> {
     pub refer_to_a1: Option<flatbuffers::WIPOffset<super::namespace_a::TableInFirstNS<'a >>>,
     pub refer_to_a2: Option<flatbuffers::WIPOffset<super::namespace_a::SecondTableInA<'a >>>,
 }
-impl<'a> Default for TableInCArgs {
+impl<'a> Default for TableInCArgs<'a> {
     #[inline]
     fn default() -> Self {
         TableInCArgs {

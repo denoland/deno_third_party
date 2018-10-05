@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright 2014 Google Inc. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +33,7 @@
 #include "namespace_test/namespace_test1_generated.h"
 #include "namespace_test/namespace_test2_generated.h"
 #include "union_vector/union_vector_generated.h"
+#include "test_assert.h"
 
 // clang-format off
 #ifndef FLATBUFFERS_CPP98_STL
@@ -43,44 +44,7 @@
 
 using namespace MyGame::Example;
 
-#ifdef __ANDROID__
-  #include <android/log.h>
-  #define TEST_OUTPUT_LINE(...) \
-    __android_log_print(ANDROID_LOG_INFO, "FlatBuffers", __VA_ARGS__)
-  #define FLATBUFFERS_NO_FILE_TESTS
-#else
-  #define TEST_OUTPUT_LINE(...) \
-    { printf(__VA_ARGS__); printf("\n"); }
-#endif
-// clang-format on
-
-int testing_fails = 0;
-
-void TestFail(const char *expval, const char *val, const char *exp,
-              const char *file, int line) {
-  TEST_OUTPUT_LINE("VALUE: \"%s\"", expval);
-  TEST_OUTPUT_LINE("EXPECTED: \"%s\"", val);
-  TEST_OUTPUT_LINE("TEST FAILED: %s:%d, %s", file, line, exp);
-  assert(0);
-  testing_fails++;
-}
-
-void TestEqStr(const char *expval, const char *val, const char *exp,
-               const char *file, int line) {
-  if (strcmp(expval, val) != 0) { TestFail(expval, val, exp, file, line); }
-}
-
-template<typename T, typename U>
-void TestEq(T expval, U val, const char *exp, const char *file, int line) {
-  if (U(expval) != val) {
-    TestFail(flatbuffers::NumToString(expval).c_str(),
-             flatbuffers::NumToString(val).c_str(), exp, file, line);
-  }
-}
-
-#define TEST_EQ(exp, val) TestEq(exp, val, #exp, __FILE__, __LINE__)
-#define TEST_NOTNULL(exp) TestEq(exp == NULL, false, #exp, __FILE__, __LINE__)
-#define TEST_EQ_STR(exp, val) TestEqStr(exp, val, #exp, __FILE__, __LINE__)
+void FlatBufferBuilderTest();
 
 // Include simple random number generator to ensure results will be the
 // same cross platform.
@@ -1727,6 +1691,38 @@ void UnionVectorTest() {
       "characters_type: [ Belle, MuLan, BookFan, Other, Unused ], "
       "characters: [ { books_read: 7 }, { sword_attack_damage: 5 }, "
       "{ books_read: 2 }, \"Other\", \"Unused\" ] }");
+
+
+  flatbuffers::ToStringVisitor visitor("\n", true, "  ");
+  IterateFlatBuffer(fbb.GetBufferPointer(), MovieTypeTable(), &visitor);
+  TEST_EQ_STR(
+      visitor.s.c_str(),
+      "{\n"
+      "  \"main_character_type\": \"Rapunzel\",\n"
+      "  \"main_character\": {\n"
+      "    \"hair_length\": 6\n"
+      "  },\n"
+      "  \"characters_type\": [\n"
+      "    \"Belle\",\n"
+      "    \"MuLan\",\n"
+      "    \"BookFan\",\n"
+      "    \"Other\",\n"
+      "    \"Unused\"\n"
+      "  ],\n"
+      "  \"characters\": [\n"
+      "    {\n"
+      "      \"books_read\": 7\n"
+      "    },\n"
+      "    {\n"
+      "      \"sword_attack_damage\": 5\n"
+      "    },\n"
+      "    {\n"
+      "      \"books_read\": 2\n"
+      "    },\n"
+      "    \"Other\",\n"
+      "    \"Unused\"\n"
+      "  ]\n"
+      "}");
 }
 
 void ConformTest() {
@@ -1978,6 +1974,25 @@ void UninitializedVectorTest() {
   TEST_EQ(test_1->b(), 40);
 }
 
+void EqualOperatorTest() {
+  MonsterT a;
+  MonsterT b;
+  TEST_EQ(b == a, true);
+
+  b.mana = 33;
+  TEST_EQ(b == a, false);
+  b.mana = 150;
+  TEST_EQ(b == a, true);
+
+  b.inventory.push_back(3);
+  TEST_EQ(b == a, false);
+  b.inventory.clear();
+  TEST_EQ(b == a, true);
+
+  b.test.type = Any_Monster;
+  TEST_EQ(b == a, false);
+}
+
 // For testing any binaries, e.g. from fuzzing.
 void LoadVerifyBinaryTest() {
   std::string binary;
@@ -1990,7 +2005,7 @@ void LoadVerifyBinaryTest() {
   }
 }
 
-int main(int /*argc*/, const char * /*argv*/ []) {
+int FlatBufferTests() {
   // clang-format off
   #if defined(FLATBUFFERS_MEMORY_LEAK_TRACKING) && \
       defined(_MSC_VER) && defined(_DEBUG)
@@ -2062,6 +2077,16 @@ int main(int /*argc*/, const char * /*argv*/ []) {
 
   FlexBuffersTest();
   UninitializedVectorTest();
+  EqualOperatorTest();
+
+  return 0;
+}
+
+int main(int /*argc*/, const char * /*argv*/ []) {
+  InitTestEngine();
+
+  FlatBufferTests();
+  FlatBufferBuilderTest();
 
   if (!testing_fails) {
     TEST_OUTPUT_LINE("ALL TESTS PASSED");
