@@ -28,9 +28,9 @@ Node* PromiseBuiltinsAssembler::AllocateJSPromise(Node* context) {
   Node* const promise = Allocate(JSPromise::kSizeWithEmbedderFields);
   StoreMapNoWriteBarrier(promise, promise_map);
   StoreObjectFieldRoot(promise, JSPromise::kPropertiesOrHashOffset,
-                       Heap::kEmptyFixedArrayRootIndex);
+                       RootIndex::kEmptyFixedArray);
   StoreObjectFieldRoot(promise, JSPromise::kElementsOffset,
-                       Heap::kEmptyFixedArrayRootIndex);
+                       RootIndex::kEmptyFixedArray);
   return promise;
 }
 
@@ -137,7 +137,7 @@ TF_BUILTIN(NewPromiseCapability, PromiseBuiltinsAssembler) {
         CreatePromiseResolvingFunctions(promise, debug_event, native_context);
 
     Node* capability = Allocate(PromiseCapability::kSize);
-    StoreMapNoWriteBarrier(capability, Heap::kPromiseCapabilityMapRootIndex);
+    StoreMapNoWriteBarrier(capability, RootIndex::kPromiseCapabilityMap);
     StoreObjectFieldNoWriteBarrier(capability,
                                    PromiseCapability::kPromiseOffset, promise);
     StoreObjectFieldNoWriteBarrier(capability,
@@ -150,13 +150,13 @@ TF_BUILTIN(NewPromiseCapability, PromiseBuiltinsAssembler) {
   BIND(&if_slow_promise_capability);
   {
     Node* capability = Allocate(PromiseCapability::kSize);
-    StoreMapNoWriteBarrier(capability, Heap::kPromiseCapabilityMapRootIndex);
+    StoreMapNoWriteBarrier(capability, RootIndex::kPromiseCapabilityMap);
     StoreObjectFieldRoot(capability, PromiseCapability::kPromiseOffset,
-                         Heap::kUndefinedValueRootIndex);
+                         RootIndex::kUndefinedValue);
     StoreObjectFieldRoot(capability, PromiseCapability::kResolveOffset,
-                         Heap::kUndefinedValueRootIndex);
+                         RootIndex::kUndefinedValue);
     StoreObjectFieldRoot(capability, PromiseCapability::kRejectOffset,
-                         Heap::kUndefinedValueRootIndex);
+                         RootIndex::kUndefinedValue);
 
     Node* executor_context =
         CreatePromiseGetCapabilitiesExecutorContext(capability, native_context);
@@ -318,8 +318,11 @@ void PromiseBuiltinsAssembler::PerformPromiseThen(
              Word32Or(IsCallable(on_fulfilled), IsUndefined(on_fulfilled)));
   CSA_ASSERT(this, Word32Or(IsCallable(on_rejected), IsUndefined(on_rejected)));
   CSA_ASSERT(this, TaggedIsNotSmi(result_promise_or_capability));
-  CSA_ASSERT(this, Word32Or(IsJSPromise(result_promise_or_capability),
-                            IsPromiseCapability(result_promise_or_capability)));
+  CSA_ASSERT(
+      this,
+      Word32Or(Word32Or(IsJSPromise(result_promise_or_capability),
+                        IsPromiseCapability(result_promise_or_capability)),
+               IsUndefined(result_promise_or_capability)));
 
   Label if_pending(this), if_notpending(this), done(this);
   Node* const status = PromiseStatus(promise);
@@ -352,7 +355,7 @@ void PromiseBuiltinsAssembler::PerformPromiseThen(
 
     BIND(&if_fulfilled);
     {
-      var_map.Bind(LoadRoot(Heap::kPromiseFulfillReactionJobTaskMapRootIndex));
+      var_map.Bind(LoadRoot(RootIndex::kPromiseFulfillReactionJobTaskMap));
       var_handler.Bind(on_fulfilled);
       Goto(&enqueue);
     }
@@ -360,7 +363,7 @@ void PromiseBuiltinsAssembler::PerformPromiseThen(
     BIND(&if_rejected);
     {
       CSA_ASSERT(this, IsPromiseStatus(status, v8::Promise::kRejected));
-      var_map.Bind(LoadRoot(Heap::kPromiseRejectReactionJobTaskMapRootIndex));
+      var_map.Bind(LoadRoot(RootIndex::kPromiseRejectReactionJobTaskMap));
       var_handler.Bind(on_rejected);
       GotoIf(PromiseHasHandler(promise), &enqueue);
       CallRuntime(Runtime::kPromiseRevokeReject, context, promise);
@@ -390,7 +393,8 @@ TF_BUILTIN(PerformPromiseThen, PromiseBuiltinsAssembler) {
   Node* const result_promise = Parameter(Descriptor::kResultPromise);
 
   CSA_ASSERT(this, TaggedIsNotSmi(result_promise));
-  CSA_ASSERT(this, IsJSPromise(result_promise));
+  CSA_ASSERT(
+      this, Word32Or(IsJSPromise(result_promise), IsUndefined(result_promise)));
 
   PerformPromiseThen(context, promise, on_fulfilled, on_rejected,
                      result_promise);
@@ -401,7 +405,7 @@ Node* PromiseBuiltinsAssembler::AllocatePromiseReaction(
     Node* next, Node* promise_or_capability, Node* fulfill_handler,
     Node* reject_handler) {
   Node* const reaction = Allocate(PromiseReaction::kSize);
-  StoreMapNoWriteBarrier(reaction, Heap::kPromiseReactionMapRootIndex);
+  StoreMapNoWriteBarrier(reaction, RootIndex::kPromiseReactionMap);
   StoreObjectFieldNoWriteBarrier(reaction, PromiseReaction::kNextOffset, next);
   StoreObjectFieldNoWriteBarrier(reaction,
                                  PromiseReaction::kPromiseOrCapabilityOffset,
@@ -431,10 +435,10 @@ Node* PromiseBuiltinsAssembler::AllocatePromiseReactionJobTask(
 }
 
 Node* PromiseBuiltinsAssembler::AllocatePromiseReactionJobTask(
-    Heap::RootListIndex map_root_index, Node* context, Node* argument,
-    Node* handler, Node* promise_or_capability) {
-  DCHECK(map_root_index == Heap::kPromiseFulfillReactionJobTaskMapRootIndex ||
-         map_root_index == Heap::kPromiseRejectReactionJobTaskMapRootIndex);
+    RootIndex map_root_index, Node* context, Node* argument, Node* handler,
+    Node* promise_or_capability) {
+  DCHECK(map_root_index == RootIndex::kPromiseFulfillReactionJobTaskMap ||
+         map_root_index == RootIndex::kPromiseRejectReactionJobTaskMap);
   Node* const map = LoadRoot(map_root_index);
   return AllocatePromiseReactionJobTask(map, context, argument, handler,
                                         promise_or_capability);
@@ -444,7 +448,7 @@ Node* PromiseBuiltinsAssembler::AllocatePromiseResolveThenableJobTask(
     Node* promise_to_resolve, Node* then, Node* thenable, Node* context) {
   Node* const microtask = Allocate(PromiseResolveThenableJobTask::kSize);
   StoreMapNoWriteBarrier(microtask,
-                         Heap::kPromiseResolveThenableJobTaskMapRootIndex);
+                         RootIndex::kPromiseResolveThenableJobTaskMap);
   StoreObjectFieldNoWriteBarrier(
       microtask, PromiseResolveThenableJobTask::kContextOffset, context);
   StoreObjectFieldNoWriteBarrier(
@@ -502,8 +506,8 @@ Node* PromiseBuiltinsAssembler::TriggerPromiseReactions(
       // of stores here to avoid screwing up the store buffer.
       STATIC_ASSERT(PromiseReaction::kSize == PromiseReactionJobTask::kSize);
       if (type == PromiseReaction::kFulfill) {
-        StoreMapNoWriteBarrier(
-            current, Heap::kPromiseFulfillReactionJobTaskMapRootIndex);
+        StoreMapNoWriteBarrier(current,
+                               RootIndex::kPromiseFulfillReactionJobTaskMap);
         StoreObjectField(current, PromiseReactionJobTask::kArgumentOffset,
                          argument);
         StoreObjectField(current, PromiseReactionJobTask::kContextOffset,
@@ -516,7 +520,7 @@ Node* PromiseBuiltinsAssembler::TriggerPromiseReactions(
         Node* handler =
             LoadObjectField(current, PromiseReaction::kRejectHandlerOffset);
         StoreMapNoWriteBarrier(current,
-                               Heap::kPromiseRejectReactionJobTaskMapRootIndex);
+                               RootIndex::kPromiseRejectReactionJobTaskMap);
         StoreObjectField(current, PromiseReactionJobTask::kArgumentOffset,
                          argument);
         StoreObjectField(current, PromiseReactionJobTask::kContextOffset,
@@ -1154,11 +1158,14 @@ void PromiseBuiltinsAssembler::PromiseReactionJob(Node* context, Node* argument,
   CSA_ASSERT(this, TaggedIsNotSmi(handler));
   CSA_ASSERT(this, Word32Or(IsUndefined(handler), IsCallable(handler)));
   CSA_ASSERT(this, TaggedIsNotSmi(promise_or_capability));
-  CSA_ASSERT(this, Word32Or(IsJSPromise(promise_or_capability),
-                            IsPromiseCapability(promise_or_capability)));
+  CSA_ASSERT(this,
+             Word32Or(Word32Or(IsJSPromise(promise_or_capability),
+                               IsPromiseCapability(promise_or_capability)),
+                      IsUndefined(promise_or_capability)));
 
   VARIABLE(var_handler_result, MachineRepresentation::kTagged, argument);
-  Label if_handler_callable(this), if_fulfill(this), if_reject(this);
+  Label if_handler_callable(this), if_fulfill(this), if_reject(this),
+      if_internal(this);
   Branch(IsUndefined(handler),
          type == PromiseReaction::kFulfill ? &if_fulfill : &if_reject,
          &if_handler_callable);
@@ -1170,7 +1177,16 @@ void PromiseBuiltinsAssembler::PromiseReactionJob(Node* context, Node* argument,
         context, handler, UndefinedConstant(), argument);
     GotoIfException(result, &if_reject, &var_handler_result);
     var_handler_result.Bind(result);
-    Goto(&if_fulfill);
+    Branch(IsUndefined(promise_or_capability), &if_internal, &if_fulfill);
+  }
+
+  BIND(&if_internal);
+  {
+    // There's no [[Capability]] for this promise reaction job, which
+    // means that this is a specification-internal operation (aka await)
+    // where the result does not matter (see the specification change in
+    // https://github.com/tc39/ecma262/pull/1146 for details).
+    Return(UndefinedConstant());
   }
 
   BIND(&if_fulfill);

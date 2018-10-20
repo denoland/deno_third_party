@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 
-from common import QEMU_ROOT, EnsurePathExists
+from common import GetQemuRootForPlatform, EnsurePathExists
 
 
 # Virtual networking configuration data for QEMU.
@@ -34,7 +34,7 @@ def _GetAvailableTcpPort():
 
 
 class QemuTarget(target.Target):
-  def __init__(self, output_dir, target_cpu, system_log_file,
+  def __init__(self, output_dir, target_cpu, cpu_cores, system_log_file,
                ram_size_mb=2048):
     """output_dir: The directory which will contain the files that are
                    generated to support the QEMU deployment.
@@ -44,6 +44,7 @@ class QemuTarget(target.Target):
     self._qemu_process = None
     self._ram_size_mb = ram_size_mb
     self._system_log_file = system_log_file
+    self._cpu_cores = cpu_cores
 
   def __enter__(self):
     return self
@@ -56,7 +57,7 @@ class QemuTarget(target.Target):
       self._qemu_process.kill()
 
   def Start(self):
-    qemu_path = os.path.join(QEMU_ROOT, 'bin',
+    qemu_path = os.path.join(GetQemuRootForPlatform(), 'bin',
                              'qemu-system-' + self._GetTargetSdkLegacyArch())
     kernel_args = boot_data.GetKernelArgs(self._output_dir)
 
@@ -73,11 +74,11 @@ class QemuTarget(target.Target):
         '-nographic',
         '-kernel', EnsurePathExists(
             boot_data.GetTargetFile(self._GetTargetSdkArch(),
-                                    'zircon.bin')),
+                                    'qemu-kernel.bin')),
         '-initrd', EnsurePathExists(
             boot_data.GetTargetFile(self._GetTargetSdkArch(),
-                                    'bootdata-blob.bin')),
-        '-smp', '4',
+                                    'fuchsia.zbi')),
+        '-smp', str(self._cpu_cores),
 
         # Attach the blobstore and data volumes. Use snapshot mode to discard
         # any changes.
@@ -101,24 +102,27 @@ class QemuTarget(target.Target):
       ]
 
     # Configure the machine & CPU to emulate, based on the target architecture.
-    # Enable lightweight virtualization (KVM) if the host and guest OS run on
-    # the same architecture.
     if self._target_cpu == 'arm64':
       qemu_command.extend([
           '-machine','virt',
           '-cpu', 'cortex-a53',
       ])
       netdev_type = 'virtio-net-pci'
-      if platform.machine() == 'aarch64':
-        qemu_command.append('-enable-kvm')
     else:
       qemu_command.extend([
           '-machine', 'q35',
-          '-cpu', 'host,migratable=no',
       ])
       netdev_type = 'e1000'
-      if platform.machine() == 'x86_64':
+
+    # On Linux, enable lightweight virtualization (KVM) if the host and guest
+    # architectures are the same.
+    if sys.platform.startswith('linux'):
+      if self._target_cpu == 'arm64' and platform.machine() == 'aarch64':
         qemu_command.append('-enable-kvm')
+      elif self._target_cpu == 'x64' and platform.machine() == 'x86_64':
+        qemu_command.extend([
+            '-enable-kvm', '-cpu', 'host,migratable=no',
+        ])
 
     # Configure virtual network. It is used in the tests to connect to
     # testserver running on the host.
