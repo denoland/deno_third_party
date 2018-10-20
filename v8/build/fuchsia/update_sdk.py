@@ -13,7 +13,7 @@ import sys
 import tarfile
 import tempfile
 
-SDK_HASH_FILE = os.path.join(os.path.dirname(__file__), 'sdk.sha1')
+from common import GetHostOsFromPlatform, GetHostArchFromPlatform
 
 REPOSITORY_ROOT = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', '..'))
@@ -23,6 +23,14 @@ import find_depot_tools
 
 SDK_SUBDIRS = ["arch", "pkg", "qemu", "sysroot", "target",
                "toolchain_libs", "tools"]
+
+def GetSdkHashForPlatform():
+  filename = '{platform}.sdk.sha1'.format(platform =  GetHostOsFromPlatform())
+  return os.path.join(os.path.dirname(__file__), filename)
+
+def GetBucketForPlatform():
+  return 'gs://fuchsia/sdk/{platform}-amd64/'.format(
+      platform = GetHostOsFromPlatform())
 
 
 def EnsureDirExists(path):
@@ -58,26 +66,35 @@ def main():
     print >>sys.stderr, 'usage: %s' % sys.argv[0]
     return 1
 
+  # Quietly exit if there's no SDK support for this platform.
+  try:
+    GetHostOsFromPlatform()
+  except:
+    return 0
+
   # Previously SDK was unpacked in //third_party/fuchsia-sdk instead of
   # //third_party/fuchsia-sdk/sdk . Remove the old files if they are still
   # there.
-  Cleanup(os.path.join(REPOSITORY_ROOT, 'third_party', 'fuchsia-sdk'))
+  sdk_root = os.path.join(REPOSITORY_ROOT, 'third_party', 'fuchsia-sdk')
+  Cleanup(sdk_root)
 
-  with open(SDK_HASH_FILE, 'r') as f:
+  hash_file = GetSdkHashForPlatform()
+  with open(hash_file, 'r') as f:
     sdk_hash = f.read().strip()
 
   if not sdk_hash:
-    print >>sys.stderr, 'No SHA1 found in %s' % SDK_HASH_FILE
+    print >>sys.stderr, 'No SHA1 found in %s' % hash_file
     return 1
 
-  output_dir = os.path.join(REPOSITORY_ROOT, 'third_party', 'fuchsia-sdk',
-                            'sdk')
+  output_dir = os.path.join(sdk_root, 'sdk')
 
   hash_filename = os.path.join(output_dir, '.hash')
   if os.path.exists(hash_filename):
     with open(hash_filename, 'r') as f:
       if f.read().strip() == sdk_hash:
-        # Nothing to do.
+        # Nothing to do. Generate sdk/BUILD.gn anyways, in case the conversion
+        # script changed.
+        subprocess.check_call([os.path.join(sdk_root, 'gen_build_defs.py')])
         return 0
 
   print 'Downloading SDK %s...' % sdk_hash
@@ -89,15 +106,17 @@ def main():
   os.close(fd)
 
   try:
-    bucket = 'gs://fuchsia/sdk/linux-amd64/'
     cmd = [os.path.join(find_depot_tools.DEPOT_TOOLS_PATH, 'gsutil.py'),
-           'cp', bucket + sdk_hash, tmp]
+           'cp', GetBucketForPlatform() + sdk_hash, tmp]
     subprocess.check_call(cmd)
     with open(tmp, 'rb') as f:
       EnsureDirExists(output_dir)
       tarfile.open(mode='r:gz', fileobj=f).extractall(path=output_dir)
   finally:
     os.remove(tmp)
+
+  # Generate sdk/BUILD.gn.
+  subprocess.check_call([os.path.join(sdk_root, 'gen_build_defs.py')])
 
   with open(hash_filename, 'w') as f:
     f.write(sdk_hash)

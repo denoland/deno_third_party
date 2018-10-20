@@ -26,14 +26,13 @@
 // THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// Author: vladl@google.com (Vlad Losev)
+
 //
 // Tests for Google Test itself.  This verifies that the basic constructs of
 // Google Test work.
 
 #include "gtest/gtest.h"
-#include "googletest-param-test-test.h"
+#include "test/googletest-param-test-test.h"
 
 using ::testing::Values;
 using ::testing::internal::ParamGenerator;

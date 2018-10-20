@@ -18,12 +18,14 @@ namespace v8 {
 namespace internal {
 namespace wasm {
 
-WasmEngine::WasmEngine(std::unique_ptr<WasmCodeManager> code_manager)
-    : code_manager_(std::move(code_manager)) {}
+WasmEngine::WasmEngine()
+    : code_manager_(&memory_tracker_, kMaxWasmCodeMemory) {}
 
 WasmEngine::~WasmEngine() {
   // All AsyncCompileJobs have been canceled.
   DCHECK(jobs_.empty());
+  // All Isolates have been deregistered.
+  DCHECK(isolates_.empty());
 }
 
 bool WasmEngine::SyncValidate(Isolate* isolate, const WasmFeatures& enabled,
@@ -189,9 +191,11 @@ Handle<WasmModuleObject> WasmEngine::ImportNativeModule(
     Isolate* isolate, std::shared_ptr<NativeModule> shared_module) {
   CHECK_EQ(code_manager(), shared_module->code_manager());
   Vector<const byte> wire_bytes = shared_module->wire_bytes();
-  Handle<Script> script = CreateWasmScript(isolate, wire_bytes);
+  const WasmModule* module = shared_module->module();
+  Handle<Script> script =
+      CreateWasmScript(isolate, wire_bytes, module->source_map_url);
   Handle<WasmModuleObject> module_object =
-      WasmModuleObject::New(isolate, shared_module, script);
+      WasmModuleObject::New(isolate, std::move(shared_module), script);
 
   // TODO(6792): Wrappers below might be cloned using {Factory::CopyCode}.
   // This requires unlocking the code space here. This should eventually be
@@ -249,6 +253,7 @@ std::unique_ptr<AsyncCompileJob> WasmEngine::RemoveCompileJob(
 
 bool WasmEngine::HasRunningCompileJob(Isolate* isolate) {
   base::LockGuard<base::Mutex> guard(&mutex_);
+  DCHECK_EQ(1, isolates_.count(isolate));
   for (auto& entry : jobs_) {
     if (entry.first->isolate() == isolate) return true;
   }
@@ -257,6 +262,7 @@ bool WasmEngine::HasRunningCompileJob(Isolate* isolate) {
 
 void WasmEngine::DeleteCompileJobsOnIsolate(Isolate* isolate) {
   base::LockGuard<base::Mutex> guard(&mutex_);
+  DCHECK_EQ(1, isolates_.count(isolate));
   for (auto it = jobs_.begin(); it != jobs_.end();) {
     if (it->first->isolate() == isolate) {
       it = jobs_.erase(it);
@@ -266,12 +272,19 @@ void WasmEngine::DeleteCompileJobsOnIsolate(Isolate* isolate) {
   }
 }
 
-namespace {
-
-WasmEngine* AllocateNewWasmEngine() {
-  return new WasmEngine(std::unique_ptr<WasmCodeManager>(
-      new WasmCodeManager(kMaxWasmCodeMemory)));
+void WasmEngine::AddIsolate(Isolate* isolate) {
+  base::LockGuard<base::Mutex> guard(&mutex_);
+  DCHECK_EQ(0, isolates_.count(isolate));
+  isolates_.insert(isolate);
 }
+
+void WasmEngine::RemoveIsolate(Isolate* isolate) {
+  base::LockGuard<base::Mutex> guard(&mutex_);
+  DCHECK_EQ(1, isolates_.count(isolate));
+  isolates_.erase(isolate);
+}
+
+namespace {
 
 struct WasmEnginePointerConstructTrait final {
   static void Construct(void* raw_ptr) {
@@ -289,19 +302,22 @@ base::LazyStaticInstance<std::shared_ptr<WasmEngine>,
 
 }  // namespace
 
+// static
 void WasmEngine::InitializeOncePerProcess() {
   if (!FLAG_wasm_shared_engine) return;
-  global_wasm_engine.Pointer()->reset(AllocateNewWasmEngine());
+  global_wasm_engine.Pointer()->reset(new WasmEngine());
 }
 
+// static
 void WasmEngine::GlobalTearDown() {
   if (!FLAG_wasm_shared_engine) return;
   global_wasm_engine.Pointer()->reset();
 }
 
+// static
 std::shared_ptr<WasmEngine> WasmEngine::GetWasmEngine() {
   if (FLAG_wasm_shared_engine) return global_wasm_engine.Get();
-  return std::shared_ptr<WasmEngine>(AllocateNewWasmEngine());
+  return std::shared_ptr<WasmEngine>(new WasmEngine());
 }
 
 }  // namespace wasm
