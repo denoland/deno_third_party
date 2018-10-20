@@ -346,7 +346,7 @@ C_REGISTERS(DECLARE_C_REGISTER)
 
 // Class Operand represents a shifter operand in data processing instructions
 // defining immediate numbers and masks
-class Operand BASE_EMBEDDED {
+class Operand {
  public:
   // immediate
   V8_INLINE explicit Operand(intptr_t immediate,
@@ -368,6 +368,7 @@ class Operand BASE_EMBEDDED {
   V8_INLINE explicit Operand(Register rm);
 
   static Operand EmbeddedNumber(double value);  // Smi or HeapNumber
+  static Operand EmbeddedStringConstant(const StringConstantBase* str);
 
   // Return true if this is a register operand.
   V8_INLINE bool is_reg() const { return rm_.is_valid(); }
@@ -424,7 +425,7 @@ typedef int32_t Disp;
 //   1) a base register + 16 bit unsigned displacement
 //   2) a base register + index register + 16 bit unsigned displacement
 //   3) a base register + index register + 20 bit signed displacement
-class MemOperand BASE_EMBEDDED {
+class MemOperand {
  public:
   explicit MemOperand(Register rx, Disp offset = 0);
   explicit MemOperand(Register rx, Register rb, Disp offset = 0);
@@ -1503,13 +1504,6 @@ inline void ss_a_format(Opcode op, int f1, int f2, int f3, int f4, int f5) {
   void dq(uint64_t data);
   void dp(uintptr_t data);
 
-  void PatchConstantPoolAccessInstruction(int pc_offset, int offset,
-                                          ConstantPoolEntry::Access access,
-                                          ConstantPoolEntry::Type type) {
-    // No embedded constant pool support.
-    UNREACHABLE();
-  }
-
   // Read/patch instructions
   SixByteInstr instr_at(int pos) {
     return Instruction::InstructionBits(buffer_ + pos);
@@ -1663,7 +1657,7 @@ inline void ss_a_format(Opcode op, int f1, int f2, int f3, int f4, int f5) {
   friend class EnsureSpace;
 };
 
-class EnsureSpace BASE_EMBEDDED {
+class EnsureSpace {
  public:
   explicit EnsureSpace(Assembler* assembler) { assembler->CheckBuffer(); }
 };

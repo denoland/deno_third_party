@@ -33,30 +33,32 @@ InspectorTest.startDumpingProtocolMessages = function() {
 }
 
 InspectorTest.logMessage = function(originalMessage) {
-  var message = JSON.parse(JSON.stringify(originalMessage));
-  if (message.id)
-    message.id = "<messageId>";
-
   const nonStableFields = new Set([
     'objectId', 'scriptId', 'exceptionId', 'timestamp', 'executionContextId',
     'callFrameId', 'breakpointId', 'bindRemoteObjectFunctionId',
     'formatterObjectId', 'debuggerId'
   ]);
-  var objects = [ message ];
-  while (objects.length) {
-    var object = objects.shift();
-    for (var key in object) {
-      if (nonStableFields.has(key))
-        object[key] = `<${key}>`;
-      else if (typeof object[key] === "string" && object[key].match(/\d+:\d+:\d+:\d+/))
-        object[key] = object[key].substring(0, object[key].lastIndexOf(':')) + ":<scriptId>";
-      else if (typeof object[key] === "object")
-        objects.push(object[key]);
-    }
-  }
+  const message = JSON.parse(JSON.stringify(originalMessage, replacer.bind(null, Symbol(), nonStableFields)));
+  if (message.id)
+    message.id = '<messageId>';
 
   InspectorTest.logObject(message);
   return originalMessage;
+
+  function replacer(stableIdSymbol, nonStableFields, name, val) {
+    if (nonStableFields.has(name))
+      return `<${name}>`;
+    if (name === 'internalProperties') {
+      const stableId = val.find(prop => prop.name === '[[StableObjectId]]');
+      if (stableId)
+        stableId.value[stableIdSymbol] = true;
+    }
+    if (name === 'parentId')
+      return { id: '<id>' };
+    if (val && val[stableIdSymbol])
+      return '<StablectObjectId>';
+    return val;
+  }
 }
 
 InspectorTest.logObject = function(object, title) {
@@ -335,7 +337,8 @@ InspectorTest.Session = class {
         var eventName = match[2];
         eventName = eventName.charAt(0).toLowerCase() + eventName.slice(1);
         if (match[1])
-          return () => this._waitForEventPromise(`${agentName}.${eventName}`);
+          return numOfEvents => this._waitForEventPromise(
+                     `${agentName}.${eventName}`, numOfEvents || 1);
         return listener => this._eventHandlers.set(`${agentName}.${eventName}`, listener);
       }
     })});
@@ -369,11 +372,16 @@ InspectorTest.Session = class {
     }
   };
 
-  _waitForEventPromise(eventName) {
+  _waitForEventPromise(eventName, numOfEvents) {
+    let events = [];
     return new Promise(fulfill => {
       this._eventHandlers.set(eventName, result => {
-        delete this._eventHandlers.delete(eventName);
-        fulfill(result);
+        --numOfEvents;
+        events.push(result);
+        if (numOfEvents === 0) {
+          delete this._eventHandlers.delete(eventName);
+          fulfill(events.length > 1 ? events : events[0]);
+        }
       });
     });
   }

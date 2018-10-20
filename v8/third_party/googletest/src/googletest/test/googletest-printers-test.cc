@@ -26,14 +26,11 @@
 // THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// Author: wan@google.com (Zhanyong Wan)
+
 
 // Google Test - The Google C++ Testing and Mocking Framework
 //
 // This file tests the universal value printer.
-
-#include "gtest/gtest-printers.h"
 
 #include <ctype.h>
 #include <limits.h>
@@ -48,6 +45,7 @@
 #include <utility>
 #include <vector>
 
+#include "gtest/gtest-printers.h"
 #include "gtest/gtest.h"
 
 #if GTEST_HAS_UNORDERED_MAP_
@@ -920,8 +918,6 @@ TEST(PrintStlContainerTest, MultiSet) {
 }
 
 #if GTEST_HAS_STD_FORWARD_LIST_
-// <slist> is available on Linux in the google3 mode, but not on
-// Windows or Mac OS X.
 
 TEST(PrintStlContainerTest, SinglyLinkedList) {
   int a[] = { 9, 2, 8 };
