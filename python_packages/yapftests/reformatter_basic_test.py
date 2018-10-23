@@ -134,43 +134,6 @@ class BasicReformatterTest(yapf_test_helper.YAPFTest):
     uwlines = yapf_test_helper.ParseAndUnwrap(unformatted_code)
     self.assertCodeEqual(expected_formatted_code, reformatter.Reformat(uwlines))
 
-  def testIndentBlankLines(self):
-    try:
-      style.SetGlobalStyle(
-          style.CreateStyleFromConfig(
-              '{based_on_style: chromium, indent_blank_lines: true}'))
-      unformatted_code = textwrap.dedent("""\
-          class foo(object):
-
-            def foobar(self):
-
-              pass
-
-            def barfoo(self, x, y):  # bar
-
-              if x:
-
-                return y
-
-
-          def bar():
-
-            return 0
-          """)
-      expected_formatted_code = """\
-class foo(object):\n  \n  def foobar(self):\n    \n    pass\n  \n  def barfoo(self, x, y):  # bar\n    \n    if x:\n      \n      return y\n\n\ndef bar():\n  \n  return 0
-"""
-      uwlines = yapf_test_helper.ParseAndUnwrap(unformatted_code)
-      self.assertCodeEqual(expected_formatted_code,
-                           reformatter.Reformat(uwlines))
-    finally:
-      style.SetGlobalStyle(style.CreateChromiumStyle())
-
-    unformatted_code, expected_formatted_code = (expected_formatted_code,
-                                                 unformatted_code)
-    uwlines = yapf_test_helper.ParseAndUnwrap(unformatted_code)
-    self.assertCodeEqual(expected_formatted_code, reformatter.Reformat(uwlines))
-
   def testMultipleUgliness(self):
     unformatted_code = textwrap.dedent("""\
         x = {  'a':37,'b':42,
@@ -2558,37 +2521,6 @@ x = [1, 2, 3, 4, 5, 6, 7,]
 """
       uwlines = yapf_test_helper.ParseAndUnwrap(code)
       self.assertCodeEqual(code, reformatter.Reformat(uwlines))
-    finally:
-      style.SetGlobalStyle(style.CreateChromiumStyle())
-
-  def testDedentClosingBracketsWithTypeAnnotationExceedingLineLength(self):
-    try:
-      style.SetGlobalStyle(
-          style.CreateStyleFromConfig('{based_on_style: chromium,'
-                                      ' dedent_closing_brackets: True}'))
-      unformatted_code = textwrap.dedent("""\
-                def function(first_argument_xxxxxxxxxxxxxxxx=(0,), second_argument=None) -> None:
-                  pass
-
-
-                def function(first_argument_xxxxxxxxxxxxxxxxxxxxxxx=(0,), second_argument=None) -> None:
-                  pass
-                """)
-      expected_formatted_code = textwrap.dedent("""\
-                def function(
-                    first_argument_xxxxxxxxxxxxxxxx=(0,), second_argument=None
-                ) -> None:
-                  pass
-
-
-                def function(
-                    first_argument_xxxxxxxxxxxxxxxxxxxxxxx=(0,), second_argument=None
-                ) -> None:
-                  pass
-                """)
-      uwlines = yapf_test_helper.ParseAndUnwrap(unformatted_code)
-      self.assertCodeEqual(expected_formatted_code,
-                           reformatter.Reformat(uwlines))
     finally:
       style.SetGlobalStyle(style.CreateChromiumStyle())
 
