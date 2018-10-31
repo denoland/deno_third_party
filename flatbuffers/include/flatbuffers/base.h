@@ -7,10 +7,12 @@
   #define _CRTDBG_MAP_ALLOC
 #endif
 
-#include <assert.h>
-
 #if !defined(FLATBUFFERS_ASSERT)
+#include <assert.h>
 #define FLATBUFFERS_ASSERT assert
+#elif defined(FLATBUFFERS_ASSERT_INCLUDE)
+// Include file with forward declaration
+#include FLATBUFFERS_ASSERT_INCLUDE
 #endif
 
 #ifndef ARDUINO
@@ -120,9 +122,11 @@
     defined(__clang__)
   #define FLATBUFFERS_FINAL_CLASS final
   #define FLATBUFFERS_OVERRIDE override
+  #define FLATBUFFERS_VTABLE_UNDERLYING_TYPE : flatbuffers::voffset_t
 #else
   #define FLATBUFFERS_FINAL_CLASS
   #define FLATBUFFERS_OVERRIDE
+  #define FLATBUFFERS_VTABLE_UNDERLYING_TYPE
 #endif
 
 #if (!defined(_MSC_VER) || _MSC_VER >= 1900) && \
@@ -179,6 +183,26 @@
     #endif
   #endif // __has_include
 #endif // !FLATBUFFERS_HAS_STRING_VIEW
+
+#ifndef FLATBUFFERS_HAS_NEW_STRTOD
+  // Modern (C++11) strtod and strtof functions are available for use.
+  // 1) nan/inf strings as argument of strtod;
+  // 2) hex-float  as argument of  strtod/strtof.
+  #if (defined(_MSC_VER) && _MSC_VER >= 1900) || \
+      (defined(__GNUC__) && (__GNUC__ * 100 + __GNUC_MINOR__ >= 409)) || \
+      (defined(__clang__))
+    #define FLATBUFFERS_HAS_NEW_STRTOD 1
+  #endif
+#endif // !FLATBUFFERS_HAS_NEW_STRTOD
+
+// Suppress sanitizer directives.
+#if defined(__clang__)
+  #define __no_sanitize_undefined__(reason) __attribute__((no_sanitize("undefined")))
+#elif defined(__GNUC__) && (__GNUC__ * 100 + __GNUC_MINOR__ >= 408)
+  #define __no_sanitize_undefined__(reason) __attribute__((no_sanitize_undefined))
+#else
+  #define __no_sanitize_undefined__(reason)
+#endif
 
 /// @endcond
 
@@ -262,11 +286,15 @@ template<typename T> T EndianScalar(T t) {
   #endif
 }
 
-template<typename T> T ReadScalar(const void *p) {
+template<typename T>
+__no_sanitize_undefined__("C++ aliasing type rules, see std::bit_cast<>")
+T ReadScalar(const void *p) {
   return EndianScalar(*reinterpret_cast<const T *>(p));
 }
 
-template<typename T> void WriteScalar(void *p, T t) {
+template<typename T>
+__no_sanitize_undefined__("C++ aliasing type rules, see std::bit_cast<>")
+void WriteScalar(void *p, T t) {
   *reinterpret_cast<T *>(p) = EndianScalar(t);
 }
 
