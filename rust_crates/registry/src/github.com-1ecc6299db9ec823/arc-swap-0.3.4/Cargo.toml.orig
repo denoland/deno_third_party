@@ -1,0 +1,43 @@
+[package]
+name = "arc-swap"
+version = "0.3.4"
+authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
+description = "Atomically swappable Arc"
+documentation = "https://docs.rs/arc-swap"
+repository = "https://github.com/vorner/arc-swap"
+readme = "README.md"
+keywords = ["atomic", "Arc"]
+categories = ["data-structures", "memory-management"]
+license = "Apache-2.0/MIT"
+
+[badges]
+travis-ci = { repository = "vorner/arc-swap" }
+appveyor = { repository = "vorner/arc-swap" }
+maintenance = { status = "actively-developed" }
+
+[dependencies]
+
+[dev-dependencies]
+crossbeam-utils = "~0.5"
+itertools = "~0.7"
+lazy_static = "~1"
+model = "~0.0.4"
+num_cpus = "~1"
+version-sync = "~0.5"
+proptest = "~0.7"
+
+[profile.bench]
+debug = true
+
+[[bench]]
+name = "atomics"
+path = "benches/atomics.rs"
+
+[[bench]]
+name = "background"
+path = "benches/background.rs"
+
+[[bench]]
+name = "int-access"
+path = "benches/int-access.rs"
+harness = false
