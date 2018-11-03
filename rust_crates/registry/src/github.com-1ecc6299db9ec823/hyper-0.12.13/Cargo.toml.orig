@@ -1,0 +1,171 @@
+[package]
+name = "hyper"
+version = "0.12.13" # don't forget to update html_root_url
+description = "A fast and correct HTTP library."
+readme = "README.md"
+homepage = "https://hyper.rs"
+documentation = "https://docs.rs/hyper"
+repository = "https://github.com/hyperium/hyper"
+license = "MIT"
+authors = ["Sean McArthur <sean@seanmonstar.com>"]
+keywords = ["http", "hyper", "hyperium"]
+categories = ["network-programming", "web-programming::http-client", "web-programming::http-server"]
+
+include = [
+  "Cargo.toml",
+  "LICENSE",
+  "src/**/*"
+]
+
+[dependencies]
+bytes = "0.4.4"
+futures = "0.1.21"
+futures-cpupool = { version = "0.1.6", optional = true }
+http = "0.1.13"
+httparse = "1.0"
+h2 = "0.1.10"
+iovec = "0.1"
+itoa = "0.4.1"
+log = "0.4"
+net2 = { version = "0.2.32", optional = true }
+time = "0.1"
+tokio = { version = "0.1.7", optional = true }
+tokio-executor = { version = "0.1.0", optional = true }
+tokio-io = "0.1"
+tokio-reactor = { version = "0.1", optional = true }
+tokio-tcp = { version = "0.1", optional = true }
+tokio-threadpool = { version = "0.1.3", optional = true }
+tokio-timer = { version = "0.2", optional = true }
+want = "0.0.6"
+
+[dev-dependencies]
+futures-timer = "0.1"
+num_cpus = "1.0"
+pretty_env_logger = "0.2.0"
+spmc = "0.2"
+url = "1.0"
+tokio-fs = "0.1"
+tokio-mockstream = "1.1.0"
+serde = "1.0"
+serde_derive = "1.0"
+serde_json = "1.0"
+
+[features]
+default = [
+    "__internal_flaky_tests",
+    "runtime",
+]
+runtime = [
+    "futures-cpupool",
+    "net2",
+    "tokio",
+    "tokio-executor",
+    "tokio-reactor",
+    "tokio-tcp",
+    "tokio-threadpool",
+    "tokio-timer",
+]
+nightly = []
+__internal_flaky_tests = []
+
+[profile.release]
+codegen-units = 1
+incremental = false
+
+[profile.bench]
+codegen-units = 1
+incremental = false
+
+[[example]]
+name = "client"
+path = "examples/client.rs"
+required-features = ["runtime"]
+
+[[example]]
+name = "client_json"
+path = "examples/client_json.rs"
+required-features = ["runtime"]
+
+[[example]]
+name = "echo"
+path = "examples/echo.rs"
+required-features = ["runtime"]
+
+[[example]]
+name = "hello"
+path = "examples/hello.rs"
+required-features = ["runtime"]
+
+[[example]]
+name = "multi_server"
+path = "examples/multi_server.rs"
+required-features = ["runtime"]
+
+[[example]]
+name = "params"
+path = "examples/params.rs"
+required-features = ["runtime"]
+
+[[example]]
+name = "proxy"
+path = "examples/proxy.rs"
+required-features = ["runtime"]
+
+[[example]]
+name = "send_file"
+path = "examples/send_file.rs"
+required-features = ["runtime"]
+
+[[example]]
+name = "single_threaded"
+path = "examples/single_threaded.rs"
+required-features = ["runtime"]
+
+[[example]]
+name = "state"
+path = "examples/state.rs"
+required-features = ["runtime"]
+
+[[example]]
+name = "upgrades"
+path = "examples/upgrades.rs"
+required-features = ["runtime"]
+
+
+[[example]]
+name = "web_api"
+path = "examples/web_api.rs"
+required-features = ["runtime"]
+
+
+[[bench]]
+name = "end_to_end"
+path = "benches/end_to_end.rs"
+required-features = ["runtime"]
+
+[[bench]]
+name = "pipeline"
+path = "benches/pipeline.rs"
+required-features = ["runtime"]
+
+[[bench]]
+name = "server"
+path = "benches/server.rs"
+required-features = ["runtime"]
+
+
+[[test]]
+name = "client"
+path = "tests/client.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "server"
+path = "tests/server.rs"
+required-features = ["runtime"]
+

@@ -1,0 +1,23 @@
+language: rust
+matrix:
+  include:
+    - os: linux
+      dist: trusty
+      sudo: required
+      rust: stable
+    - os: linux
+      dist: trusty
+      sudo: required
+      rust: nightly
+      env: COVERAGE=1
+    - os: osx
+before_install:
+  - if [[ "$COVERAGE" == "1" ]]; then admin/build-lcov ; fi
+  - if [[ "$COVERAGE" == "1" ]]; then gem install coveralls-lcov ; fi
+  - if [[ "$COVERAGE" == "1" ]]; then rustup install stable ; fi
+  - if [[ "$COVERAGE" == "1" ]]; then sudo apt-get install libclang-common-3.8-dev llvm-3.8-dev ; fi
+script:
+  - RUST_BACKTRACE=1 cargo test
+  - RUST_BACKTRACE=1 cargo test --release
+  - if [[ "$COVERAGE" == "1" ]]; then ./admin/coverage          ; fi
+  - if [[ "$COVERAGE" == "1" ]]; then coveralls-lcov final.info ; fi
