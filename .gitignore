@@ -53,3 +53,6 @@
 
 # ts-simple-ast should use the same version of typescript
 /node_modules/ts-simple-ast/node_modules
+
+# Used by depot_tools/download_from_google_storage.py
+*.gstmp
