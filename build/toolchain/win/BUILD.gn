@@ -9,6 +9,7 @@ import("//build/config/win/visual_studio_version.gni")
 import("//build/toolchain/clang_static_analyzer.gni")
 import("//build/toolchain/goma.gni")
 import("//build/toolchain/toolchain.gni")
+import("//build/toolchain/cc_wrapper.gni")
 
 # Should only be running on Windows.
 assert(is_win)
@@ -108,7 +109,11 @@ template("msvc_toolchain") {
 
       # lld-link includes a replacement for lib.exe that can produce thin
       # archives and understands bitcode (for lto builds).
-      lib = "$prefix/$lld_link /lib /llvmlibthin"
+      if (use_thin_lto) {
+        lib = "$prefix/$lld_link /lib /llvmlibthin"
+      } else {
+        lib = "$prefix/$lld_link /lib"
+      }
       link = "$prefix/$lld_link"
       if (host_os != "win") {
         # See comment adding --rsp-quoting to $cl above for more information.
@@ -362,7 +367,7 @@ if (win_build_host_cpu != "x64") {
 
   msvc_toolchain(win_build_host_cpu) {
     environment = "environment." + win_build_host_cpu
-    cl = "${goma_prefix}\"${build_cpu_toolchain_data.vc_bin_dir}/cl.exe\""
+    cl = "${goma_prefix}${cc_wrapper_prefix}\"${build_cpu_toolchain_data.vc_bin_dir}/cl.exe\""
     if (host_os != "win") {
       # For win cross build.
       sys_lib_flags = "${build_cpu_toolchain_data.libpath_flags}"
@@ -377,7 +382,7 @@ if (win_build_host_cpu != "x64") {
   msvc_toolchain("win_clang_" + win_build_host_cpu) {
     environment = "environment." + win_build_host_cpu
     prefix = rebase_path("$clang_base_path/bin", root_build_dir)
-    cl = "${goma_prefix}$prefix/${clang_cl}"
+    cl = "${goma_prefix}${cc_wrapper_prefix}$prefix/${clang_cl}"
     sys_include_flags = "${build_cpu_toolchain_data.include_flags_imsvc}"
     if (host_os != "win") {
       # For win cross build.
@@ -407,7 +412,7 @@ x64_toolchain_data = exec_script("setup_toolchain.py",
 template("win_x64_toolchains") {
   msvc_toolchain(target_name) {
     environment = "environment.x64"
-    cl = "${goma_prefix}\"${x64_toolchain_data.vc_bin_dir}/cl.exe\""
+    cl = "${goma_prefix}${cc_wrapper_prefix}\"${x64_toolchain_data.vc_bin_dir}/cl.exe\""
     if (host_os != "win") {
       # For win cross build
       sys_lib_flags = "${x64_toolchain_data.libpath_flags}"
@@ -426,7 +431,7 @@ template("win_x64_toolchains") {
   msvc_toolchain("win_clang_" + target_name) {
     environment = "environment.x64"
     prefix = rebase_path("$clang_base_path/bin", root_build_dir)
-    cl = "${goma_prefix}$prefix/${clang_cl}"
+    cl = "${goma_prefix}${cc_wrapper_prefix}$prefix/${clang_cl}"
     sys_include_flags = "${x64_toolchain_data.include_flags_imsvc}"
     if (host_os != "win") {
       # For win cross build
@@ -479,7 +484,7 @@ if (target_os == "winuwp") {
 
   msvc_toolchain("uwp_" + target_cpu) {
     environment = "environment.store_" + target_cpu
-    cl = "${goma_prefix}\"${store_cpu_toolchain_data.vc_bin_dir}/cl.exe\""
+    cl = "${goma_prefix}${cc_wrapper_prefix}\"${store_cpu_toolchain_data.vc_bin_dir}/cl.exe\""
     toolchain_args = {
       current_os = "winuwp"
       current_cpu = target_cpu
