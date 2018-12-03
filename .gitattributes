@@ -5,4 +5,5 @@
 # This is revelevant for Windows only, and requires git >= 2.19.2 to work.
 /* symlink=dir
 /package.json symlink=file
+/v8/build symlink=dir
 **/node_modules/.bin/* symlink=file
