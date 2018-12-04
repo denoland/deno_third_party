@@ -1025,7 +1025,7 @@ class CppGenerator : public BaseGenerator {
     }
 
     // Generate type traits for unions to map from a type to union enum value.
-    if (enum_def.is_union && !enum_def.uses_type_aliases) {
+    if (enum_def.is_union && !enum_def.uses_multiple_type_instances) {
       for (auto it = enum_def.vals.vec.begin(); it != enum_def.vals.vec.end();
            ++it) {
         const auto &ev = **it;
@@ -1074,7 +1074,7 @@ class CppGenerator : public BaseGenerator {
       code_ += "";
       code_ += "  void Reset();";
       code_ += "";
-      if (!enum_def.uses_type_aliases) {
+      if (!enum_def.uses_multiple_type_instances) {
         code_ += "#ifndef FLATBUFFERS_CPP98_STL";
         code_ += "  template <typename T>";
         code_ += "  void Set(T&& val) {";
@@ -1538,7 +1538,7 @@ class CppGenerator : public BaseGenerator {
       cmp_rhs = "rhs";
       compare_op = "  return\n      " + compare_op + ";";
     }
-    
+
     code_.SetValue("CMP_OP", compare_op);
     code_.SetValue("CMP_LHS", cmp_lhs);
     code_.SetValue("CMP_RHS", cmp_rhs);
@@ -1773,9 +1773,10 @@ class CppGenerator : public BaseGenerator {
       if (field.value.type.base_type == BASE_TYPE_UNION) {
         auto u = field.value.type.enum_def;
 
-        code_ +=
-            "  template<typename T> "
-            "const T *{{NULLABLE_EXT}}{{FIELD_NAME}}_as() const;";
+        if (!field.value.type.enum_def->uses_multiple_type_instances)
+          code_ +=
+              "  template<typename T> "
+              "const T *{{NULLABLE_EXT}}{{FIELD_NAME}}_as() const;";
 
         for (auto u_it = u->vals.vec.begin(); u_it != u->vals.vec.end();
              ++u_it) {
@@ -1906,7 +1907,7 @@ class CppGenerator : public BaseGenerator {
       }
 
       auto u = field.value.type.enum_def;
-      if (u->uses_type_aliases) continue;
+      if (u->uses_multiple_type_instances) continue;
 
       code_.SetValue("FIELD_NAME", Name(field));
 
@@ -2059,36 +2060,30 @@ class CppGenerator : public BaseGenerator {
 
     // Generate a CreateXDirect function with vector types as parameters
     if (has_string_or_vector_fields) {
-      code_ +=
-          "inline flatbuffers::Offset<{{STRUCT_NAME}}> "
-          "Create{{STRUCT_NAME}}Direct(";
+      code_ += "inline flatbuffers::Offset<{{STRUCT_NAME}}> "
+               "Create{{STRUCT_NAME}}Direct(";
       code_ += "    flatbuffers::FlatBufferBuilder &_fbb\\";
       for (auto it = struct_def.fields.vec.begin();
            it != struct_def.fields.vec.end(); ++it) {
         const auto &field = **it;
         if (!field.deprecated) { GenParam(field, true, ",\n    "); }
       }
-
       // Need to call "Create" with the struct namespace.
       const auto qualified_create_name =
           struct_def.defined_namespace->GetFullyQualifiedName("Create");
       code_.SetValue("CREATE_NAME", TranslateNameSpace(qualified_create_name));
-
       code_ += ") {";
-      code_ += "  return {{CREATE_NAME}}{{STRUCT_NAME}}(";
-      code_ += "      _fbb\\";
       for (auto it = struct_def.fields.vec.begin();
            it != struct_def.fields.vec.end(); ++it) {
         const auto &field = **it;
         if (!field.deprecated) {
           code_.SetValue("FIELD_NAME", Name(field));
-
           if (field.value.type.base_type == BASE_TYPE_STRING) {
             code_ +=
-                ",\n      {{FIELD_NAME}} ? "
-                "_fbb.CreateString({{FIELD_NAME}}) : 0\\";
+                "  auto {{FIELD_NAME}}__ = {{FIELD_NAME}} ? "
+                "_fbb.CreateString({{FIELD_NAME}}) : 0;";
           } else if (field.value.type.base_type == BASE_TYPE_VECTOR) {
-            code_ += ",\n      {{FIELD_NAME}} ? \\";
+            code_ += "  auto {{FIELD_NAME}}__ = {{FIELD_NAME}} ? \\";
             const auto vtype = field.value.type.VectorType();
             if (IsStruct(vtype)) {
               const auto type = WrapInNameSpace(*vtype.struct_def);
@@ -2097,9 +2092,21 @@ class CppGenerator : public BaseGenerator {
               const auto type = GenTypeWire(vtype, "", false);
               code_ += "_fbb.CreateVector<" + type + ">\\";
             }
-            code_ += "(*{{FIELD_NAME}}) : 0\\";
-          } else {
-            code_ += ",\n      {{FIELD_NAME}}\\";
+            code_ += "(*{{FIELD_NAME}}) : 0;";
+          }
+        }
+      }
+      code_ += "  return {{CREATE_NAME}}{{STRUCT_NAME}}(";
+      code_ += "      _fbb\\";
+      for (auto it = struct_def.fields.vec.begin();
+           it != struct_def.fields.vec.end(); ++it) {
+        const auto &field = **it;
+        if (!field.deprecated) {
+          code_.SetValue("FIELD_NAME", Name(field));
+          code_ += ",\n      {{FIELD_NAME}}\\";
+          if (field.value.type.base_type == BASE_TYPE_STRING ||
+              field.value.type.base_type == BASE_TYPE_VECTOR) {
+            code_ += "__\\";
           }
         }
       }
@@ -2362,8 +2369,9 @@ class CppGenerator : public BaseGenerator {
               // the underlying storage type (eg. uint8_t).
               const auto basetype = GenTypeBasic(
                   field.value.type.enum_def->underlying_type, false);
-              code += "_fbb.CreateVector((const " + basetype + "*)" + value +
-                      ".data(), " + value + ".size())";
+              code += "_fbb.CreateVectorScalarCast<" + basetype +
+                      ">(flatbuffers::data(" + value + "), " + value +
+                      ".size())";
             } else if (field.attributes.Lookup("cpp_type")) {
               auto type = GenTypeBasic(vector_type, false);
               code += "_fbb.CreateVector<" + type + ">(" + value + ".size(), ";

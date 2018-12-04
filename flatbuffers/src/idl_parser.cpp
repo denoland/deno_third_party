@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright 2014 Google Inc. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -219,7 +219,7 @@ CheckedError Parser::ParseHexNum(int nibbles, uint64_t *val) {
       return Error("escape code must be followed by " + NumToString(nibbles) +
                    " hex digits");
   std::string target(cursor_, cursor_ + nibbles);
-  *val = StringToUInt(target.c_str(), nullptr, 16);
+  *val = StringToUInt(target.c_str(), 16);
   cursor_ += nibbles;
   return NoError();
 }
@@ -1603,6 +1603,7 @@ CheckedError Parser::ParseEnum(bool is_union, EnumDef **dest) {
   ECHECK(ParseMetaData(&enum_def->attributes));
   EXPECT('{');
   if (is_union) enum_def->vals.Add("NONE", new EnumVal("NONE", 0));
+  std::set<std::pair<BaseType, StructDef*>> union_types;
   for (;;) {
     if (opts.proto_mode && attribute_ == "option") {
       ECHECK(ParseProtoOption());
@@ -1633,9 +1634,16 @@ CheckedError Parser::ParseEnum(bool is_union, EnumDef **dest) {
           if (ev.union_type.base_type != BASE_TYPE_STRUCT &&
               ev.union_type.base_type != BASE_TYPE_STRING)
             return Error("union value type may only be table/struct/string");
-          enum_def->uses_type_aliases = true;
         } else {
           ev.union_type = Type(BASE_TYPE_STRUCT, LookupCreateStruct(full_name));
+        }
+        if (!enum_def->uses_multiple_type_instances) {
+          auto union_type_key = std::make_pair(ev.union_type.base_type, ev.union_type.struct_def);
+          if (union_types.count(union_type_key) > 0) {
+            enum_def->uses_multiple_type_instances = true;
+          } else {
+            union_types.insert(union_type_key);
+          }
         }
       }
       if (Is('=')) {
@@ -2433,10 +2441,14 @@ CheckedError Parser::ParseRoot(const char *source, const char **include_paths,
 CheckedError Parser::DoParse(const char *source, const char **include_paths,
                              const char *source_filename,
                              const char *include_filename) {
-  if (source_filename &&
-      included_files_.find(source_filename) == included_files_.end()) {
-    included_files_[source_filename] = include_filename ? include_filename : "";
-    files_included_per_file_[source_filename] = std::set<std::string>();
+  if (source_filename) {
+    if (included_files_.find(source_filename) == included_files_.end()) {
+      included_files_[source_filename] =
+          include_filename ? include_filename : "";
+      files_included_per_file_[source_filename] = std::set<std::string>();
+    } else {
+      return NoError();
+    }
   }
   if (!include_paths) {
     static const char *current_directory[] = { "", nullptr };
@@ -2497,6 +2509,9 @@ CheckedError Parser::DoParse(const char *source, const char **include_paths,
         // entered into included_files_.
         // This is recursive, but only go as deep as the number of include
         // statements.
+        if (source_filename) {
+          included_files_.erase(source_filename);
+        }
         return DoParse(source, include_paths, source_filename,
                        include_filename);
       }
@@ -2644,14 +2659,15 @@ void Parser::Serialize() {
     service_offsets.push_back(offset);
     (*it)->serialized_location = offset.o;
   }
-  auto schema_offset = reflection::CreateSchema(
-      builder_,
-      builder_.CreateVectorOfSortedTables(&object_offsets),
-      builder_.CreateVectorOfSortedTables(&enum_offsets),
-      builder_.CreateString(file_identifier_),
-      builder_.CreateString(file_extension_),
-      (root_struct_def_ ? root_struct_def_->serialized_location : 0),
-      builder_.CreateVectorOfSortedTables(&service_offsets));
+  auto objs__ = builder_.CreateVectorOfSortedTables(&object_offsets);
+  auto enum__ = builder_.CreateVectorOfSortedTables(&enum_offsets);
+  auto fiid__ = builder_.CreateString(file_identifier_);
+  auto fext__ = builder_.CreateString(file_extension_);
+  auto serv__ = builder_.CreateVectorOfSortedTables(&service_offsets);
+  auto schema_offset =
+      reflection::CreateSchema(builder_, objs__, enum__, fiid__, fext__,
+        (root_struct_def_ ? root_struct_def_->serialized_location : 0),
+        serv__);
   if (opts.size_prefixed) {
     builder_.FinishSizePrefixed(schema_offset, reflection::SchemaIdentifier());
   } else {
@@ -2667,49 +2683,49 @@ Offset<reflection::Object> StructDef::Serialize(FlatBufferBuilder *builder,
         builder, static_cast<uint16_t>(it - fields.vec.begin()), parser));
   }
   auto qualified_name = defined_namespace->GetFullyQualifiedName(name);
-  return reflection::CreateObject(
-      *builder,
-      builder->CreateString(qualified_name),
-      builder->CreateVectorOfSortedTables(&field_offsets),
-      fixed,
-      static_cast<int>(minalign),
-      static_cast<int>(bytesize),
-      SerializeAttributes(builder, parser),
-      parser.opts.binary_schema_comments
-          ? builder->CreateVectorOfStrings(doc_comment)
-          : 0);
+  auto name__ = builder->CreateString(qualified_name);
+  auto flds__ = builder->CreateVectorOfSortedTables(&field_offsets);
+  auto attr__ = SerializeAttributes(builder, parser);
+  auto docs__ = parser.opts.binary_schema_comments
+                ? builder->CreateVectorOfStrings(doc_comment)
+                : 0;
+  return reflection::CreateObject(*builder, name__, flds__, fixed,
+                                  static_cast<int>(minalign),
+                                  static_cast<int>(bytesize),
+                                  attr__, docs__);
 }
 
 Offset<reflection::Field> FieldDef::Serialize(FlatBufferBuilder *builder,
                                               uint16_t id,
                                               const Parser &parser) const {
-  return reflection::CreateField(
-      *builder, builder->CreateString(name), value.type.Serialize(builder), id,
-      value.offset,
+  auto name__ = builder->CreateString(name);
+  auto type__ = value.type.Serialize(builder);
+  auto attr__ = SerializeAttributes(builder, parser);
+  auto docs__ = parser.opts.binary_schema_comments
+                ? builder->CreateVectorOfStrings(doc_comment)
+                : 0;
+  return reflection::CreateField(*builder, name__, type__, id, value.offset,
       // Is uint64>max(int64) tested?
       IsInteger(value.type.base_type) ? StringToInt(value.constant.c_str()) : 0,
       // result may be platform-dependent if underlying is float (not double)
       IsFloat(value.type.base_type) ? strtod(value.constant.c_str(), nullptr)
                                     : 0.0,
-      deprecated, required, key, SerializeAttributes(builder, parser),
-      parser.opts.binary_schema_comments
-          ? builder->CreateVectorOfStrings(doc_comment)
-          : 0);
+      deprecated, required, key, attr__, docs__);
   // TODO: value.constant is almost always "0", we could save quite a bit of
   // space by sharing it. Same for common values of value.type.
 }
 
 Offset<reflection::RPCCall> RPCCall::Serialize(FlatBufferBuilder *builder,
                                                const Parser &parser) const {
-  return reflection::CreateRPCCall(
-      *builder,
-      builder->CreateString(name),
-      request->serialized_location,
-      response->serialized_location,
-      SerializeAttributes(builder, parser),
-      parser.opts.binary_schema_comments
-          ? builder->CreateVectorOfStrings(doc_comment)
-          : 0);
+  auto name__ = builder->CreateString(name);
+  auto attr__ = SerializeAttributes(builder, parser);
+  auto docs__ = parser.opts.binary_schema_comments
+                ? builder->CreateVectorOfStrings(doc_comment)
+                : 0;
+  return reflection::CreateRPCCall(*builder, name__,
+                                   request->serialized_location,
+                                   response->serialized_location,
+                                   attr__, docs__);
 }
 
 Offset<reflection::Service> ServiceDef::Serialize(FlatBufferBuilder *builder,
@@ -2719,14 +2735,13 @@ Offset<reflection::Service> ServiceDef::Serialize(FlatBufferBuilder *builder,
     servicecall_offsets.push_back((*it)->Serialize(builder, parser));
   }
   auto qualified_name = defined_namespace->GetFullyQualifiedName(name);
-  return reflection::CreateService(
-      *builder,
-      builder->CreateString(qualified_name),
-      builder->CreateVector(servicecall_offsets),
-      SerializeAttributes(builder, parser),
-      parser.opts.binary_schema_comments
-          ? builder->CreateVectorOfStrings(doc_comment)
-          : 0);
+  auto name__ = builder->CreateString(qualified_name);
+  auto call__ = builder->CreateVector(servicecall_offsets);
+  auto attr__ = SerializeAttributes(builder, parser);
+  auto docs__ = parser.opts.binary_schema_comments
+                ? builder->CreateVectorOfStrings(doc_comment)
+                : 0;
+  return reflection::CreateService(*builder, name__, call__, attr__, docs__);
 }
 
 Offset<reflection::Enum> EnumDef::Serialize(FlatBufferBuilder *builder,
@@ -2736,29 +2751,27 @@ Offset<reflection::Enum> EnumDef::Serialize(FlatBufferBuilder *builder,
     enumval_offsets.push_back((*it)->Serialize(builder, parser));
   }
   auto qualified_name = defined_namespace->GetFullyQualifiedName(name);
-  return reflection::CreateEnum(
-      *builder,
-      builder->CreateString(qualified_name),
-      builder->CreateVector(enumval_offsets),
-      is_union,
-      underlying_type.Serialize(builder),
-      SerializeAttributes(builder, parser),
-      parser.opts.binary_schema_comments
-          ? builder->CreateVectorOfStrings(doc_comment)
-          : 0);
+  auto name__ = builder->CreateString(qualified_name);
+  auto vals__ = builder->CreateVector(enumval_offsets);
+  auto type__ = underlying_type.Serialize(builder);
+  auto attr__ = SerializeAttributes(builder, parser);
+  auto docs__ = parser.opts.binary_schema_comments
+                ? builder->CreateVectorOfStrings(doc_comment)
+                : 0;
+  return reflection::CreateEnum(*builder, name__, vals__, is_union, type__,
+                                attr__, docs__);
 }
 
 Offset<reflection::EnumVal> EnumVal::Serialize(FlatBufferBuilder *builder,
                                                const Parser &parser) const {
-  return reflection::CreateEnumVal(
-      *builder,
-      builder->CreateString(name),
-      value,
+  auto name__ = builder->CreateString(name);
+  auto type__ = union_type.Serialize(builder);
+  auto docs__ = parser.opts.binary_schema_comments
+                ? builder->CreateVectorOfStrings(doc_comment)
+                : 0;
+  return reflection::CreateEnumVal(*builder, name__, value,
       union_type.struct_def ? union_type.struct_def->serialized_location : 0,
-      union_type.Serialize(builder),
-      parser.opts.binary_schema_comments
-          ? builder->CreateVectorOfStrings(doc_comment)
-          : 0);
+      type__, docs__);
 }
 
 Offset<reflection::Type> Type::Serialize(FlatBufferBuilder *builder) const {
@@ -2778,9 +2791,9 @@ Definition::SerializeAttributes(FlatBufferBuilder *builder,
     auto it = parser.known_attributes_.find(kv->first);
     FLATBUFFERS_ASSERT(it != parser.known_attributes_.end());
     if (parser.opts.binary_schema_builtins || !it->second) {
-      attrs.push_back(reflection::CreateKeyValue(
-          *builder, builder->CreateString(kv->first),
-          builder->CreateString(kv->second->constant)));
+      auto key = builder->CreateString(kv->first);
+      auto val = builder->CreateString(kv->second->constant);
+      attrs.push_back(reflection::CreateKeyValue(*builder, key, val));
     }
   }
   if (attrs.size()) {

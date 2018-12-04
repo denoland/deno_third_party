@@ -50,7 +50,12 @@ uint32_t lcg_rand() {
 }
 void lcg_reset() { lcg_seed = 48271; }
 
-std::string test_data_path = "tests/";
+std::string test_data_path =
+#ifdef BAZEL_TEST_DATA_PATH
+    "../com_github_google_flatbuffers/tests/";
+#else
+    "tests/";
+#endif
 
 // example of how to build up a serialized buffer algorithmically:
 flatbuffers::DetachedBuffer CreateFlatBufferTest(std::string &buffer) {
@@ -161,13 +166,22 @@ flatbuffers::DetachedBuffer CreateFlatBufferTest(std::string &buffer) {
   flexbuild.Finish();
   auto flex = builder.CreateVector(flexbuild.GetBuffer());
 
+  // Test vector of enums.
+  Color colors[] = { Color_Blue, Color_Green };
+  // We use this special creation function because we have an array of
+  // pre-C++11 (enum class) enums whose size likely is int, yet its declared
+  // type in the schema is byte.
+  auto vecofcolors = builder.CreateVectorScalarCast<int8_t, Color>(colors, 2);
+
   // shortcut for creating monster with all fields set:
   auto mloc = CreateMonster(builder, &vec, 150, 80, name, inventory, Color_Blue,
                             Any_Monster, mlocs[1].Union(),  // Store a union.
                             testv, vecofstrings, vecoftables, 0,
                             nested_flatbuffer_vector, 0, false, 0, 0, 0, 0, 0,
                             0, 0, 0, 0, 3.14159f, 3.0f, 0.0f, vecofstrings2,
-                            vecofstructs, flex, testv2);
+                            vecofstructs, flex, testv2, 0, 0, 0, 0, 0, 0, 0, 0,
+                            0, 0, 0, AnyUniqueAliases_NONE, 0,
+                            AnyAmbiguousAliases_NONE, 0, vecofcolors);
 
   FinishMonsterBuffer(builder, mloc);
 
@@ -309,6 +323,14 @@ void AccessFlatBufferTest(const uint8_t *flatbuf, size_t length,
   // However, if you actually want to access the nested data, this is a
   // convenient accessor that directly gives you the root value:
   TEST_EQ(monster->flex_flexbuffer_root().AsInt16(), 1234);
+
+  // Test vector of enums:
+  auto colors = monster->vector_of_enums();
+  if (colors) {
+    TEST_EQ(colors->size(), 2);
+    TEST_EQ(colors->Get(0), Color_Blue);
+    TEST_EQ(colors->Get(1), Color_Green);
+  }
 
   // Since Flatbuffers uses explicit mechanisms to override the default
   // compiler alignment, double check that the compiler indeed obeys them:
@@ -834,7 +856,8 @@ void MiniReflectFlatBuffersTest(uint8_t *flatbuf) {
       "{ id: 2, distance: 20 }, { id: 3, distance: 30 }, "
       "{ id: 4, distance: 40 } ], "
       "flex: [ 210, 4, 5, 2 ], "
-      "test5: [ { a: 10, b: 20 }, { a: 30, b: 40 } ] "
+      "test5: [ { a: 10, b: 20 }, { a: 30, b: 40 } ], "
+      "vector_of_enums: [ Blue, Green ] "
       "}");
 }
 
@@ -1512,7 +1535,7 @@ void ValidFloatTest() {
   // Old MSVC versions may have problem with this check.
   // https://www.exploringbinary.com/visual-c-plus-plus-strtod-still-broken/
   TEST_EQ(TestValue<double>("{ Y:6.9294956446009195e15 }", "double"),
-    6929495644600920);
+    6929495644600920.0);
   // check nan's
   TEST_EQ(std::isnan(TestValue<double>("{ Y:nan }", "double")), true);
   TEST_EQ(std::isnan(TestValue<float>("{ Y:nan }", "float")), true);
@@ -1640,6 +1663,7 @@ void NumericUtilsTestInteger(const char *lower, const char *upper) {
 template<typename T>
 void NumericUtilsTestFloat(const char *lower, const char *upper) {
   T f;
+  TEST_EQ(flatbuffers::StringToNumber("", &f), false);
   TEST_EQ(flatbuffers::StringToNumber("1q", &f), false);
   TEST_EQ(f, 0);
   TEST_EQ(flatbuffers::StringToNumber(upper, &f), true);
@@ -2352,6 +2376,58 @@ void LoadVerifyBinaryTest() {
   }
 }
 
+void CreateSharedStringTest() {
+  flatbuffers::FlatBufferBuilder builder;
+  const auto one1 = builder.CreateSharedString("one");
+  const auto two = builder.CreateSharedString("two");
+  const auto one2 = builder.CreateSharedString("one");
+  TEST_EQ(one1.o, one2.o);
+  const auto onetwo = builder.CreateSharedString("onetwo");
+  TEST_EQ(onetwo.o != one1.o, true);
+  TEST_EQ(onetwo.o != two.o, true);
+
+  // Support for embedded nulls
+  const char chars_b[] = {'a', '\0', 'b'};
+  const char chars_c[] = {'a', '\0', 'c'};
+  const auto null_b1 = builder.CreateSharedString(chars_b, sizeof(chars_b));
+  const auto null_c = builder.CreateSharedString(chars_c, sizeof(chars_c));
+  const auto null_b2 = builder.CreateSharedString(chars_b, sizeof(chars_b));
+  TEST_EQ(null_b1.o != null_c.o, true); // Issue#5058 repro
+  TEST_EQ(null_b1.o, null_b2.o);
+
+  // Put the strings into an array for round trip verification.
+  const flatbuffers::Offset<flatbuffers::String> array[7] = { one1, two, one2, onetwo, null_b1, null_c, null_b2 };
+  const auto vector_offset = builder.CreateVector(array, flatbuffers::uoffset_t(7));
+  MonsterBuilder monster_builder(builder);
+  monster_builder.add_name(two);
+  monster_builder.add_testarrayofstring(vector_offset);
+  builder.Finish(monster_builder.Finish());
+
+  // Read the Monster back.
+  const auto *monster = flatbuffers::GetRoot<Monster>(builder.GetBufferPointer());
+  TEST_EQ_STR(monster->name()->c_str(), "two");
+  const auto *testarrayofstring = monster->testarrayofstring();
+  TEST_EQ(testarrayofstring->size(), flatbuffers::uoffset_t(7));
+  const auto &a = *testarrayofstring;
+  TEST_EQ_STR(a[0]->c_str(), "one");
+  TEST_EQ_STR(a[1]->c_str(), "two");
+  TEST_EQ_STR(a[2]->c_str(), "one");
+  TEST_EQ_STR(a[3]->c_str(), "onetwo");
+  TEST_EQ(a[4]->str(), (std::string(chars_b, sizeof(chars_b))));
+  TEST_EQ(a[5]->str(), (std::string(chars_c, sizeof(chars_c))));
+  TEST_EQ(a[6]->str(), (std::string(chars_b, sizeof(chars_b))));
+
+  // Make sure String::operator< works, too, since it is related to StringOffsetCompare.
+  TEST_EQ((*a[0]) < (*a[1]), true);
+  TEST_EQ((*a[1]) < (*a[0]), false);
+  TEST_EQ((*a[1]) < (*a[2]), false);
+  TEST_EQ((*a[2]) < (*a[1]), true);
+  TEST_EQ((*a[4]) < (*a[3]), true);
+  TEST_EQ((*a[5]) < (*a[4]), false);
+  TEST_EQ((*a[5]) < (*a[4]), false);
+  TEST_EQ((*a[6]) < (*a[5]), true);
+}
+
 int FlatBufferTests() {
   // clang-format off
   #if defined(FLATBUFFERS_MEMORY_LEAK_TRACKING) && \
@@ -2421,6 +2497,7 @@ int FlatBufferTests() {
   ParseProtoBufAsciiTest();
   TypeAliasesTest();
   EndianSwapTest();
+  CreateSharedStringTest();
   JsonDefaultTest();
   FlexBuffersTest();
   UninitializedVectorTest();
@@ -2434,6 +2511,18 @@ int FlatBufferTests() {
 
 int main(int /*argc*/, const char * /*argv*/ []) {
   InitTestEngine();
+
+  std::string req_locale;
+  if (flatbuffers::ReadEnvironmentVariable("FLATBUFFERS_TEST_LOCALE",
+                                          &req_locale)) {
+    TEST_OUTPUT_LINE("The environment variable FLATBUFFERS_TEST_LOCALE=%s",
+                     req_locale.c_str());
+    req_locale = flatbuffers::RemoveStringQuotes(req_locale);
+    std::string the_locale;
+    TEST_ASSERT_FUNC(
+        flatbuffers::SetGlobalTestLocale(req_locale.c_str(), &the_locale));
+    TEST_OUTPUT_LINE("The global C-locale changed: %s", the_locale.c_str());
+  }
 
   FlatBufferTests();
   FlatBufferBuilderTest();

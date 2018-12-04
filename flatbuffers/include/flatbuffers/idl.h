@@ -327,7 +327,7 @@ struct EnumVal {
 };
 
 struct EnumDef : public Definition {
-  EnumDef() : is_union(false), uses_type_aliases(false) {}
+  EnumDef() : is_union(false), uses_multiple_type_instances(false) {}
 
   EnumVal *ReverseLookup(int64_t enum_idx, bool skip_union_default = true) {
     for (auto it = vals.vec.begin() +
@@ -342,7 +342,9 @@ struct EnumDef : public Definition {
 
   SymbolTable<EnumVal> vals;
   bool is_union;
-  bool uses_type_aliases;
+  // Type is a union which uses type aliases where at least one type is
+  // available under two different names.
+  bool uses_multiple_type_instances;
   Type underlying_type;
 };
 
@@ -389,6 +391,7 @@ struct IDLOptions {
   std::string cpp_object_api_pointer_type;
   std::string cpp_object_api_string_type;
   bool gen_nullable;
+  bool gen_generated;
   std::string object_prefix;
   std::string object_suffix;
   bool union_value_namespacing;
@@ -463,6 +466,7 @@ struct IDLOptions {
         gen_compare(false),
         cpp_object_api_pointer_type("std::unique_ptr"),
         gen_nullable(false),
+        gen_generated(false),
         object_suffix("T"),
         union_value_namespacing(true),
         allow_non_utf8(false),
@@ -847,8 +851,8 @@ extern bool GenerateLobster(const Parser &parser,
 // Generate Lua files from the definitions in the Parser object.
 // See idl_gen_lua.cpp.
 extern bool GenerateLua(const Parser &parser,
-	                    const std::string &path,
-	                    const std::string &file_name);
+                      const std::string &path,
+                      const std::string &file_name);
 
 // Generate Rust files from the definitions in the Parser object.
 // See idl_gen_rust.cpp.
