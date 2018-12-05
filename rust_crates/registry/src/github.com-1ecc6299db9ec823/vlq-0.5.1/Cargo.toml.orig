@@ -1,0 +1,16 @@
+[package]
+name = "vlq"
+version = "0.5.1"
+authors = ["Tom Tromey <tom@tromey.com>", "Nick Fitzgerald <fitzgen@gmail.com>"]
+
+description = "Sourcemap-style VLQ encoder and decoder"
+documentation = "https://docs.rs/vlq/"
+readme = "README.md"
+keywords = ["vlq", "sourcemap"]
+repository = "https://github.com/tromey/vlq"
+license = "Apache-2.0/MIT"
+
+[dev-dependencies]
+quickcheck = "0.5.0"
+
+[dependencies]
