@@ -40,12 +40,6 @@
   version "1.15.2"
   resolved "https://registry.yarnpkg.com/@types/prettier/-/prettier-1.15.2.tgz#91594ea7cb6f3b1f7ea69f32621246654c7cc231"
 
-"@types/source-map-support@^0.4.1":
-  version "0.4.1"
-  resolved "https://registry.yarnpkg.com/@types/source-map-support/-/source-map-support-0.4.1.tgz#ad77158e8c6695a16629ef82b9fb9dfe7c610ac0"
-  dependencies:
-    "@types/node" "*"
-
 "@types/text-encoding@0.0.33":
   version "0.0.33"
   resolved "https://registry.yarnpkg.com/@types/text-encoding/-/text-encoding-0.0.33.tgz#67618d2da2cb6055c16c7caa2e967c1c6d1e7600"
