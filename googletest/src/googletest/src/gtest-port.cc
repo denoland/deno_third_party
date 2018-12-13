@@ -39,7 +39,6 @@
 
 #if GTEST_OS_WINDOWS
 # include <windows.h>
-# include <crtdbg.h>
 # include <io.h>
 # include <sys/stat.h>
 # include <map>  // Used in ThreadLocal.
@@ -313,19 +312,23 @@ class MemoryIsNotDeallocated
 {
  public:
   MemoryIsNotDeallocated() : old_crtdbg_flag_(0) {
+#if 0   // Ryan hack
 #ifdef _MSC_VER
     old_crtdbg_flag_ = _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG);
     // Set heap allocation block type to _IGNORE_BLOCK so that MS debug CRT
     // doesn't report mem leak if there's no matching deallocation.
     _CrtSetDbgFlag(old_crtdbg_flag_ & ~_CRTDBG_ALLOC_MEM_DF);
 #endif  //  _MSC_VER
+#endif  // Ryan hack
   }
 
   ~MemoryIsNotDeallocated() {
+#if 0   // Ryan hack
 #ifdef _MSC_VER
     // Restore the original _CRTDBG_ALLOC_MEM_DF flag
     _CrtSetDbgFlag(old_crtdbg_flag_);
 #endif  //  _MSC_VER
+#endif  // Ryan hack
   }
 
  private:
