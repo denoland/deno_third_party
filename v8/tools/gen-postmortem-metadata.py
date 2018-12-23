@@ -94,8 +94,6 @@ consts_misc = [
     { 'name': 'OddballOther',           'value': 'Oddball::kOther' },
     { 'name': 'OddballException',       'value': 'Oddball::kException' },
 
-    { 'name': 'prop_idx_first',
-        'value': 'DescriptorArray::kFirstIndex' },
     { 'name': 'prop_kind_Data',
         'value': 'kData' },
     { 'name': 'prop_kind_Accessor',
@@ -207,8 +205,8 @@ consts_misc = [
         'value': 'Context::EXTENSION_INDEX' },
     { 'name': 'context_min_slots',
         'value': 'Context::MIN_CONTEXT_SLOTS' },
-    { 'name': 'context_idx_embedder_data',
-        'value': 'Internals::kContextEmbedderDataIndex' },
+    { 'name': 'native_context_embedder_data_offset',
+        'value': 'Internals::kNativeContextEmbedderDataOffset' },
 
 
     { 'name': 'namedictionaryshape_prefix_size',
@@ -250,7 +248,9 @@ extras_accessors = [
     'FixedArray, data, uintptr_t, kHeaderSize',
     'FixedTypedArrayBase, external_pointer, Object, kExternalPointerOffset',
     'JSArrayBuffer, backing_store, Object, kBackingStoreOffset',
-    'JSArrayBufferView, byte_offset, Object, kByteOffsetOffset',
+    'JSArrayBuffer, byte_length, size_t, kByteLengthOffset',
+    'JSArrayBufferView, byte_length, size_t, kByteLengthOffset',
+    'JSArrayBufferView, byte_offset, size_t, kByteOffsetOffset',
     'JSTypedArray, length, Object, kLengthOffset',
     'Map, instance_size_in_words, char, kInstanceSizeInWordsOffset',
     'Map, inobject_properties_start_or_constructor_function_index, char, kInObjectPropertiesStartOrConstructorFunctionIndexOffset',
@@ -275,6 +275,7 @@ extras_accessors = [
     'SlicedString, parent, String, kParentOffset',
     'Code, instruction_start, uintptr_t, kHeaderSize',
     'Code, instruction_size, int, kInstructionSizeOffset',
+    'String, length, int32_t, kLengthOffset',
 ];
 
 #
@@ -285,7 +286,7 @@ extras_accessors = [
 expected_classes = [
     'ConsString', 'FixedArray', 'HeapNumber', 'JSArray', 'JSFunction',
     'JSObject', 'JSRegExp', 'JSValue', 'Map', 'Oddball', 'Script',
-    'SeqOneByteString', 'SharedFunctionInfo', 'ScopeInfo'
+    'SeqOneByteString', 'SharedFunctionInfo', 'ScopeInfo', 'JSPromise'
 ];
 
 
@@ -308,6 +309,7 @@ header = '''
 #include "src/frames-inl.h" /* for architecture-specific frame constants */
 #include "src/contexts.h"
 #include "src/objects.h"
+#include "src/objects/js-promise.h"
 #include "src/objects/js-regexp-string-iterator.h"
 
 using namespace v8::internal;

@@ -14,6 +14,8 @@
 #include "src/frames.h"
 #include "src/objects-inl.h"
 #include "src/objects/js-generator.h"
+#include "src/objects/smi.h"
+#include "src/register-configuration.h"
 #include "src/runtime/runtime.h"
 #include "src/wasm/wasm-objects.h"
 
@@ -194,6 +196,44 @@ void Generate_JSBuiltinsConstructStubHelper(MacroAssembler* masm) {
   __ Ret();
 }
 
+void Generate_StackOverflowCheck(MacroAssembler* masm, Register num_args,
+                                 Label* stack_overflow) {
+  UseScratchRegisterScope temps(masm);
+  Register scratch = temps.AcquireX();
+
+  // Check the stack for overflow.
+  // We are not trying to catch interruptions (e.g. debug break and
+  // preemption) here, so the "real stack limit" is checked.
+  Label enough_stack_space;
+  __ LoadRoot(scratch, RootIndex::kRealStackLimit);
+  // Make scratch the space we have left. The stack might already be overflowed
+  // here which will cause scratch to become negative.
+  __ Sub(scratch, sp, scratch);
+  // Check if the arguments will overflow the stack.
+  __ Cmp(scratch, Operand(num_args, LSL, kPointerSizeLog2));
+  __ B(le, stack_overflow);
+
+#if defined(V8_OS_WIN)
+  // Simulate _chkstk to extend stack guard page on Windows ARM64.
+  const int kPageSize = 4096;
+  Label chkstk, chkstk_done;
+  Register probe = temps.AcquireX();
+
+  __ Sub(scratch, sp, Operand(num_args, LSL, kPointerSizeLog2));
+  __ Mov(probe, sp);
+
+  // Loop start of stack probe.
+  __ Bind(&chkstk);
+  __ Sub(probe, probe, kPageSize);
+  __ Cmp(probe, scratch);
+  __ B(lo, &chkstk_done);
+  __ Ldrb(xzr, MemOperand(probe));
+  __ B(&chkstk);
+
+  __ Bind(&chkstk_done);
+#endif
+}
+
 }  // namespace
 
 // The construct stub for ES5 constructor functions and ES6 class constructors.
@@ -302,6 +342,19 @@ void Builtins::Generate_JSConstructStubGeneric(MacroAssembler* masm) {
     // slots for the arguments. If the number of arguments was odd, the last
     // argument will overwrite one of the receivers pushed above.
     __ Bic(x10, x12, 1);
+
+    // Check if we have enough stack space to push all arguments.
+    Label enough_stack_space, stack_overflow;
+    Generate_StackOverflowCheck(masm, x10, &stack_overflow);
+    __ B(&enough_stack_space);
+
+    __ Bind(&stack_overflow);
+    // Restore the context from the frame.
+    __ Ldr(cp, MemOperand(fp, ConstructFrameConstants::kContextOffset));
+    __ CallRuntime(Runtime::kThrowStackOverflow);
+    __ Unreachable();
+
+    __ Bind(&enough_stack_space);
     __ Claim(x10);
 
     // Copy the arguments.
@@ -533,23 +586,6 @@ void Builtins::Generate_ResumeGeneratorTrampoline(MacroAssembler* masm) {
   }
 }
 
-static void Generate_StackOverflowCheck(MacroAssembler* masm, Register num_args,
-                                        Label* stack_overflow) {
-  UseScratchRegisterScope temps(masm);
-  Register scratch = temps.AcquireX();
-
-  // Check the stack for overflow.
-  // We are not trying to catch interruptions (e.g. debug break and
-  // preemption) here, so the "real stack limit" is checked.
-  Label enough_stack_space;
-  __ LoadRoot(scratch, RootIndex::kRealStackLimit);
-  // Make scratch the space we have left. The stack might already be overflowed
-  // here which will cause scratch to become negative.
-  __ Sub(scratch, sp, scratch);
-  // Check if the arguments will overflow the stack.
-  __ Cmp(scratch, Operand(num_args, LSL, kPointerSizeLog2));
-  __ B(le, stack_overflow);
-}
 
 // Input:
 //   x0: new.target.
@@ -568,8 +604,6 @@ static void Generate_JSEntryTrampolineHelper(MacroAssembler* masm,
   Register argv = x4;
   Register scratch = x10;
   Register slots_to_claim = x11;
-
-  ProfileEntryHookStub::MaybeCallEntryHook(masm);
 
   {
     // Enter an internal frame.
@@ -750,6 +784,9 @@ static void MaybeTailCallOptimizedCodeSlot(MacroAssembler* masm,
                         Operand(Smi::FromEnum(OptimizationMarker::kNone)), eq,
                         &fallthrough);
 
+    // TODO(v8:8394): The logging of first execution will break if
+    // feedback vectors are not allocated. We need to find a different way of
+    // logging these events if required.
     TailCallRuntimeIfMarkerEquals(masm, optimized_code_entry,
                                   OptimizationMarker::kLogFirstExecution,
                                   Runtime::kFunctionFirstExecution);
@@ -882,8 +919,6 @@ static void AdvanceBytecodeOffsetOrReturn(MacroAssembler* masm,
 // The function builds an interpreter frame.  See InterpreterFrameConstants in
 // frames.h for its layout.
 void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
-  ProfileEntryHookStub::MaybeCallEntryHook(masm);
-
   Register closure = x1;
   Register feedback_vector = x2;
 
@@ -891,13 +926,29 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
   __ Ldr(feedback_vector,
          FieldMemOperand(closure, JSFunction::kFeedbackCellOffset));
   __ Ldr(feedback_vector, FieldMemOperand(feedback_vector, Cell::kValueOffset));
+
+  Label push_stack_frame;
+  // Check if feedback vector is valid. If valid, check for optimized code
+  // and update invocation count. Otherwise, setup the stack frame.
+  __ CompareRoot(feedback_vector, RootIndex::kUndefinedValue);
+  __ B(eq, &push_stack_frame);
+
   // Read off the optimized code slot in the feedback vector, and if there
   // is optimized code or an optimization marker, call that instead.
   MaybeTailCallOptimizedCodeSlot(masm, feedback_vector, x7, x4, x5);
 
+  // Increment invocation count for the function.
+  // MaybeTailCallOptimizedCodeSlot preserves feedback_vector, so safe to reuse
+  __ Ldr(w10, FieldMemOperand(feedback_vector,
+                              FeedbackVector::kInvocationCountOffset));
+  __ Add(w10, w10, Operand(1));
+  __ Str(w10, FieldMemOperand(feedback_vector,
+                              FeedbackVector::kInvocationCountOffset));
+
   // Open a frame scope to indicate that there is a frame on the stack.  The
   // MANUAL indicates that the scope shouldn't actually generate code to set up
   // the frame (that is done below).
+  __ Bind(&push_stack_frame);
   FrameScope frame_scope(masm, StackFrame::MANUAL);
   __ Push(lr, fp, cp, closure);
   __ Add(fp, sp, StandardFrameConstants::kFixedFrameSizeFromFp);
@@ -915,13 +966,6 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
          FieldMemOperand(kInterpreterBytecodeArrayRegister,
                          InterpreterData::kBytecodeArrayOffset));
   __ Bind(&has_bytecode_array);
-
-  // Increment invocation count for the function.
-  __ Ldr(x11, FieldMemOperand(closure, JSFunction::kFeedbackCellOffset));
-  __ Ldr(x11, FieldMemOperand(x11, Cell::kValueOffset));
-  __ Ldr(w10, FieldMemOperand(x11, FeedbackVector::kInvocationCountOffset));
-  __ Add(w10, w10, Operand(1));
-  __ Str(w10, FieldMemOperand(x11, FeedbackVector::kInvocationCountOffset));
 
   // Check function data field is actually a BytecodeArray object.
   if (FLAG_debug_code) {
@@ -996,9 +1040,15 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
   __ Mov(
       kInterpreterDispatchTableRegister,
       ExternalReference::interpreter_dispatch_table_address(masm->isolate()));
+#if defined(V8_OS_WIN)
+  __ Ldrb(x23, MemOperand(kInterpreterBytecodeArrayRegister,
+                          kInterpreterBytecodeOffsetRegister));
+  __ Mov(x1, Operand(x23, LSL, kPointerSizeLog2));
+#else
   __ Ldrb(x18, MemOperand(kInterpreterBytecodeArrayRegister,
                           kInterpreterBytecodeOffsetRegister));
   __ Mov(x1, Operand(x18, LSL, kPointerSizeLog2));
+#endif
   __ Ldr(kJavaScriptCallCodeStartRegister,
          MemOperand(kInterpreterDispatchTableRegister, x1));
   __ Call(kJavaScriptCallCodeStartRegister);
@@ -1181,12 +1231,14 @@ static void Generate_InterpreterEnterBytecode(MacroAssembler* masm) {
   // Set the return address to the correct point in the interpreter entry
   // trampoline.
   Label builtin_trampoline, trampoline_loaded;
-  Smi* interpreter_entry_return_pc_offset(
+  Smi interpreter_entry_return_pc_offset(
       masm->isolate()->heap()->interpreter_entry_return_pc_offset());
   DCHECK_NE(interpreter_entry_return_pc_offset, Smi::kZero);
 
-  // If the SFI function_data is an InterpreterData, get the trampoline stored
-  // in it, otherwise get the trampoline from the builtins list.
+  // If the SFI function_data is an InterpreterData, the function will have a
+  // custom copy of the interpreter entry trampoline for profiling. If so,
+  // get the custom trampoline, otherwise grab the entry address of the global
+  // trampoline.
   __ Ldr(x1, MemOperand(fp, StandardFrameConstants::kFunctionOffset));
   __ Ldr(x1, FieldMemOperand(x1, JSFunction::kSharedFunctionInfoOffset));
   __ Ldr(x1, FieldMemOperand(x1, SharedFunctionInfo::kFunctionDataOffset));
@@ -1197,14 +1249,17 @@ static void Generate_InterpreterEnterBytecode(MacroAssembler* masm) {
 
   __ Ldr(x1,
          FieldMemOperand(x1, InterpreterData::kInterpreterTrampolineOffset));
+  __ Add(x1, x1, Operand(Code::kHeaderSize - kHeapObjectTag));
   __ B(&trampoline_loaded);
 
   __ Bind(&builtin_trampoline);
-  __ LoadObject(x1, BUILTIN_CODE(masm->isolate(), InterpreterEntryTrampoline));
+  __ Mov(x1, ExternalReference::
+                 address_of_interpreter_entry_trampoline_instruction_start(
+                     masm->isolate()));
+  __ Ldr(x1, MemOperand(x1));
 
   __ Bind(&trampoline_loaded);
-  __ Add(lr, x1, Operand(interpreter_entry_return_pc_offset->value() +
-                         Code::kHeaderSize - kHeapObjectTag));
+  __ Add(lr, x1, Operand(interpreter_entry_return_pc_offset->value()));
 
   // Initialize the dispatch table register.
   __ Mov(
@@ -1232,9 +1287,15 @@ static void Generate_InterpreterEnterBytecode(MacroAssembler* masm) {
   __ SmiUntag(kInterpreterBytecodeOffsetRegister);
 
   // Dispatch to the target bytecode.
+#if defined(V8_OS_WIN)
+  __ Ldrb(x23, MemOperand(kInterpreterBytecodeArrayRegister,
+                          kInterpreterBytecodeOffsetRegister));
+  __ Mov(x1, Operand(x23, LSL, kPointerSizeLog2));
+#else
   __ Ldrb(x18, MemOperand(kInterpreterBytecodeArrayRegister,
                           kInterpreterBytecodeOffsetRegister));
   __ Mov(x1, Operand(x18, LSL, kPointerSizeLog2));
+#endif
   __ Ldr(kJavaScriptCallCodeStartRegister,
          MemOperand(kInterpreterDispatchTableRegister, x1));
   __ Jump(kJavaScriptCallCodeStartRegister);
@@ -1465,7 +1526,7 @@ void Builtins::Generate_InterpreterOnStackReplacement(MacroAssembler* masm) {
 
   // If the code object is null, just return to the caller.
   Label skip;
-  __ CompareAndBranch(x0, Smi::kZero, ne, &skip);
+  __ CompareAndBranch(x0, Smi::zero(), ne, &skip);
   __ Ret();
 
   __ Bind(&skip);
@@ -2647,8 +2708,10 @@ void Builtins::Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm) {
 void Builtins::Generate_WasmCompileLazy(MacroAssembler* masm) {
   // The function index was put in w8 by the jump table trampoline.
   // Sign extend and convert to Smi for the runtime call.
-  __ sxtw(x8, w8);
-  __ SmiTag(x8, x8);
+  __ sxtw(kWasmCompileLazyFuncIndexRegister,
+          kWasmCompileLazyFuncIndexRegister.W());
+  __ SmiTag(kWasmCompileLazyFuncIndexRegister,
+            kWasmCompileLazyFuncIndexRegister);
   {
     HardAbortScope hard_abort(masm);  // Avoid calls to Abort.
     FrameScope scope(masm, StackFrame::WASM_COMPILE_LAZY);
@@ -2665,13 +2728,13 @@ void Builtins::Generate_WasmCompileLazy(MacroAssembler* masm) {
 
     // Pass instance and function index as explicit arguments to the runtime
     // function.
-    __ Push(kWasmInstanceRegister, x8);
+    __ Push(kWasmInstanceRegister, kWasmCompileLazyFuncIndexRegister);
     // Load the correct CEntry builtin from the instance object.
     __ Ldr(x2, FieldMemOperand(kWasmInstanceRegister,
                                WasmInstanceObject::kCEntryStubOffset));
     // Initialize the JavaScript context with 0. CEntry will use it to
     // set the current context on the isolate.
-    __ Mov(cp, Smi::kZero);
+    __ Mov(cp, Smi::zero());
     __ CallRuntimeWithCEntry(Runtime::kWasmCompileLazy, x2);
     // The entrypoint address is the return value.
     __ mov(x8, kReturnRegister0);
@@ -2695,7 +2758,6 @@ void Builtins::Generate_CEntry(MacroAssembler* masm, int result_size,
   HardAbortScope hard_aborts(masm);
 
   ASM_LOCATION("CEntry::Generate entry");
-  ProfileEntryHookStub::MaybeCallEntryHook(masm);
 
   // Register parameters:
   //    x0: argc (including receiver, untagged)
@@ -2955,7 +3017,7 @@ void Builtins::Generate_DoubleToI(MacroAssembler* masm) {
   // Isolate the mantissa bits, and set the implicit '1'.
   Register mantissa = scratch2;
   __ Ubfx(mantissa, result, 0, HeapNumber::kMantissaBits);
-  __ Orr(mantissa, mantissa, 1UL << HeapNumber::kMantissaBits);
+  __ Orr(mantissa, mantissa, 1ULL << HeapNumber::kMantissaBits);
 
   // Negate the mantissa if necessary.
   __ Tst(result, kXSignMask);
