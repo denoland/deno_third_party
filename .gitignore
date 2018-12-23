@@ -9,10 +9,10 @@
 /rust_crates/registry/cache/
 /rust_crates/registry/index/
 
-/v8/buildtools/*/clang-format
-/v8/buildtools/*/gn
-/v8/buildtools/win/*.exe
-/v8/third_party/llvm-build/
+v8/buildtools/*/clang-format
+v8/buildtools/*/gn
+v8/buildtools/win/*.exe
+v8/third_party/llvm-build/
 
 # Outdated Rust crates for which we are already using a newer version.
 /rust_crates/registry/**/rand-0.4.*/

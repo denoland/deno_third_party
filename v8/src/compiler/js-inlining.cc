@@ -234,7 +234,8 @@ Node* JSInliner::CreateArtificialFrameState(Node* node, Node* outer_frame_state,
                                             int parameter_count,
                                             BailoutId bailout_id,
                                             FrameStateType frame_state_type,
-                                            Handle<SharedFunctionInfo> shared) {
+                                            Handle<SharedFunctionInfo> shared,
+                                            Node* context) {
   const FrameStateFunctionInfo* state_info =
       common()->CreateFrameStateFunctionInfo(frame_state_type,
                                              parameter_count + 1, 0, shared);
@@ -251,9 +252,11 @@ Node* JSInliner::CreateArtificialFrameState(Node* node, Node* outer_frame_state,
       static_cast<int>(params.size()), SparseInputMask::Dense());
   Node* params_node = graph()->NewNode(
       op_param, static_cast<int>(params.size()), &params.front());
-  return graph()->NewNode(op, params_node, node0, node0,
-                          jsgraph()->UndefinedConstant(), node->InputAt(0),
-                          outer_frame_state);
+  if (!context) {
+    context = jsgraph()->UndefinedConstant();
+  }
+  return graph()->NewNode(op, params_node, node0, node0, context,
+                          node->InputAt(0), outer_frame_state);
 }
 
 namespace {
@@ -293,8 +296,7 @@ bool JSInliner::DetermineCallTarget(
     // TODO(turbofan): We might want to revisit this restriction later when we
     // have a need for this, and we know how to model different native contexts
     // in the same graph in a compositional way.
-    if (function->context()->native_context() !=
-        info_->context()->native_context()) {
+    if (function->native_context() != info_->native_context()) {
       return false;
     }
 
@@ -373,7 +375,7 @@ Reduction JSInliner::Reduce(Node* node) {
 }
 
 Handle<Context> JSInliner::native_context() const {
-  return handle(info_->context()->native_context(), isolate());
+  return handle(info_->native_context(), isolate());
 }
 
 Reduction JSInliner::ReduceJSCall(Node* node) {
@@ -466,6 +468,10 @@ Reduction JSInliner::ReduceJSCall(Node* node) {
         info_->shared_info()->DebugName()->ToCString().get(),
         (exception_target != nullptr) ? " (inside try-block)" : "");
 
+  // Get the bytecode array.
+  Handle<BytecodeArray> bytecode_array =
+      handle(shared_info->GetBytecodeArray(), isolate());
+
   // Determine the targets feedback vector and its context.
   Node* context;
   Handle<FeedbackVector> feedback_vector;
@@ -473,7 +479,7 @@ Reduction JSInliner::ReduceJSCall(Node* node) {
 
   // Remember that we inlined this function.
   int inlining_id = info_->AddInlinedFunction(
-      shared_info, source_positions_->GetSourcePosition(node));
+      shared_info, bytecode_array, source_positions_->GetSourcePosition(node));
 
   // Create the subgraph for the inlinee.
   Node* start;
@@ -487,8 +493,8 @@ Reduction JSInliner::ReduceJSCall(Node* node) {
     }
     CallFrequency frequency = call.frequency();
     BytecodeGraphBuilder graph_builder(
-        zone(), shared_info, feedback_vector, BailoutId::None(), jsgraph(),
-        frequency, source_positions_, native_context(), inlining_id,
+        zone(), bytecode_array, shared_info, feedback_vector, BailoutId::None(),
+        jsgraph(), frequency, source_positions_, native_context(), inlining_id,
         flags, false, info_->is_analyze_environment_liveness());
     graph_builder.CreateGraph();
 
@@ -536,14 +542,14 @@ Reduction JSInliner::ReduceJSCall(Node* node) {
     // instantiation but before the invocation (i.e. inside {JSConstructStub}
     // where execution continues at {construct_stub_create_deopt_pc_offset}).
     Node* receiver = jsgraph()->TheHoleConstant();  // Implicit receiver.
+    Node* context = NodeProperties::GetContextInput(node);
     if (NeedsImplicitReceiver(shared_info)) {
       Node* effect = NodeProperties::GetEffectInput(node);
       Node* control = NodeProperties::GetControlInput(node);
-      Node* context = NodeProperties::GetContextInput(node);
       Node* frame_state_inside = CreateArtificialFrameState(
           node, frame_state, call.formal_arguments(),
           BailoutId::ConstructStubCreate(), FrameStateType::kConstructStub,
-          shared_info);
+          shared_info, context);
       Node* create =
           graph()->NewNode(javascript()->Create(), call.target(), new_target,
                            context, frame_state_inside, effect, control);
@@ -595,10 +601,10 @@ Reduction JSInliner::ReduceJSCall(Node* node) {
     node->ReplaceInput(1, receiver);
     // Insert a construct stub frame into the chain of frame states. This will
     // reconstruct the proper frame when deoptimizing within the constructor.
-    frame_state =
-        CreateArtificialFrameState(node, frame_state, call.formal_arguments(),
-                                   BailoutId::ConstructStubInvoke(),
-                                   FrameStateType::kConstructStub, shared_info);
+    frame_state = CreateArtificialFrameState(
+        node, frame_state, call.formal_arguments(),
+        BailoutId::ConstructStubInvoke(), FrameStateType::kConstructStub,
+        shared_info, context);
   }
 
   // Insert a JSConvertReceiver node for sloppy callees. Note that the context
@@ -606,7 +612,7 @@ Reduction JSInliner::ReduceJSCall(Node* node) {
   if (node->opcode() == IrOpcode::kJSCall &&
       is_sloppy(shared_info->language_mode()) && !shared_info->native()) {
     Node* effect = NodeProperties::GetEffectInput(node);
-    if (NodeProperties::CanBePrimitive(isolate(), call.receiver(), effect)) {
+    if (NodeProperties::CanBePrimitive(broker(), call.receiver(), effect)) {
       CallParameters const& p = CallParametersOf(node->op());
       Node* global_proxy = jsgraph()->HeapConstant(
           handle(info_->native_context()->global_proxy(), isolate()));

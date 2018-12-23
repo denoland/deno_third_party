@@ -516,7 +516,7 @@ Maybe<int> OffsetOfElementsAccess(const Operator* op, Node* index_node) {
   double max = index_type.Max();
   double min = index_type.Min();
   int index = static_cast<int>(min);
-  if (!(index == min && index == max)) return Nothing<int>();
+  if (index < 0 || index != min || index != max) return Nothing<int>();
   return Just(OffsetOfElementAt(ElementAccessOf(op), index));
 }
 
@@ -634,7 +634,9 @@ void ReduceNode(const Operator* op, EscapeAnalysisTracker::Scope* current,
         Node* value1;
         if (length == 1 &&
             vobject->FieldAt(OffsetOfElementAt(access, 0)).To(&var) &&
-            current->Get(var).To(&value)) {
+            current->Get(var).To(&value) &&
+            (value == nullptr ||
+             NodeProperties::GetType(value).Is(access.type))) {
           // The {object} has no elements, and we know that the LoadElement
           // {index} must be within bounds, thus it must always yield this
           // one element of {object}.
@@ -643,8 +645,12 @@ void ReduceNode(const Operator* op, EscapeAnalysisTracker::Scope* current,
         } else if (length == 2 &&
                    vobject->FieldAt(OffsetOfElementAt(access, 0)).To(&var0) &&
                    current->Get(var0).To(&value0) &&
+                   (value0 == nullptr ||
+                    NodeProperties::GetType(value0).Is(access.type)) &&
                    vobject->FieldAt(OffsetOfElementAt(access, 1)).To(&var1) &&
-                   current->Get(var1).To(&value1)) {
+                   current->Get(var1).To(&value1) &&
+                   (value1 == nullptr ||
+                    NodeProperties::GetType(value1).Is(access.type))) {
           if (value0 && value1) {
             // The {object} has exactly two elements, so the LoadElement
             // must return one of them (i.e. either the element at index
