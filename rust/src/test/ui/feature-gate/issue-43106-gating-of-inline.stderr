@@ -1,0 +1,42 @@
+error[E0518]: attribute should be applied to function or closure
+  --> $DIR/issue-43106-gating-of-inline.rs:11:1
+   |
+LL |   #[inline = "2100"]
+   |   ^^^^^^^^^^^^^^^^^^
+LL |   //~^ ERROR attribute should be applied to function or closure
+LL | / mod inline {
+LL | |     mod inner { #![inline="2100"] }
+LL | |     //~^ ERROR attribute should be applied to function or closure
+LL | |
+...  |
+LL | |     //~^ ERROR attribute should be applied to function or closure
+LL | | }
+   | |_- not a function or closure
+
+error[E0518]: attribute should be applied to function or closure
+  --> $DIR/issue-43106-gating-of-inline.rs:14:17
+   |
+LL |     mod inner { #![inline="2100"] }
+   |     ------------^^^^^^^^^^^^^^^^^-- not a function or closure
+
+error[E0518]: attribute should be applied to function or closure
+  --> $DIR/issue-43106-gating-of-inline.rs:19:5
+   |
+LL |     #[inline = "2100"] struct S;
+   |     ^^^^^^^^^^^^^^^^^^ --------- not a function or closure
+
+error[E0518]: attribute should be applied to function or closure
+  --> $DIR/issue-43106-gating-of-inline.rs:22:5
+   |
+LL |     #[inline = "2100"] type T = S;
+   |     ^^^^^^^^^^^^^^^^^^ ----------- not a function or closure
+
+error[E0518]: attribute should be applied to function or closure
+  --> $DIR/issue-43106-gating-of-inline.rs:25:5
+   |
+LL |     #[inline = "2100"] impl S { }
+   |     ^^^^^^^^^^^^^^^^^^ ---------- not a function or closure
+
+error: aborting due to 5 previous errors
+
+For more information about this error, try `rustc --explain E0518`.

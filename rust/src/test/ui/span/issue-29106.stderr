@@ -1,0 +1,23 @@
+error[E0597]: `x` does not live long enough
+  --> $DIR/issue-29106.rs:16:27
+   |
+LL |         y = Arc::new(Foo(&x));
+   |                           ^ borrowed value does not live long enough
+LL |     }
+   |     - `x` dropped here while still borrowed
+   |
+   = note: values in a scope are dropped in the opposite order they are created
+
+error[E0597]: `x` does not live long enough
+  --> $DIR/issue-29106.rs:23:26
+   |
+LL |         y = Rc::new(Foo(&x));
+   |                          ^ borrowed value does not live long enough
+LL |     }
+   |     - `x` dropped here while still borrowed
+   |
+   = note: values in a scope are dropped in the opposite order they are created
+
+error: aborting due to 2 previous errors
+
+For more information about this error, try `rustc --explain E0597`.
