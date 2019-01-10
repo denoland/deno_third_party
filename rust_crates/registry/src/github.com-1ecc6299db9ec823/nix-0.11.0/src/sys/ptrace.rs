@@ -320,7 +320,7 @@ pub fn cont<T: Into<Option<Signal>>>(pid: Pid, sig: T) -> Result<()> {
     }
 }
 
-/// Move the stopped tracee process forward by a single step as with
+/// Move the stopped tracee process forward by a single step as with 
 /// `ptrace(PTRACE_SINGLESTEP, ...)`
 ///
 /// Advances the execution of the process with PID `pid` by a single step optionally delivering a
@@ -331,11 +331,11 @@ pub fn cont<T: Into<Option<Signal>>>(pid: Pid, sig: T) -> Result<()> {
 /// extern crate nix;
 /// use nix::sys::ptrace::step;
 /// use nix::unistd::Pid;
-/// use nix::sys::signal::Signal;
+/// use nix::sys::signal::Signal; 
 /// use nix::sys::wait::*;
 /// fn main() {
-///     // If a process changes state to the stopped state because of a SIGUSR1
-///     // signal, this will step the process forward and forward the user
+///     // If a process changes state to the stopped state because of a SIGUSR1 
+///     // signal, this will step the process forward and forward the user 
 ///     // signal to the stopped process
 ///     match waitpid(Pid::from_raw(-1), None) {
 ///         Ok(WaitStatus::Stopped(pid, Signal::SIGUSR1)) => {
