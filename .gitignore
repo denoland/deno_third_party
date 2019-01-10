@@ -14,42 +14,5 @@ v8/buildtools/*/gn
 v8/buildtools/win/*.exe
 v8/third_party/llvm-build/
 
-# Outdated Rust crates for which we are already using a newer version.
-/rust_crates/registry/**/rand-0.4.*/
-/rust_crates/registry/**/rand_core-0.2.*/
-
-# Cargo always fetches these crates but we don't need them.
-/rust_crates/registry/**/argon2rs-*/
-/rust_crates/registry/**/backtrace-*/
-/rust_crates/registry/**/backtrace-sys-*/
-/rust_crates/registry/**/blake2-rfc-*/
-/rust_crates/registry/**/cc-*/
-/rust_crates/registry/**/cloudabi-*/
-/rust_crates/registry/**/constant_time_eq-*/
-/rust_crates/registry/**/failure_derive-*/
-/rust_crates/registry/**/failure-*/
-/rust_crates/registry/**/fuchsia-zircon-*/
-/rust_crates/registry/**/fuchsia-zircon-sys-*/
-/rust_crates/registry/**/owning_ref-*/
-/rust_crates/registry/**/proc-macro2-*/
-/rust_crates/registry/**/quote-*/
-/rust_crates/registry/**/redox_syscall-*/
-/rust_crates/registry/**/redox_termios-*/
-/rust_crates/registry/**/redox_users-*/
-/rust_crates/registry/**/rustc_version-*/
-/rust_crates/registry/**/rustc-demangle-*/
-/rust_crates/registry/**/scoped_threadpool-*/
-/rust_crates/registry/**/semver-*/
-/rust_crates/registry/**/semver-parser-*/
-/rust_crates/registry/**/stable_deref_trait-*/
-/rust_crates/registry/**/syn-*/
-/rust_crates/registry/**/synstructure-*/
-/rust_crates/registry/**/termion-*/
-/rust_crates/registry/**/unicode-xid-*/
-/rust_crates/registry/**/version_check-*/
-/rust_crates/registry/**/winapi-build-*/
-/rust_crates/registry/**/winapi-i686-pc-windows-gnu-*/
-/rust_crates/registry/**/winapi-x86_64-pc-windows-gnu-*/
-
 # ts-simple-ast should use the same version of typescript
 /node_modules/ts-simple-ast/node_modules
