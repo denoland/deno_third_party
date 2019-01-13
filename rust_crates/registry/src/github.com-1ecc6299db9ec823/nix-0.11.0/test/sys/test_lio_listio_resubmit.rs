@@ -89,7 +89,7 @@ fn test_lio_listio_resubmit() {
         while err == Err(Error::Sys(Errno::EIO)) ||
               err == Err(Error::Sys(Errno::EAGAIN)) ||
               err == Err(Error::Sys(Errno::EINTR)) {
-            //
+            // 
             thread::sleep(time::Duration::from_millis(10));
             resubmit_count += 1;
             err = liocb.listio_resubmit(LioMode::LIO_NOWAIT,

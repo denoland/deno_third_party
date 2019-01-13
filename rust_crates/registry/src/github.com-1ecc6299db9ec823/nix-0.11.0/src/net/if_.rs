@@ -217,7 +217,7 @@ libc_bitflags!(
         /// Do not provide packet information
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         IFF_NO_PI as libc::c_int;
-        /// TUN device (no Ethernet headers)
+        /// TUN device (no Ethernet headers) 
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         IFF_TUN as libc::c_int;
         /// TAP device
