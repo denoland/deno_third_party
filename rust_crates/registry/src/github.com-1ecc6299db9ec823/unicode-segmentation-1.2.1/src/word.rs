@@ -195,7 +195,7 @@ impl<'a> Iterator for UWordBounds<'a> {
             // When prev_zwj is true, for the purposes of WB3c, we are in the Zwj state,
             // however we are in the previous state for the purposes of all other rules.
             if prev_zwj {
-                match cat {
+                match cat { 
                     wd::WC_Glue_After_Zwj => continue,
                     wd::WC_E_Base_GAZ => {
                         state = Emoji;

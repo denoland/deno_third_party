@@ -54,7 +54,7 @@ fn main() {
     rl.save_history("history.txt").unwrap();
 }
 ```
-
+                          
 ## crates.io
 You can use this package in your project by adding the following
 to your `Cargo.toml`:
@@ -227,3 +227,4 @@ Rustyline          | Rust    | Ux/Win | ANSI  | Yes     | Yes           | any   
 [Prompt-toolkit]: https://github.com/jonathanslenders/python-prompt-toolkit
 [Rb-readline]: https://github.com/ConnorAtherton/rb-readline
 [Replxx]: https://github.com/AmokHuginnsson/replxx
+
