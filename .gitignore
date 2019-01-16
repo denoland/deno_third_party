@@ -3,6 +3,7 @@
 /depot_tools/.cipd_**
 /depot_tools/.versions/
 /depot_tools/external_bin/
+/depot_tools/tmp.*
 
 /rust_crates/git/.cargo-lock-git
 /rust_crates/git/db/
