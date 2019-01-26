@@ -1,0 +1,12 @@
+[package]
+name = "integer-atomics"
+description = "This crate allows you to compile code that needs the unstable integer atomics types (Atomic{U,I}{8,16,32,64}) with the stable compiler."
+version = "1.0.2"
+license = "MIT"
+authors = ["main() <main@ehvag.de>"]
+repository = "https://github.com/main--/rust-integer-atomics"
+
+[features]
+nightly = []
+
+[dependencies]
