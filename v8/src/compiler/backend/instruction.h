@@ -16,8 +16,9 @@
 #include "src/compiler/frame.h"
 #include "src/compiler/opcodes.h"
 #include "src/double.h"
+#include "src/external-reference.h"
 #include "src/globals.h"
-#include "src/macro-assembler.h"
+#include "src/register-arch.h"
 #include "src/source-position.h"
 #include "src/zone/zone-allocator.h"
 
@@ -194,7 +195,8 @@ class UnallocatedOperand final : public InstructionOperand {
       : UnallocatedOperand(virtual_register) {
     DCHECK(policy == FIXED_SLOT);
     value_ |= BasicPolicyField::encode(policy);
-    value_ |= static_cast<int64_t>(index) << FixedSlotIndexField::kShift;
+    value_ |= static_cast<uint64_t>(static_cast<int64_t>(index))
+              << FixedSlotIndexField::kShift;
     DCHECK(this->fixed_slot_index() == index);
   }
 
@@ -381,7 +383,8 @@ class ImmediateOperand : public InstructionOperand {
   explicit ImmediateOperand(ImmediateType type, int32_t value)
       : InstructionOperand(IMMEDIATE) {
     value_ |= TypeField::encode(type);
-    value_ |= static_cast<int64_t>(value) << ValueField::kShift;
+    value_ |= static_cast<uint64_t>(static_cast<int64_t>(value))
+              << ValueField::kShift;
   }
 
   ImmediateType type() const { return TypeField::decode(value_); }
@@ -419,7 +422,8 @@ class LocationOperand : public InstructionOperand {
     DCHECK(IsSupportedRepresentation(rep));
     value_ |= LocationKindField::encode(location_kind);
     value_ |= RepresentationField::encode(rep);
-    value_ |= static_cast<int64_t>(index) << IndexField::kShift;
+    value_ |= static_cast<uint64_t>(static_cast<int64_t>(index))
+              << IndexField::kShift;
   }
 
   int index() const {
@@ -704,9 +708,7 @@ class V8_EXPORT_PRIVATE ParallelMove final
     : public NON_EXPORTED_BASE(ZoneVector<MoveOperands*>),
       public NON_EXPORTED_BASE(ZoneObject) {
  public:
-  explicit ParallelMove(Zone* zone) : ZoneVector<MoveOperands*>(zone) {
-    reserve(4);
-  }
+  explicit ParallelMove(Zone* zone) : ZoneVector<MoveOperands*>(zone) {}
 
   MoveOperands* AddMove(const InstructionOperand& from,
                         const InstructionOperand& to) {
@@ -717,7 +719,9 @@ class V8_EXPORT_PRIVATE ParallelMove final
   MoveOperands* AddMove(const InstructionOperand& from,
                         const InstructionOperand& to,
                         Zone* operand_allocation_zone) {
+    if (from.EqualsCanonicalized(to)) return nullptr;
     MoveOperands* move = new (operand_allocation_zone) MoveOperands(from, to);
+    if (empty()) reserve(4);
     push_back(move);
     return move;
   }
@@ -1365,6 +1369,7 @@ class V8_EXPORT_PRIVATE InstructionBlock final
     return loop_end_;
   }
   inline bool IsLoopHeader() const { return loop_end_.IsValid(); }
+  inline bool IsSwitchTarget() const { return switch_target_; }
   inline bool ShouldAlign() const { return alignment_; }
 
   typedef ZoneVector<RpoNumber> Predecessors;
@@ -1387,6 +1392,8 @@ class V8_EXPORT_PRIVATE InstructionBlock final
 
   void set_alignment(bool val) { alignment_ = val; }
 
+  void set_switch_target(bool val) { switch_target_ = val; }
+
   bool needs_frame() const { return needs_frame_; }
   void mark_needs_frame() { needs_frame_ = true; }
 
@@ -1408,6 +1415,7 @@ class V8_EXPORT_PRIVATE InstructionBlock final
   int32_t code_end_ = -1;     // end index of arch-specific code.
   const bool deferred_ = -1;  // Block contains deferred code.
   const bool handler_;   // Block is a handler entry point.
+  bool switch_target_ = false;
   bool alignment_ = false;  // insert alignment before this block
   bool needs_frame_ = false;
   bool must_construct_frame_ = false;

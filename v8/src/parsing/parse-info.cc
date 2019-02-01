@@ -11,6 +11,7 @@
 #include "src/compiler-dispatcher/compiler-dispatcher.h"
 #include "src/counters.h"
 #include "src/heap/heap-inl.h"
+#include "src/log.h"
 #include "src/objects-inl.h"
 #include "src/objects/scope-info.h"
 #include "src/zone/zone.h"
@@ -52,6 +53,16 @@ ParseInfo::ParseInfo(Isolate* isolate, AccountingAllocator* zone_allocator)
   if (isolate->compiler_dispatcher()->IsEnabled()) {
     parallel_tasks_.reset(new ParallelTasks(isolate->compiler_dispatcher()));
   }
+  set_might_always_opt(FLAG_always_opt || FLAG_prepare_always_opt);
+  set_allow_lazy_compile(FLAG_lazy);
+  set_allow_natives_syntax(FLAG_allow_natives_syntax);
+  set_allow_harmony_public_fields(FLAG_harmony_public_fields);
+  set_allow_harmony_static_fields(FLAG_harmony_static_fields);
+  set_allow_harmony_dynamic_import(FLAG_harmony_dynamic_import);
+  set_allow_harmony_import_meta(FLAG_harmony_import_meta);
+  set_allow_harmony_numeric_separator(FLAG_harmony_numeric_separator);
+  set_allow_harmony_private_fields(FLAG_harmony_private_fields);
+  set_allow_harmony_private_methods(FLAG_harmony_private_methods);
 }
 
 ParseInfo::ParseInfo(Isolate* isolate)
@@ -69,6 +80,7 @@ void ParseInfo::SetFunctionInfo(T function) {
   set_requires_instance_members_initializer(
       function->requires_instance_members_initializer());
   set_toplevel(function->is_toplevel());
+  set_is_oneshot_iife(function->is_oneshot_iife());
   set_wrapped_as_function(function->is_wrapped());
 }
 

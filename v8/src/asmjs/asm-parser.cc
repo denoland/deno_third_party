@@ -12,6 +12,7 @@
 #include "src/asmjs/asm-js.h"
 #include "src/asmjs/asm-types.h"
 #include "src/base/optional.h"
+#include "src/base/overflowing-math.h"
 #include "src/flags.h"
 #include "src/parsing/scanner.h"
 #include "src/wasm/wasm-limits.h"
@@ -343,7 +344,7 @@ void AsmJsParser::ValidateModule() {
   RECURSE(ValidateModuleParameters());
   EXPECT_TOKEN('{');
   EXPECT_TOKEN(TOK(UseAsm));
-  SkipSemicolon();
+  RECURSE(SkipSemicolon());
   RECURSE(ValidateModuleVars());
   while (Peek(TOK(function))) {
     RECURSE(ValidateFunction());
@@ -1564,7 +1565,8 @@ AsmType* AsmJsParser::UnaryExpression() {
     if (CheckForUnsigned(&uvalue)) {
       // TODO(bradnelson): was supposed to be 0x7FFFFFFF, check errata.
       if (uvalue <= 0x80000000) {
-        current_function_builder_->EmitI32Const(-static_cast<int32_t>(uvalue));
+        current_function_builder_->EmitI32Const(
+            base::NegateWithWraparound(static_cast<int32_t>(uvalue)));
       } else {
         FAILn("Integer numeric literal out of range.");
       }
@@ -1997,7 +1999,8 @@ AsmType* AsmJsParser::BitwiseORExpression() {
     // Remember whether the first operand to this OR-expression has requested
     // deferred validation of the |0 annotation.
     // NOTE: This has to happen here to work recursively.
-    bool requires_zero = call_coercion_deferred_->IsExactly(AsmType::Signed());
+    bool requires_zero =
+        AsmType::IsExactly(call_coercion_deferred_, AsmType::Signed());
     call_coercion_deferred_ = nullptr;
     // TODO(bradnelson): Make it prettier.
     bool zero = false;

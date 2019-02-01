@@ -620,9 +620,24 @@ void InstructionSelector::VisitLoad(Node* node) {
       opcode = kArm64LdrW;
       immediate_mode = kLoadStoreImm32;
       break;
+#ifdef V8_COMPRESS_POINTERS
+    case MachineRepresentation::kTaggedSigned:
+      opcode = kArm64LdrDecompressTaggedSigned;
+      immediate_mode = kLoadStoreImm32;
+      break;
+    case MachineRepresentation::kTaggedPointer:
+      opcode = kArm64LdrDecompressTaggedPointer;
+      immediate_mode = kLoadStoreImm32;
+      break;
+    case MachineRepresentation::kTagged:
+      opcode = kArm64LdrDecompressAnyTagged;
+      immediate_mode = kLoadStoreImm32;
+      break;
+#else
     case MachineRepresentation::kTaggedSigned:   // Fall through.
     case MachineRepresentation::kTaggedPointer:  // Fall through.
     case MachineRepresentation::kTagged:         // Fall through.
+#endif
     case MachineRepresentation::kWord64:
       opcode = kArm64Ldr;
       immediate_mode = kLoadStoreImm64;
@@ -1665,7 +1680,7 @@ void InstructionSelector::EmitPrepareArguments(
   Arm64OperandGenerator g(this);
 
   // `arguments` includes alignment "holes". This means that slots bigger than
-  // kPointerSize, e.g. Simd128, will span across multiple arguments.
+  // kSystemPointerSize, e.g. Simd128, will span across multiple arguments.
   int claim_count = static_cast<int>(arguments->size());
   int slot = claim_count - 1;
   claim_count = RoundUp(claim_count, 2);
@@ -3009,7 +3024,7 @@ void InstructionSelector::VisitInt64AbsWithOverflow(Node* node) {
 
 void InstructionSelector::VisitS128Zero(Node* node) {
   Arm64OperandGenerator g(this);
-  Emit(kArm64S128Zero, g.DefineAsRegister(node), g.DefineAsRegister(node));
+  Emit(kArm64S128Zero, g.DefineAsRegister(node));
 }
 
 #define SIMD_VISIT_SPLAT(Type)                               \

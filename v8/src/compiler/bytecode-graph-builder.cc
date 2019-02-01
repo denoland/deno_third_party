@@ -747,11 +747,11 @@ class BytecodeGraphBuilder::OsrIteratorState {
  private:
   struct IteratorsStates {
     int exception_handler_index_;
-    SourcePositionTableIterator::IndexAndPosition source_iterator_state_;
+    SourcePositionTableIterator::IndexAndPositionState source_iterator_state_;
 
-    IteratorsStates(
-        int exception_handler_index,
-        SourcePositionTableIterator::IndexAndPosition source_iterator_state)
+    IteratorsStates(int exception_handler_index,
+                    SourcePositionTableIterator::IndexAndPositionState
+                        source_iterator_state)
         : exception_handler_index_(exception_handler_index),
           source_iterator_state_(source_iterator_state) {}
   };
@@ -870,7 +870,7 @@ void BytecodeGraphBuilder::VisitSingleBytecode(
     Visit##name();                     \
     break;
       BYTECODE_LIST(BYTECODE_CASE)
-#undef BYTECODE_CODE
+#undef BYTECODE_CASE
     }
   }
 }
@@ -2168,7 +2168,7 @@ void BytecodeGraphBuilder::BuildHoleCheckAndThrow(
         bytecode_iterator().current_offset()));
     Node* node;
     const Operator* op = javascript()->CallRuntime(runtime_id);
-    if (runtime_id == Runtime::kThrowReferenceError) {
+    if (runtime_id == Runtime::kThrowAccessedUninitializedVariable) {
       DCHECK_NOT_NULL(name);
       node = NewNode(op, name);
     } else {
@@ -2190,7 +2190,8 @@ void BytecodeGraphBuilder::VisitThrowReferenceErrorIfHole() {
                                  jsgraph()->TheHoleConstant());
   Node* name = jsgraph()->Constant(
       handle(bytecode_iterator().GetConstantForIndexOperand(0), isolate()));
-  BuildHoleCheckAndThrow(check_for_hole, Runtime::kThrowReferenceError, name);
+  BuildHoleCheckAndThrow(check_for_hole,
+                         Runtime::kThrowAccessedUninitializedVariable, name);
 }
 
 void BytecodeGraphBuilder::VisitThrowSuperNotCalledIfHole() {
@@ -2290,8 +2291,13 @@ ForInMode BytecodeGraphBuilder::GetForInMode(int operand_index) {
 CallFrequency BytecodeGraphBuilder::ComputeCallFrequency(int slot_id) const {
   if (invocation_frequency_.IsUnknown()) return CallFrequency();
   FeedbackNexus nexus(feedback_vector(), FeedbackVector::ToSlot(slot_id));
-  return CallFrequency(nexus.ComputeCallFrequency() *
-                       invocation_frequency_.value());
+  float feedback_frequency = nexus.ComputeCallFrequency();
+  if (feedback_frequency == 0.0f) {
+    // This is to prevent multiplying zero and infinity.
+    return CallFrequency(0.0f);
+  } else {
+    return CallFrequency(feedback_frequency * invocation_frequency_.value());
+  }
 }
 
 SpeculationMode BytecodeGraphBuilder::GetSpeculationMode(int slot_id) const {
@@ -3476,7 +3482,9 @@ Node* BytecodeGraphBuilder::MakeNode(const Operator* op, int value_input_count,
     if (has_control) ++input_count_with_deps;
     if (has_effect) ++input_count_with_deps;
     Node** buffer = EnsureInputBufferSize(input_count_with_deps);
-    memcpy(buffer, value_inputs, kPointerSize * value_input_count);
+    if (value_input_count > 0) {
+      memcpy(buffer, value_inputs, kSystemPointerSize * value_input_count);
+    }
     Node** current_input = buffer + value_input_count;
     if (has_context) {
       *current_input++ = OperatorProperties::NeedsExactContext(op)

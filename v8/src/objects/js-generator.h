@@ -6,6 +6,7 @@
 #define V8_OBJECTS_JS_GENERATOR_H_
 
 #include "src/objects/js-objects.h"
+#include "src/objects/struct.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -22,7 +23,7 @@ class JSGeneratorObject : public JSObject {
   DECL_ACCESSORS(function, JSFunction)
 
   // [context]: The context of the suspended computation.
-  DECL_ACCESSORS2(context, Context)
+  DECL_ACCESSORS(context, Context)
 
   // [receiver]: The receiver of the suspended computation.
   DECL_ACCESSORS(receiver, Object)
@@ -54,7 +55,7 @@ class JSGeneratorObject : public JSObject {
   int source_position() const;
 
   // [parameters_and_registers]: Saved interpreter register file.
-  DECL_ACCESSORS2(parameters_and_registers, FixedArray)
+  DECL_ACCESSORS(parameters_and_registers, FixedArray)
 
   DECL_CAST(JSGeneratorObject)
 
@@ -81,8 +82,7 @@ class JSGeneratorObject : public JSObject {
   DEFINE_FIELD_OFFSET_CONSTANTS(JSObject::kHeaderSize, JS_GENERATOR_FIELDS)
 #undef JS_GENERATOR_FIELDS
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSGeneratorObject);
+  OBJECT_CONSTRUCTORS(JSGeneratorObject, JSObject);
 };
 
 class JSAsyncFunctionObject : public JSGeneratorObject {
@@ -105,8 +105,7 @@ class JSAsyncFunctionObject : public JSGeneratorObject {
                                 JS_ASYNC_FUNCTION_FIELDS)
 #undef JS_ASYNC_FUNCTION_FIELDS
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSAsyncFunctionObject);
+  OBJECT_CONSTRUCTORS(JSAsyncFunctionObject, JSGeneratorObject);
 };
 
 class JSAsyncGeneratorObject : public JSGeneratorObject {
@@ -136,8 +135,7 @@ class JSAsyncGeneratorObject : public JSGeneratorObject {
                                 JS_ASYNC_GENERATOR_FIELDS)
 #undef JS_ASYNC_GENERATOR_FIELDS
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSAsyncGeneratorObject);
+  OBJECT_CONSTRUCTORS(JSAsyncGeneratorObject, JSGeneratorObject);
 };
 
 class AsyncGeneratorRequest : public Struct {
@@ -148,18 +146,24 @@ class AsyncGeneratorRequest : public Struct {
   DECL_ACCESSORS(value, Object)
   DECL_ACCESSORS(promise, Object)
 
-  static const int kNextOffset = Struct::kHeaderSize;
-  static const int kResumeModeOffset = kNextOffset + kPointerSize;
-  static const int kValueOffset = kResumeModeOffset + kPointerSize;
-  static const int kPromiseOffset = kValueOffset + kPointerSize;
-  static const int kSize = kPromiseOffset + kPointerSize;
+// Layout description.
+#define ASYNC_GENERATOR_REQUEST_FIELDS(V) \
+  V(kNextOffset, kTaggedSize)             \
+  V(kResumeModeOffset, kTaggedSize)       \
+  V(kValueOffset, kTaggedSize)            \
+  V(kPromiseOffset, kTaggedSize)          \
+  /* Total size. */                       \
+  V(kSize, 0)
+
+  DEFINE_FIELD_OFFSET_CONSTANTS(Struct::kHeaderSize,
+                                ASYNC_GENERATOR_REQUEST_FIELDS)
+#undef ASYNC_GENERATOR_REQUEST_FIELDS
 
   DECL_CAST(AsyncGeneratorRequest)
   DECL_PRINTER(AsyncGeneratorRequest)
   DECL_VERIFIER(AsyncGeneratorRequest)
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(AsyncGeneratorRequest);
+  OBJECT_CONSTRUCTORS(AsyncGeneratorRequest, Struct);
 };
 
 }  // namespace internal

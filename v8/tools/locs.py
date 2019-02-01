@@ -134,28 +134,46 @@ def GenerateCompileCommandsAndBuild(build_dir, compile_commands_file, out):
 
   ninja = "ninja -C {} -t compdb cxx cc > {}".format(
       build_dir, compile_commands_file)
-  subprocess.call(ninja, shell=True, stdout=out)
-  autoninja = "autoninja -C {}".format(build_dir)
-  subprocess.call(autoninja, shell=True, stdout=out)
+  if subprocess.call(ninja, shell=True, stdout=out) != 0:
+    print("Error: Cound not generate {} for {}.".format(
+      compile_commands_file, build_dir), file=sys.stderr)
+    exit(1)
+
+  autoninja = "autoninja -C {} v8_generated_cc_files".format(build_dir)
+  if subprocess.call(autoninja, shell=True, stdout=out) != 0:
+    print("Error: Building target 'v8_generated_cc_files'"
+      " failed for {}.".format(build_dir), file=sys.stderr)
+    exit(1)
+
   return compile_commands_file
+
+def fmt_bytes(bytes):
+  if bytes > 1024*1024*1024:
+    return int(bytes / (1024*1024)), "MB"
+  elif bytes > 1024*1024:
+    return int(bytes / (1024)), "kB"
+  return int(bytes), " B"
 
 
 class CompilationData:
-  def __init__(self, loc, expanded):
+  def __init__(self, loc, in_bytes, expanded, expanded_bytes):
     self.loc = loc
+    self.in_bytes = in_bytes
     self.expanded = expanded
+    self.expanded_bytes = expanded_bytes
 
   def ratio(self):
     return self.expanded / (self.loc+1)
 
   def to_string(self):
-    return "{:>9,} to {:>12,} ({:>5.0f}x)".format(
-        self.loc, self.expanded, self.ratio())
-
+    exp_bytes, exp_unit = fmt_bytes(self.expanded_bytes)
+    in_bytes, in_unit = fmt_bytes(self.in_bytes)
+    return "{:>9,} LoC ({:>7,} {}) to {:>12,} LoC ({:>7,} {}) ({:>5.0f}x)".format(
+        self.loc, in_bytes, in_unit, self.expanded, exp_bytes, exp_unit, self.ratio())
 
 class File(CompilationData):
-  def __init__(self, file, loc, expanded):
-    super().__init__(loc, expanded)
+  def __init__(self, file, loc, in_bytes, expanded, expanded_bytes):
+    super().__init__(loc, in_bytes, expanded, expanded_bytes)
     self.file = file
 
   def to_string(self):
@@ -164,7 +182,7 @@ class File(CompilationData):
 
 class Group(CompilationData):
   def __init__(self, name, regexp_string):
-    super().__init__(0, 0)
+    super().__init__(0, 0, 0, 0)
     self.name = name
     self.count = 0
     self.regexp = re.compile(regexp_string)
@@ -172,7 +190,9 @@ class Group(CompilationData):
   def account(self, unit):
     if (self.regexp.match(unit.file)):
       self.loc += unit.loc
+      self.in_bytes += unit.in_bytes
       self.expanded += unit.expanded
+      self.expanded_bytes += unit.expanded_bytes
       self.count += 1
 
   def to_string(self, name_width):
@@ -219,7 +239,7 @@ def SetupReportGroups():
 class Results:
   def __init__(self):
     self.groups = SetupReportGroups()
-    self.units = []
+    self.units = {}
 
   def track(self, filename):
     is_tracked = False
@@ -228,9 +248,9 @@ class Results:
         is_tracked = True
     return is_tracked
 
-  def recordFile(self, filename, loc, expanded):
-    unit = File(filename, loc, expanded)
-    self.units.append(unit)
+  def recordFile(self, filename, loc, in_bytes, expanded, expanded_bytes):
+    unit = File(filename, loc, in_bytes, expanded, expanded_bytes)
+    self.units[filename] = unit
     for group in self.groups.values():
       group.account(unit)
 
@@ -242,16 +262,18 @@ class Results:
       print(self.groups[key].to_string(self.maxGroupWidth()), file=file)
 
   def printSorted(self, key, count, reverse, out):
-    for unit in sorted(self.units, key=key, reverse=reverse)[:count]:
+    for unit in sorted(list(self.units.values()), key=key, reverse=reverse)[:count]:
       print(unit.to_string(), file=out)
 
 
 class LocsEncoder(json.JSONEncoder):
   def default(self, o):
     if isinstance(o, File):
-      return {"file": o.file, "loc": o.loc, "expanded": o.expanded}
+      return {"file": o.file, "loc": o.loc, "in_bytes": o.in_bytes,
+              "expanded": o.expanded, "expanded_bytes": o.expanded_bytes}
     if isinstance(o, Group):
-      return {"name": o.name, "loc": o.loc, "expanded": o.expanded}
+      return {"name": o.name, "loc": o.loc, "in_bytes": o.in_bytes,
+              "expanded": o.expanded, "expanded_bytes": o.expanded_bytes}
     if isinstance(o, Results):
       return {"groups": o.groups, "units": o.units}
     return json.JSONEncoder.default(self, o)
@@ -263,7 +285,7 @@ class StatusLine:
 
   def print(self, statusline, end="\r", file=sys.stdout):
     self.max_width = max(self.max_width, len(statusline))
-    print("{0:<{1}}".format(statusline, self.max_width), end=end, file=file)
+    print("{0:<{1}}".format(statusline, self.max_width), end=end, file=file, flush=True)
 
 
 class CommandSplitter:
@@ -309,16 +331,15 @@ def Main():
     for i, key in enumerate(data):
       if not result.track(key['file']):
         continue
-      if not ARGS['json']:
-        status.print(
-            "[{}/{}] Counting LoCs of {}".format(i, len(data), key['file']))
+      status.print("[{}/{}] Counting LoCs of {}".format(i, len(data), key['file']),
+        file=out)
       clangcmd, infilename, infile, outfile = cmd_splitter.process(key, temp)
       outfile.parent.mkdir(parents=True, exist_ok=True)
       if infile.is_file():
         clangcmd = clangcmd + " -E -P " + \
-            str(infile) + " -o /dev/stdout | sed '/^\\s*$/d' | wc -l"
+            str(infile) + " -o /dev/stdout | sed '/^\\s*$/d' | wc -lc"
         loccmd = ("cat {}  | sed '\\;^\\s*//;d' | sed '\\;^/\\*;d'"
-                  " | sed '/^\\*/d' | sed '/^\\s*$/d' | wc -l").format(
+                  " | sed '/^\\*/d' | sed '/^\\s*$/d' | wc -lc").format(
             infile)
         runcmd = " {} ; {}".format(clangcmd, loccmd)
         if ARGS['echocmd']:
@@ -331,8 +352,8 @@ def Main():
       status.print("[{}/{}] Summing up {}".format(
           i, len(processes), p['infile']), file=out)
       output, err = p['process'].communicate()
-      expanded, loc = list(map(int, output.split()))
-      result.recordFile(p['infile'], loc, expanded)
+      expanded, expanded_bytes, loc, in_bytes = list(map(int, output.split()))
+      result.recordFile(p['infile'], loc, in_bytes, expanded, expanded_bytes)
 
     end = time.time()
     if ARGS['json']:

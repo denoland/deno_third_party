@@ -8,7 +8,7 @@
 
 #include "src/api-inl.h"
 #include "src/objects-inl.h"
-#include "src/objects.h"
+#include "src/objects/heap-number-inl.h"
 #include "src/v8.h"
 
 #include "test/cctest/cctest.h"
@@ -47,7 +47,7 @@ Handle<T> GetLexical(const char* name) {
       isolate->native_context()->script_context_table(), isolate);
 
   ScriptContextTable::LookupResult lookup_result;
-  if (ScriptContextTable::Lookup(isolate, script_contexts, str_name,
+  if (ScriptContextTable::Lookup(isolate, *script_contexts, *str_name,
                                  &lookup_result)) {
     Handle<Context> script_context = ScriptContextTable::GetContext(
         isolate, script_contexts, lookup_result.context_index);
@@ -75,31 +75,27 @@ static inline Handle<T> CompileRunI(const char* script) {
   return OpenHandle<T>(CompileRun(script));
 }
 
-
-static Object* GetFieldValue(JSObject* obj, int property_index) {
+static Object GetFieldValue(JSObject obj, int property_index) {
   FieldIndex index = FieldIndex::ForPropertyIndex(obj->map(), property_index);
   return obj->RawFastPropertyAt(index);
 }
 
-
-static double GetDoubleFieldValue(JSObject* obj, FieldIndex field_index) {
+static double GetDoubleFieldValue(JSObject obj, FieldIndex field_index) {
   if (obj->IsUnboxedDoubleField(field_index)) {
     return obj->RawFastDoublePropertyAt(field_index);
   } else {
-    Object* value = obj->RawFastPropertyAt(field_index);
+    Object value = obj->RawFastPropertyAt(field_index);
     CHECK(value->IsMutableHeapNumber());
     return MutableHeapNumber::cast(value)->value();
   }
 }
 
-
-static double GetDoubleFieldValue(JSObject* obj, int property_index) {
+static double GetDoubleFieldValue(JSObject obj, int property_index) {
   FieldIndex index = FieldIndex::ForPropertyIndex(obj->map(), property_index);
   return GetDoubleFieldValue(obj, index);
 }
 
-
-bool IsObjectShrinkable(JSObject* obj) {
+bool IsObjectShrinkable(JSObject obj) {
   Handle<Map> filler_map =
       CcTest::i_isolate()->factory()->one_pointer_filler_map();
 
@@ -114,7 +110,6 @@ bool IsObjectShrinkable(JSObject* obj) {
   }
   return true;
 }
-
 
 TEST(JSObjectBasic) {
   // Avoid eventual completion of in-object slack tracking.
@@ -1213,6 +1208,83 @@ TEST(SubclassPromiseBuiltin) {
 TEST(SubclassPromiseBuiltinNoInlineNew) {
   FLAG_inline_new = false;
   TestSubclassPromiseBuiltin();
+}
+
+TEST(SubclassTranspiledClassHierarchy) {
+  CcTest::InitializeVM();
+  v8::HandleScope scope(CcTest::isolate());
+
+  CompileRun(
+      "Object.setPrototypeOf(B, A);\n"
+      "function A() {\n"
+      "  this.a0 = 0;\n"
+      "  this.a1 = 1;\n"
+      "  this.a2 = 1;\n"
+      "  this.a3 = 1;\n"
+      "  this.a4 = 1;\n"
+      "  this.a5 = 1;\n"
+      "  this.a6 = 1;\n"
+      "  this.a7 = 1;\n"
+      "  this.a8 = 1;\n"
+      "  this.a9 = 1;\n"
+      "  this.a10 = 1;\n"
+      "  this.a11 = 1;\n"
+      "  this.a12 = 1;\n"
+      "  this.a13 = 1;\n"
+      "  this.a14 = 1;\n"
+      "  this.a15 = 1;\n"
+      "  this.a16 = 1;\n"
+      "  this.a17 = 1;\n"
+      "  this.a18 = 1;\n"
+      "  this.a19 = 1;\n"
+      "};\n"
+      "function B() {\n"
+      "  A.call(this);\n"
+      "  this.b = 1;\n"
+      "};\n");
+
+  Handle<JSFunction> func = GetGlobal<JSFunction>("B");
+
+  // Zero instances have been created so far.
+  CHECK(!func->has_initial_map());
+
+  v8::Local<v8::Script> new_script = v8_compile("new B()");
+
+  RunI<JSObject>(new_script);
+
+  CHECK(func->has_initial_map());
+  Handle<Map> initial_map(func->initial_map(), func->GetIsolate());
+
+  CHECK_EQ(JS_OBJECT_TYPE, initial_map->instance_type());
+
+  // One instance of a subclass created.
+  CHECK_EQ(Map::kSlackTrackingCounterStart - 1,
+           initial_map->construction_counter());
+  CHECK(initial_map->IsInobjectSlackTrackingInProgress());
+
+  // Create two instances in order to ensure that |obj|.o is a data field
+  // in case of Function subclassing.
+  Handle<JSObject> obj = RunI<JSObject>(new_script);
+
+  // Two instances of a subclass created.
+  CHECK_EQ(Map::kSlackTrackingCounterStart - 2,
+           initial_map->construction_counter());
+  CHECK(initial_map->IsInobjectSlackTrackingInProgress());
+  CHECK(IsObjectShrinkable(*obj));
+
+  // Create several subclass instances to complete the tracking.
+  for (int i = 2; i < Map::kGenerousAllocationCount; i++) {
+    CHECK(initial_map->IsInobjectSlackTrackingInProgress());
+    Handle<JSObject> tmp = RunI<JSObject>(new_script);
+    CHECK_EQ(initial_map->IsInobjectSlackTrackingInProgress(),
+             IsObjectShrinkable(*tmp));
+  }
+  CHECK(!initial_map->IsInobjectSlackTrackingInProgress());
+  CHECK(!IsObjectShrinkable(*obj));
+
+  // No slack left.
+  CHECK_EQ(21, obj->map()->GetInObjectProperties());
+  CHECK_EQ(JS_OBJECT_TYPE, obj->map()->instance_type());
 }
 
 }  // namespace test_inobject_slack_tracking

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-namespace array {
+namespace array_slice {
   macro HandleSimpleArgumentsSlice(
       context: Context, args: JSArgumentsObjectWithLength, start: Smi,
       count: Smi): JSArray
@@ -21,8 +21,8 @@ namespace array {
     const newElements: FixedArray =
         Cast<FixedArray>(result.elements) otherwise Bailout;
     CopyElements(
-        PACKED_ELEMENTS, newElements, Convert<intptr>(0), sourceElements,
-        Convert<intptr>(start), Convert<intptr>(count));
+        PACKED_ELEMENTS, newElements, 0, sourceElements, Convert<intptr>(start),
+        Convert<intptr>(count));
     return result;
   }
 

@@ -5,8 +5,8 @@
 #ifndef V8_CONTEXTS_H_
 #define V8_CONTEXTS_H_
 
+#include "src/function-kind.h"
 #include "src/objects/fixed-array.h"
-
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
 
@@ -17,14 +17,11 @@ class JSGlobalObject;
 class JSGlobalProxy;
 class MicrotaskQueue;
 class NativeContext;
-class ObjectSlot;
 class RegExpMatchInfo;
 
 enum ContextLookupFlags {
   FOLLOW_CONTEXT_CHAIN = 1 << 0,
   FOLLOW_PROTOTYPE_CHAIN = 1 << 1,
-  STOP_AT_DECLARATION_SCOPE = 1 << 2,
-  SKIP_WITH_CONTEXT = 1 << 3,
 
   DONT_FOLLOW_CHAINS = 0,
   FOLLOW_CHAINS = FOLLOW_CONTEXT_CHAIN | FOLLOW_PROTOTYPE_CHAIN,
@@ -69,43 +66,6 @@ enum ContextLookupFlags {
     promise_internal_constructor)                                       \
   V(IS_PROMISE_INDEX, JSFunction, is_promise)                           \
   V(PROMISE_THEN_INDEX, JSFunction, promise_then)
-
-#define NATIVE_CONTEXT_IMPORTED_FIELDS(V)                                 \
-  V(ARRAY_ENTRIES_ITERATOR_INDEX, JSFunction, array_entries_iterator)     \
-  V(ARRAY_FOR_EACH_ITERATOR_INDEX, JSFunction, array_for_each_iterator)   \
-  V(ARRAY_KEYS_ITERATOR_INDEX, JSFunction, array_keys_iterator)           \
-  V(ARRAY_VALUES_ITERATOR_INDEX, JSFunction, array_values_iterator)       \
-  V(ERROR_FUNCTION_INDEX, JSFunction, error_function)                     \
-  V(ERROR_TO_STRING, JSFunction, error_to_string)                         \
-  V(EVAL_ERROR_FUNCTION_INDEX, JSFunction, eval_error_function)           \
-  V(GLOBAL_EVAL_FUN_INDEX, JSFunction, global_eval_fun)                   \
-  V(GLOBAL_PROXY_FUNCTION_INDEX, JSFunction, global_proxy_function)       \
-  V(MAP_DELETE_INDEX, JSFunction, map_delete)                             \
-  V(MAP_GET_INDEX, JSFunction, map_get)                                   \
-  V(MAP_HAS_INDEX, JSFunction, map_has)                                   \
-  V(MAP_SET_INDEX, JSFunction, map_set)                                   \
-  V(FUNCTION_HAS_INSTANCE_INDEX, JSFunction, function_has_instance)       \
-  V(OBJECT_VALUE_OF, JSFunction, object_value_of)                         \
-  V(OBJECT_TO_STRING, JSFunction, object_to_string)                       \
-  V(PROMISE_ALL_INDEX, JSFunction, promise_all)                           \
-  V(PROMISE_CATCH_INDEX, JSFunction, promise_catch)                       \
-  V(PROMISE_FUNCTION_INDEX, JSFunction, promise_function)                 \
-  V(RANGE_ERROR_FUNCTION_INDEX, JSFunction, range_error_function)         \
-  V(REFERENCE_ERROR_FUNCTION_INDEX, JSFunction, reference_error_function) \
-  V(SET_ADD_INDEX, JSFunction, set_add)                                   \
-  V(SET_DELETE_INDEX, JSFunction, set_delete)                             \
-  V(SET_HAS_INDEX, JSFunction, set_has)                                   \
-  V(SYNTAX_ERROR_FUNCTION_INDEX, JSFunction, syntax_error_function)       \
-  V(TYPE_ERROR_FUNCTION_INDEX, JSFunction, type_error_function)           \
-  V(URI_ERROR_FUNCTION_INDEX, JSFunction, uri_error_function)             \
-  V(WASM_COMPILE_ERROR_FUNCTION_INDEX, JSFunction,                        \
-    wasm_compile_error_function)                                          \
-  V(WASM_LINK_ERROR_FUNCTION_INDEX, JSFunction, wasm_link_error_function) \
-  V(WASM_RUNTIME_ERROR_FUNCTION_INDEX, JSFunction,                        \
-    wasm_runtime_error_function)                                          \
-  V(WEAKMAP_SET_INDEX, JSFunction, weakmap_set)                           \
-  V(WEAKMAP_GET_INDEX, JSFunction, weakmap_get)                           \
-  V(WEAKSET_ADD_INDEX, JSFunction, weakset_add)
 
 #define NATIVE_CONTEXT_FIELDS(V)                                               \
   V(GLOBAL_PROXY_INDEX, JSGlobalProxy, global_proxy_object)                    \
@@ -206,7 +166,6 @@ enum ContextLookupFlags {
   V(INT16_ARRAY_FUN_INDEX, JSFunction, int16_array_fun)                        \
   V(INT32_ARRAY_FUN_INDEX, JSFunction, int32_array_fun)                        \
   V(INT8_ARRAY_FUN_INDEX, JSFunction, int8_array_fun)                          \
-  V(INTERNAL_ARRAY_FUNCTION_INDEX, JSFunction, internal_array_function)        \
   V(INTL_COLLATOR_FUNCTION_INDEX, JSFunction, intl_collator_function)          \
   V(INTL_DATE_TIME_FORMAT_FUNCTION_INDEX, JSFunction,                          \
     intl_date_time_format_function)                                            \
@@ -230,9 +189,9 @@ enum ContextLookupFlags {
   V(JS_MODULE_NAMESPACE_MAP, Map, js_module_namespace_map)                     \
   V(JS_SET_FUN_INDEX, JSFunction, js_set_fun)                                  \
   V(JS_SET_MAP_INDEX, Map, js_set_map)                                         \
-  V(JS_WEAK_CELL_MAP_INDEX, Map, js_weak_cell_map)                             \
-  V(JS_WEAK_FACTORY_CLEANUP_ITERATOR_MAP_INDEX, Map,                           \
-    js_weak_factory_cleanup_iterator_map)                                      \
+  V(WEAK_CELL_MAP_INDEX, Map, weak_cell_map)                                   \
+  V(JS_FINALIZATION_GROUP_CLEANUP_ITERATOR_MAP_INDEX, Map,                     \
+    js_finalization_group_cleanup_iterator_map)                                \
   V(JS_WEAK_MAP_FUN_INDEX, JSFunction, js_weak_map_fun)                        \
   V(JS_WEAK_REF_MAP_INDEX, Map, js_weak_ref_map)                               \
   V(JS_WEAK_SET_FUN_INDEX, JSFunction, js_weak_set_fun)                        \
@@ -244,7 +203,6 @@ enum ContextLookupFlags {
   V(MATH_RANDOM_STATE_INDEX, ByteArray, math_random_state)                     \
   V(MATH_RANDOM_CACHE_INDEX, FixedDoubleArray, math_random_cache)              \
   V(MESSAGE_LISTENERS_INDEX, TemplateList, message_listeners)                  \
-  V(NATIVES_UTILS_OBJECT_INDEX, Object, natives_utils_object)                  \
   V(NORMALIZED_MAP_CACHE_INDEX, Object, normalized_map_cache)                  \
   V(NUMBER_FUNCTION_INDEX, JSFunction, number_function)                        \
   V(OBJECT_FUNCTION_INDEX, JSFunction, object_function)                        \
@@ -353,8 +311,41 @@ enum ContextLookupFlags {
   V(UINT32_ARRAY_FUN_INDEX, JSFunction, uint32_array_fun)                      \
   V(UINT8_ARRAY_FUN_INDEX, JSFunction, uint8_array_fun)                        \
   V(UINT8_CLAMPED_ARRAY_FUN_INDEX, JSFunction, uint8_clamped_array_fun)        \
-  NATIVE_CONTEXT_INTRINSIC_FUNCTIONS(V)                                        \
-  NATIVE_CONTEXT_IMPORTED_FIELDS(V)
+  V(ARRAY_ENTRIES_ITERATOR_INDEX, JSFunction, array_entries_iterator)          \
+  V(ARRAY_FOR_EACH_ITERATOR_INDEX, JSFunction, array_for_each_iterator)        \
+  V(ARRAY_KEYS_ITERATOR_INDEX, JSFunction, array_keys_iterator)                \
+  V(ARRAY_VALUES_ITERATOR_INDEX, JSFunction, array_values_iterator)            \
+  V(ERROR_FUNCTION_INDEX, JSFunction, error_function)                          \
+  V(ERROR_TO_STRING, JSFunction, error_to_string)                              \
+  V(EVAL_ERROR_FUNCTION_INDEX, JSFunction, eval_error_function)                \
+  V(GLOBAL_EVAL_FUN_INDEX, JSFunction, global_eval_fun)                        \
+  V(GLOBAL_PROXY_FUNCTION_INDEX, JSFunction, global_proxy_function)            \
+  V(MAP_DELETE_INDEX, JSFunction, map_delete)                                  \
+  V(MAP_GET_INDEX, JSFunction, map_get)                                        \
+  V(MAP_HAS_INDEX, JSFunction, map_has)                                        \
+  V(MAP_SET_INDEX, JSFunction, map_set)                                        \
+  V(FUNCTION_HAS_INSTANCE_INDEX, JSFunction, function_has_instance)            \
+  V(OBJECT_TO_STRING, JSFunction, object_to_string)                            \
+  V(PROMISE_ALL_INDEX, JSFunction, promise_all)                                \
+  V(PROMISE_CATCH_INDEX, JSFunction, promise_catch)                            \
+  V(PROMISE_FUNCTION_INDEX, JSFunction, promise_function)                      \
+  V(RANGE_ERROR_FUNCTION_INDEX, JSFunction, range_error_function)              \
+  V(REFERENCE_ERROR_FUNCTION_INDEX, JSFunction, reference_error_function)      \
+  V(SET_ADD_INDEX, JSFunction, set_add)                                        \
+  V(SET_DELETE_INDEX, JSFunction, set_delete)                                  \
+  V(SET_HAS_INDEX, JSFunction, set_has)                                        \
+  V(SYNTAX_ERROR_FUNCTION_INDEX, JSFunction, syntax_error_function)            \
+  V(TYPE_ERROR_FUNCTION_INDEX, JSFunction, type_error_function)                \
+  V(URI_ERROR_FUNCTION_INDEX, JSFunction, uri_error_function)                  \
+  V(WASM_COMPILE_ERROR_FUNCTION_INDEX, JSFunction,                             \
+    wasm_compile_error_function)                                               \
+  V(WASM_LINK_ERROR_FUNCTION_INDEX, JSFunction, wasm_link_error_function)      \
+  V(WASM_RUNTIME_ERROR_FUNCTION_INDEX, JSFunction,                             \
+    wasm_runtime_error_function)                                               \
+  V(WEAKMAP_SET_INDEX, JSFunction, weakmap_set)                                \
+  V(WEAKMAP_GET_INDEX, JSFunction, weakmap_get)                                \
+  V(WEAKSET_ADD_INDEX, JSFunction, weakset_add)                                \
+  NATIVE_CONTEXT_INTRINSIC_FUNCTIONS(V)
 
 // A table of all script contexts. Every loaded top-level script with top-level
 // lexical declarations contributes its ScriptContext into this table.
@@ -363,7 +354,7 @@ enum ContextLookupFlags {
 // the subsequent slots 1..used contain ScriptContexts.
 class ScriptContextTable : public FixedArray {
  public:
-  DECL_CAST2(ScriptContextTable)
+  DECL_CAST(ScriptContextTable)
 
   struct LookupResult {
     int context_index;
@@ -379,14 +370,15 @@ class ScriptContextTable : public FixedArray {
   static inline Handle<Context> GetContext(Isolate* isolate,
                                            Handle<ScriptContextTable> table,
                                            int i);
+  inline Context get_context(int i) const;
 
   // Lookup a variable `name` in a ScriptContextTable.
   // If it returns true, the variable is found and `result` contains
   // valid information about its location.
   // If it returns false, `result` is untouched.
   V8_WARN_UNUSED_RESULT
-  static bool Lookup(Isolate* isolate, Handle<ScriptContextTable> table,
-                     Handle<String> name, LookupResult* result);
+  static bool Lookup(Isolate* isolate, ScriptContextTable table, String name,
+                     LookupResult* result);
 
   V8_WARN_UNUSED_RESULT
   static Handle<ScriptContextTable> Extend(Handle<ScriptContextTable> table,
@@ -444,21 +436,21 @@ class ScriptContextTable : public FixedArray {
 // Script contexts from all top-level scripts are gathered in
 // ScriptContextTable.
 
-class Context : public HeapObjectPtr {
+class Context : public HeapObject {
  public:
   NEVER_READ_ONLY_SPACE
 
-  DECL_CAST2(Context)
+  DECL_CAST(Context)
 
   // [length]: length of the context.
   V8_INLINE int length() const;
   V8_INLINE void set_length(int value);
 
   // Setter and getter for elements.
-  V8_INLINE Object* get(int index) const;
-  V8_INLINE void set(int index, Object* value);
+  V8_INLINE Object get(int index) const;
+  V8_INLINE void set(int index, Object value);
   // Setter with explicit barrier mode.
-  V8_INLINE void set(int index, Object* value, WriteBarrierMode mode);
+  V8_INLINE void set(int index, Object value, WriteBarrierMode mode);
 
   // Layout description.
 #define CONTEXT_FIELDS(V)                                             \
@@ -552,18 +544,18 @@ class Context : public HeapObjectPtr {
   inline Context previous();
   inline void set_previous(Context context);
 
-  inline Object* next_context_link();
+  inline Object next_context_link();
 
   inline bool has_extension();
-  inline HeapObject* extension();
-  inline void set_extension(HeapObject* object);
-  JSObject* extension_object();
-  JSReceiver* extension_receiver();
+  inline HeapObject extension();
+  inline void set_extension(HeapObject object);
+  JSObject extension_object();
+  JSReceiver extension_receiver();
   ScopeInfo scope_info();
 
   // Find the module context (assuming there is one) and return the associated
   // module object.
-  Module* module();
+  Module module();
 
   // Get the context where var declarations will be hoisted to, which
   // may be the context itself.
@@ -574,11 +566,11 @@ class Context : public HeapObjectPtr {
   Context closure_context();
 
   // Returns a JSGlobalProxy object or null.
-  JSGlobalProxy* global_proxy();
-  void set_global_proxy(JSGlobalProxy* global);
+  JSGlobalProxy global_proxy();
+  void set_global_proxy(JSGlobalProxy global);
 
   // Get the JSGlobalObject object.
-  V8_EXPORT_PRIVATE JSGlobalObject* global_object();
+  V8_EXPORT_PRIVATE JSGlobalObject global_object();
 
   // Get the script context by traversing the context chain.
   Context script_context();
@@ -604,21 +596,20 @@ class Context : public HeapObjectPtr {
   // The native context also stores a list of all optimized code and a
   // list of all deoptimized code, which are needed by the deoptimizer.
   void AddOptimizedCode(Code code);
-  void SetOptimizedCodeListHead(Object* head);
-  Object* OptimizedCodeListHead();
-  void SetDeoptimizedCodeListHead(Object* head);
-  Object* DeoptimizedCodeListHead();
+  void SetOptimizedCodeListHead(Object head);
+  Object OptimizedCodeListHead();
+  void SetDeoptimizedCodeListHead(Object head);
+  Object DeoptimizedCodeListHead();
 
   Handle<Object> ErrorMessageForCodeGenerationFromStrings();
 
-  static int ImportedFieldIndexForName(Handle<String> name);
   static int IntrinsicIndexForName(Handle<String> name);
   static int IntrinsicIndexForName(const unsigned char* name, int length);
 
 #define NATIVE_CONTEXT_FIELD_ACCESSORS(index, type, name) \
-  inline void set_##name(type##ArgType value);            \
-  inline bool is_##name(type##ArgType value) const;       \
-  inline type##ArgType name() const;
+  inline void set_##name(type value);                     \
+  inline bool is_##name(type value) const;                \
+  inline type name() const;
   NATIVE_CONTEXT_FIELDS(NATIVE_CONTEXT_FIELD_ACCESSORS)
 #undef NATIVE_CONTEXT_FIELD_ACCESSORS
 
@@ -643,11 +634,12 @@ class Context : public HeapObjectPtr {
   // 4) result.is_null():
   //    There was no binding found, *index is always -1 and *attributes is
   //    always ABSENT.
-  Handle<Object> Lookup(Handle<String> name, ContextLookupFlags flags,
-                        int* index, PropertyAttributes* attributes,
-                        InitializationFlag* init_flag,
-                        VariableMode* variable_mode,
-                        bool* is_sloppy_function_name = nullptr);
+  static Handle<Object> Lookup(Handle<Context> context, Handle<String> name,
+                               ContextLookupFlags flags, int* index,
+                               PropertyAttributes* attributes,
+                               InitializationFlag* init_flag,
+                               VariableMode* variable_mode,
+                               bool* is_sloppy_function_name = nullptr);
 
   static inline int FunctionMapIndex(LanguageMode language_mode,
                                      FunctionKind kind, bool has_prototype_slot,
@@ -673,16 +665,16 @@ class Context : public HeapObjectPtr {
 #ifdef DEBUG
   // Bootstrapping-aware type checks.
   V8_EXPORT_PRIVATE static bool IsBootstrappingOrNativeContext(Isolate* isolate,
-                                                               Object* object);
-  static bool IsBootstrappingOrValidParentContext(Object* object, Context kid);
+                                                               Object object);
+  static bool IsBootstrappingOrValidParentContext(Object object, Context kid);
 #endif
 
-  OBJECT_CONSTRUCTORS(Context, HeapObjectPtr)
+  OBJECT_CONSTRUCTORS(Context, HeapObject)
 };
 
 class NativeContext : public Context {
  public:
-  DECL_CAST2(NativeContext)
+  DECL_CAST(NativeContext)
   // TODO(neis): Move some stuff from Context here.
 
   // [microtask_queue]: pointer to the MicrotaskQueue object.

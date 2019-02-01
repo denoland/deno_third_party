@@ -5,7 +5,7 @@
 #ifndef V8_OBJECTS_API_CALLBACKS_H_
 #define V8_OBJECTS_API_CALLBACKS_H_
 
-#include "src/objects.h"
+#include "src/objects/struct.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -24,7 +24,7 @@ namespace internal {
 // This shadows the accessor in the prototype.
 class AccessorInfo : public Struct {
  public:
-  DECL_ACCESSORS2(name, Name)
+  DECL_ACCESSORS(name, Name)
   DECL_INT_ACCESSORS(flags)
   DECL_ACCESSORS(expected_receiver_type, Object)
   // This directly points at a foreign C function to be used from the runtime.
@@ -64,7 +64,7 @@ class AccessorInfo : public Struct {
   // Checks whether the given receiver is compatible with this accessor.
   static bool IsCompatibleReceiverMap(Handle<AccessorInfo> info,
                                       Handle<Map> map);
-  inline bool IsCompatibleReceiver(Object* receiver);
+  inline bool IsCompatibleReceiver(Object receiver);
 
   DECL_CAST(AccessorInfo)
 
@@ -108,7 +108,7 @@ class AccessorInfo : public Struct {
   DEFINE_BIT_FIELDS(ACCESSOR_INFO_FLAGS_BIT_FIELDS)
 #undef ACCESSOR_INFO_FLAGS_BIT_FIELDS
 
-  DISALLOW_IMPLICIT_CONSTRUCTORS(AccessorInfo);
+  OBJECT_CONSTRUCTORS(AccessorInfo, Struct);
 };
 
 class AccessCheckInfo : public Struct {
@@ -124,7 +124,7 @@ class AccessCheckInfo : public Struct {
   DECL_PRINTER(AccessCheckInfo)
   DECL_VERIFIER(AccessCheckInfo)
 
-  static AccessCheckInfo* Get(Isolate* isolate, Handle<JSObject> receiver);
+  static AccessCheckInfo Get(Isolate* isolate, Handle<JSObject> receiver);
 
 // Layout description.
 #define ACCESS_CHECK_INFO_FIELDS(V)         \
@@ -138,8 +138,7 @@ class AccessCheckInfo : public Struct {
                                 ACCESS_CHECK_INFO_FIELDS)
 #undef ACCESS_CHECK_INFO_FIELDS
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(AccessCheckInfo);
+  OBJECT_CONSTRUCTORS(AccessCheckInfo, Struct);
 };
 
 class InterceptorInfo : public Struct {
@@ -190,8 +189,7 @@ class InterceptorInfo : public Struct {
   static const int kNamed = 3;
   static const int kHasNoSideEffect = 4;
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(InterceptorInfo);
+  OBJECT_CONSTRUCTORS(InterceptorInfo, Struct);
 };
 
 class CallHandlerInfo : public Tuple3 {
@@ -219,8 +217,7 @@ class CallHandlerInfo : public Tuple3 {
   static const int kJsCallbackOffset = kValue2Offset;
   static const int kDataOffset = kValue3Offset;
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(CallHandlerInfo);
+  OBJECT_CONSTRUCTORS(CallHandlerInfo, Tuple3);
 };
 
 }  // namespace internal

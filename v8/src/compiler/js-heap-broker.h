@@ -8,11 +8,13 @@
 #include "src/base/compiler-specific.h"
 #include "src/base/optional.h"
 #include "src/compiler/refs-map.h"
+#include "src/function-kind.h"
 #include "src/globals.h"
 #include "src/handles.h"
 #include "src/objects.h"
 #include "src/objects/builtin-function-id.h"
 #include "src/objects/instance-type.h"
+#include "src/ostreams.h"
 #include "src/zone/zone-containers.h"
 
 namespace v8 {
@@ -20,6 +22,7 @@ namespace internal {
 
 class BytecodeArray;
 class FixedDoubleArray;
+class HeapNumber;
 class InternalizedString;
 class JSBoundFunction;
 class JSDataView;
@@ -65,6 +68,7 @@ enum class OddballType : uint8_t {
   /* Subtypes of Name */           \
   V(InternalizedString)            \
   V(String)                        \
+  V(Symbol)                        \
   /* Subtypes of HeapObject */     \
   V(AllocationSite)                \
   V(Cell)                          \
@@ -228,11 +232,13 @@ class JSFunctionRef : public JSObjectRef {
   using JSObjectRef::JSObjectRef;
   Handle<JSFunction> object() const;
 
+  bool has_feedback_vector() const;
   bool has_initial_map() const;
   bool has_prototype() const;
   bool PrototypeRequiresRuntimeLookup() const;
 
   void Serialize();
+  bool IsSerializedForCompilation() const;
 
   // The following are available only after calling Serialize().
   ObjectRef prototype() const;
@@ -240,6 +246,7 @@ class JSFunctionRef : public JSObjectRef {
   ContextRef context() const;
   NativeContextRef native_context() const;
   SharedFunctionInfoRef shared() const;
+  FeedbackVectorRef feedback_vector() const;
   int InitialMapInstanceSizeWithMinSlack() const;
 };
 
@@ -414,6 +421,8 @@ class MapRef : public HeapObjectRef {
   int NumberOfOwnDescriptors() const;
   int GetInObjectPropertyOffset(int index) const;
   int constructor_function_index() const;
+  int NextFreePropertyIndex() const;
+  int UnusedPropertyFields() const;
   ElementsKind elements_kind() const;
   bool is_stable() const;
   bool is_extensible() const;
@@ -430,6 +439,8 @@ class MapRef : public HeapObjectRef {
   bool is_undetectable() const;
   bool is_callable() const;
   bool has_hidden_prototype() const;
+  bool supports_fast_array_iteration() const;
+  bool supports_fast_array_resize() const;
 
 #define DEF_TESTER(Type, ...) bool Is##Type##Map() const;
   INSTANCE_TYPE_CHECKERS(DEF_TESTER)
@@ -527,6 +538,9 @@ class SharedFunctionInfoRef : public HeapObjectRef {
 #define DECL_ACCESSOR(type, name) type name() const;
   BROKER_SFI_FIELDS(DECL_ACCESSOR)
 #undef DECL_ACCESSOR
+
+  bool IsSerializedForCompilation(FeedbackVectorRef feedback) const;
+  void SetSerializedForCompilation(FeedbackVectorRef feedback);
 };
 
 class StringRef : public NameRef {
@@ -539,6 +553,12 @@ class StringRef : public NameRef {
   base::Optional<double> ToNumber();
   bool IsSeqString() const;
   bool IsExternalString() const;
+};
+
+class SymbolRef : public NameRef {
+ public:
+  using NameRef::NameRef;
+  Handle<Symbol> object() const;
 };
 
 class JSTypedArrayRef : public JSObjectRef {
@@ -589,6 +609,9 @@ class InternalizedStringRef : public StringRef {
  public:
   using StringRef::StringRef;
   Handle<InternalizedString> object() const;
+
+  uint32_t array_index() const;
+  static const uint32_t kNotAnArrayIndex = -1;  // 2^32-1 is not a valid index.
 };
 
 class V8_EXPORT_PRIVATE JSHeapBroker : public NON_EXPORTED_BASE(ZoneObject) {
@@ -614,13 +637,14 @@ class V8_EXPORT_PRIVATE JSHeapBroker : public NON_EXPORTED_BASE(ZoneObject) {
   // Never returns nullptr.
   ObjectData* GetOrCreateData(Handle<Object>);
   // Like the previous but wraps argument in handle first (for convenience).
-  ObjectData* GetOrCreateData(Object*);
+  ObjectData* GetOrCreateData(Object);
 
   // Check if {object} is any native context's %ArrayPrototype% or
   // %ObjectPrototype%.
   bool IsArrayOrObjectPrototype(const JSObjectRef& object) const;
 
-  void Trace(const char* format, ...) const;
+  std::ostream& Trace();
+
   void IncrementTracingIndentation();
   void DecrementTracingIndentation();
 
@@ -640,9 +664,9 @@ class V8_EXPORT_PRIVATE JSHeapBroker : public NON_EXPORTED_BASE(ZoneObject) {
   ZoneUnorderedSet<Handle<JSObject>, Handle<JSObject>::hash,
                    Handle<JSObject>::equal_to>
       array_and_object_prototypes_;
-
   BrokerMode mode_ = kDisabled;
-  unsigned tracing_indentation_ = 0;
+  StdoutStream trace_out_;
+  unsigned trace_indentation_ = 0;
   PerIsolateCompilerCache* compiler_cache_;
 
   static const size_t kMinimalRefsBucketCount = 8;     // must be power of 2
@@ -659,6 +683,11 @@ class V8_EXPORT_PRIVATE JSHeapBroker : public NON_EXPORTED_BASE(ZoneObject) {
 class Reduction;
 Reduction NoChangeBecauseOfMissingData(JSHeapBroker* broker,
                                        const char* function, int line);
+
+#define TRACE_BROKER(broker, x)                               \
+  do {                                                        \
+    if (FLAG_trace_heap_broker) broker->Trace() << x << '\n'; \
+  } while (false)
 
 }  // namespace compiler
 }  // namespace internal

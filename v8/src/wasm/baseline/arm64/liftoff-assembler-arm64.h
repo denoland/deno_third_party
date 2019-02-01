@@ -41,8 +41,8 @@ namespace liftoff {
 //  -----+--------------------+  <-- stack ptr (sp)
 //
 
-constexpr int32_t kInstanceOffset = 2 * kPointerSize;
-constexpr int32_t kFirstStackSlotOffset = kInstanceOffset + kPointerSize;
+constexpr int32_t kInstanceOffset = 2 * kSystemPointerSize;
+constexpr int32_t kFirstStackSlotOffset = kInstanceOffset + kSystemPointerSize;
 constexpr int32_t kConstantStackSpace = 0;
 
 inline MemOperand GetStackSlot(uint32_t index) {
@@ -148,7 +148,8 @@ void LiftoffAssembler::PatchPrepareStackFrame(int offset,
     return;
   }
 #endif
-  PatchingAssembler patching_assembler(AssemblerOptions{}, buffer_ + offset, 1);
+  PatchingAssembler patching_assembler(AssemblerOptions{},
+                                       buffer_start_ + offset, 1);
   patching_assembler.PatchSubSp(bytes);
 }
 
@@ -188,12 +189,26 @@ void LiftoffAssembler::LoadFromInstance(Register dst, uint32_t offset,
   }
 }
 
+void LiftoffAssembler::LoadTaggedPointerFromInstance(Register dst,
+                                                     uint32_t offset) {
+  LoadFromInstance(dst, offset, kTaggedSize);
+}
+
 void LiftoffAssembler::SpillInstance(Register instance) {
   Str(instance, liftoff::GetInstanceOperand());
 }
 
 void LiftoffAssembler::FillInstanceInto(Register dst) {
   Ldr(dst, liftoff::GetInstanceOperand());
+}
+
+void LiftoffAssembler::LoadTaggedPointer(Register dst, Register src_addr,
+                                         Register offset_reg,
+                                         uint32_t offset_imm,
+                                         LiftoffRegList pinned) {
+  STATIC_ASSERT(kTaggedSize == kInt64Size);
+  Load(LiftoffRegister(dst), src_addr, offset_reg, offset_imm,
+       LoadType::kI64Load, pinned);
 }
 
 void LiftoffAssembler::Load(LiftoffRegister dst, Register src_addr,
@@ -349,7 +364,7 @@ void LiftoffAssembler::Fill(LiftoffRegister reg, uint32_t index,
   Ldr(liftoff::GetRegFromType(reg, type), src);
 }
 
-void LiftoffAssembler::FillI64Half(Register, uint32_t half_index) {
+void LiftoffAssembler::FillI64Half(Register, uint32_t index, RegPairHalf) {
   UNREACHABLE();
 }
 
@@ -1010,7 +1025,7 @@ void LiftoffStackSlots::Construct() {
         asm_->Poke(liftoff::GetRegFromType(slot.src_.reg(), slot.src_.type()),
                    poke_offset);
         break;
-      case LiftoffAssembler::VarState::KIntConst:
+      case LiftoffAssembler::VarState::kIntConst:
         DCHECK(slot.src_.type() == kWasmI32 || slot.src_.type() == kWasmI64);
         if (slot.src_.i32_const() == 0) {
           Register zero_reg = slot.src_.type() == kWasmI32 ? wzr : xzr;

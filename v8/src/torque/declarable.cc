@@ -6,6 +6,7 @@
 #include <iostream>
 
 #include "src/torque/declarable.h"
+#include "src/torque/global-context.h"
 
 namespace v8 {
 namespace internal {
@@ -14,13 +15,8 @@ namespace torque {
 DEFINE_CONTEXTUAL_VARIABLE(CurrentScope);
 
 std::ostream& operator<<(std::ostream& os, const QualifiedName& name) {
-  bool first = true;
   for (const std::string& qualifier : name.namespace_qualification) {
-    if (!first) {
-      os << "::";
-    }
-    os << qualifier;
-    first = false;
+    os << qualifier << "::";
   }
   return os << name.name;
 }
@@ -99,6 +95,12 @@ base::Optional<TypeVector> Generic::InferSpecializationTypes(
   }
   return result;
 }
+
+bool Namespace::IsDefaultNamespace() const {
+  return this == GlobalContext::GetDefaultNamespace();
+}
+
+bool Namespace::IsTestNamespace() const { return name() == kTestNamespaceName; }
 
 }  // namespace torque
 }  // namespace internal

@@ -34,12 +34,12 @@ Page* HeapTester::AllocateByteArraysOnPage(
     ByteArray byte_array;
     CHECK(AllocateByteArrayForTest(heap, kLength, TENURED).To(&byte_array));
     byte_arrays->push_back(byte_array);
-    page = Page::FromAddress(byte_array->address());
+    page = Page::FromHeapObject(byte_array);
     size_t n = page->area_size() / kSize;
     for (size_t i = 1; i < n; i++) {
       CHECK(AllocateByteArrayForTest(heap, kLength, TENURED).To(&byte_array));
       byte_arrays->push_back(byte_array);
-      CHECK_EQ(page, Page::FromAddress(byte_array->address()));
+      CHECK_EQ(page, Page::FromHeapObject(byte_array));
     }
   }
   CHECK_NULL(page->invalidated_slots());
@@ -55,7 +55,7 @@ HEAP_TEST(InvalidatedSlotsNoInvalidatedRanges) {
   for (ByteArray byte_array : byte_arrays) {
     Address start = byte_array->address() + ByteArray::kHeaderSize;
     Address end = byte_array->address() + byte_array->Size();
-    for (Address addr = start; addr < end; addr += kPointerSize) {
+    for (Address addr = start; addr < end; addr += kTaggedSize) {
       CHECK(filter.IsValid(addr));
     }
   }
@@ -76,7 +76,7 @@ HEAP_TEST(InvalidatedSlotsSomeInvalidatedRanges) {
     ByteArray byte_array = byte_arrays[i];
     Address start = byte_array->address() + ByteArray::kHeaderSize;
     Address end = byte_array->address() + byte_array->Size();
-    for (Address addr = start; addr < end; addr += kPointerSize) {
+    for (Address addr = start; addr < end; addr += kTaggedSize) {
       if (i % 2 == 0) {
         CHECK(!filter.IsValid(addr));
       } else {
@@ -101,7 +101,7 @@ HEAP_TEST(InvalidatedSlotsAllInvalidatedRanges) {
     ByteArray byte_array = byte_arrays[i];
     Address start = byte_array->address() + ByteArray::kHeaderSize;
     Address end = byte_array->address() + byte_array->Size();
-    for (Address addr = start; addr < end; addr += kPointerSize) {
+    for (Address addr = start; addr < end; addr += kTaggedSize) {
       CHECK(!filter.IsValid(addr));
     }
   }
@@ -126,7 +126,7 @@ HEAP_TEST(InvalidatedSlotsAfterTrimming) {
     Address start = byte_array->address() + ByteArray::kHeaderSize;
     Address end = byte_array->address() + byte_array->Size();
     heap->RightTrimFixedArray(byte_array, byte_array->length());
-    for (Address addr = start; addr < end; addr += kPointerSize) {
+    for (Address addr = start; addr < end; addr += kTaggedSize) {
       CHECK_EQ(filter.IsValid(addr), page->SweepingDone());
     }
   }
@@ -152,7 +152,7 @@ HEAP_TEST(InvalidatedSlotsEvacuationCandidate) {
     ByteArray byte_array = byte_arrays[i];
     Address start = byte_array->address() + ByteArray::kHeaderSize;
     Address end = byte_array->address() + byte_array->Size();
-    for (Address addr = start; addr < end; addr += kPointerSize) {
+    for (Address addr = start; addr < end; addr += kTaggedSize) {
       CHECK(filter.IsValid(addr));
     }
   }
@@ -176,7 +176,7 @@ HEAP_TEST(InvalidatedSlotsResetObjectRegression) {
     ByteArray byte_array = byte_arrays[i];
     Address start = byte_array->address() + ByteArray::kHeaderSize;
     Address end = byte_array->address() + byte_array->Size();
-    for (Address addr = start; addr < end; addr += kPointerSize) {
+    for (Address addr = start; addr < end; addr += kTaggedSize) {
       CHECK(!filter.IsValid(addr));
     }
   }
@@ -246,8 +246,8 @@ HEAP_TEST(InvalidatedSlotsRightTrimLargeFixedArray) {
   Handle<FixedArray> trimmed;
   {
     AlwaysAllocateScope always_allocate(isolate);
-    trimmed =
-        factory->NewFixedArray(kMaxRegularHeapObjectSize / kPointerSize + 100);
+    trimmed = factory->NewFixedArray(
+        kMaxRegularHeapObjectSize / kTaggedSize + 100, TENURED);
     DCHECK(MemoryChunk::FromHeapObject(*trimmed)->InLargeObjectSpace());
   }
   heap::SimulateIncrementalMarking(heap);
@@ -330,28 +330,16 @@ HEAP_TEST(InvalidatedSlotsFastToSlow) {
   // Start incremental marking.
   heap::SimulateIncrementalMarking(heap);
   // Set properties to point to the evacuation candidate.
-  JSReceiver::SetProperty(isolate, obj, prop_name1, evacuated,
-                          LanguageMode::kSloppy)
-      .Check();
-  JSReceiver::SetProperty(isolate, obj, prop_name2, evacuated,
-                          LanguageMode::kSloppy)
-      .Check();
-  JSReceiver::SetProperty(isolate, obj, prop_name3, evacuated,
-                          LanguageMode::kSloppy)
-      .Check();
+  Object::SetProperty(isolate, obj, prop_name1, evacuated).Check();
+  Object::SetProperty(isolate, obj, prop_name2, evacuated).Check();
+  Object::SetProperty(isolate, obj, prop_name3, evacuated).Check();
 
   {
     HandleScope scope(isolate);
     Handle<HeapObject> dead = factory->NewFixedArray(1);
-    JSReceiver::SetProperty(isolate, obj, prop_name1, dead,
-                            LanguageMode::kSloppy)
-        .Check();
-    JSReceiver::SetProperty(isolate, obj, prop_name2, dead,
-                            LanguageMode::kSloppy)
-        .Check();
-    JSReceiver::SetProperty(isolate, obj, prop_name3, dead,
-                            LanguageMode::kSloppy)
-        .Check();
+    Object::SetProperty(isolate, obj, prop_name1, dead).Check();
+    Object::SetProperty(isolate, obj, prop_name2, dead).Check();
+    Object::SetProperty(isolate, obj, prop_name3, dead).Check();
     Handle<Map> map(obj->map(), isolate);
     Handle<Map> normalized_map =
         Map::Normalize(isolate, map, CLEAR_INOBJECT_PROPERTIES, "testing");

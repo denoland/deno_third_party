@@ -939,14 +939,9 @@ PerIsolateData::RealmScope::~RealmScope() {
     Global<Context>& realm = data_->realms_[i];
     if (realm.IsEmpty()) continue;
     DisposeModuleEmbedderData(realm.Get(data_->isolate_));
-    // TODO(adamk): No need to reset manually, Globals reset when destructed.
-    realm.Reset();
   }
   data_->realm_count_ = 0;
   delete[] data_->realms_;
-  // TODO(adamk): No need to reset manually, Globals reset when destructed.
-  if (!data_->realm_shared_.IsEmpty())
-    data_->realm_shared_.Reset();
 }
 
 
@@ -1665,18 +1660,11 @@ Local<String> Shell::Stringify(Isolate* isolate, Local<Value> value) {
   v8::Local<v8::Context> context =
       v8::Local<v8::Context>::New(isolate, evaluation_context_);
   if (stringify_function_.IsEmpty()) {
-    int source_index = i::NativesCollection<i::D8>::GetIndex("d8");
-    i::Vector<const char> source_string =
-        i::NativesCollection<i::D8>::GetScriptSource(source_index);
-    i::Vector<const char> source_name =
-        i::NativesCollection<i::D8>::GetScriptName(source_index);
     Local<String> source =
-        String::NewFromUtf8(isolate, source_string.start(),
-                            NewStringType::kNormal, source_string.length())
+        String::NewFromUtf8(isolate, stringify_source_, NewStringType::kNormal)
             .ToLocalChecked();
     Local<String> name =
-        String::NewFromUtf8(isolate, source_name.start(),
-                            NewStringType::kNormal, source_name.length())
+        String::NewFromUtf8(isolate, "d8-stringify", NewStringType::kNormal)
             .ToLocalChecked();
     ScriptOrigin origin(name);
     Local<Script> script =
@@ -2421,8 +2409,8 @@ bool ends_with(const char* input, const char* suffix) {
   return false;
 }
 
-void SourceGroup::Execute(Isolate* isolate) {
-  bool exception_was_thrown = false;
+bool SourceGroup::Execute(Isolate* isolate) {
+  bool success = true;
   for (int i = begin_offset_; i < end_offset_; ++i) {
     const char* arg = argv_[i];
     if (strcmp(arg, "-e") == 0 && i + 1 < end_offset_) {
@@ -2438,7 +2426,7 @@ void SourceGroup::Execute(Isolate* isolate) {
       if (!Shell::ExecuteString(isolate, source, file_name,
                                 Shell::kNoPrintResult, Shell::kReportExceptions,
                                 Shell::kNoProcessMessageQueue)) {
-        exception_was_thrown = true;
+        success = false;
         break;
       }
       ++i;
@@ -2446,7 +2434,7 @@ void SourceGroup::Execute(Isolate* isolate) {
     } else if (ends_with(arg, ".mjs")) {
       Shell::set_script_executed();
       if (!Shell::ExecuteModule(isolate, arg)) {
-        exception_was_thrown = true;
+        success = false;
         break;
       }
       continue;
@@ -2455,7 +2443,7 @@ void SourceGroup::Execute(Isolate* isolate) {
       arg = argv_[++i];
       Shell::set_script_executed();
       if (!Shell::ExecuteModule(isolate, arg)) {
-        exception_was_thrown = true;
+        success = false;
         break;
       }
       continue;
@@ -2478,13 +2466,11 @@ void SourceGroup::Execute(Isolate* isolate) {
     if (!Shell::ExecuteString(isolate, source, file_name, Shell::kNoPrintResult,
                               Shell::kReportExceptions,
                               Shell::kProcessMessageQueue)) {
-      exception_was_thrown = true;
+      success = false;
       break;
     }
   }
-  if (exception_was_thrown != Shell::options.expected_to_throw) {
-    base::OS::ExitProcess(1);
-  }
+  return success;
 }
 
 Local<String> SourceGroup::ReadFile(Isolate* isolate, const char* name) {
@@ -2941,6 +2927,7 @@ int Shell::RunMain(Isolate* isolate, int argc, char* argv[], bool last_run) {
   for (int i = 1; i < options.num_isolates; ++i) {
     options.isolate_sources[i].StartExecuteInThread();
   }
+  bool success = true;
   {
     SetWaitUntilDone(isolate, false);
     if (options.lcov_file) {
@@ -2957,8 +2944,8 @@ int Shell::RunMain(Isolate* isolate, int argc, char* argv[], bool last_run) {
       Context::Scope cscope(context);
       InspectorClient inspector_client(context, options.enable_inspector);
       PerIsolateData::RealmScope realm_scope(PerIsolateData::Get(isolate));
-      options.isolate_sources[0].Execute(isolate);
-      CompleteMessageLoop(isolate);
+      if (!options.isolate_sources[0].Execute(isolate)) success = false;
+      if (!CompleteMessageLoop(isolate)) success = false;
     }
     if (!use_existing_context) {
       DisposeModuleEmbedderData(context);
@@ -2974,7 +2961,8 @@ int Shell::RunMain(Isolate* isolate, int argc, char* argv[], bool last_run) {
     }
   }
   CleanupWorkers();
-  return 0;
+  // In order to finish successfully, success must be != expected_to_throw.
+  return success == Shell::options.expected_to_throw ? 1 : 0;
 }
 
 
@@ -3008,12 +2996,11 @@ bool ProcessMessages(
     const std::function<platform::MessageLoopBehavior()>& behavior) {
   while (true) {
     i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
-    i::SaveContext saved_context(i_isolate);
-    i_isolate->set_context(i::Context());
+    i::SaveAndSwitchContext saved_context(i_isolate, i::Context());
     SealHandleScope shs(isolate);
     while (v8::platform::PumpMessageLoop(g_default_platform, isolate,
                                          behavior())) {
-      isolate->RunMicrotasks();
+      MicrotasksScope::PerformCheckpoint(isolate);
     }
     if (g_default_platform->IdleTasksEnabled(isolate)) {
       v8::platform::RunIdleTasks(g_default_platform, isolate,
@@ -3037,7 +3024,7 @@ bool ProcessMessages(
 }
 }  // anonymous namespace
 
-void Shell::CompleteMessageLoop(Isolate* isolate) {
+bool Shell::CompleteMessageLoop(Isolate* isolate) {
   auto get_waiting_behaviour = [isolate]() {
     base::MutexGuard guard(isolate_status_lock_.Pointer());
     DCHECK_GT(isolate_status_.count(isolate), 0);
@@ -3049,7 +3036,7 @@ void Shell::CompleteMessageLoop(Isolate* isolate) {
     return should_wait ? platform::MessageLoopBehavior::kWaitForWork
                        : platform::MessageLoopBehavior::kDoNotWait;
   };
-  ProcessMessages(isolate, get_waiting_behaviour);
+  return ProcessMessages(isolate, get_waiting_behaviour);
 }
 
 bool Shell::EmptyMessageQueues(Isolate* isolate) {
@@ -3121,7 +3108,7 @@ class Serializer : public ValueSerializer::Delegate {
   }
 
   Maybe<uint32_t> GetWasmModuleTransferId(
-      Isolate* isolate, Local<WasmCompiledModule> module) override {
+      Isolate* isolate, Local<WasmModuleObject> module) override {
     DCHECK_NOT_NULL(data_);
     for (size_t index = 0; index < wasm_modules_.size(); ++index) {
       if (wasm_modules_[index] == module) {
@@ -3202,13 +3189,13 @@ class Serializer : public ValueSerializer::Delegate {
     for (const auto& global_array_buffer : array_buffers_) {
       Local<ArrayBuffer> array_buffer =
           Local<ArrayBuffer>::New(isolate_, global_array_buffer);
-      if (!array_buffer->IsNeuterable()) {
+      if (!array_buffer->IsDetachable()) {
         Throw(isolate_, "ArrayBuffer could not be transferred");
         return Nothing<bool>();
       }
 
       ArrayBuffer::Contents contents = MaybeExternalize(array_buffer);
-      array_buffer->Neuter();
+      array_buffer->Detach();
       data_->array_buffer_contents_.push_back(contents);
     }
 
@@ -3220,7 +3207,7 @@ class Serializer : public ValueSerializer::Delegate {
   std::unique_ptr<SerializationData> data_;
   std::vector<Global<ArrayBuffer>> array_buffers_;
   std::vector<Global<SharedArrayBuffer>> shared_array_buffers_;
-  std::vector<Global<WasmCompiledModule>> wasm_modules_;
+  std::vector<Global<WasmModuleObject>> wasm_modules_;
   std::vector<ExternalizedContents> externalized_contents_;
   size_t current_memory_usage_;
 
@@ -3256,22 +3243,21 @@ class Deserializer : public ValueDeserializer::Delegate {
       Isolate* isolate, uint32_t clone_id) override {
     DCHECK_NOT_NULL(data_);
     if (clone_id < data_->shared_array_buffer_contents().size()) {
-      SharedArrayBuffer::Contents contents =
+      const SharedArrayBuffer::Contents contents =
           data_->shared_array_buffer_contents().at(clone_id);
-      return SharedArrayBuffer::New(isolate_, contents.Data(),
-                                    contents.ByteLength());
+      return SharedArrayBuffer::New(isolate_, contents);
     }
     return MaybeLocal<SharedArrayBuffer>();
   }
 
-  MaybeLocal<WasmCompiledModule> GetWasmModuleFromId(
+  MaybeLocal<WasmModuleObject> GetWasmModuleFromId(
       Isolate* isolate, uint32_t transfer_id) override {
     DCHECK_NOT_NULL(data_);
     if (transfer_id < data_->transferrable_modules().size()) {
-      return WasmCompiledModule::FromTransferrableModule(
+      return WasmModuleObject::FromTransferrableModule(
           isolate_, data_->transferrable_modules().at(transfer_id));
     }
-    return MaybeLocal<WasmCompiledModule>();
+    return MaybeLocal<WasmModuleObject>();
   }
 
  private:

@@ -7,12 +7,14 @@
 
 #include "src/objects/code.h"
 
+#include "src/code-desc.h"
 #include "src/interpreter/bytecode-register.h"
 #include "src/isolate.h"
 #include "src/objects/dictionary.h"
 #include "src/objects/instance-type-inl.h"
 #include "src/objects/map-inl.h"
 #include "src/objects/maybe-object-inl.h"
+#include "src/objects/oddball.h"
 #include "src/objects/smi-inl.h"
 #include "src/v8memory.h"
 
@@ -24,22 +26,25 @@ namespace internal {
 
 OBJECT_CONSTRUCTORS_IMPL(DeoptimizationData, FixedArray)
 OBJECT_CONSTRUCTORS_IMPL(BytecodeArray, FixedArrayBase)
-OBJECT_CONSTRUCTORS_IMPL(AbstractCode, HeapObjectPtr)
+OBJECT_CONSTRUCTORS_IMPL(AbstractCode, HeapObject)
+OBJECT_CONSTRUCTORS_IMPL(DependentCode, WeakFixedArray)
+OBJECT_CONSTRUCTORS_IMPL(CodeDataContainer, HeapObject)
+OBJECT_CONSTRUCTORS_IMPL(SourcePositionTableWithFrameCache, Tuple2)
 
 NEVER_READ_ONLY_SPACE_IMPL(AbstractCode)
 
-CAST_ACCESSOR2(AbstractCode)
-CAST_ACCESSOR2(BytecodeArray)
-CAST_ACCESSOR2(Code)
+CAST_ACCESSOR(AbstractCode)
+CAST_ACCESSOR(BytecodeArray)
+CAST_ACCESSOR(Code)
 CAST_ACCESSOR(CodeDataContainer)
 CAST_ACCESSOR(DependentCode)
-CAST_ACCESSOR2(DeoptimizationData)
+CAST_ACCESSOR(DeoptimizationData)
 CAST_ACCESSOR(SourcePositionTableWithFrameCache)
 
-ACCESSORS2(SourcePositionTableWithFrameCache, source_position_table, ByteArray,
-           kSourcePositionTableIndex)
-ACCESSORS2(SourcePositionTableWithFrameCache, stack_frame_cache,
-           SimpleNumberDictionary, kStackFrameCacheIndex)
+ACCESSORS(SourcePositionTableWithFrameCache, source_position_table, ByteArray,
+          kSourcePositionTableIndex)
+ACCESSORS(SourcePositionTableWithFrameCache, stack_frame_cache,
+          SimpleNumberDictionary, kStackFrameCacheIndex)
 
 int AbstractCode::raw_instruction_size() {
   if (IsCode()) {
@@ -65,8 +70,8 @@ ByteArray AbstractCode::source_position_table() {
   }
 }
 
-Object* AbstractCode::stack_frame_cache() {
-  Object* maybe_table;
+Object AbstractCode::stack_frame_cache() {
+  Object maybe_table;
   if (IsCode()) {
     maybe_table = GetCode()->source_position_table();
   } else {
@@ -146,11 +151,11 @@ BytecodeArray AbstractCode::GetBytecodeArray() {
   return BytecodeArray::cast(*this);
 }
 
-DependentCode* DependentCode::next_link() {
+DependentCode DependentCode::next_link() {
   return DependentCode::cast(Get(kNextLinkIndex)->GetHeapObjectAssumeStrong());
 }
 
-void DependentCode::set_next_link(DependentCode* next) {
+void DependentCode::set_next_link(DependentCode next) {
   Set(kNextLinkIndex, HeapObjectReference::Strong(next));
 }
 
@@ -187,35 +192,27 @@ void DependentCode::copy(int from, int to) {
   Set(kCodesStartIndex + to, Get(kCodesStartIndex + from));
 }
 
-OBJECT_CONSTRUCTORS_IMPL(Code, HeapObjectPtr)
+OBJECT_CONSTRUCTORS_IMPL(Code, HeapObject)
 NEVER_READ_ONLY_SPACE_IMPL(Code)
 
 INT_ACCESSORS(Code, raw_instruction_size, kInstructionSizeOffset)
+INT_ACCESSORS(Code, safepoint_table_offset, kSafepointTableOffsetOffset)
 INT_ACCESSORS(Code, handler_table_offset, kHandlerTableOffsetOffset)
-#define CODE_ACCESSORS(name, type, offset) \
-  ACCESSORS_CHECKED2(Code, name, type, offset, true, !Heap::InNewSpace(value))
-#define CODE_ACCESSORS2(name, type, offset) \
-  ACCESSORS_CHECKED3(Code, name, type, offset, true, !Heap::InNewSpace(value))
-// TODO(3770): Use shared SYNCHRONIZED_ACCESSORS_CHECKED2 when migrating
-// CodeDataContainer*.
-#define SYNCHRONIZED_CODE_ACCESSORS(name, type, offset)         \
-  type* Code::name() const {                                    \
-    type* value = type::cast(ACQUIRE_READ_FIELD(this, offset)); \
-    return value;                                               \
-  }                                                             \
-  void Code::set_##name(type* value, WriteBarrierMode mode) {   \
-    DCHECK(!Heap::InNewSpace(value));                           \
-    RELEASE_WRITE_FIELD(this, offset, value);                   \
-    CONDITIONAL_WRITE_BARRIER(this, offset, value, mode);       \
-  }
-CODE_ACCESSORS2(relocation_info, ByteArray, kRelocationInfoOffset)
-CODE_ACCESSORS2(deoptimization_data, FixedArray, kDeoptimizationDataOffset)
+INT_ACCESSORS(Code, code_comments_offset, kCodeCommentsOffsetOffset)
+#define CODE_ACCESSORS(name, type, offset)           \
+  ACCESSORS_CHECKED2(Code, name, type, offset, true, \
+                     !Heap::InYoungGeneration(value))
+#define SYNCHRONIZED_CODE_ACCESSORS(name, type, offset)           \
+  SYNCHRONIZED_ACCESSORS_CHECKED2(Code, name, type, offset, true, \
+                                  !Heap::InYoungGeneration(value))
+
+CODE_ACCESSORS(relocation_info, ByteArray, kRelocationInfoOffset)
+CODE_ACCESSORS(deoptimization_data, FixedArray, kDeoptimizationDataOffset)
 CODE_ACCESSORS(source_position_table, Object, kSourcePositionTableOffset)
 // Concurrent marker needs to access kind specific flags in code data container.
 SYNCHRONIZED_CODE_ACCESSORS(code_data_container, CodeDataContainer,
                             kCodeDataContainerOffset)
 #undef CODE_ACCESSORS
-#undef CODE_ACCESSORS2
 #undef SYNCHRONIZED_CODE_ACCESSORS
 
 void Code::WipeOutHeader() {
@@ -235,28 +232,18 @@ void Code::clear_padding() {
 }
 
 ByteArray Code::SourcePositionTable() const {
-  Object* maybe_table = source_position_table();
+  Object maybe_table = source_position_table();
   if (maybe_table->IsByteArray()) return ByteArray::cast(maybe_table);
   DCHECK(maybe_table->IsSourcePositionTableWithFrameCache());
   return SourcePositionTableWithFrameCache::cast(maybe_table)
       ->source_position_table();
 }
 
-uint32_t Code::stub_key() const {
-  DCHECK(is_stub());
-  return READ_UINT32_FIELD(this, kStubKeyOffset);
-}
-
-void Code::set_stub_key(uint32_t key) {
-  DCHECK(is_stub() || key == 0);  // Allow zero initialization.
-  WRITE_UINT32_FIELD(this, kStubKeyOffset, key);
-}
-
-Object* Code::next_code_link() const {
+Object Code::next_code_link() const {
   return code_data_container()->next_code_link();
 }
 
-void Code::set_next_code_link(Object* value) {
+void Code::set_next_code_link(Object value) {
   code_data_container()->set_next_code_link(value);
 }
 
@@ -439,19 +426,6 @@ inline void Code::set_can_have_weak_objects(bool value) {
   code_data_container()->set_kind_specific_flags(updated);
 }
 
-inline bool Code::is_construct_stub() const {
-  DCHECK(kind() == BUILTIN);
-  int32_t flags = code_data_container()->kind_specific_flags();
-  return IsConstructStubField::decode(flags);
-}
-
-inline void Code::set_is_construct_stub(bool value) {
-  DCHECK(kind() == BUILTIN);
-  int32_t previous = code_data_container()->kind_specific_flags();
-  int32_t updated = IsConstructStubField::update(previous, value);
-  code_data_container()->set_kind_specific_flags(updated);
-}
-
 inline bool Code::is_promise_rejection() const {
   DCHECK(kind() == BUILTIN);
   int32_t flags = code_data_container()->kind_specific_flags();
@@ -510,18 +484,6 @@ int Code::stack_slots() const {
   return StackSlotsField::decode(READ_UINT32_FIELD(this, kFlagsOffset));
 }
 
-int Code::safepoint_table_offset() const {
-  DCHECK(has_safepoint_info());
-  return READ_INT32_FIELD(this, kSafepointTableOffsetOffset);
-}
-
-void Code::set_safepoint_table_offset(int offset) {
-  CHECK_LE(0, offset);
-  DCHECK(has_safepoint_info() || offset == 0);  // Allow zero initialization.
-  DCHECK(IsAligned(offset, static_cast<unsigned>(kIntSize)));
-  WRITE_INT32_FIELD(this, kSafepointTableOffsetOffset, offset);
-}
-
 bool Code::marked_for_deoptimization() const {
   DCHECK(kind() == OPTIMIZED_FUNCTION);
   int32_t flags = code_data_container()->kind_specific_flags();
@@ -564,28 +526,28 @@ void Code::set_deopt_already_counted(bool flag) {
   code_data_container()->set_kind_specific_flags(updated);
 }
 
-bool Code::is_stub() const { return kind() == STUB; }
 bool Code::is_optimized_code() const { return kind() == OPTIMIZED_FUNCTION; }
 bool Code::is_wasm_code() const { return kind() == WASM_FUNCTION; }
 
 int Code::constant_pool_offset() const {
-  if (!FLAG_enable_embedded_constant_pool) return InstructionSize();
-  return READ_INT_FIELD(this, kConstantPoolOffset);
+  if (!FLAG_enable_embedded_constant_pool) return code_comments_offset();
+  return READ_INT_FIELD(this, kConstantPoolOffsetOffset);
 }
 
 void Code::set_constant_pool_offset(int value) {
   if (!FLAG_enable_embedded_constant_pool) return;
-  WRITE_INT_FIELD(this, kConstantPoolOffset, value);
+  DCHECK_LE(value, InstructionSize());
+  WRITE_INT_FIELD(this, kConstantPoolOffsetOffset, value);
 }
 
 Address Code::constant_pool() const {
-  if (FLAG_enable_embedded_constant_pool) {
-    int offset = constant_pool_offset();
-    if (offset < InstructionSize()) {
-      return InstructionStart() + offset;
-    }
-  }
-  return kNullAddress;
+  if (!has_constant_pool()) return kNullAddress;
+  return InstructionStart() + constant_pool_offset();
+}
+
+Address Code::code_comments() const {
+  if (!has_code_comments()) return kNullAddress;
+  return InstructionStart() + code_comments_offset();
 }
 
 Code Code::GetCodeFromTargetAddress(Address address) {
@@ -597,29 +559,29 @@ Code Code::GetCodeFromTargetAddress(Address address) {
     CHECK(address < start || address >= end);
   }
 
-  HeapObject* code = HeapObject::FromAddress(address - Code::kHeaderSize);
+  HeapObject code = HeapObject::FromAddress(address - Code::kHeaderSize);
   // Unchecked cast because we can't rely on the map currently
   // not being a forwarding pointer.
   return Code::unchecked_cast(code);
 }
 
-Object* Code::GetObjectFromCodeEntry(Address code_entry) {
-  return HeapObject::FromAddress(code_entry - Code::kHeaderSize);
-}
-
-Object* Code::GetObjectFromEntryAddress(Address location_of_address) {
-  return GetObjectFromCodeEntry(Memory<Address>(location_of_address));
+Code Code::GetObjectFromEntryAddress(Address location_of_address) {
+  Address code_entry = Memory<Address>(location_of_address);
+  HeapObject code = HeapObject::FromAddress(code_entry - Code::kHeaderSize);
+  // Unchecked cast because we can't rely on the map currently
+  // not being a forwarding pointer.
+  return Code::unchecked_cast(code);
 }
 
 bool Code::CanContainWeakObjects() {
   return is_optimized_code() && can_have_weak_objects();
 }
 
-bool Code::IsWeakObject(HeapObject* object) {
+bool Code::IsWeakObject(HeapObject object) {
   return (CanContainWeakObjects() && IsWeakObjectInOptimizedCode(object));
 }
 
-bool Code::IsWeakObjectInOptimizedCode(HeapObject* object) {
+bool Code::IsWeakObjectInOptimizedCode(HeapObject object) {
   Map map = object->synchronized_map();
   InstanceType instance_type = map->instance_type();
   if (InstanceTypeChecker::IsMap(instance_type)) {
@@ -735,8 +697,8 @@ int BytecodeArray::parameter_count() const {
   return READ_INT_FIELD(this, kParameterSizeOffset) >> kSystemPointerSizeLog2;
 }
 
-ACCESSORS2(BytecodeArray, constant_pool, FixedArray, kConstantPoolOffset)
-ACCESSORS2(BytecodeArray, handler_table, ByteArray, kHandlerTableOffset)
+ACCESSORS(BytecodeArray, constant_pool, FixedArray, kConstantPoolOffset)
+ACCESSORS(BytecodeArray, handler_table, ByteArray, kHandlerTableOffset)
 ACCESSORS(BytecodeArray, source_position_table, Object,
           kSourcePositionTableOffset)
 
@@ -751,7 +713,7 @@ Address BytecodeArray::GetFirstBytecodeAddress() {
 }
 
 ByteArray BytecodeArray::SourcePositionTable() {
-  Object* maybe_table = source_position_table();
+  Object maybe_table = source_position_table();
   if (maybe_table->IsByteArray()) return ByteArray::cast(maybe_table);
   DCHECK(maybe_table->IsSourcePositionTableWithFrameCache());
   return SourcePositionTableWithFrameCache::cast(maybe_table)
@@ -759,7 +721,7 @@ ByteArray BytecodeArray::SourcePositionTable() {
 }
 
 void BytecodeArray::ClearFrameCacheFromSourcePositionTable() {
-  Object* maybe_table = source_position_table();
+  Object maybe_table = source_position_table();
   if (maybe_table->IsByteArray()) return;
   DCHECK(maybe_table->IsSourcePositionTableWithFrameCache());
   set_source_position_table(SourcePositionTableWithFrameCache::cast(maybe_table)

@@ -20,14 +20,13 @@ uint32_t GetProtectionFromMemoryPermission(OS::MemoryPermission access) {
     case OS::MemoryPermission::kNoAccess:
       return 0;  // no permissions
     case OS::MemoryPermission::kRead:
-      return ZX_VM_FLAG_PERM_READ;
+      return ZX_VM_PERM_READ;
     case OS::MemoryPermission::kReadWrite:
-      return ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
+      return ZX_VM_PERM_READ | ZX_VM_PERM_WRITE;
     case OS::MemoryPermission::kReadWriteExecute:
-      return ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE |
-             ZX_VM_FLAG_PERM_EXECUTE;
+      return ZX_VM_PERM_READ | ZX_VM_PERM_WRITE | ZX_VM_PERM_EXECUTE;
     case OS::MemoryPermission::kReadExecute:
-      return ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_EXECUTE;
+      return ZX_VM_PERM_READ | ZX_VM_PERM_EXECUTE;
   }
   UNREACHABLE();
 }
@@ -57,6 +56,11 @@ void* OS::Allocate(void* address, size_t size, size_t alignment,
                          strlen(kVirtualMemoryName));
   uintptr_t reservation;
   uint32_t prot = GetProtectionFromMemoryPermission(access);
+  if ((prot & ZX_VM_PERM_EXECUTE) != 0) {
+    if (zx_vmo_replace_as_executable(vmo, ZX_HANDLE_INVALID, &vmo) != ZX_OK) {
+      return nullptr;
+    }
+  }
   zx_status_t status = zx_vmar_map(zx_vmar_root_self(), prot, 0, vmo, 0,
                                    request_size, &reservation);
   // Either the vmo is now referenced by the vmar, or we failed and are bailing,

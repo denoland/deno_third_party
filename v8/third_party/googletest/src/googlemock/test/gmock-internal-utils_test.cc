@@ -123,13 +123,9 @@ TEST(ConvertIdentifierNameToWordsTest, WorksWhenNameIsMixture) {
 }
 
 TEST(PointeeOfTest, WorksForSmartPointers) {
-#if GTEST_HAS_STD_UNIQUE_PTR_
   CompileAssertTypesEqual<int, PointeeOf<std::unique_ptr<int> >::type>();
-#endif  // GTEST_HAS_STD_UNIQUE_PTR_
-#if GTEST_HAS_STD_SHARED_PTR_
   CompileAssertTypesEqual<std::string,
                           PointeeOf<std::shared_ptr<std::string> >::type>();
-#endif  // GTEST_HAS_STD_SHARED_PTR_
 }
 
 TEST(PointeeOfTest, WorksForRawPointers) {
@@ -139,21 +135,16 @@ TEST(PointeeOfTest, WorksForRawPointers) {
 }
 
 TEST(GetRawPointerTest, WorksForSmartPointers) {
-#if GTEST_HAS_STD_UNIQUE_PTR_
   const char* const raw_p1 = new const char('a');  // NOLINT
   const std::unique_ptr<const char> p1(raw_p1);
   EXPECT_EQ(raw_p1, GetRawPointer(p1));
-#endif  // GTEST_HAS_STD_UNIQUE_PTR_
-#if GTEST_HAS_STD_SHARED_PTR_
   double* const raw_p2 = new double(2.5);  // NOLINT
   const std::shared_ptr<double> p2(raw_p2);
   EXPECT_EQ(raw_p2, GetRawPointer(p2));
-#endif  // GTEST_HAS_STD_SHARED_PTR_
 }
 
 TEST(GetRawPointerTest, WorksForRawPointers) {
   int* p = nullptr;
-  // Don't use EXPECT_EQ as no NULL-testing magic on Symbian.
   EXPECT_TRUE(nullptr == GetRawPointer(p));
   int n = 1;
   EXPECT_EQ(&n, GetRawPointer(&n));
@@ -379,11 +370,9 @@ TEST(ExpectTest, FailsNonfatallyOnFalse) {
 
 class LogIsVisibleTest : public ::testing::Test {
  protected:
-  virtual void SetUp() {
-    original_verbose_ = GMOCK_FLAG(verbose);
-  }
+  void SetUp() override { original_verbose_ = GMOCK_FLAG(verbose); }
 
-  virtual void TearDown() { GMOCK_FLAG(verbose) = original_verbose_; }
+  void TearDown() override { GMOCK_FLAG(verbose) = original_verbose_; }
 
   std::string original_verbose_;
 };
@@ -442,11 +431,11 @@ TEST(LogTest, NoStackTraceWhenStackFramesToSkipIsNegative) {
 }
 
 struct MockStackTraceGetter : testing::internal::OsStackTraceGetterInterface {
-  virtual std::string CurrentStackTrace(int max_depth, int skip_count) {
+  std::string CurrentStackTrace(int max_depth, int skip_count) override {
     return (testing::Message() << max_depth << "::" << skip_count << "\n")
         .GetString();
   }
-  virtual void UponLeavingGTest() {}
+  void UponLeavingGTest() override {}
 };
 
 // Tests that in opt mode, a positive stack_frames_to_skip argument is
@@ -529,12 +518,6 @@ TEST(TypeTraitsTest, is_reference) {
   EXPECT_FALSE(is_reference<int>::value);
   EXPECT_FALSE(is_reference<char*>::value);
   EXPECT_TRUE(is_reference<const int&>::value);
-}
-
-TEST(TypeTraitsTest, is_pointer) {
-  EXPECT_FALSE(is_pointer<int>::value);
-  EXPECT_FALSE(is_pointer<char&>::value);
-  EXPECT_TRUE(is_pointer<const int*>::value);
 }
 
 TEST(TypeTraitsTest, type_equals) {
@@ -705,6 +688,70 @@ TEST(StlContainerViewTest, WorksForDynamicNativeArray) {
   // Makes sure a1 and a3 aren't aliases.
   a1[0] = 3;
   EXPECT_EQ(0, a3.begin()[0]);
+}
+
+// Tests the Function template struct.
+
+TEST(FunctionTest, Nullary) {
+  typedef Function<int()> F;  // NOLINT
+  EXPECT_EQ(0u, F::ArgumentCount);
+  CompileAssertTypesEqual<int, F::Result>();
+  CompileAssertTypesEqual<std::tuple<>, F::ArgumentTuple>();
+  CompileAssertTypesEqual<std::tuple<>, F::ArgumentMatcherTuple>();
+  CompileAssertTypesEqual<void(), F::MakeResultVoid>();
+  CompileAssertTypesEqual<IgnoredValue(), F::MakeResultIgnoredValue>();
+}
+
+TEST(FunctionTest, Unary) {
+  typedef Function<int(bool)> F;  // NOLINT
+  EXPECT_EQ(1u, F::ArgumentCount);
+  CompileAssertTypesEqual<int, F::Result>();
+  CompileAssertTypesEqual<bool, F::Arg<0>::type>();
+  CompileAssertTypesEqual<std::tuple<bool>, F::ArgumentTuple>();
+  CompileAssertTypesEqual<std::tuple<Matcher<bool> >,
+                          F::ArgumentMatcherTuple>();
+  CompileAssertTypesEqual<void(bool), F::MakeResultVoid>();  // NOLINT
+  CompileAssertTypesEqual<IgnoredValue(bool),  // NOLINT
+      F::MakeResultIgnoredValue>();
+}
+
+TEST(FunctionTest, Binary) {
+  typedef Function<int(bool, const long&)> F;  // NOLINT
+  EXPECT_EQ(2u, F::ArgumentCount);
+  CompileAssertTypesEqual<int, F::Result>();
+  CompileAssertTypesEqual<bool, F::Arg<0>::type>();
+  CompileAssertTypesEqual<const long&, F::Arg<1>::type>();  // NOLINT
+  CompileAssertTypesEqual<std::tuple<bool, const long&>,  // NOLINT
+                          F::ArgumentTuple>();
+  CompileAssertTypesEqual<
+      std::tuple<Matcher<bool>, Matcher<const long&> >,  // NOLINT
+      F::ArgumentMatcherTuple>();
+  CompileAssertTypesEqual<void(bool, const long&), F::MakeResultVoid>();  // NOLINT
+  CompileAssertTypesEqual<IgnoredValue(bool, const long&),  // NOLINT
+      F::MakeResultIgnoredValue>();
+}
+
+TEST(FunctionTest, LongArgumentList) {
+  typedef Function<char(bool, int, char*, int&, const long&)> F;  // NOLINT
+  EXPECT_EQ(5u, F::ArgumentCount);
+  CompileAssertTypesEqual<char, F::Result>();
+  CompileAssertTypesEqual<bool, F::Arg<0>::type>();
+  CompileAssertTypesEqual<int, F::Arg<1>::type>();
+  CompileAssertTypesEqual<char*, F::Arg<2>::type>();
+  CompileAssertTypesEqual<int&, F::Arg<3>::type>();
+  CompileAssertTypesEqual<const long&, F::Arg<4>::type>();  // NOLINT
+  CompileAssertTypesEqual<
+      std::tuple<bool, int, char*, int&, const long&>,  // NOLINT
+      F::ArgumentTuple>();
+  CompileAssertTypesEqual<
+      std::tuple<Matcher<bool>, Matcher<int>, Matcher<char*>, Matcher<int&>,
+                 Matcher<const long&> >,  // NOLINT
+      F::ArgumentMatcherTuple>();
+  CompileAssertTypesEqual<void(bool, int, char*, int&, const long&),  // NOLINT
+                          F::MakeResultVoid>();
+  CompileAssertTypesEqual<
+      IgnoredValue(bool, int, char*, int&, const long&),  // NOLINT
+      F::MakeResultIgnoredValue>();
 }
 
 }  // namespace

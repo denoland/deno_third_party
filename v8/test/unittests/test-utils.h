@@ -222,7 +222,9 @@ class WithInternalIsolateMixin : public TMixin {
   Factory* factory() const { return isolate()->factory(); }
   Isolate* isolate() const { return TMixin::i_isolate(); }
 
-  Handle<Context> native_context() const { return isolate()->native_context(); }
+  Handle<NativeContext> native_context() const {
+    return isolate()->native_context();
+  }
 
   template <typename T = Object>
   Handle<T> RunJS(const char* source) {
@@ -311,6 +313,14 @@ class SaveFlags {
 
   DISALLOW_COPY_AND_ASSIGN(SaveFlags);
 };
+
+// For GTest.
+inline void PrintTo(Object o, ::std::ostream* os) {
+  *os << reinterpret_cast<void*>(o.ptr());
+}
+inline void PrintTo(Smi o, ::std::ostream* os) {
+  *os << reinterpret_cast<void*>(o.ptr());
+}
 
 }  // namespace internal
 }  // namespace v8

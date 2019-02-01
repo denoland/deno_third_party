@@ -7,11 +7,14 @@
 #include <memory>
 
 #include "src/api-inl.h"
+#include "src/counters.h"
 #include "src/execution.h"
 #include "src/isolate-inl.h"
 #include "src/keys.h"
+#include "src/objects/foreign-inl.h"
 #include "src/objects/frame-array-inl.h"
 #include "src/objects/js-array-inl.h"
+#include "src/objects/struct-inl.h"
 #include "src/string-builder-inl.h"
 #include "src/wasm/wasm-code-manager.h"
 #include "src/wasm/wasm-objects.h"
@@ -83,7 +86,7 @@ void MessageHandler::ReportMessage(Isolate* isolate, const MessageLocation* loc,
     // and ignore scheduled exceptions callbacks can throw.
 
     // We pass the exception object into the message handler callback though.
-    Object* exception_object = ReadOnlyRoots(isolate).undefined_value();
+    Object exception_object = ReadOnlyRoots(isolate).undefined_value();
     if (isolate->has_pending_exception()) {
       exception_object = isolate->pending_exception();
     }
@@ -147,7 +150,7 @@ void MessageHandler::ReportMessageNoExceptions(
       HandleScope scope(isolate);
       if (global_listeners->get(i)->IsUndefined(isolate)) continue;
       FixedArray listener = FixedArray::cast(global_listeners->get(i));
-      Foreign* callback_obj = Foreign::cast(listener->get(0));
+      Foreign callback_obj = Foreign::cast(listener->get(0));
       int32_t message_levels =
           static_cast<int32_t>(Smi::ToInt(listener->get(2)));
       if (!(message_levels & error_level)) {
@@ -157,6 +160,8 @@ void MessageHandler::ReportMessageNoExceptions(
           FUNCTION_CAST<v8::MessageCallback>(callback_obj->foreign_address());
       Handle<Object> callback_data(listener->get(1), isolate);
       {
+        RuntimeCallTimerScope timer(
+            isolate, RuntimeCallCounterId::kMessageListenerCallback);
         // Do not allow exceptions to propagate.
         v8::TryCatch try_catch(reinterpret_cast<v8::Isolate*>(isolate));
         callback(api_message_obj, callback_data->IsUndefined(isolate)
@@ -186,7 +191,7 @@ std::unique_ptr<char[]> MessageHandler::GetLocalizedMessage(
 
 namespace {
 
-Object* EvalFromFunctionName(Isolate* isolate, Handle<Script> script) {
+Object EvalFromFunctionName(Isolate* isolate, Handle<Script> script) {
   if (!script->has_eval_from_shared()) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
@@ -200,7 +205,7 @@ Object* EvalFromFunctionName(Isolate* isolate, Handle<Script> script) {
   return shared->inferred_name();
 }
 
-Object* EvalFromScript(Isolate* isolate, Handle<Script> script) {
+Object EvalFromScript(Isolate* isolate, Handle<Script> script) {
   if (!script->has_eval_from_shared()) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
@@ -289,6 +294,11 @@ Handle<Object> StackFrameBase::GetEvalOrigin() {
   return FormatEvalOrigin(isolate_, GetScript()).ToHandleChecked();
 }
 
+int StackFrameBase::GetScriptId() const {
+  if (!HasScript()) return -1;
+  return GetScript()->id();
+}
+
 bool StackFrameBase::IsEval() {
   return HasScript() &&
          GetScript()->compilation_type() == Script::COMPILATION_TYPE_EVAL;
@@ -362,7 +372,7 @@ bool CheckMethodName(Isolate* isolate, Handle<JSReceiver> receiver,
 }
 
 Handle<Object> ScriptNameOrSourceUrl(Handle<Script> script, Isolate* isolate) {
-  Object* name_or_url = script->source_url();
+  Object name_or_url = script->source_url();
   if (!name_or_url->IsString()) name_or_url = script->name();
   return handle(name_or_url, isolate);
 }
@@ -833,33 +843,33 @@ MaybeHandle<String> AsmJsWasmStackFrame::ToString() {
 
 FrameArrayIterator::FrameArrayIterator(Isolate* isolate,
                                        Handle<FrameArray> array, int frame_ix)
-    : isolate_(isolate), array_(array), next_frame_ix_(frame_ix) {}
+    : isolate_(isolate), array_(array), frame_ix_(frame_ix) {}
 
-bool FrameArrayIterator::HasNext() const {
-  return (next_frame_ix_ < array_->FrameCount());
+bool FrameArrayIterator::HasFrame() const {
+  return (frame_ix_ < array_->FrameCount());
 }
 
-void FrameArrayIterator::Next() { next_frame_ix_++; }
+void FrameArrayIterator::Advance() { frame_ix_++; }
 
 StackFrameBase* FrameArrayIterator::Frame() {
-  DCHECK(HasNext());
-  const int flags = array_->Flags(next_frame_ix_)->value();
+  DCHECK(HasFrame());
+  const int flags = array_->Flags(frame_ix_)->value();
   int flag_mask = FrameArray::kIsWasmFrame |
                   FrameArray::kIsWasmInterpretedFrame |
                   FrameArray::kIsAsmJsWasmFrame;
   switch (flags & flag_mask) {
     case 0:
       // JavaScript Frame.
-      js_frame_.FromFrameArray(isolate_, array_, next_frame_ix_);
+      js_frame_.FromFrameArray(isolate_, array_, frame_ix_);
       return &js_frame_;
     case FrameArray::kIsWasmFrame:
     case FrameArray::kIsWasmInterpretedFrame:
       // Wasm Frame:
-      wasm_frame_.FromFrameArray(isolate_, array_, next_frame_ix_);
+      wasm_frame_.FromFrameArray(isolate_, array_, frame_ix_);
       return &wasm_frame_;
     case FrameArray::kIsAsmJsWasmFrame:
       // Asm.js Wasm Frame:
-      asm_wasm_frame_.FromFrameArray(isolate_, array_, next_frame_ix_);
+      asm_wasm_frame_.FromFrameArray(isolate_, array_, frame_ix_);
       return &asm_wasm_frame_;
     default:
       UNREACHABLE();
@@ -1035,7 +1045,7 @@ MaybeHandle<Object> ErrorUtils::FormatStackTrace(Isolate* isolate,
   RETURN_ON_EXCEPTION(isolate, AppendErrorString(isolate, error, &builder),
                       Object);
 
-  for (FrameArrayIterator it(isolate, elems); it.HasNext(); it.Next()) {
+  for (FrameArrayIterator it(isolate, elems); it.HasFrame(); it.Advance()) {
     builder.AppendCString("\n    at ");
 
     StackFrameBase* frame = it.Frame();
@@ -1081,7 +1091,7 @@ Handle<String> MessageFormatter::FormatMessage(Isolate* isolate,
   if (!maybe_result_string.ToHandle(&result_string)) {
     DCHECK(isolate->has_pending_exception());
     isolate->clear_pending_exception();
-    return factory->InternalizeOneByteString(STATIC_CHAR_VECTOR("<error>"));
+    return factory->InternalizeOneByteString(StaticCharVector("<error>"));
   }
   // A string that has been obtained from JS code in this way is
   // likely to be a complicated ConsString of some sort.  We flatten it
@@ -1295,10 +1305,9 @@ MaybeHandle<Object> ErrorUtils::MakeGenericError(
     Handle<Object> arg0, Handle<Object> arg1, Handle<Object> arg2,
     FrameSkipMode mode) {
   if (FLAG_clear_exceptions_on_js_entry) {
-    // This function used to be implemented in JavaScript, and JSEntryStub
-    // clears
-    // any pending exceptions - so whenever we'd call this from C++, pending
-    // exceptions would be cleared. Preserve this behavior.
+    // This function used to be implemented in JavaScript, and JSEntry
+    // clears any pending exceptions - so whenever we'd call this from C++,
+    // pending exceptions would be cleared. Preserve this behavior.
     isolate->clear_pending_exception();
   }
 

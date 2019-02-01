@@ -16,32 +16,6 @@
 namespace v8 {
 namespace internal {
 
-// Give alias names to registers for calling conventions.
-constexpr Register kReturnRegister0 = v0;
-constexpr Register kReturnRegister1 = v1;
-constexpr Register kReturnRegister2 = a0;
-constexpr Register kJSFunctionRegister = a1;
-constexpr Register kContextRegister = s7;
-constexpr Register kAllocateSizeRegister = a0;
-constexpr Register kSpeculationPoisonRegister = a7;
-constexpr Register kInterpreterAccumulatorRegister = v0;
-constexpr Register kInterpreterBytecodeOffsetRegister = t0;
-constexpr Register kInterpreterBytecodeArrayRegister = t1;
-constexpr Register kInterpreterDispatchTableRegister = t2;
-
-constexpr Register kJavaScriptCallArgCountRegister = a0;
-constexpr Register kJavaScriptCallCodeStartRegister = a2;
-constexpr Register kJavaScriptCallTargetRegister = kJSFunctionRegister;
-constexpr Register kJavaScriptCallNewTargetRegister = a3;
-constexpr Register kJavaScriptCallExtraArg1Register = a2;
-
-constexpr Register kOffHeapTrampolineRegister = at;
-constexpr Register kRuntimeCallFunctionRegister = a1;
-constexpr Register kRuntimeCallArgCountRegister = a0;
-constexpr Register kRuntimeCallArgvRegister = a2;
-constexpr Register kWasmInstanceRegister = a0;
-constexpr Register kWasmCompileLazyFuncIndexRegister = t0;
-
 // Forward declarations.
 enum class AbortReason : uint8_t;
 
@@ -139,14 +113,9 @@ inline MemOperand CFunctionArgumentOperand(int index) {
 
 class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
  public:
-  TurboAssembler(const AssemblerOptions& options, void* buffer, int buffer_size)
-      : TurboAssemblerBase(options, buffer, buffer_size) {}
-
-  TurboAssembler(Isolate* isolate, const AssemblerOptions& options,
-                 void* buffer, int buffer_size,
-                 CodeObjectRequired create_code_object)
-      : TurboAssemblerBase(isolate, options, buffer, buffer_size,
-                           create_code_object) {}
+  template <typename... Args>
+  explicit TurboAssembler(Args&&... args)
+      : TurboAssemblerBase(std::forward<Args>(args)...) {}
 
   // Activation support.
   void EnterFrame(StackFrame::Type type);
@@ -184,8 +153,6 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
 
   // Print a message to stdout and abort execution.
   void Abort(AbortReason msg);
-
-  inline bool AllowThisStubCall(CodeStub* stub);
 
   // Arguments macros.
 #define COND_TYPED_ARGS Condition cond, Register r1, const Operand& r2
@@ -284,11 +251,28 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
             COND_ARGS);
   void Call(Label* target);
 
-  void CallForDeoptimization(Address target, int deopt_id,
-                             RelocInfo::Mode rmode) {
-    USE(deopt_id);
-    Call(target, rmode);
+  void CallBuiltinPointer(Register builtin_pointer) override;
+
+  void LoadCodeObjectEntry(Register destination,
+                           Register code_object) override {
+    // TODO(mips): Implement.
+    UNIMPLEMENTED();
   }
+  void CallCodeObject(Register code_object) override {
+    // TODO(mips): Implement.
+    UNIMPLEMENTED();
+  }
+  void JumpCodeObject(Register code_object) override {
+    // TODO(mips): Implement.
+    UNIMPLEMENTED();
+  }
+
+  // Generates an instruction sequence s.t. the return address points to the
+  // instruction following the call.
+  // The return address on the stack is used by frame iteration.
+  void StoreReturnAddressAndCall(Register target);
+
+  void CallForDeoptimization(Address target, int deopt_id);
 
   void Ret(COND_ARGS);
   inline void Ret(BranchDelaySlot bd, Condition cond = al,
@@ -565,15 +549,6 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   // Call a runtime routine. This expects {centry} to contain a fitting CEntry
   // builtin for the target runtime function and uses an indirect call.
   void CallRuntimeWithCEntry(Runtime::FunctionId fid, Register centry);
-
-  // Performs a truncating conversion of a floating point number as used by
-  // the JS bitwise operations. See ECMA-262 9.5: ToInt32. Goes to 'done' if it
-  // succeeds, otherwise falls through if result is saturated. On return
-  // 'result' either holds answer, or is clobbered on fall through.
-  //
-  // Only public for the test code in test-code-stubs-arm.cc.
-  void TryInlineTruncateDoubleToI(Register result, DoubleRegister input,
-                                  Label* done);
 
   // Performs a truncating conversion of a floating point number as used by
   // the JS bitwise operations. See ECMA-262 9.5: ToInt32.
@@ -869,6 +844,13 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
  private:
   bool has_double_zero_reg_set_ = false;
 
+  // Performs a truncating conversion of a floating point number as used by
+  // the JS bitwise operations. See ECMA-262 9.5: ToInt32. Goes to 'done' if it
+  // succeeds, otherwise falls through if result is saturated. On return
+  // 'result' either holds answer, or is clobbered on fall through.
+  void TryInlineTruncateDoubleToI(Register result, DoubleRegister input,
+                                  Label* done);
+
   void CompareF(SecondaryField sizeField, FPUCondition cc, FPURegister cmp1,
                 FPURegister cmp2);
 
@@ -928,18 +910,11 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
 };
 
 // MacroAssembler implements a collection of frequently used macros.
-class MacroAssembler : public TurboAssembler {
+class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
  public:
-  MacroAssembler(const AssemblerOptions& options, void* buffer, int size)
-      : TurboAssembler(options, buffer, size) {}
-
-  MacroAssembler(Isolate* isolate, void* buffer, int size,
-                 CodeObjectRequired create_code_object)
-      : MacroAssembler(isolate, AssemblerOptions::Default(isolate), buffer,
-                       size, create_code_object) {}
-
-  MacroAssembler(Isolate* isolate, const AssemblerOptions& options,
-                 void* buffer, int size, CodeObjectRequired create_code_object);
+  template <typename... Args>
+  explicit MacroAssembler(Args&&... args)
+      : TurboAssembler(std::forward<Args>(args)...) {}
 
   bool IsNear(Label* L, Condition cond, int rs_reg);
 
@@ -1112,17 +1087,6 @@ class MacroAssembler : public TurboAssembler {
 
   // -------------------------------------------------------------------------
   // Runtime calls.
-
-#define COND_ARGS Condition cond = al, Register rs = zero_reg, \
-const Operand& rt = Operand(zero_reg), BranchDelaySlot bd = PROTECT
-
-  // Call a code stub.
-  void CallStub(CodeStub* stub, COND_ARGS);
-
-  // Tail call a code stub (jump).
-  void TailCallStub(CodeStub* stub, COND_ARGS);
-
-#undef COND_ARGS
 
   // Call a runtime routine.
   void CallRuntime(const Runtime::Function* f, int num_arguments,

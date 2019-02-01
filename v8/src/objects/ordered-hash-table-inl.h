@@ -16,6 +16,43 @@
 namespace v8 {
 namespace internal {
 
+CAST_ACCESSOR(OrderedNameDictionary)
+CAST_ACCESSOR(SmallOrderedNameDictionary)
+CAST_ACCESSOR(OrderedHashMap)
+CAST_ACCESSOR(OrderedHashSet)
+CAST_ACCESSOR(SmallOrderedHashMap)
+CAST_ACCESSOR(SmallOrderedHashSet)
+
+template <class Derived, int entrysize>
+OrderedHashTable<Derived, entrysize>::OrderedHashTable(Address ptr)
+    : FixedArray(ptr) {}
+
+OrderedHashSet::OrderedHashSet(Address ptr)
+    : OrderedHashTable<OrderedHashSet, 1>(ptr) {
+  SLOW_DCHECK(IsOrderedHashSet());
+}
+
+OrderedHashMap::OrderedHashMap(Address ptr)
+    : OrderedHashTable<OrderedHashMap, 2>(ptr) {
+  SLOW_DCHECK(IsOrderedHashMap());
+}
+
+OrderedNameDictionary::OrderedNameDictionary(Address ptr)
+    : OrderedHashTable<OrderedNameDictionary, 3>(ptr) {
+  SLOW_DCHECK(IsOrderedNameDictionary());
+}
+
+template <class Derived>
+SmallOrderedHashTable<Derived>::SmallOrderedHashTable(Address ptr)
+    : HeapObject(ptr) {}
+
+OBJECT_CONSTRUCTORS_IMPL(SmallOrderedHashSet,
+                         SmallOrderedHashTable<SmallOrderedHashSet>)
+OBJECT_CONSTRUCTORS_IMPL(SmallOrderedHashMap,
+                         SmallOrderedHashTable<SmallOrderedHashMap>)
+OBJECT_CONSTRUCTORS_IMPL(SmallOrderedNameDictionary,
+                         SmallOrderedHashTable<SmallOrderedNameDictionary>)
+
 RootIndex OrderedHashSet::GetMapRootIndex() {
   return RootIndex::kOrderedHashSetMap;
 }
@@ -40,20 +77,20 @@ RootIndex SmallOrderedHashSet::GetMapRootIndex() {
   return RootIndex::kSmallOrderedHashSetMap;
 }
 
-inline Object* OrderedHashMap::ValueAt(int entry) {
+inline Object OrderedHashMap::ValueAt(int entry) {
   DCHECK_NE(entry, kNotFound);
   DCHECK_LT(entry, UsedCapacity());
   return get(EntryToIndex(entry) + kValueOffset);
 }
 
-inline Object* OrderedNameDictionary::ValueAt(int entry) {
+inline Object OrderedNameDictionary::ValueAt(int entry) {
   DCHECK_NE(entry, kNotFound);
   DCHECK_LT(entry, UsedCapacity());
   return get(EntryToIndex(entry) + kValueOffset);
 }
 
 // Set the value for entry.
-inline void OrderedNameDictionary::ValueAtPut(int entry, Object* value) {
+inline void OrderedNameDictionary::ValueAtPut(int entry, Object value) {
   DCHECK_NE(entry, kNotFound);
   DCHECK_LT(entry, UsedCapacity());
   this->set(EntryToIndex(entry) + kValueOffset, value);
@@ -76,12 +113,12 @@ inline void OrderedNameDictionary::DetailsAtPut(int entry,
   this->set(EntryToIndex(entry) + kPropertyDetailsOffset, value.AsSmi());
 }
 
-inline Object* SmallOrderedNameDictionary::ValueAt(int entry) {
+inline Object SmallOrderedNameDictionary::ValueAt(int entry) {
   return this->GetDataEntry(entry, kValueIndex);
 }
 
 // Set the value for entry.
-inline void SmallOrderedNameDictionary::ValueAtPut(int entry, Object* value) {
+inline void SmallOrderedNameDictionary::ValueAtPut(int entry, Object value) {
   this->SetDataEntry(entry, kValueIndex, value);
 }
 
@@ -114,6 +151,48 @@ inline bool SmallOrderedHashSet::Is(Handle<HeapObject> table) {
 inline bool SmallOrderedHashMap::Is(Handle<HeapObject> table) {
   return table->IsSmallOrderedHashMap();
 }
+
+template <class Derived>
+void SmallOrderedHashTable<Derived>::SetDataEntry(int entry, int relative_index,
+                                                  Object value) {
+  DCHECK_NE(kNotFound, entry);
+  int entry_offset = GetDataEntryOffset(entry, relative_index);
+  RELAXED_WRITE_FIELD(*this, entry_offset, value);
+  WRITE_BARRIER(*this, entry_offset, value);
+}
+
+template <class Derived, class TableType>
+Object OrderedHashTableIterator<Derived, TableType>::CurrentKey() {
+  TableType table = TableType::cast(this->table());
+  int index = Smi::ToInt(this->index());
+  Object key = table->KeyAt(index);
+  DCHECK(!key->IsTheHole());
+  return key;
+}
+
+inline void SmallOrderedNameDictionary::SetHash(int hash) {
+  DCHECK(PropertyArray::HashField::is_valid(hash));
+  WRITE_INT_FIELD(*this, PrefixOffset(), hash);
+}
+
+inline int SmallOrderedNameDictionary::Hash() {
+  int hash = READ_INT_FIELD(*this, PrefixOffset());
+  DCHECK(PropertyArray::HashField::is_valid(hash));
+  return hash;
+}
+
+inline void OrderedNameDictionary::SetHash(int hash) {
+  DCHECK(PropertyArray::HashField::is_valid(hash));
+  this->set(PrefixIndex(), Smi::FromInt(hash));
+}
+
+inline int OrderedNameDictionary::Hash() {
+  Object hash_obj = this->get(PrefixIndex());
+  int hash = Smi::ToInt(hash_obj);
+  DCHECK(PropertyArray::HashField::is_valid(hash));
+  return hash;
+}
+
 }  // namespace internal
 }  // namespace v8
 

@@ -244,17 +244,15 @@ template <class Subclass>
 void AstTraversalVisitor<Subclass>::VisitForInStatement(ForInStatement* stmt) {
   PROCESS_NODE(stmt);
   RECURSE(Visit(stmt->each()));
-  RECURSE(Visit(stmt->enumerable()));
+  RECURSE(Visit(stmt->subject()));
   RECURSE(Visit(stmt->body()));
 }
 
 template <class Subclass>
 void AstTraversalVisitor<Subclass>::VisitForOfStatement(ForOfStatement* stmt) {
   PROCESS_NODE(stmt);
-  RECURSE(Visit(stmt->assign_iterator()));
-  RECURSE(Visit(stmt->next_result()));
-  RECURSE(Visit(stmt->result_done()));
-  RECURSE(Visit(stmt->assign_each()));
+  RECURSE(Visit(stmt->each()));
+  RECURSE(Visit(stmt->subject()));
   RECURSE(Visit(stmt->body()));
 }
 
@@ -470,7 +468,7 @@ void AstTraversalVisitor<Subclass>::VisitCompareOperation(
 }
 
 template <class Subclass>
-void AstTraversalVisitor<Subclass>::VisitThisFunction(ThisFunction* expr) {
+void AstTraversalVisitor<Subclass>::VisitThisExpression(ThisExpression* expr) {
   PROCESS_EXPRESSION(expr);
 }
 
@@ -533,12 +531,6 @@ void AstTraversalVisitor<Subclass>::VisitEmptyParentheses(
 }
 
 template <class Subclass>
-void AstTraversalVisitor<Subclass>::VisitGetIterator(GetIterator* expr) {
-  PROCESS_EXPRESSION(expr);
-  RECURSE_EXPRESSION(Visit(expr->iterable()));
-}
-
-template <class Subclass>
 void AstTraversalVisitor<Subclass>::VisitGetTemplateObject(
     GetTemplateObject* expr) {
   PROCESS_EXPRESSION(expr);
@@ -564,7 +556,6 @@ template <class Subclass>
 void AstTraversalVisitor<Subclass>::VisitSuperPropertyReference(
     SuperPropertyReference* expr) {
   PROCESS_EXPRESSION(expr);
-  RECURSE_EXPRESSION(VisitVariableProxy(expr->this_var()));
   RECURSE_EXPRESSION(Visit(expr->home_object()));
 }
 
@@ -572,16 +563,8 @@ template <class Subclass>
 void AstTraversalVisitor<Subclass>::VisitSuperCallReference(
     SuperCallReference* expr) {
   PROCESS_EXPRESSION(expr);
-  RECURSE_EXPRESSION(VisitVariableProxy(expr->this_var()));
   RECURSE_EXPRESSION(VisitVariableProxy(expr->new_target_var()));
   RECURSE_EXPRESSION(VisitVariableProxy(expr->this_function_var()));
-}
-
-template <class Subclass>
-void AstTraversalVisitor<Subclass>::VisitRewritableExpression(
-    RewritableExpression* expr) {
-  PROCESS_EXPRESSION(expr);
-  RECURSE(Visit(expr->expression()));
 }
 
 #undef PROCESS_NODE

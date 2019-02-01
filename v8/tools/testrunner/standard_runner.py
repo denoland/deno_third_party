@@ -18,7 +18,7 @@ from testrunner.objects import predictable
 from testrunner.testproc.execution import ExecutionProc
 from testrunner.testproc.filter import StatusFileFilterProc, NameFilterProc
 from testrunner.testproc.loader import LoadProc
-from testrunner.testproc.progress import ResultsTracker, TestsCounter
+from testrunner.testproc.progress import ResultsTracker
 from testrunner.testproc.seed import SeedProc
 from testrunner.testproc.variant import VariantProc
 from testrunner.utils import random_utils
@@ -29,7 +29,7 @@ ARCH_GUESS = utils.DefaultArch()
 VARIANTS = ["default"]
 
 MORE_VARIANTS = [
-  "nooptimization",
+  "jitless",
   "stress",
   "stress_background_compile",
   "stress_incremental_marking",
@@ -43,13 +43,14 @@ VARIANT_ALIASES = {
   # Shortcut for the two above ("more" first - it has the longer running tests).
   "exhaustive": MORE_VARIANTS + VARIANTS,
   # Additional variants, run on a subset of bots.
-  "extra": ["future", "no_liftoff", "no_wasm_traps", "trusted"],
+  "extra": ["nooptimization", "future", "no_liftoff", "no_wasm_traps"],
 }
 
 GC_STRESS_FLAGS = ["--gc-interval=500", "--stress-compaction",
                    "--concurrent-recompilation-queue-length=64",
                    "--concurrent-recompilation-delay=500",
-                   "--concurrent-recompilation"]
+                   "--concurrent-recompilation",
+                   "--stress-flush-bytecode"]
 
 RANDOM_GC_STRESS_FLAGS = ["--random-gc-interval=5000",
                           "--stress-compaction-random"]
@@ -280,8 +281,7 @@ class StandardTestRunner(base_runner.BaseTestRunner):
       jobs = options.j
 
       print '>>> Running with test processors'
-      loader = LoadProc()
-      tests_counter = TestsCounter()
+      loader = LoadProc(tests)
       results = self._create_result_tracker(options)
       indicators = self._create_progress_indicators(options)
 
@@ -296,7 +296,6 @@ class StandardTestRunner(base_runner.BaseTestRunner):
         NameFilterProc(args) if args else None,
         StatusFileFilterProc(options.slow_tests, options.pass_fail_tests),
         self._create_shard_proc(options),
-        tests_counter,
         VariantProc(self._variants),
         StatusFileFilterProc(options.slow_tests, options.pass_fail_tests),
         self._create_predictable_filter(),
@@ -310,12 +309,8 @@ class StandardTestRunner(base_runner.BaseTestRunner):
       ]
 
       self._prepare_procs(procs)
-      tests.sort(key=lambda t: t.is_slow, reverse=True)
 
-      loader.load_tests(tests)
-
-      print '>>> Running %d base tests' % tests_counter.total
-      tests_counter.remove_from_chain()
+      loader.load_initial_tests(initial_batch_size=options.j*2)
 
       # This starts up worker processes and blocks until all tests are
       # processed.

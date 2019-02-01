@@ -24,10 +24,11 @@ ReadOnlySerializer::~ReadOnlySerializer() {
   OutputStatistics("ReadOnlySerializer");
 }
 
-void ReadOnlySerializer::SerializeObject(HeapObject* obj, HowToCode how_to_code,
+void ReadOnlySerializer::SerializeObject(HeapObject obj, HowToCode how_to_code,
                                          WhereToPoint where_to_point,
                                          int skip) {
   CHECK(isolate()->heap()->read_only_space()->Contains(obj));
+  CHECK_IMPLIES(obj->IsString(), obj->IsInternalizedString());
 
   if (SerializeHotObject(obj, how_to_code, where_to_point, skip)) return;
   if (IsRootAndHasBeenSerialized(obj) &&
@@ -59,13 +60,14 @@ void ReadOnlySerializer::FinalizeSerialization() {
   // This comes right after serialization of the other snapshots, where we
   // add entries to the read-only object cache. Add one entry with 'undefined'
   // to terminate the read-only object cache.
-  Object* undefined = ReadOnlyRoots(isolate()).undefined_value();
-  VisitRootPointer(Root::kReadOnlyObjectCache, nullptr, ObjectSlot(&undefined));
+  Object undefined = ReadOnlyRoots(isolate()).undefined_value();
+  VisitRootPointer(Root::kReadOnlyObjectCache, nullptr,
+                   FullObjectSlot(&undefined));
   SerializeDeferredObjects();
   Pad();
 }
 
-bool ReadOnlySerializer::MustBeDeferred(HeapObject* object) {
+bool ReadOnlySerializer::MustBeDeferred(HeapObject object) {
   if (root_has_been_serialized(RootIndex::kFreeSpaceMap) &&
       root_has_been_serialized(RootIndex::kOnePointerFillerMap) &&
       root_has_been_serialized(RootIndex::kTwoPointerFillerMap)) {
@@ -82,7 +84,7 @@ bool ReadOnlySerializer::MustBeDeferred(HeapObject* object) {
 }
 
 bool ReadOnlySerializer::SerializeUsingReadOnlyObjectCache(
-    SnapshotByteSink* sink, HeapObject* obj, HowToCode how_to_code,
+    SnapshotByteSink* sink, HeapObject obj, HowToCode how_to_code,
     WhereToPoint where_to_point, int skip) {
   if (!isolate()->heap()->read_only_space()->Contains(obj)) return false;
 

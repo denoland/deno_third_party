@@ -15,7 +15,7 @@ namespace internal {
 template <typename T>
 class Handle;
 
-class FieldType : public ObjectPtr {
+class FieldType : public Object {
  public:
   static FieldType None();
   static FieldType Any();
@@ -23,12 +23,12 @@ class FieldType : public ObjectPtr {
   static Handle<FieldType> Any(Isolate* isolate);
   static FieldType Class(Map map);
   static Handle<FieldType> Class(Handle<Map> map, Isolate* isolate);
-  static FieldType cast(Object* object);
-  static FieldType unchecked_cast(ObjectPtr object) {
+  static FieldType cast(Object object);
+  static FieldType unchecked_cast(Object object) {
     return FieldType(object.ptr());
   }
 
-  bool NowContains(Object* value) const;
+  bool NowContains(Object value) const;
 
   bool NowContains(Handle<Object> value) const { return NowContains(*value); }
 
@@ -46,7 +46,7 @@ class FieldType : public ObjectPtr {
   const FieldType* operator->() const { return this; }
 
  private:
-  explicit constexpr FieldType(Address ptr) : ObjectPtr(ptr) {}
+  explicit constexpr FieldType(Address ptr) : Object(ptr) {}
 };
 
 }  // namespace internal

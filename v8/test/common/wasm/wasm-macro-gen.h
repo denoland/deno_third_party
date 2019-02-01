@@ -135,6 +135,10 @@
 #define WASM_IF_ELSE_X(index, cond, tstmt, fstmt)                            \
   cond, kExprIf, static_cast<byte>(index), tstmt, kExprElse, fstmt, kExprEnd
 
+#define WASM_TRY_CATCH_T(t, trystmt, catchstmt)                          \
+  kExprTry, static_cast<byte>(ValueTypes::ValueTypeCodeFor(t)), trystmt, \
+      kExprCatch, catchstmt, kExprEnd
+
 #define WASM_SELECT(tval, fval, cond) tval, fval, cond, kExprSelect
 
 #define WASM_RETURN0 kExprReturn
@@ -154,10 +158,12 @@
 #define WASM_CASE(x) static_cast<byte>(x), static_cast<byte>(x >> 8)
 #define WASM_CASE_BR(x) static_cast<byte>(x), static_cast<byte>(0x80 | (x) >> 8)
 
+#define WASM_THROW(index) kExprThrow, static_cast<byte>(index)
+
 //------------------------------------------------------------------------------
 // Misc expressions.
 //------------------------------------------------------------------------------
-#define WASM_ID(...) __VA_ARGS__
+#define WASM_STMTS(...) __VA_ARGS__
 #define WASM_ZERO kExprI32Const, 0
 #define WASM_ONE kExprI32Const, 1
 
@@ -585,17 +591,17 @@ inline WasmOpcode LoadStoreOpcodeOf(MachineType type, bool store) {
 #define MEMORY_ZERO 0
 
 #define WASM_MEMORY_INIT(seg, dst, src, size) \
-  dst, src, size, WASM_NUMERIC_OP(kExprMemoryInit), MEMORY_ZERO, U32V_1(seg)
-#define WASM_MEMORY_DROP(seg) WASM_NUMERIC_OP(kExprMemoryDrop), U32V_1(seg)
+  dst, src, size, WASM_NUMERIC_OP(kExprMemoryInit), U32V_1(seg), MEMORY_ZERO
+#define WASM_DATA_DROP(seg) WASM_NUMERIC_OP(kExprDataDrop), U32V_1(seg)
 #define WASM_MEMORY_COPY(dst, src, size) \
-  dst, src, size, WASM_NUMERIC_OP(kExprMemoryCopy), MEMORY_ZERO
+  dst, src, size, WASM_NUMERIC_OP(kExprMemoryCopy), MEMORY_ZERO, MEMORY_ZERO
 #define WASM_MEMORY_FILL(dst, val, size) \
   dst, val, size, WASM_NUMERIC_OP(kExprMemoryFill), MEMORY_ZERO
 #define WASM_TABLE_INIT(seg, dst, src, size) \
-  dst, src, size, WASM_NUMERIC_OP(kExprTableInit), TABLE_ZERO, U32V_1(seg)
-#define WASM_TABLE_DROP(seg) WASM_NUMERIC_OP(kExprTableDrop), U32V_1(seg)
+  dst, src, size, WASM_NUMERIC_OP(kExprTableInit), U32V_1(seg), TABLE_ZERO
+#define WASM_ELEM_DROP(seg) WASM_NUMERIC_OP(kExprElemDrop), U32V_1(seg)
 #define WASM_TABLE_COPY(dst, src, size) \
-  dst, src, size, WASM_NUMERIC_OP(kExprTableCopy), TABLE_ZERO
+  dst, src, size, WASM_NUMERIC_OP(kExprTableCopy), TABLE_ZERO, TABLE_ZERO
 
 //------------------------------------------------------------------------------
 // Memory Operations.

@@ -7,7 +7,7 @@
 
 #include "src/globals.h"
 #include "src/maybe-handles.h"
-#include "src/objects.h"
+#include "src/objects/heap-object.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -19,13 +19,13 @@ namespace internal {
 // It's basically an "array of EmbedderDataSlots".
 // Note, if the pointer compression is enabled the embedder data slot also
 // contains a raw data part in addition to tagged part.
-class EmbedderDataArray : public HeapObjectPtr {
+class EmbedderDataArray : public HeapObject {
  public:
   // [length]: length of the array in an embedder data slots.
   V8_INLINE int length() const;
   V8_INLINE void set_length(int value);
 
-  DECL_CAST2(EmbedderDataArray)
+  DECL_CAST(EmbedderDataArray)
 
 // Layout description.
 #define EMBEDDER_DATA_ARRAY_FIELDS(V) \
@@ -67,7 +67,7 @@ class EmbedderDataArray : public HeapObjectPtr {
  private:
   STATIC_ASSERT(kHeaderSize == Internals::kFixedArrayHeaderSize);
 
-  OBJECT_CONSTRUCTORS(EmbedderDataArray, HeapObjectPtr);
+  OBJECT_CONSTRUCTORS(EmbedderDataArray, HeapObject);
 };
 
 }  // namespace internal

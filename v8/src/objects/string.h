@@ -143,7 +143,8 @@ class String : public Name {
   };
 
   template <typename Char>
-  V8_INLINE Vector<const Char> GetCharVector();
+  V8_INLINE Vector<const Char> GetCharVector(
+      const DisallowHeapAllocation& no_gc);
 
   // Get and set the length of the string.
   inline int length() const;
@@ -163,9 +164,9 @@ class String : public Name {
 
   // Cons and slices have an encoding flag that may not represent the actual
   // encoding of the underlying string.  This is taken into account here.
-  // Requires: this->IsFlat()
-  inline bool IsOneByteRepresentationUnderneath();
-  inline bool IsTwoByteRepresentationUnderneath();
+  // This function is static because that helps it get inlined.
+  // Requires: string.IsFlat()
+  static inline bool IsOneByteRepresentationUnderneath(String string);
 
   // NOTE: this should be considered only a hint.  False negatives are
   // possible.
@@ -201,7 +202,7 @@ class String : public Name {
   // If the string isn't flat, and therefore doesn't have flat content, the
   // returned structure will report so, and can't provide a vector of either
   // kind.
-  FlatContent GetFlatContent();
+  FlatContent GetFlatContent(const DisallowHeapAllocation& no_gc);
 
   // Returns the parent of a sliced string or first part of a flat cons string.
   // Requires: StringShape(this).IsIndirect() && this->IsFlat()
@@ -223,16 +224,16 @@ class String : public Name {
                                                         Handle<String> y);
 
   // Perform ES6 21.1.3.8, including checking arguments.
-  static Object* IndexOf(Isolate* isolate, Handle<Object> receiver,
-                         Handle<Object> search, Handle<Object> position);
+  static Object IndexOf(Isolate* isolate, Handle<Object> receiver,
+                        Handle<Object> search, Handle<Object> position);
   // Perform string match of pattern on subject, starting at start index.
   // Caller must ensure that 0 <= start_index <= sub->length(), as this does not
   // check any arguments.
   static int IndexOf(Isolate* isolate, Handle<String> receiver,
                      Handle<String> search, int start_index);
 
-  static Object* LastIndexOf(Isolate* isolate, Handle<Object> receiver,
-                             Handle<Object> search, Handle<Object> position);
+  static Object LastIndexOf(Isolate* isolate, Handle<Object> receiver,
+                            Handle<Object> search, Handle<Object> position);
 
   // Encapsulates logic related to a match and its capture groups as required
   // by GetSubstitution.
@@ -303,14 +304,14 @@ class String : public Name {
 
   // Conversion.
   inline bool AsArrayIndex(uint32_t* index);
-  uint32_t inline ToValidIndex(Object* number);
+  uint32_t inline ToValidIndex(Object number);
 
   // Trimming.
   enum TrimMode { kTrim, kTrimStart, kTrimEnd };
   static Handle<String> Trim(Isolate* isolate, Handle<String> string,
                              TrimMode mode);
 
-  DECL_CAST2(String)
+  DECL_CAST(String)
 
   void PrintOn(FILE* out);
 
@@ -456,7 +457,8 @@ class String : public Name {
 
 class SubStringRange {
  public:
-  explicit inline SubStringRange(String string, int first = 0, int length = -1);
+  inline SubStringRange(String string, const DisallowHeapAllocation& no_gc,
+                        int first = 0, int length = -1);
   class iterator;
   inline iterator begin();
   inline iterator end();
@@ -465,12 +467,13 @@ class SubStringRange {
   String string_;
   int first_;
   int length_;
+  const DisallowHeapAllocation& no_gc_;
 };
 
 // The SeqString abstract class captures sequential string values.
 class SeqString : public String {
  public:
-  DECL_CAST2(SeqString)
+  DECL_CAST(SeqString)
 
   // Truncate the string in-place if possible and return the result.
   // In case of new_length == 0, the empty string is returned without
@@ -483,7 +486,7 @@ class SeqString : public String {
 
 class InternalizedString : public String {
  public:
-  DECL_CAST2(InternalizedString)
+  DECL_CAST(InternalizedString)
   // TODO(neis): Possibly move some stuff from String here.
 
   OBJECT_CONSTRUCTORS(InternalizedString, String);
@@ -502,13 +505,13 @@ class SeqOneByteString : public SeqString {
   // Get the address of the characters in this string.
   inline Address GetCharsAddress();
 
-  inline uint8_t* GetChars();
+  inline uint8_t* GetChars(const DisallowHeapAllocation& no_gc);
 
   // Clear uninitialized padding space. This ensures that the snapshot content
   // is deterministic.
   void clear_padding();
 
-  DECL_CAST2(SeqOneByteString)
+  DECL_CAST(SeqOneByteString)
 
   // Garbage collection support.  This method is called by the
   // garbage collector to compute the actual size of an OneByteString
@@ -543,13 +546,13 @@ class SeqTwoByteString : public SeqString {
   // Get the address of the characters in this string.
   inline Address GetCharsAddress();
 
-  inline uc16* GetChars();
+  inline uc16* GetChars(const DisallowHeapAllocation& no_gc);
 
   // Clear uninitialized padding space. This ensures that the snapshot content
   // is deterministic.
   void clear_padding();
 
-  DECL_CAST2(SeqTwoByteString)
+  DECL_CAST(SeqTwoByteString)
 
   // Garbage collection support.  This method is called by the
   // garbage collector to compute the actual size of a TwoByteString
@@ -586,7 +589,7 @@ class ConsString : public String {
   inline String first();
   // Doesn't check that the result is a string, even in debug mode.  This is
   // useful during GC where the mark bits confuse the checks.
-  inline Object* unchecked_first();
+  inline Object unchecked_first();
   inline void set_first(Isolate* isolate, String first,
                         WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
@@ -594,14 +597,14 @@ class ConsString : public String {
   inline String second();
   // Doesn't check that the result is a string, even in debug mode.  This is
   // useful during GC where the mark bits confuse the checks.
-  inline Object* unchecked_second();
+  inline Object unchecked_second();
   inline void set_second(Isolate* isolate, String second,
                          WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
   // Dispatched behavior.
   V8_EXPORT_PRIVATE uint16_t ConsStringGet(int index);
 
-  DECL_CAST2(ConsString)
+  DECL_CAST(ConsString)
 
   // Layout description.
 #define CONS_STRING_FIELDS(V)   \
@@ -634,13 +637,13 @@ class ThinString : public String {
  public:
   // Actual string that this ThinString refers to.
   inline String actual() const;
-  inline HeapObject* unchecked_actual() const;
+  inline HeapObject unchecked_actual() const;
   inline void set_actual(String s,
                          WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
   V8_EXPORT_PRIVATE uint16_t ThinStringGet(int index);
 
-  DECL_CAST2(ThinString)
+  DECL_CAST(ThinString)
   DECL_VERIFIER(ThinString)
 
   // Layout description.
@@ -680,7 +683,7 @@ class SlicedString : public String {
   // Dispatched behavior.
   V8_EXPORT_PRIVATE uint16_t SlicedStringGet(int index);
 
-  DECL_CAST2(SlicedString)
+  DECL_CAST(SlicedString)
 
   // Layout description.
 #define SLICED_STRING_FIELDS(V) \
@@ -713,7 +716,7 @@ class SlicedString : public String {
 // API.  Therefore, ExternalStrings should not be used internally.
 class ExternalString : public String {
  public:
-  DECL_CAST2(ExternalString)
+  DECL_CAST(ExternalString)
 
   // Layout description.
 #define EXTERNAL_STRING_FIELDS(V)            \
@@ -771,7 +774,7 @@ class ExternalOneByteString : public ExternalString {
   // Dispatched behavior.
   inline uint16_t ExternalOneByteStringGet(int index);
 
-  DECL_CAST2(ExternalOneByteString)
+  DECL_CAST(ExternalOneByteString)
 
   class BodyDescriptor;
 
@@ -809,7 +812,7 @@ class ExternalTwoByteString : public ExternalString {
   // For regexp code.
   inline const uint16_t* ExternalTwoByteStringGetData(unsigned start);
 
-  DECL_CAST2(ExternalTwoByteString)
+  DECL_CAST(ExternalTwoByteString)
 
   class BodyDescriptor;
 

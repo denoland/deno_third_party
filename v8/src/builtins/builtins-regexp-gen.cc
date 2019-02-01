@@ -118,7 +118,7 @@ TNode<Object> RegExpBuiltinsAssembler::FastLoadLastIndex(
     TNode<JSRegExp> regexp) {
   // Load the in-object field.
   static const int field_offset =
-      JSRegExp::kSize + JSRegExp::kLastIndexFieldIndex * kPointerSize;
+      JSRegExp::kSize + JSRegExp::kLastIndexFieldIndex * kTaggedSize;
   return LoadObjectField(regexp, field_offset);
 }
 
@@ -139,7 +139,7 @@ TNode<Object> RegExpBuiltinsAssembler::LoadLastIndex(TNode<Context> context,
 void RegExpBuiltinsAssembler::FastStoreLastIndex(Node* regexp, Node* value) {
   // Store the in-object field.
   static const int field_offset =
-      JSRegExp::kSize + JSRegExp::kLastIndexFieldIndex * kPointerSize;
+      JSRegExp::kSize + JSRegExp::kLastIndexFieldIndex * kTaggedSize;
   StoreObjectField(regexp, field_offset, value);
 }
 
@@ -324,13 +324,6 @@ void RegExpBuiltinsAssembler::GetStringPointers(
 TNode<HeapObject> RegExpBuiltinsAssembler::RegExpExecInternal(
     TNode<Context> context, TNode<JSRegExp> regexp, TNode<String> string,
     TNode<Number> last_index, TNode<RegExpMatchInfo> match_info) {
-// Just jump directly to runtime if native RegExp is not selected at compile
-// time or if regexp entry in generated code is turned off runtime switch or
-// at compilation.
-#ifdef V8_INTERPRETED_REGEXP
-  return CAST(CallRuntime(Runtime::kRegExpExec, context, regexp, string,
-                          last_index, match_info));
-#else  // V8_INTERPRETED_REGEXP
   ToDirectStringAssembler to_direct(state(), string);
 
   TVARIABLE(HeapObject, var_result);
@@ -460,6 +453,7 @@ TNode<HeapObject> RegExpBuiltinsAssembler::RegExpExecInternal(
 #endif
 
   GotoIf(TaggedIsSmi(var_code.value()), &runtime);
+  GotoIfNot(IsCode(CAST(var_code.value())), &runtime);
   TNode<Code> code = CAST(var_code.value());
 
   Label if_success(this), if_exception(this, Label::kDeferred);
@@ -592,7 +586,7 @@ TNode<HeapObject> RegExpBuiltinsAssembler::RegExpExecInternal(
             TNode<Smi> smi_value = SmiFromInt32(value);
             StoreNoWriteBarrier(MachineRepresentation::kTagged, match_info,
                                 var_to_offset.value(), smi_value);
-            Increment(&var_to_offset, kPointerSize);
+            Increment(&var_to_offset, kTaggedSize);
           },
           kInt32Size, INTPTR_PARAMETERS, IndexAdvanceMode::kPost);
     }
@@ -639,7 +633,6 @@ TNode<HeapObject> RegExpBuiltinsAssembler::RegExpExecInternal(
 
   BIND(&out);
   return var_result.value();
-#endif  // V8_INTERPRETED_REGEXP
 }
 
 // ES#sec-regexp.prototype.exec
@@ -1202,20 +1195,20 @@ Node* RegExpBuiltinsAssembler::FlagsGetter(Node* const context,
 }
 
 // ES#sec-isregexp IsRegExp ( argument )
-Node* RegExpBuiltinsAssembler::IsRegExp(Node* const context,
-                                        Node* const maybe_receiver) {
+TNode<BoolT> RegExpBuiltinsAssembler::IsRegExp(TNode<Context> context,
+                                               TNode<Object> maybe_receiver) {
   Label out(this), if_isregexp(this);
 
-  VARIABLE(var_result, MachineRepresentation::kWord32, Int32Constant(0));
+  TVARIABLE(BoolT, var_result, Int32FalseConstant());
 
   GotoIf(TaggedIsSmi(maybe_receiver), &out);
-  GotoIfNot(IsJSReceiver(maybe_receiver), &out);
+  GotoIfNot(IsJSReceiver(CAST(maybe_receiver)), &out);
 
-  Node* const receiver = maybe_receiver;
+  TNode<JSReceiver> receiver = CAST(maybe_receiver);
 
   // Check @@match.
   {
-    Node* const value =
+    TNode<Object> value =
         GetProperty(context, receiver, isolate()->factory()->match_symbol());
 
     Label match_isundefined(this), match_isnotundefined(this);
@@ -1225,11 +1218,26 @@ Node* RegExpBuiltinsAssembler::IsRegExp(Node* const context,
     Branch(IsJSRegExp(receiver), &if_isregexp, &out);
 
     BIND(&match_isnotundefined);
-    BranchIfToBooleanIsTrue(value, &if_isregexp, &out);
+    Label match_istrueish(this), match_isfalseish(this);
+    BranchIfToBooleanIsTrue(value, &match_istrueish, &match_isfalseish);
+
+    // The common path. Symbol.match exists, equals the RegExpPrototypeMatch
+    // function (and is thus trueish), and the receiver is a JSRegExp.
+    BIND(&match_istrueish);
+    GotoIf(IsJSRegExp(receiver), &if_isregexp);
+    CallRuntime(Runtime::kIncrementUseCounter, context,
+                SmiConstant(v8::Isolate::kRegExpMatchIsTrueishOnNonJSRegExp));
+    Goto(&if_isregexp);
+
+    BIND(&match_isfalseish);
+    GotoIfNot(IsJSRegExp(receiver), &out);
+    CallRuntime(Runtime::kIncrementUseCounter, context,
+                SmiConstant(v8::Isolate::kRegExpMatchIsFalseishOnJSRegExp));
+    Goto(&out);
   }
 
   BIND(&if_isregexp);
-  var_result.Bind(Int32Constant(1));
+  var_result = Int32TrueConstant();
   Goto(&out);
 
   BIND(&out);
@@ -1299,7 +1307,7 @@ TF_BUILTIN(RegExpConstructor, RegExpBuiltinsAssembler) {
   Node* const regexp_function =
       LoadContextElement(native_context, Context::REGEXP_FUNCTION_INDEX);
 
-  Node* const pattern_is_regexp = IsRegExp(context, pattern);
+  TNode<BoolT> pattern_is_regexp = IsRegExp(context, pattern);
 
   {
     Label next(this);
@@ -2482,10 +2490,10 @@ void RegExpBuiltinsAssembler::RegExpPrototypeSplitBody(Node* const context,
         Node* const reg = var_reg.value();
         Node* const from = LoadFixedArrayElement(
             match_indices, reg,
-            RegExpMatchInfo::kFirstCaptureIndex * kPointerSize, mode);
+            RegExpMatchInfo::kFirstCaptureIndex * kTaggedSize, mode);
         TNode<Smi> const to = CAST(LoadFixedArrayElement(
             match_indices, reg,
-            (RegExpMatchInfo::kFirstCaptureIndex + 1) * kPointerSize, mode));
+            (RegExpMatchInfo::kFirstCaptureIndex + 1) * kTaggedSize, mode));
 
         Label select_capture(this), select_undefined(this), store_value(this);
         VARIABLE(var_value, MachineRepresentation::kTagged);

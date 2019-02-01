@@ -1,8 +1,12 @@
 
 # Google Test #
 
-[![Build Status](https://travis-ci.org/google/googletest.svg?branch=master)](https://travis-ci.org/google/googletest)
+[![Build Status](https://api.travis-ci.org/google/googletest.svg?branch=master)](https://travis-ci.org/google/googletest)
 [![Build status](https://ci.appveyor.com/api/projects/status/4o38plt0xbo1ubc8/branch/master?svg=true)](https://ci.appveyor.com/project/GoogleTestAppVeyor/googletest/branch/master)
+
+**PR FREEZE COMING SOON**
+
+We are working on a large refactoring that would make it hard to accept external PRs. *Really Soon Now* we will not be accepting new PRs until the refactoring has been completed. 
 
 **Future Plans**:
 * 1.8.x Release - [the 1.8.x](https://github.com/google/googletest/releases/tag/release-1.8.1) is the last release that works with pre-C++11 compilers. The 1.8.x will not accept any requests for any new features and any bugfix requests will only be accepted if proven "critical"
@@ -16,7 +20,7 @@ This repository is a merger of the formerly separate GoogleTest and
 GoogleMock projects. These were so closely related that it makes sense to
 maintain and release them together.
 
-Please the mailing list at googletestframework@googlegroups.com for questions, discussions, and development.  
+Please subscribe to the mailing list at googletestframework@googlegroups.com for questions, discussions, and development.  
 There is also an IRC channel on [OFTC](https://webchat.oftc.net/) (irc.oftc.net) #gtest available.  
 
 Getting started information for **Google Test** is available in the

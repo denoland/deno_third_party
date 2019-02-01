@@ -110,9 +110,10 @@ BUILTIN(StringFromCodePoint) {
           static_cast<int>(one_byte_buffer.size() + two_byte_buffer.size())));
 
   DisallowHeapAllocation no_gc;
-  CopyChars(result->GetChars(), one_byte_buffer.data(), one_byte_buffer.size());
-  CopyChars(result->GetChars() + one_byte_buffer.size(), two_byte_buffer.data(),
-            two_byte_buffer.size());
+  CopyChars(result->GetChars(no_gc), one_byte_buffer.data(),
+            one_byte_buffer.size());
+  CopyChars(result->GetChars(no_gc) + one_byte_buffer.size(),
+            two_byte_buffer.data(), two_byte_buffer.size());
 
   return *result;
 }
@@ -158,8 +159,8 @@ BUILTIN(StringPrototypeEndsWith) {
   search_string = String::Flatten(isolate, search_string);
 
   DisallowHeapAllocation no_gc;  // ensure vectors stay valid
-  String::FlatContent str_content = str->GetFlatContent();
-  String::FlatContent search_content = search_string->GetFlatContent();
+  String::FlatContent str_content = str->GetFlatContent(no_gc);
+  String::FlatContent search_content = search_string->GetFlatContent(no_gc);
 
   if (str_content.IsOneByte() && search_content.IsOneByte()) {
     Vector<const uint8_t> str_vector = str_content.ToOneByteVector();
@@ -240,8 +241,8 @@ BUILTIN(StringPrototypeLocaleCompare) {
   str2 = String::Flatten(isolate, str2);
 
   DisallowHeapAllocation no_gc;
-  String::FlatContent flat1 = str1->GetFlatContent();
-  String::FlatContent flat2 = str2->GetFlatContent();
+  String::FlatContent flat1 = str1->GetFlatContent(no_gc);
+  String::FlatContent flat2 = str2->GetFlatContent(no_gc);
 
   for (int i = 0; i < end; i++) {
     if (flat1.Get(i) != flat2.Get(i)) {
@@ -289,53 +290,6 @@ BUILTIN(StringPrototypeNormalize) {
 }
 #endif  // !V8_INTL_SUPPORT
 
-BUILTIN(StringPrototypeStartsWith) {
-  HandleScope handle_scope(isolate);
-  TO_THIS_STRING(str, "String.prototype.startsWith");
-
-  // Check if the search string is a regExp and fail if it is.
-  Handle<Object> search = args.atOrUndefined(isolate, 1);
-  Maybe<bool> is_reg_exp = RegExpUtils::IsRegExp(isolate, search);
-  if (is_reg_exp.IsNothing()) {
-    DCHECK(isolate->has_pending_exception());
-    return ReadOnlyRoots(isolate).exception();
-  }
-  if (is_reg_exp.FromJust()) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kFirstArgumentNotRegExp,
-                              isolate->factory()->NewStringFromStaticChars(
-                                  "String.prototype.startsWith")));
-  }
-  Handle<String> search_string;
-  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, search_string,
-                                     Object::ToString(isolate, search));
-
-  Handle<Object> position = args.atOrUndefined(isolate, 2);
-  int start;
-
-  if (position->IsUndefined(isolate)) {
-    start = 0;
-  } else {
-    ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, position,
-                                       Object::ToInteger(isolate, position));
-    start = str->ToValidIndex(*position);
-  }
-
-  if (start + search_string->length() > str->length()) {
-    return ReadOnlyRoots(isolate).false_value();
-  }
-
-  FlatStringReader str_reader(isolate, String::Flatten(isolate, str));
-  FlatStringReader search_reader(isolate,
-                                 String::Flatten(isolate, search_string));
-
-  for (int i = 0; i < search_string->length(); i++) {
-    if (str_reader.Get(start + i) != search_reader.Get(i)) {
-      return ReadOnlyRoots(isolate).false_value();
-    }
-  }
-  return ReadOnlyRoots(isolate).true_value();
-}
 
 #ifndef V8_INTL_SUPPORT
 namespace {
@@ -349,7 +303,7 @@ inline bool ToUpperOverflows(uc32 character) {
 }
 
 template <class Converter>
-V8_WARN_UNUSED_RESULT static Object* ConvertCaseHelper(
+V8_WARN_UNUSED_RESULT static Object ConvertCaseHelper(
     Isolate* isolate, String string, SeqString result, int result_length,
     unibrow::Mapping<Converter, 128>* mapping) {
   DisallowHeapAllocation no_gc;
@@ -446,7 +400,7 @@ V8_WARN_UNUSED_RESULT static Object* ConvertCaseHelper(
 }
 
 template <class Converter>
-V8_WARN_UNUSED_RESULT static Object* ConvertCase(
+V8_WARN_UNUSED_RESULT static Object ConvertCase(
     Handle<String> s, Isolate* isolate,
     unibrow::Mapping<Converter, 128>* mapping) {
   s = String::Flatten(isolate, s);
@@ -460,16 +414,16 @@ V8_WARN_UNUSED_RESULT static Object* ConvertCase(
   // character is also ASCII.  This is currently the case, but it
   // might break in the future if we implement more context and locale
   // dependent upper/lower conversions.
-  if (s->IsOneByteRepresentationUnderneath()) {
+  if (String::IsOneByteRepresentationUnderneath(*s)) {
     // Same length as input.
     Handle<SeqOneByteString> result =
         isolate->factory()->NewRawOneByteString(length).ToHandleChecked();
     DisallowHeapAllocation no_gc;
-    String::FlatContent flat_content = s->GetFlatContent();
+    String::FlatContent flat_content = s->GetFlatContent(no_gc);
     DCHECK(flat_content.IsFlat());
     bool has_changed_character = false;
     int index_to_first_unprocessed = FastAsciiConvert<Converter::kIsToLower>(
-        reinterpret_cast<char*>(result->GetChars()),
+        reinterpret_cast<char*>(result->GetChars(no_gc)),
         reinterpret_cast<const char*>(flat_content.ToOneByteVector().start()),
         length, &has_changed_character);
     // If not ASCII, we discard the result and take the 2 byte path.
@@ -484,7 +438,7 @@ V8_WARN_UNUSED_RESULT static Object* ConvertCase(
     result = isolate->factory()->NewRawTwoByteString(length).ToHandleChecked();
   }
 
-  Object* answer = ConvertCaseHelper(isolate, *s, *result, length, mapping);
+  Object answer = ConvertCaseHelper(isolate, *s, *result, length, mapping);
   if (answer->IsException(isolate) || answer->IsString()) return answer;
 
   DCHECK(answer->IsSmi());

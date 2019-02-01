@@ -4,7 +4,6 @@
 
 // Flags: --expose-wasm
 
-load('test/mjsunit/wasm/wasm-constants.js');
 load('test/mjsunit/wasm/wasm-module-builder.js');
 
 function CreateDefaultBuilder() {
@@ -36,10 +35,7 @@ function checkFailingInstantiation(builder, ffi, error, message) {
   assertThrows(_ => builder.instantiate(ffi), error, message);
 
   // Test asynchronous instantiation.
-  assertPromiseResult(builder.asyncInstantiate(ffi), assertUnreachable, e => {
-    assertInstanceof(e, error);
-    assertEquals(message, e.message);
-  });
+  assertThrowsAsync(builder.asyncInstantiate(ffi), error, message);
 }
 
 (function testValidFFI() {

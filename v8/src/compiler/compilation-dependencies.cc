@@ -12,13 +12,17 @@ namespace internal {
 namespace compiler {
 
 CompilationDependencies::CompilationDependencies(Isolate* isolate, Zone* zone)
-    : zone_(zone), dependencies_(zone) {}
+    : zone_(zone), dependencies_(zone), isolate_(isolate) {}
 
 class CompilationDependencies::Dependency : public ZoneObject {
  public:
   virtual bool IsValid() const = 0;
   virtual void PrepareInstall() {}
   virtual void Install(const MaybeObjectHandle& code) = 0;
+
+#ifdef DEBUG
+  virtual bool IsPretenureModeDependency() const { return false; }
+#endif
 };
 
 class InitialMapDependency final : public CompilationDependencies::Dependency {
@@ -146,6 +150,10 @@ class PretenureModeDependency final
         DependentCode::kAllocationSiteTenuringChangedGroup);
   }
 
+#ifdef DEBUG
+  bool IsPretenureModeDependency() const override { return true; }
+#endif
+
  private:
   AllocationSiteRef site_;
   PretenureFlag mode_;
@@ -156,24 +164,17 @@ class FieldTypeDependency final : public CompilationDependencies::Dependency {
   // TODO(neis): Once the concurrent compiler frontend is always-on, we no
   // longer need to explicitly store the type.
   FieldTypeDependency(const MapRef& owner, int descriptor,
-                      const ObjectRef& type, PropertyConstness constness)
-      : owner_(owner),
-        descriptor_(descriptor),
-        type_(type),
-        constness_(constness) {
+                      const ObjectRef& type)
+      : owner_(owner), descriptor_(descriptor), type_(type) {
     DCHECK(owner_.equals(owner_.FindFieldOwner(descriptor_)));
     DCHECK(type_.equals(owner_.GetFieldType(descriptor_)));
-    DCHECK_EQ(constness_, owner_.GetPropertyDetails(descriptor_).constness());
   }
 
   bool IsValid() const override {
     DisallowHeapAllocation no_heap_allocation;
     Handle<Map> owner = owner_.object();
     Handle<Object> type = type_.object();
-    return *type == owner->instance_descriptors()->GetFieldType(descriptor_) &&
-           constness_ == owner->instance_descriptors()
-                             ->GetDetails(descriptor_)
-                             .constness();
+    return *type == owner->instance_descriptors()->GetFieldType(descriptor_);
   }
 
   void Install(const MaybeObjectHandle& code) override {
@@ -186,7 +187,34 @@ class FieldTypeDependency final : public CompilationDependencies::Dependency {
   MapRef owner_;
   int descriptor_;
   ObjectRef type_;
-  PropertyConstness constness_;
+};
+
+class FieldConstnessDependency final
+    : public CompilationDependencies::Dependency {
+ public:
+  FieldConstnessDependency(const MapRef& owner, int descriptor)
+      : owner_(owner), descriptor_(descriptor) {
+    DCHECK(owner_.equals(owner_.FindFieldOwner(descriptor_)));
+    DCHECK_EQ(PropertyConstness::kConst,
+              owner_.GetPropertyDetails(descriptor_).constness());
+  }
+
+  bool IsValid() const override {
+    DisallowHeapAllocation no_heap_allocation;
+    Handle<Map> owner = owner_.object();
+    return PropertyConstness::kConst ==
+           owner->instance_descriptors()->GetDetails(descriptor_).constness();
+  }
+
+  void Install(const MaybeObjectHandle& code) override {
+    SLOW_DCHECK(IsValid());
+    DependentCode::InstallDependency(owner_.isolate(), code, owner_.object(),
+                                     DependentCode::kFieldOwnerGroup);
+  }
+
+ private:
+  MapRef owner_;
+  int descriptor_;
 };
 
 class GlobalPropertyDependency final
@@ -353,15 +381,37 @@ PretenureFlag CompilationDependencies::DependOnPretenureMode(
   return mode;
 }
 
+PropertyConstness CompilationDependencies::DependOnFieldConstness(
+    const MapRef& map, int descriptor) {
+  MapRef owner = map.FindFieldOwner(descriptor);
+  PropertyConstness constness =
+      owner.GetPropertyDetails(descriptor).constness();
+  if (constness == PropertyConstness::kMutable) return constness;
+
+  // If the map can have fast elements transitions, then the field can be only
+  // considered constant if the map does not transition.
+  if (Map::CanHaveFastTransitionableElementsKind(map.instance_type())) {
+    // If the map can already transition away, let us report the field as
+    // mutable.
+    if (!map.is_stable()) {
+      return PropertyConstness::kMutable;
+    }
+    DependOnStableMap(map);
+  }
+
+  DCHECK_EQ(constness, PropertyConstness::kConst);
+  dependencies_.push_front(new (zone_)
+                               FieldConstnessDependency(owner, descriptor));
+  return PropertyConstness::kConst;
+}
+
 void CompilationDependencies::DependOnFieldType(const MapRef& map,
                                                 int descriptor) {
   MapRef owner = map.FindFieldOwner(descriptor);
   ObjectRef type = owner.GetFieldType(descriptor);
-  PropertyConstness constness =
-      owner.GetPropertyDetails(descriptor).constness();
   DCHECK(type.equals(map.GetFieldType(descriptor)));
-  dependencies_.push_front(
-      new (zone_) FieldTypeDependency(owner, descriptor, type, constness));
+  dependencies_.push_front(new (zone_)
+                               FieldTypeDependency(owner, descriptor, type));
 }
 
 void CompilationDependencies::DependOnGlobalProperty(
@@ -416,7 +466,22 @@ bool CompilationDependencies::Commit(Handle<Code> code) {
     }
     dep->Install(MaybeObjectHandle::Weak(code));
   }
-  SLOW_DCHECK(AreValid());
+
+  // It is even possible that a GC during the above installations invalidated
+  // one of the dependencies. However, this should only affect pretenure mode
+  // dependencies, which we assert below. It is safe to return successfully in
+  // these cases, because once the code gets executed it will do a stack check
+  // that triggers its deoptimization.
+  if (FLAG_stress_gc_during_compilation) {
+    isolate_->heap()->PreciseCollectAllGarbage(
+        Heap::kNoGCFlags, GarbageCollectionReason::kTesting,
+        kGCCallbackFlagForced);
+  }
+#ifdef DEBUG
+  for (auto dep : dependencies_) {
+    CHECK_IMPLIES(!dep->IsValid(), dep->IsPretenureModeDependency());
+  }
+#endif
 
   dependencies_.clear();
   return true;
@@ -469,7 +534,7 @@ SlackTrackingPrediction::SlackTrackingPrediction(MapRef initial_map,
                                                  int instance_size)
     : instance_size_(instance_size),
       inobject_property_count_(
-          (instance_size >> kPointerSizeLog2) -
+          (instance_size >> kTaggedSizeLog2) -
           initial_map.GetInObjectPropertiesStartInWords()) {}
 
 SlackTrackingPrediction

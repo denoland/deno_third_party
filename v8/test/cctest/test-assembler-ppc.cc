@@ -32,17 +32,18 @@
 #include "src/ppc/assembler-ppc-inl.h"
 #include "src/simulator.h"
 #include "test/cctest/cctest.h"
+#include "test/common/assembler-tester.h"
 
 namespace v8 {
 namespace internal {
 
 // TODO(ppc): Refine these signatures per test case, they can have arbitrary
 // return and argument types and arbitrary number of arguments.
-using F_iiiii = Object*(int x, int p1, int p2, int p3, int p4);
-using F_piiii = Object*(void* p0, int p1, int p2, int p3, int p4);
-using F_ppiii = Object*(void* p0, void* p1, int p2, int p3, int p4);
-using F_pppii = Object*(void* p0, void* p1, void* p2, int p3, int p4);
-using F_ippii = Object*(int p0, void* p1, void* p2, int p3, int p4);
+using F_iiiii = void*(int x, int p1, int p2, int p3, int p4);
+using F_piiii = void*(void* p0, int p1, int p2, int p3, int p4);
+using F_ppiii = void*(void* p0, void* p1, int p2, int p3, int p4);
+using F_pppii = void*(void* p0, void* p1, void* p2, int p3, int p4);
+using F_ippii = void*(int p0, void* p1, void* p2, int p3, int p4);
 
 #define __ assm.
 
@@ -52,7 +53,7 @@ TEST(0) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   __ function_descriptor();
 
@@ -79,7 +80,7 @@ TEST(1) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
   Label L, C;
 
   __ function_descriptor();
@@ -116,7 +117,7 @@ TEST(2) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
   Label L, C;
 
   __ function_descriptor();
@@ -173,8 +174,7 @@ TEST(3) {
   } T;
   T t;
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
-  Label L, C;
+  Assembler assm(AssemblerOptions{});
 
   __ function_descriptor();
 
@@ -264,7 +264,7 @@ TEST(4) {
 
   // Create a function that accepts &t, and loads, manipulates, and stores
   // the doubles and floats.
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
   Label L, C;
 
   if (CpuFeatures::IsSupported(VFP3)) {
@@ -333,7 +333,7 @@ TEST(4) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
         Code::STUB,
         Handle<Code>())->ToObjectChecked();
@@ -379,7 +379,7 @@ TEST(5) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(ARMv7)) {
     CpuFeatures::Scope scope(ARMv7);
@@ -393,7 +393,7 @@ TEST(5) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
         Code::STUB,
         Handle<Code>())->ToObjectChecked();
@@ -415,7 +415,7 @@ TEST(6) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(ARMv7)) {
     CpuFeatures::Scope scope(ARMv7);
@@ -428,7 +428,7 @@ TEST(6) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
         Code::STUB,
         Handle<Code>())->ToObjectChecked();
@@ -457,7 +457,7 @@ static void TestRoundingMode(VCVTTypes types,
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(VFP3)) {
     CpuFeatures::Scope scope(VFP3);
@@ -503,7 +503,7 @@ static void TestRoundingMode(VCVTTypes types,
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
         Code::STUB,
         Handle<Code>())->ToObjectChecked();
@@ -661,7 +661,7 @@ TEST(8) {
 
   // Create a function that uses vldm/vstm to move some double and
   // single precision values around in memory.
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(VFP2)) {
     CpuFeatures::Scope scope(VFP2);
@@ -690,7 +690,7 @@ TEST(8) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
         Code::STUB,
         Handle<Code>())->ToObjectChecked();
@@ -772,7 +772,7 @@ TEST(9) {
 
   // Create a function that uses vldm/vstm to move some double and
   // single precision values around in memory.
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(VFP2)) {
     CpuFeatures::Scope scope(VFP2);
@@ -805,7 +805,7 @@ TEST(9) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
         Code::STUB,
         Handle<Code>())->ToObjectChecked();
@@ -887,7 +887,7 @@ TEST(10) {
 
   // Create a function that uses vldm/vstm to move some double and
   // single precision values around in memory.
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(VFP2)) {
     CpuFeatures::Scope scope(VFP2);
@@ -916,7 +916,7 @@ TEST(10) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
         Code::STUB,
         Handle<Code>())->ToObjectChecked();
@@ -983,7 +983,7 @@ TEST(11) {
   i.a = 0xABCD0001;
   i.b = 0xABCD0000;
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   // Test HeapObject untagging.
   __ ldr(r1, MemOperand(r0, offsetof(I, a)));
@@ -1013,7 +1013,7 @@ TEST(11) {
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
-  Object* code = isolate->heap()->CreateCode(
+  Object code = isolate->heap()->CreateCode(
       desc,
       Code::STUB,
       Handle<Code>())->ToObjectChecked();
@@ -1037,7 +1037,7 @@ TEST(12) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
   Label target;
   __ b(eq, &target);
   __ b(ne, &target);

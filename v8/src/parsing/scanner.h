@@ -217,7 +217,7 @@ class Scanner {
     }
     ~BookmarkScope() = default;
 
-    void Set();
+    void Set(size_t bookmark);
     void Apply();
     bool HasBeenSet() const;
     bool HasBeenApplied() const;
@@ -225,7 +225,6 @@ class Scanner {
    private:
     static const size_t kNoBookmark;
     static const size_t kBookmarkWasApplied;
-    static const size_t kBookmarkAtFirstPos;
 
     Scanner* scanner_;
     size_t bookmark_;
@@ -256,9 +255,9 @@ class Scanner {
     Location() : beg_pos(0), end_pos(0) { }
 
     int length() const { return end_pos - beg_pos; }
-    bool IsValid() const { return beg_pos >= 0 && end_pos >= beg_pos; }
+    bool IsValid() const { return IsInRange(beg_pos, 0, end_pos); }
 
-    static Location invalid() { return Location(-1, -1); }
+    static Location invalid() { return Location(-1, 0); }
 
     int beg_pos;
     int end_pos;
@@ -408,6 +407,9 @@ class Scanner {
 
   const Utf16CharacterStream* stream() const { return source_; }
 
+  // If the next characters in the stream are "#!", the line is skipped.
+  void SkipHashBang();
+
  private:
   // Scoped helper for saving & restoring scanner error state.
   // This is used for tagged template literals, in which normally forbidden
@@ -469,8 +471,7 @@ class Scanner {
 
    private:
     static const int kInitialCapacity = 16;
-    static const int kGrowthFactory = 4;
-    static const int kMinConversionSlack = 256;
+    static const int kGrowthFactor = 4;
     static const int kMaxGrowth = 1 * MB;
 
     inline bool IsValidAscii(char code_unit) {

@@ -47,9 +47,7 @@ class Declarations {
   static std::vector<Declarable*> Lookup(const QualifiedName& name) {
     std::vector<Declarable*> d = TryLookup(name);
     if (d.empty()) {
-      std::stringstream s;
-      s << "cannot find \"" << name << "\"";
-      ReportError(s.str());
+      ReportError("cannot find \"", name, "\"");
     }
     return d;
   }
@@ -62,7 +60,7 @@ class Declarations {
   static const Type* GetType(TypeExpression* type_expression);
 
   static Builtin* FindSomeInternalBuiltinWithType(
-      const FunctionPointerType* type);
+      const BuiltinPointerType* type);
 
   static Value* LookupValue(const QualifiedName& name);
 
@@ -83,8 +81,11 @@ class Declarations {
   static void DeclareType(const std::string& name, const Type* type,
                           bool redeclaration);
 
-  static void DeclareStruct(const std::string& name,
-                            const std::vector<NameAndType>& fields);
+  static StructType* DeclareStruct(const std::string& name);
+
+  static ClassType* DeclareClass(const Type* super, const std::string& name,
+                                 bool is_extern, bool transient,
+                                 const std::string& generates);
 
   static Macro* CreateMacro(std::string external_name,
                             std::string readable_name,
@@ -96,6 +97,10 @@ class Declarations {
       base::Optional<std::string> external_assembler_name,
       const Signature& signature, bool transitioning,
       base::Optional<Statement*> body, base::Optional<std::string> op = {});
+
+  static Method* CreateMethod(AggregateType* class_type,
+                              const std::string& name, Signature signature,
+                              bool transitioning, Statement* body);
 
   static Intrinsic* CreateIntrinsic(const std::string& name,
                                     const Signature& signature);
@@ -134,6 +139,7 @@ class Declarations {
     return CurrentScope::Get()->AddDeclarable(name,
                                               RegisterDeclarable(std::move(d)));
   }
+  static Macro* DeclareOperator(const std::string& name, Macro* m);
 
   static std::string GetGeneratedCallableName(
       const std::string& name, const TypeVector& specialized_types);

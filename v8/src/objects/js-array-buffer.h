@@ -32,7 +32,7 @@ class JSArrayBuffer : public JSObject {
   DECL_PRIMITIVE_ACCESSORS(byte_length, size_t)
 
   // [backing_store]: backing memory for this array
-  DECL_ACCESSORS(backing_store, void)
+  DECL_ACCESSORS(backing_store, void*)
 
   // For non-wasm, allocation_length and allocation_base are byte_length and
   // backing_store, respectively.
@@ -49,8 +49,8 @@ class JSArrayBuffer : public JSObject {
 // Bit positions for [bit_field].
 #define JS_ARRAY_BUFFER_BIT_FIELD_FIELDS(V, _) \
   V(IsExternalBit, bool, 1, _)                 \
-  V(IsNeuterableBit, bool, 1, _)               \
-  V(WasNeuteredBit, bool, 1, _)                \
+  V(IsDetachableBit, bool, 1, _)               \
+  V(WasDetachedBit, bool, 1, _)                \
   V(IsSharedBit, bool, 1, _)                   \
   V(IsGrowableBit, bool, 1, _)                 \
   V(IsWasmMemoryBit, bool, 1, _)
@@ -62,11 +62,11 @@ class JSArrayBuffer : public JSObject {
   // memory block once all ArrayBuffers referencing it are collected by the GC.
   DECL_BOOLEAN_ACCESSORS(is_external)
 
-  // [is_neuterable]: false indicates that this buffer cannot be detached.
-  DECL_BOOLEAN_ACCESSORS(is_neuterable)
+  // [is_detachable]: false indicates that this buffer cannot be detached.
+  DECL_BOOLEAN_ACCESSORS(is_detachable)
 
-  // [was_neutered]: true if the buffer was previously detached.
-  DECL_BOOLEAN_ACCESSORS(was_neutered)
+  // [was_detached]: true if the buffer was previously detached.
+  DECL_BOOLEAN_ACCESSORS(was_detached)
 
   // [is_shared]: tells whether this is an ArrayBuffer or a SharedArrayBuffer.
   DECL_BOOLEAN_ACCESSORS(is_shared)
@@ -79,7 +79,7 @@ class JSArrayBuffer : public JSObject {
 
   DECL_CAST(JSArrayBuffer)
 
-  void Neuter();
+  void Detach();
 
   struct Allocation {
     Allocation(void* allocation_base, size_t length, void* backing_store,
@@ -141,8 +141,7 @@ class JSArrayBuffer : public JSObject {
 
   class BodyDescriptor;
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSArrayBuffer);
+  OBJECT_CONSTRUCTORS(JSArrayBuffer, JSObject);
 };
 
 class JSArrayBufferView : public JSObject {
@@ -160,7 +159,7 @@ class JSArrayBufferView : public JSObject {
 
   DECL_VERIFIER(JSArrayBufferView)
 
-  inline bool WasNeutered() const;
+  inline bool WasDetached() const;
 
 // Layout description.
 #define JS_ARRAY_BUFFER_VIEW_FIELDS(V) \
@@ -178,8 +177,7 @@ class JSArrayBufferView : public JSObject {
 
   class BodyDescriptor;
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSArrayBufferView);
+  OBJECT_CONSTRUCTORS(JSArrayBufferView, JSObject);
 };
 
 class JSTypedArray : public JSArrayBufferView {
@@ -191,7 +189,7 @@ class JSTypedArray : public JSArrayBufferView {
   // ES6 9.4.5.3
   V8_WARN_UNUSED_RESULT static Maybe<bool> DefineOwnProperty(
       Isolate* isolate, Handle<JSTypedArray> o, Handle<Object> key,
-      PropertyDescriptor* desc, ShouldThrow should_throw);
+      PropertyDescriptor* desc, Maybe<ShouldThrow> should_throw);
 
   DECL_CAST(JSTypedArray)
 
@@ -233,7 +231,7 @@ class JSTypedArray : public JSArrayBufferView {
   DECL_ACCESSORS(raw_length, Object)
 #endif
 
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSTypedArray);
+  OBJECT_CONSTRUCTORS(JSTypedArray, JSArrayBufferView);
 };
 
 class JSDataView : public JSArrayBufferView {
@@ -249,8 +247,7 @@ class JSDataView : public JSArrayBufferView {
       kHeaderSize +
       v8::ArrayBufferView::kEmbedderFieldCount * kEmbedderDataSlotSize;
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSDataView);
+  OBJECT_CONSTRUCTORS(JSDataView, JSArrayBufferView);
 };
 
 }  // namespace internal

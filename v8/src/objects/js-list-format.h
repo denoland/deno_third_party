@@ -57,7 +57,7 @@ class JSListFormat : public JSObject {
   DECL_CAST(JSListFormat)
 
   // ListFormat accessors.
-  DECL_ACCESSORS2(locale, String)
+  DECL_ACCESSORS(locale, String)
   DECL_ACCESSORS(icu_formatter, Managed<icu::ListFormatter>)
 
   // Style: identifying the relative time format style used.
@@ -116,8 +116,7 @@ class JSListFormat : public JSObject {
   DEFINE_FIELD_OFFSET_CONSTANTS(JSObject::kHeaderSize, JS_LIST_FORMAT_FIELDS)
 #undef JS_LIST_FORMAT_FIELDS
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSListFormat);
+  OBJECT_CONSTRUCTORS(JSListFormat, JSObject);
 };
 
 }  // namespace internal

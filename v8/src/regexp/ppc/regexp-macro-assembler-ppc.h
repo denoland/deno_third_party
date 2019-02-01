@@ -12,8 +12,6 @@
 namespace v8 {
 namespace internal {
 
-
-#ifndef V8_INTERPRETED_REGEXP
 class RegExpMacroAssemblerPPC : public NativeRegExpMacroAssembler {
  public:
   RegExpMacroAssemblerPPC(Isolate* isolate, Zone* zone, Mode mode,
@@ -117,7 +115,7 @@ class RegExpMacroAssemblerPPC : public NativeRegExpMacroAssembler {
   static const int kRegisterZero = kStringStartMinusOne - kPointerSize;
 
   // Initial size of code buffer.
-  static const size_t kRegExpCodeSize = 1024;
+  static const int kRegExpCodeSize = 1024;
 
   // Load a number of characters at the given offset from the
   // current position, into the current-character register.
@@ -207,7 +205,6 @@ class RegExpMacroAssemblerPPC : public NativeRegExpMacroAssembler {
 const RegList kRegExpCalleeSaved =
     1 << 25 | 1 << 26 | 1 << 27 | 1 << 28 | 1 << 29 | 1 << 30 | 1 << 31;
 
-#endif  // V8_INTERPRETED_REGEXP
 }  // namespace internal
 }  // namespace v8
 

@@ -12,7 +12,6 @@
 namespace v8 {
 namespace internal {
 
-#ifndef V8_INTERPRETED_REGEXP
 class RegExpMacroAssemblerIA32: public NativeRegExpMacroAssembler {
  public:
   RegExpMacroAssemblerIA32(Isolate* isolate, Zone* zone, Mode mode,
@@ -124,7 +123,7 @@ class RegExpMacroAssemblerIA32: public NativeRegExpMacroAssembler {
   static const int kRegisterZero = kStringStartMinusOne - kPointerSize;
 
   // Initial size of code buffer.
-  static const size_t kRegExpCodeSize = 1024;
+  static const int kRegExpCodeSize = 1024;
 
   // Load a number of characters at the given offset from the
   // current position, into the current-character register.
@@ -197,7 +196,6 @@ class RegExpMacroAssemblerIA32: public NativeRegExpMacroAssembler {
   Label check_preempt_label_;
   Label stack_overflow_label_;
 };
-#endif  // V8_INTERPRETED_REGEXP
 
 }  // namespace internal
 }  // namespace v8

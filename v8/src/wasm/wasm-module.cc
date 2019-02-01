@@ -260,7 +260,8 @@ Handle<JSArray> GetCustomSections(Isolate* isolate,
       thrower->RangeError("out of memory allocating custom section data");
       return Handle<JSArray>();
     }
-    Handle<JSArrayBuffer> buffer = isolate->factory()->NewJSArrayBuffer();
+    Handle<JSArrayBuffer> buffer =
+        isolate->factory()->NewJSArrayBuffer(SharedFlag::kNotShared);
     constexpr bool is_external = false;
     JSArrayBuffer::Setup(buffer, isolate, is_external, memory, size);
     memcpy(memory, wire_bytes.start() + section.payload.offset(),
@@ -320,7 +321,7 @@ size_t EstimateStoredSize(const WasmModule* module) {
          VectorSize(module->functions) + VectorSize(module->data_segments) +
          VectorSize(module->tables) + VectorSize(module->import_table) +
          VectorSize(module->export_table) + VectorSize(module->exceptions) +
-         VectorSize(module->table_inits);
+         VectorSize(module->elem_segments);
 }
 }  // namespace wasm
 }  // namespace internal

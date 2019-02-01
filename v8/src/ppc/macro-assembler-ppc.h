@@ -18,32 +18,6 @@
 namespace v8 {
 namespace internal {
 
-// Give alias names to registers for calling conventions.
-constexpr Register kReturnRegister0 = r3;
-constexpr Register kReturnRegister1 = r4;
-constexpr Register kReturnRegister2 = r5;
-constexpr Register kJSFunctionRegister = r4;
-constexpr Register kContextRegister = r30;
-constexpr Register kAllocateSizeRegister = r4;
-constexpr Register kSpeculationPoisonRegister = r14;
-constexpr Register kInterpreterAccumulatorRegister = r3;
-constexpr Register kInterpreterBytecodeOffsetRegister = r15;
-constexpr Register kInterpreterBytecodeArrayRegister = r16;
-constexpr Register kInterpreterDispatchTableRegister = r17;
-
-constexpr Register kJavaScriptCallArgCountRegister = r3;
-constexpr Register kJavaScriptCallCodeStartRegister = r5;
-constexpr Register kJavaScriptCallTargetRegister = kJSFunctionRegister;
-constexpr Register kJavaScriptCallNewTargetRegister = r6;
-constexpr Register kJavaScriptCallExtraArg1Register = r5;
-
-constexpr Register kOffHeapTrampolineRegister = ip;
-constexpr Register kRuntimeCallFunctionRegister = r4;
-constexpr Register kRuntimeCallArgCountRegister = r3;
-constexpr Register kRuntimeCallArgvRegister = r5;
-constexpr Register kWasmInstanceRegister = r10;
-constexpr Register kWasmCompileLazyFuncIndexRegister = r15;
-
 // ----------------------------------------------------------------------------
 // Static helper functions
 
@@ -94,14 +68,9 @@ Register GetRegisterThatIsNotOneOf(Register reg1, Register reg2 = no_reg,
 
 class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
  public:
-  TurboAssembler(const AssemblerOptions& options, void* buffer, int buffer_size)
-      : TurboAssemblerBase(options, buffer, buffer_size) {}
-
-  TurboAssembler(Isolate* isolate, const AssemblerOptions& options,
-                 void* buffer, int buffer_size,
-                 CodeObjectRequired create_code_object)
-      : TurboAssemblerBase(isolate, options, buffer, buffer_size,
-                           create_code_object) {}
+  template <typename... Args>
+  explicit TurboAssembler(Args&&... args)
+      : TurboAssemblerBase(std::forward<Args>(args)...) {}
 
   // Converts the integer (untagged smi) in |src| to a double, storing
   // the result to |dst|
@@ -404,7 +373,6 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   // Print a message to stdout and abort execution.
   void Abort(AbortReason reason);
 
-  inline bool AllowThisStubCall(CodeStub* stub);
 #if !V8_TARGET_ARCH_PPC64
   void ShiftLeftPair(Register dst_low, Register dst_high, Register src_low,
                      Register src_high, Register scratch, Register shift);
@@ -439,11 +407,12 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
             Condition cond = al);
   void Call(Label* target);
 
-  void CallForDeoptimization(Address target, int deopt_id,
-                             RelocInfo::Mode rmode) {
-    USE(deopt_id);
-    Call(target, rmode);
-  }
+  void LoadCodeObjectEntry(Register destination, Register code_object) override;
+  void CallCodeObject(Register code_object) override;
+  void JumpCodeObject(Register code_object) override;
+
+  void CallBuiltinPointer(Register builtin_pointer) override;
+  void CallForDeoptimization(Address target, int deopt_id);
 
   // Emit code to discard a non-negative number of pointer-sized elements
   // from the stack, clobbering only the sp register.
@@ -509,6 +478,11 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
       // do nothing
     }
   }
+
+  void ZeroExtByte(Register dst, Register src);
+  void ZeroExtHalfWord(Register dst, Register src);
+  void ZeroExtWord32(Register dst, Register src);
+
   // ---------------------------------------------------------------------------
   // Bit testing/extraction
   //
@@ -633,8 +607,6 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   // the JS bitwise operations. See ECMA-262 9.5: ToInt32. Goes to 'done' if it
   // succeeds, otherwise falls through if result is saturated. On return
   // 'result' either holds answer, or is clobbered on fall through.
-  //
-  // Only public for the test code in test-code-stubs-arm.cc.
   void TryInlineTruncateDoubleToI(Register result, DoubleRegister input,
                                   Label* done);
   void TruncateDoubleToI(Isolate* isolate, Zone* zone, Register result,
@@ -652,6 +624,11 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
 #endif
   }
 
+  // Generates an instruction sequence s.t. the return address points to the
+  // instruction following the call.
+  // The return address on the stack is used by frame iteration.
+  void StoreReturnAddressAndCall(Register target);
+
   void ResetSpeculationPoisonRegister();
 
  private:
@@ -668,49 +645,14 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
 };
 
 // MacroAssembler implements a collection of frequently used acros.
-class MacroAssembler : public TurboAssembler {
+class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
  public:
-  MacroAssembler(const AssemblerOptions& options, void* buffer, int size)
-      : TurboAssembler(options, buffer, size) {}
-
-  MacroAssembler(Isolate* isolate, void* buffer, int size,
-                 CodeObjectRequired create_code_object)
-      : MacroAssembler(isolate, AssemblerOptions::Default(isolate), buffer,
-                       size, create_code_object) {}
-
-  MacroAssembler(Isolate* isolate, const AssemblerOptions& options,
-                 void* buffer, int size, CodeObjectRequired create_code_object);
+  template <typename... Args>
+  explicit MacroAssembler(Args&&... args)
+      : TurboAssembler(std::forward<Args>(args)...) {}
 
   // ---------------------------------------------------------------------------
   // GC Support
-
-  void IncrementalMarkingRecordWriteHelper(Register object, Register value,
-                                           Register address);
-
-  void JumpToJSEntry(Register target);
-  // Check if object is in new space.  Jumps if the object is not in new space.
-  // The register scratch can be object itself, but scratch will be clobbered.
-  void JumpIfNotInNewSpace(Register object, Register scratch, Label* branch) {
-    InNewSpace(object, scratch, eq, branch);
-  }
-
-  // Check if object is in new space.  Jumps if the object is in new space.
-  // The register scratch can be object itself, but it will be clobbered.
-  void JumpIfInNewSpace(Register object, Register scratch, Label* branch) {
-    InNewSpace(object, scratch, ne, branch);
-  }
-
-  // Check if an object has a given incremental marking color.
-  void HasColor(Register object, Register scratch0, Register scratch1,
-                Label* has_color, int first_bit, int second_bit);
-
-  void JumpIfBlack(Register object, Register scratch0, Register scratch1,
-                   Label* on_black);
-
-  // Checks the color of an object.  If the object is white we jump to the
-  // incremental marker.
-  void JumpIfWhite(Register value, Register scratch1, Register scratch2,
-                   Register scratch3, Label* value_is_white);
 
   // Notify the garbage collector that we wrote a pointer into an object.
   // |object| is the object being stored into, |value| is the object being
@@ -887,10 +829,6 @@ class MacroAssembler : public TurboAssembler {
                                             Condition cond = al);
   void CallJSEntry(Register target);
 
-  // Call a code stub.
-  void CallStub(CodeStub* stub, Condition cond = al);
-  void TailCallStub(CodeStub* stub, Condition cond = al);
-
   // Call a runtime routine.
   void CallRuntime(const Runtime::Function* f, int num_arguments,
                    SaveFPRegsMode save_doubles = kDontSaveFPRegs);
@@ -1024,11 +962,6 @@ class MacroAssembler : public TurboAssembler {
   void InvokePrologue(const ParameterCount& expected,
                       const ParameterCount& actual, Label* done,
                       bool* definitely_mismatches, InvokeFlag flag);
-
-  // Helper for implementing JumpIfNotInNewSpace and JumpIfInNewSpace.
-  void InNewSpace(Register object, Register scratch,
-                  Condition cond,  // eq for new space, ne otherwise.
-                  Label* branch);
 
   // Compute memory operands for safepoint stack slots.
   static int SafepointRegisterStackIndex(int reg_code);

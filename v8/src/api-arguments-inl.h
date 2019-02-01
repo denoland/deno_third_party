@@ -22,14 +22,14 @@ CustomArgumentsBase::CustomArgumentsBase(Isolate* isolate)
 
 template <typename T>
 CustomArguments<T>::~CustomArguments() {
-  slot_at(kReturnValueOffset).store(ObjectPtr(kHandleZapValue));
+  slot_at(kReturnValueOffset).store(Object(kHandleZapValue));
 }
 
 template <typename T>
 template <typename V>
 Handle<V> CustomArguments<T>::GetReturnValue(Isolate* isolate) {
   // Check the ReturnValue.
-  ObjectSlot slot = slot_at(kReturnValueOffset);
+  FullObjectSlot slot = slot_at(kReturnValueOffset);
   // Nothing was set, return empty handle as per previous behaviour.
   if ((*slot)->IsTheHole(isolate)) return Handle<V>();
   Handle<V> result = Handle<V>::cast(Handle<Object>(slot.location()));
@@ -37,15 +37,15 @@ Handle<V> CustomArguments<T>::GetReturnValue(Isolate* isolate) {
   return result;
 }
 
-inline JSObject* PropertyCallbackArguments::holder() {
+inline JSObject PropertyCallbackArguments::holder() {
   return JSObject::cast(*slot_at(T::kHolderIndex));
 }
 
-inline Object* PropertyCallbackArguments::receiver() {
-  return Object::cast(*slot_at(T::kThisIndex));
+inline Object PropertyCallbackArguments::receiver() {
+  return *slot_at(T::kThisIndex);
 }
 
-inline JSObject* FunctionCallbackArguments::holder() {
+inline JSObject FunctionCallbackArguments::holder() {
   return JSObject::cast(*slot_at(T::kHolderIndex));
 }
 
@@ -127,7 +127,7 @@ FOR_EACH_CALLBACK(CREATE_INDEXED_CALLBACK)
 #undef FOR_EACH_CALLBACK
 #undef CREATE_INDEXED_CALLBACK
 
-Handle<Object> FunctionCallbackArguments::Call(CallHandlerInfo* handler) {
+Handle<Object> FunctionCallbackArguments::Call(CallHandlerInfo handler) {
   Isolate* isolate = this->isolate();
   LOG(isolate, ApiObjectAccess("call", holder()));
   RuntimeCallTimerScope timer(isolate, RuntimeCallCounterId::kFunctionCallback);

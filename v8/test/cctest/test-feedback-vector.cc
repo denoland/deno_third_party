@@ -12,6 +12,7 @@
 #include "src/heap/factory.h"
 #include "src/macro-assembler.h"
 #include "src/objects-inl.h"
+#include "src/objects/feedback-cell-inl.h"
 #include "test/cctest/test-feedback-vector.h"
 
 namespace v8 {
@@ -95,7 +96,7 @@ TEST(VectorStructure) {
     CHECK_EQ(1,
              FeedbackMetadata::GetSlotSize(FeedbackSlotKind::kCreateClosure));
     FeedbackSlot slot = helper.slot(1);
-    FeedbackCell* cell =
+    FeedbackCell cell =
         FeedbackCell::cast(vector->Get(slot)->GetHeapObjectAssumeStrong());
     CHECK_EQ(cell->value(), *factory->undefined_value());
   }
@@ -206,7 +207,7 @@ TEST(VectorCallFeedback) {
   FeedbackNexus nexus(feedback_vector, slot);
 
   CHECK_EQ(MONOMORPHIC, nexus.StateFromFeedback());
-  HeapObject* heap_object;
+  HeapObject heap_object;
   CHECK(nexus.GetFeedback()->GetHeapObjectIfWeak(&heap_object));
   CHECK_EQ(*foo, heap_object);
 
@@ -233,7 +234,7 @@ TEST(VectorCallFeedbackForArray) {
   FeedbackNexus nexus(feedback_vector, slot);
 
   CHECK_EQ(MONOMORPHIC, nexus.StateFromFeedback());
-  HeapObject* heap_object;
+  HeapObject heap_object;
   CHECK(nexus.GetFeedback()->GetHeapObjectIfWeak(&heap_object));
   CHECK_EQ(*isolate->array_function(), heap_object);
 

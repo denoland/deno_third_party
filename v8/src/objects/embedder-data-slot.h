@@ -34,8 +34,9 @@ class EmbedderDataSlot
  public:
   EmbedderDataSlot() : SlotBase(kNullAddress) {}
   V8_INLINE EmbedderDataSlot(EmbedderDataArray array, int entry_index);
-  V8_INLINE EmbedderDataSlot(JSObject* object, int embedder_field_index);
+  V8_INLINE EmbedderDataSlot(JSObject object, int embedder_field_index);
 
+  // TODO(ishell): these offsets are currently little-endian specific.
 #ifdef V8_COMPRESS_POINTERS
   static constexpr int kRawPayloadOffset = kTaggedSize;
 #endif
@@ -47,16 +48,16 @@ class EmbedderDataSlot
     const Address data_[kEmbedderDataSlotSizeInTaggedSlots];
   };
 
-  V8_INLINE Object* load_tagged() const;
+  V8_INLINE Object load_tagged() const;
   V8_INLINE void store_smi(Smi value);
 
   // Setting an arbitrary tagged value requires triggering a write barrier
   // which requires separate object and offset values, therefore these static
   // functions a
   static V8_INLINE void store_tagged(EmbedderDataArray array, int entry_index,
-                                     Object* value);
-  static V8_INLINE void store_tagged(JSObject* object, int embedder_field_index,
-                                     Object* value);
+                                     Object value);
+  static V8_INLINE void store_tagged(JSObject object, int embedder_field_index,
+                                     Object value);
 
   // Tries reinterpret the value as an aligned pointer and on success sets
   // *out_result to the pointer-like value and returns true. Note, that some

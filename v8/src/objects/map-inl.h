@@ -12,6 +12,7 @@
 #include "src/layout-descriptor-inl.h"
 #include "src/objects-inl.h"
 #include "src/objects/api-callbacks-inl.h"
+#include "src/objects/cell-inl.h"
 #include "src/objects/descriptor-array.h"
 #include "src/objects/instance-type-inl.h"
 #include "src/objects/prototype-info-inl.h"
@@ -26,10 +27,23 @@
 namespace v8 {
 namespace internal {
 
-OBJECT_CONSTRUCTORS_IMPL(Map, HeapObjectPtr)
-CAST_ACCESSOR2(Map)
+OBJECT_CONSTRUCTORS_IMPL(Map, HeapObject)
+CAST_ACCESSOR(Map)
 
-ACCESSORS(Map, instance_descriptors, DescriptorArray, kDescriptorsOffset)
+DescriptorArray Map::instance_descriptors() const {
+  return DescriptorArray::cast(READ_FIELD(*this, kDescriptorsOffset));
+}
+
+DescriptorArray Map::synchronized_instance_descriptors() const {
+  return DescriptorArray::cast(ACQUIRE_READ_FIELD(*this, kDescriptorsOffset));
+}
+
+void Map::set_synchronized_instance_descriptors(DescriptorArray value,
+                                                WriteBarrierMode mode) {
+  RELEASE_WRITE_FIELD(*this, kDescriptorsOffset, value);
+  CONDITIONAL_WRITE_BARRIER(*this, kDescriptorsOffset, value, mode);
+}
+
 // A freshly allocated layout descriptor can be set on an existing map.
 // We need to use release-store and acquire-load accessor pairs to ensure
 // that the concurrent marking thread observes initializing stores of the
@@ -76,31 +90,21 @@ BIT_FIELD_ACCESSORS(Map, bit_field3, may_have_interesting_symbols,
 BIT_FIELD_ACCESSORS(Map, bit_field3, construction_counter,
                     Map::ConstructionCounterBits)
 
-InterceptorInfo* Map::GetNamedInterceptor() {
+InterceptorInfo Map::GetNamedInterceptor() {
   DCHECK(has_named_interceptor());
-  FunctionTemplateInfo* info = GetFunctionTemplateInfo();
+  FunctionTemplateInfo info = GetFunctionTemplateInfo();
   return InterceptorInfo::cast(info->GetNamedPropertyHandler());
 }
 
-InterceptorInfo* Map::GetIndexedInterceptor() {
+InterceptorInfo Map::GetIndexedInterceptor() {
   DCHECK(has_indexed_interceptor());
-  FunctionTemplateInfo* info = GetFunctionTemplateInfo();
+  FunctionTemplateInfo info = GetFunctionTemplateInfo();
   return InterceptorInfo::cast(info->GetIndexedPropertyHandler());
 }
 
-bool Map::IsInplaceGeneralizableField(PropertyConstness constness,
-                                      Representation representation,
-                                      FieldType field_type) {
-  if (FLAG_track_constant_fields && FLAG_modify_map_inplace &&
-      (constness == PropertyConstness::kConst)) {
-    // VariableMode::kConst -> PropertyConstness::kMutable field generalization
-    // may happen in-place.
-    return true;
-  }
-  if (representation.IsHeapObject() && !field_type->IsAny()) {
-    return true;
-  }
-  return false;
+bool Map::IsMostGeneralFieldType(Representation representation,
+                                 FieldType field_type) {
+  return !representation.IsHeapObject() || field_type->IsAny();
 }
 
 bool Map::CanHaveFastTransitionableElementsKind(InstanceType instance_type) {
@@ -121,13 +125,7 @@ void Map::GeneralizeIfCanHaveTransitionableFastElementsKind(
     // kind transitions because they are inserted into the transition tree
     // before field transitions. In order to avoid complexity of handling
     // such a case we ensure that all maps with transitionable elements kinds
-    // do not have fields that can be generalized in-place (without creation
-    // of a new map).
-    if (FLAG_track_constant_fields && FLAG_modify_map_inplace) {
-      // The constness is either already PropertyConstness::kMutable or should
-      // become PropertyConstness::kMutable if it was VariableMode::kConst.
-      *constness = PropertyConstness::kMutable;
-    }
+    // have the most general field type.
     if (representation->IsHeapObject()) {
       // The field type is either already Any or should become Any if it was
       // something else.
@@ -205,7 +203,7 @@ FixedArrayBase Map::GetInitialElements() const {
   } else {
     UNREACHABLE();
   }
-  DCHECK(!Heap::InNewSpace(result));
+  DCHECK(!Heap::InYoungGeneration(result));
   return result;
 }
 
@@ -551,12 +549,12 @@ bool Map::IsPrimitiveMap() const {
   return instance_type() <= LAST_PRIMITIVE_TYPE;
 }
 
-Object* Map::prototype() const { return READ_FIELD(this, kPrototypeOffset); }
+Object Map::prototype() const { return READ_FIELD(this, kPrototypeOffset); }
 
-void Map::set_prototype(Object* value, WriteBarrierMode mode) {
+void Map::set_prototype(Object value, WriteBarrierMode mode) {
   DCHECK(value->IsNull() || value->IsJSReceiver());
-  WRITE_FIELD(this, kPrototypeOffset, value);
-  CONDITIONAL_WRITE_BARRIER(this, kPrototypeOffset, value, mode);
+  WRITE_FIELD(*this, kPrototypeOffset, value);
+  CONDITIONAL_WRITE_BARRIER(*this, kPrototypeOffset, value, mode);
 }
 
 LayoutDescriptor Map::layout_descriptor_gc_safe() const {
@@ -564,7 +562,7 @@ LayoutDescriptor Map::layout_descriptor_gc_safe() const {
   // The loaded value can be dereferenced on background thread to load the
   // bitmap. We need acquire load in order to ensure that the bitmap
   // initializing stores are also visible to the background thread.
-  Object* layout_desc = ACQUIRE_READ_FIELD(this, kLayoutDescriptorOffset);
+  Object layout_desc = ACQUIRE_READ_FIELD(*this, kLayoutDescriptorOffset);
   return LayoutDescriptor::cast_gc_safe(layout_desc);
 }
 
@@ -572,13 +570,14 @@ bool Map::HasFastPointerLayout() const {
   DCHECK(FLAG_unbox_double_fields);
   // The loaded value is used for SMI check only and is not dereferenced,
   // so relaxed load is safe.
-  Object* layout_desc = RELAXED_READ_FIELD(this, kLayoutDescriptorOffset);
+  Object layout_desc = RELAXED_READ_FIELD(*this, kLayoutDescriptorOffset);
   return LayoutDescriptor::IsFastPointerLayout(layout_desc);
 }
 
-void Map::UpdateDescriptors(DescriptorArray* descriptors,
-                            LayoutDescriptor layout_desc) {
-  set_instance_descriptors(descriptors);
+void Map::UpdateDescriptors(Isolate* isolate, DescriptorArray descriptors,
+                            LayoutDescriptor layout_desc,
+                            int number_of_own_descriptors) {
+  SetInstanceDescriptors(isolate, descriptors, number_of_own_descriptors);
   if (FLAG_unbox_double_fields) {
     if (layout_descriptor()->IsSlowLayout()) {
       set_layout_descriptor(layout_desc);
@@ -596,11 +595,10 @@ void Map::UpdateDescriptors(DescriptorArray* descriptors,
   }
 }
 
-void Map::InitializeDescriptors(DescriptorArray* descriptors,
+void Map::InitializeDescriptors(Isolate* isolate, DescriptorArray descriptors,
                                 LayoutDescriptor layout_desc) {
-  int len = descriptors->number_of_descriptors();
-  set_instance_descriptors(descriptors);
-  SetNumberOfOwnDescriptors(len);
+  SetInstanceDescriptors(isolate, descriptors,
+                         descriptors->number_of_descriptors());
 
   if (FLAG_unbox_double_fields) {
     set_layout_descriptor(layout_desc);
@@ -618,13 +616,13 @@ void Map::InitializeDescriptors(DescriptorArray* descriptors,
 
 void Map::set_bit_field3(uint32_t bits) {
   if (kInt32Size != kTaggedSize) {
-    WRITE_UINT32_FIELD(this, kBitField3Offset + kInt32Size, 0);
+    RELAXED_WRITE_UINT32_FIELD(this, kBitField3Offset + kInt32Size, 0);
   }
-  WRITE_UINT32_FIELD(this, kBitField3Offset, bits);
+  RELAXED_WRITE_UINT32_FIELD(this, kBitField3Offset, bits);
 }
 
 uint32_t Map::bit_field3() const {
-  return READ_UINT32_FIELD(this, kBitField3Offset);
+  return RELAXED_READ_UINT32_FIELD(this, kBitField3Offset);
 }
 
 LayoutDescriptor Map::GetLayoutDescriptor() const {
@@ -632,13 +630,18 @@ LayoutDescriptor Map::GetLayoutDescriptor() const {
                                   : LayoutDescriptor::FastPointerLayout();
 }
 
-void Map::AppendDescriptor(Descriptor* desc) {
-  DescriptorArray* descriptors = instance_descriptors();
+void Map::AppendDescriptor(Isolate* isolate, Descriptor* desc) {
+  DescriptorArray descriptors = instance_descriptors();
   int number_of_own_descriptors = NumberOfOwnDescriptors();
   DCHECK(descriptors->number_of_descriptors() == number_of_own_descriptors);
-  descriptors->Append(desc);
-  SetNumberOfOwnDescriptors(number_of_own_descriptors + 1);
-
+  {
+    // The following two operations need to happen before the marking write
+    // barrier.
+    descriptors->Append(desc);
+    SetNumberOfOwnDescriptors(number_of_own_descriptors + 1);
+    MarkingBarrierForDescriptorArray(isolate->heap(), *this, descriptors,
+                                     number_of_own_descriptors + 1);
+  }
   // Properly mark the map if the {desc} is an "interesting symbol".
   if (desc->GetKey()->IsInterestingSymbol()) {
     set_may_have_interesting_symbols(true);
@@ -656,8 +659,8 @@ void Map::AppendDescriptor(Descriptor* desc) {
 #endif
 }
 
-Object* Map::GetBackPointer() const {
-  Object* object = constructor_or_backpointer();
+Object Map::GetBackPointer() const {
+  Object object = constructor_or_backpointer();
   if (object->IsMap()) {
     return object;
   }
@@ -673,19 +676,19 @@ Map Map::ElementsTransitionMap() {
       .SearchSpecial(GetReadOnlyRoots().elements_transition_symbol());
 }
 
-Object* Map::prototype_info() const {
+Object Map::prototype_info() const {
   DCHECK(is_prototype_map());
   return READ_FIELD(this, Map::kTransitionsOrPrototypeInfoOffset);
 }
 
-void Map::set_prototype_info(Object* value, WriteBarrierMode mode) {
+void Map::set_prototype_info(Object value, WriteBarrierMode mode) {
   CHECK(is_prototype_map());
-  WRITE_FIELD(this, Map::kTransitionsOrPrototypeInfoOffset, value);
-  CONDITIONAL_WRITE_BARRIER(this, Map::kTransitionsOrPrototypeInfoOffset, value,
-                            mode);
+  WRITE_FIELD(*this, Map::kTransitionsOrPrototypeInfoOffset, value);
+  CONDITIONAL_WRITE_BARRIER(*this, Map::kTransitionsOrPrototypeInfoOffset,
+                            value, mode);
 }
 
-void Map::SetBackPointer(Object* value, WriteBarrierMode mode) {
+void Map::SetBackPointer(Object value, WriteBarrierMode mode) {
   CHECK_GE(instance_type(), FIRST_JS_RECEIVER_TYPE);
   CHECK(value->IsMap());
   CHECK(GetBackPointer()->IsUndefined());
@@ -700,14 +703,14 @@ ACCESSORS(Map, constructor_or_backpointer, Object,
           kConstructorOrBackPointerOffset)
 
 bool Map::IsPrototypeValidityCellValid() const {
-  Object* validity_cell = prototype_validity_cell();
-  Object* value = validity_cell->IsSmi() ? Smi::cast(validity_cell)
-                                         : Cell::cast(validity_cell)->value();
+  Object validity_cell = prototype_validity_cell();
+  Object value = validity_cell->IsSmi() ? Smi::cast(validity_cell)
+                                        : Cell::cast(validity_cell)->value();
   return value == Smi::FromInt(Map::kPrototypeChainValid);
 }
 
-Object* Map::GetConstructor() const {
-  Object* maybe_constructor = constructor_or_backpointer();
+Object Map::GetConstructor() const {
+  Object maybe_constructor = constructor_or_backpointer();
   // Follow any back pointers.
   while (maybe_constructor->IsMap()) {
     maybe_constructor =
@@ -716,8 +719,8 @@ Object* Map::GetConstructor() const {
   return maybe_constructor;
 }
 
-FunctionTemplateInfo* Map::GetFunctionTemplateInfo() const {
-  Object* constructor = GetConstructor();
+FunctionTemplateInfo Map::GetFunctionTemplateInfo() const {
+  Object constructor = GetConstructor();
   if (constructor->IsJSFunction()) {
     DCHECK(JSFunction::cast(constructor)->shared()->IsApiFunction());
     return JSFunction::cast(constructor)->shared()->get_api_func_data();
@@ -726,7 +729,7 @@ FunctionTemplateInfo* Map::GetFunctionTemplateInfo() const {
   return FunctionTemplateInfo::cast(constructor);
 }
 
-void Map::SetConstructor(Object* constructor, WriteBarrierMode mode) {
+void Map::SetConstructor(Object constructor, WriteBarrierMode mode) {
   // Never overwrite a back pointer with a constructor.
   CHECK(!constructor_or_backpointer()->IsMap());
   set_constructor_or_backpointer(constructor, mode);
@@ -763,19 +766,24 @@ int Map::SlackForArraySize(int old_size, int size_limit) {
   return Min(max_slack, old_size / 4);
 }
 
+int Map::InstanceSizeFromSlack(int slack) const {
+  return instance_size() - slack * kTaggedSize;
+}
+
+NEVER_READ_ONLY_SPACE_IMPL(NormalizedMapCache)
+
 int NormalizedMapCache::GetIndex(Handle<Map> map) {
   return map->Hash() % NormalizedMapCache::kEntries;
 }
 
-bool NormalizedMapCache::IsNormalizedMapCache(const HeapObject* obj) {
+bool NormalizedMapCache::IsNormalizedMapCache(const HeapObject obj) {
   if (!obj->IsWeakFixedArray()) return false;
   if (WeakFixedArray::cast(obj)->length() != NormalizedMapCache::kEntries) {
     return false;
   }
 #ifdef VERIFY_HEAP
   if (FLAG_verify_heap) {
-    NormalizedMapCache* cache =
-        reinterpret_cast<NormalizedMapCache*>(const_cast<HeapObject*>(obj));
+    NormalizedMapCache cache = NormalizedMapCache::cast(obj);
     cache->NormalizedMapCacheVerify(cache->GetIsolate());
   }
 #endif

@@ -37,6 +37,7 @@
 #include "src/api-inl.h"
 #include "src/assembler-inl.h"
 #include "src/base/hashmap.h"
+#include "src/base/optional.h"
 #include "src/collector.h"
 #include "src/debug/debug.h"
 #include "src/objects-inl.h"
@@ -1194,9 +1195,7 @@ class TestStatsStream : public v8::OutputStream {
       entries_size_(0),
       intervals_count_(0),
       first_interval_index_(-1) { }
-  TestStatsStream(const TestStatsStream& stream)
-
-      = default;
+  TestStatsStream(const TestStatsStream& stream) V8_NOEXCEPT = default;
   ~TestStatsStream() override = default;
   void EndOfStream() override { ++eos_signaled_; }
   WriteResult WriteAsciiChunk(char* buffer, int chars_written) override {
@@ -1931,37 +1930,37 @@ TEST(GetConstructor) {
                                    .As<v8::Object>();
   i::Handle<i::JSObject> js_obj1 =
       i::Handle<i::JSObject>::cast(v8::Utils::OpenHandle(*obj1));
-  CHECK(i::V8HeapExplorer::GetConstructor(*js_obj1));
+  CHECK(!i::V8HeapExplorer::GetConstructor(*js_obj1).is_null());
   v8::Local<v8::Object> obj2 = js_global->Get(env.local(), v8_str("obj2"))
                                    .ToLocalChecked()
                                    .As<v8::Object>();
   i::Handle<i::JSObject> js_obj2 =
       i::Handle<i::JSObject>::cast(v8::Utils::OpenHandle(*obj2));
-  CHECK(i::V8HeapExplorer::GetConstructor(*js_obj2));
+  CHECK(!i::V8HeapExplorer::GetConstructor(*js_obj2).is_null());
   v8::Local<v8::Object> obj3 = js_global->Get(env.local(), v8_str("obj3"))
                                    .ToLocalChecked()
                                    .As<v8::Object>();
   i::Handle<i::JSObject> js_obj3 =
       i::Handle<i::JSObject>::cast(v8::Utils::OpenHandle(*obj3));
-  CHECK(i::V8HeapExplorer::GetConstructor(*js_obj3));
+  CHECK(!i::V8HeapExplorer::GetConstructor(*js_obj3).is_null());
   v8::Local<v8::Object> obj4 = js_global->Get(env.local(), v8_str("obj4"))
                                    .ToLocalChecked()
                                    .As<v8::Object>();
   i::Handle<i::JSObject> js_obj4 =
       i::Handle<i::JSObject>::cast(v8::Utils::OpenHandle(*obj4));
-  CHECK(i::V8HeapExplorer::GetConstructor(*js_obj4));
+  CHECK(!i::V8HeapExplorer::GetConstructor(*js_obj4).is_null());
   v8::Local<v8::Object> obj5 = js_global->Get(env.local(), v8_str("obj5"))
                                    .ToLocalChecked()
                                    .As<v8::Object>();
   i::Handle<i::JSObject> js_obj5 =
       i::Handle<i::JSObject>::cast(v8::Utils::OpenHandle(*obj5));
-  CHECK(!i::V8HeapExplorer::GetConstructor(*js_obj5));
+  CHECK(i::V8HeapExplorer::GetConstructor(*js_obj5).is_null());
   v8::Local<v8::Object> obj6 = js_global->Get(env.local(), v8_str("obj6"))
                                    .ToLocalChecked()
                                    .As<v8::Object>();
   i::Handle<i::JSObject> js_obj6 =
       i::Handle<i::JSObject>::cast(v8::Utils::OpenHandle(*obj6));
-  CHECK(!i::V8HeapExplorer::GetConstructor(*js_obj6));
+  CHECK(i::V8HeapExplorer::GetConstructor(*js_obj6).is_null());
 }
 
 TEST(GetConstructorName) {
@@ -2447,6 +2446,8 @@ TEST(ManyLocalsInSharedContext) {
 
 
 TEST(AllocationSitesAreVisible) {
+  if (i::FLAG_lite_mode) return;
+
   LocalContext env;
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope scope(isolate);
@@ -2690,7 +2691,9 @@ TEST(TrackHeapAllocationsWithInlining) {
   const char* names[] = {"", "start", "f_0_0"};
   AllocationTraceNode* node = FindNode(tracker, ArrayVector(names));
   CHECK(node);
-  CHECK_GE(node->allocation_count(), 8u);
+  // In lite mode, there is feedback and feedback metadata.
+  unsigned int num_nodes = (i::FLAG_lite_mode) ? 6 : 8;
+  CHECK_GE(node->allocation_count(), num_nodes);
   CHECK_GE(node->allocation_size(), 4 * node->allocation_count());
   heap_profiler->StopTrackingHeapObjects();
 }
@@ -3845,7 +3848,7 @@ TEST(SamplingHeapProfilerSampleDuringDeopt) {
   v8::internal::FLAG_sampling_heap_profiler_suppress_randomness = true;
 
   // Small sample interval to force each object to be sampled.
-  heap_profiler->StartSamplingHeapProfiler(i::kPointerSize);
+  heap_profiler->StartSamplingHeapProfiler(i::kTaggedSize);
 
   // Lazy deopt from runtime call from inlined callback function.
   const char* source =
@@ -3904,7 +3907,7 @@ TEST(WeakReference) {
   i::Handle<i::FeedbackVector> fv = factory->NewFeedbackVector(shared_function);
 
   // Create a Code.
-  i::Assembler assm(i::AssemblerOptions{}, nullptr, 0);
+  i::Assembler assm(i::AssemblerOptions{});
   assm.nop();  // supported on all architectures
   i::CodeDesc desc;
   assm.GetCode(i_isolate, &desc);

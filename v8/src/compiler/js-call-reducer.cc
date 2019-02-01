@@ -5,10 +5,9 @@
 #include "src/compiler/js-call-reducer.h"
 
 #include "src/api-inl.h"
-#include "src/builtins/builtins-promise-gen.h"
+#include "src/builtins/builtins-promise.h"
 #include "src/builtins/builtins-utils.h"
 #include "src/code-factory.h"
-#include "src/code-stubs.h"
 #include "src/compiler/access-builder.h"
 #include "src/compiler/access-info.h"
 #include "src/compiler/allocation-builder.h"
@@ -997,17 +996,6 @@ void JSCallReducer::WireInLoopEnd(Node* loop, Node* eloop, Node* vloop, Node* k,
 }
 
 namespace {
-
-bool CanInlineArrayIteratingBuiltin(Isolate* isolate, MapRef& receiver_map) {
-  receiver_map.SerializePrototype();
-  if (!receiver_map.prototype().IsJSArray()) return false;
-  JSArrayRef receiver_prototype = receiver_map.prototype().AsJSArray();
-  return receiver_map.instance_type() == JS_ARRAY_TYPE &&
-         IsFastElementsKind(receiver_map.elements_kind()) &&
-         isolate->IsNoElementsProtectorIntact() &&
-         isolate->IsAnyInitialArrayPrototype(receiver_prototype.object());
-}
-
 bool CanInlineArrayIteratingBuiltin(JSHeapBroker* broker,
                                     ZoneHandleSet<Map> receiver_maps,
                                     ElementsKind* kind_return) {
@@ -1015,16 +1003,38 @@ bool CanInlineArrayIteratingBuiltin(JSHeapBroker* broker,
   *kind_return = MapRef(broker, receiver_maps[0]).elements_kind();
   for (auto receiver_map : receiver_maps) {
     MapRef map(broker, receiver_map);
-    if (!CanInlineArrayIteratingBuiltin(broker->isolate(), map)) {
-      return false;
-    }
-    if (!UnionElementsKindUptoSize(kind_return, map.elements_kind())) {
+    if (!map.supports_fast_array_iteration() ||
+        !UnionElementsKindUptoSize(kind_return, map.elements_kind())) {
       return false;
     }
   }
   return true;
 }
 
+bool CanInlineArrayResizingBuiltin(JSHeapBroker* broker,
+                                   ZoneHandleSet<Map> receiver_maps,
+                                   ElementsKind* kind_return,
+                                   bool builtin_is_push = false) {
+  DCHECK_NE(0, receiver_maps.size());
+  *kind_return = MapRef(broker, receiver_maps[0]).elements_kind();
+  for (auto receiver_map : receiver_maps) {
+    MapRef map(broker, receiver_map);
+    if (!map.supports_fast_array_resize()) return false;
+    if (builtin_is_push) {
+      if (!UnionElementsKindUptoPackedness(kind_return, map.elements_kind())) {
+        return false;
+      }
+    } else {
+      // TODO(turbofan): We should also handle fast holey double elements once
+      // we got the hole NaN mess sorted out in TurboFan/V8.
+      if (map.elements_kind() == HOLEY_DOUBLE_ELEMENTS ||
+          !UnionElementsKindUptoSize(kind_return, map.elements_kind())) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
 }  // namespace
 
 Reduction JSCallReducer::ReduceArrayForEach(
@@ -2165,10 +2175,10 @@ Node* JSCallReducer::DoFilterPostCallbackWork(ElementsKind kind, Node** control,
         simplified()->LoadField(AccessBuilder::ForJSObjectElements()), a, etrue,
         if_true);
 
-    DCHECK(TypeCache::Get().kFixedDoubleArrayLengthType.Is(
-        TypeCache::Get().kFixedArrayLengthType));
+    DCHECK(TypeCache::Get()->kFixedDoubleArrayLengthType.Is(
+        TypeCache::Get()->kFixedArrayLengthType));
     Node* checked_to = etrue = graph()->NewNode(
-        common()->TypeGuard(TypeCache::Get().kFixedArrayLengthType), to, etrue,
+        common()->TypeGuard(TypeCache::Get()->kFixedArrayLengthType), to, etrue,
         if_true);
     Node* elements_length = etrue = graph()->NewNode(
         simplified()->LoadField(AccessBuilder::ForFixedArrayLength()), elements,
@@ -2560,8 +2570,7 @@ Reduction JSCallReducer::ReduceArrayIndexOfIncludes(
     return NoChange();
 
   MapRef receiver_map(broker(), map);
-  if (!CanInlineArrayIteratingBuiltin(isolate(), receiver_map))
-    return NoChange();
+  if (!receiver_map.supports_fast_array_iteration()) return NoChange();
 
   ElementsKind const elements_kind = receiver_map.elements_kind();
   if (IsHoleyElementsKind(elements_kind)) {
@@ -2868,11 +2877,6 @@ Reduction JSCallReducer::ReduceCallApiFunction(
   Handle<FunctionTemplateInfo> function_template_info(
       FunctionTemplateInfo::cast(shared.object()->function_data()), isolate());
 
-  // CallApiCallbackStub expects the target in a register, so we count it out,
-  // and counts the receiver as an implicit argument, so we count the receiver
-  // out too.
-  if (argc > CallApiCallbackStub::kArgMax) return NoChange();
-
   // Infer the {receiver} maps, and check if we can inline the API function
   // callback based on those.
   ZoneHandleSet<Map> receiver_maps;
@@ -2930,7 +2934,7 @@ Reduction JSCallReducer::ReduceCallApiFunction(
   Handle<CallHandlerInfo> call_handler_info(
       CallHandlerInfo::cast(function_template_info->call_code()), isolate());
   Handle<Object> data(call_handler_info->data(), isolate());
-  Callable call_api_callback = CodeFactory::CallApiCallback(isolate(), argc);
+  Callable call_api_callback = CodeFactory::CallApiCallback(isolate());
   CallInterfaceDescriptor cid = call_api_callback.descriptor();
   auto call_descriptor = Linkage::GetStubCallDescriptor(
       graph()->zone(), cid,
@@ -2945,13 +2949,14 @@ Reduction JSCallReducer::ReduceCallApiFunction(
   node->InsertInput(graph()->zone(), 0,
                     jsgraph()->HeapConstant(call_api_callback.code()));
   node->ReplaceInput(1, context);
-  node->InsertInput(graph()->zone(), 2, jsgraph()->Constant(data));
-  node->InsertInput(graph()->zone(), 3, holder);
-  node->InsertInput(graph()->zone(), 4,
+  node->InsertInput(graph()->zone(), 2,
                     jsgraph()->ExternalConstant(function_reference));
-  node->ReplaceInput(5, receiver);
-  node->RemoveInput(6 + argc);           // Remove context input.
-  node->ReplaceInput(7 + argc, effect);  // Update effect input.
+  node->InsertInput(graph()->zone(), 3, jsgraph()->Constant(argc));
+  node->InsertInput(graph()->zone(), 4, jsgraph()->Constant(data));
+  node->InsertInput(graph()->zone(), 5, holder);
+  node->ReplaceInput(6, receiver);
+  node->RemoveInput(7 + argc);           // Remove context input.
+  node->ReplaceInput(8 + argc, effect);  // Update effect input.
   NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
   return Changed(node);
 }
@@ -3212,7 +3217,7 @@ bool ShouldUseCallICFeedback(Node* node) {
 
 base::Optional<HeapObjectRef> GetHeapObjectFeedback(
     JSHeapBroker* broker, const FeedbackNexus& nexus) {
-  HeapObject* object;
+  HeapObject object;
   if (!nexus.GetFeedback()->GetHeapObject(&object)) return base::nullopt;
   return HeapObjectRef(broker, handle(object, broker->isolate()));
 }
@@ -4313,32 +4318,6 @@ Reduction JSCallReducer::ReduceSoftDeoptimize(Node* node,
   return Changed(node);
 }
 
-namespace {
-
-// TODO(turbofan): This was copied from old compiler, might be too restrictive.
-bool IsReadOnlyLengthDescriptor(Isolate* isolate, Handle<Map> jsarray_map) {
-  DCHECK(!jsarray_map->is_dictionary_map());
-  Handle<Name> length_string = isolate->factory()->length_string();
-  DescriptorArray* descriptors = jsarray_map->instance_descriptors();
-  int number = descriptors->Search(*length_string, *jsarray_map);
-  DCHECK_NE(DescriptorArray::kNotFound, number);
-  return descriptors->GetDetails(number).IsReadOnly();
-}
-
-// TODO(turbofan): This was copied from old compiler, might be too restrictive.
-bool CanInlineArrayResizeOperation(Isolate* isolate, MapRef& receiver_map) {
-  receiver_map.SerializePrototype();
-  if (!receiver_map.prototype().IsJSArray()) return false;
-  JSArrayRef receiver_prototype = receiver_map.prototype().AsJSArray();
-  return receiver_map.instance_type() == JS_ARRAY_TYPE &&
-         IsFastElementsKind(receiver_map.elements_kind()) &&
-         !receiver_map.is_dictionary_map() && receiver_map.is_extensible() &&
-         isolate->IsAnyInitialArrayPrototype(receiver_prototype.object()) &&
-         !IsReadOnlyLengthDescriptor(isolate, receiver_map.object());
-}
-
-}  // namespace
-
 // ES6 section 22.1.3.18 Array.prototype.push ( )
 Reduction JSCallReducer::ReduceArrayPrototypePush(Node* node) {
   DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
@@ -4347,18 +4326,11 @@ Reduction JSCallReducer::ReduceArrayPrototypePush(Node* node) {
     return NoChange();
   }
 
-  PropertyCellRef no_elements_protector(broker(),
-                                        factory()->no_elements_protector());
-  if (no_elements_protector.value().AsSmi() != Isolate::kProtectorValid) {
-    return NoChange();
-  }
-
   int const num_values = node->op()->ValueInputCount() - 2;
   Node* receiver = NodeProperties::GetValueInput(node, 1);
   Node* effect = NodeProperties::GetEffectInput(node);
   Node* control = NodeProperties::GetControlInput(node);
 
-  // Try to determine the {receiver} map(s).
   ZoneHandleSet<Map> receiver_maps;
   NodeProperties::InferReceiverMapsResult result =
       NodeProperties::InferReceiverMaps(broker(), receiver, effect,
@@ -4366,19 +4338,13 @@ Reduction JSCallReducer::ReduceArrayPrototypePush(Node* node) {
   if (result == NodeProperties::kNoReceiverMaps) return NoChange();
   DCHECK_NE(0, receiver_maps.size());
 
-  ElementsKind kind = receiver_maps[0]->elements_kind();
-
-  for (Handle<Map> map : receiver_maps) {
-    MapRef receiver_map(broker(), map);
-    receiver_map.SerializePrototype();
-    if (!CanInlineArrayResizeOperation(isolate(), receiver_map))
-      return NoChange();
-    if (!UnionElementsKindUptoPackedness(&kind, receiver_map.elements_kind()))
-      return NoChange();
+  ElementsKind kind;
+  if (!CanInlineArrayResizingBuiltin(broker(), receiver_maps, &kind, true)) {
+    return NoChange();
   }
 
-  // Install code dependencies on the {receiver} global array protector cell.
-  dependencies()->DependOnProtector(no_elements_protector);
+  dependencies()->DependOnProtector(
+      PropertyCellRef(broker(), factory()->no_elements_protector()));
 
   // If the {receiver_maps} information is not reliable, we need
   // to check that the {receiver} still has one of these maps.
@@ -4466,12 +4432,6 @@ Reduction JSCallReducer::ReduceArrayPrototypePop(Node* node) {
     return NoChange();
   }
 
-  PropertyCellRef no_elements_protector(broker(),
-                                        factory()->no_elements_protector());
-  if (no_elements_protector.value().AsSmi() != Isolate::kProtectorValid) {
-    return NoChange();
-  }
-
   Node* receiver = NodeProperties::GetValueInput(node, 1);
   Node* effect = NodeProperties::GetEffectInput(node);
   Node* control = NodeProperties::GetControlInput(node);
@@ -4483,22 +4443,13 @@ Reduction JSCallReducer::ReduceArrayPrototypePop(Node* node) {
   if (result == NodeProperties::kNoReceiverMaps) return NoChange();
   DCHECK_NE(0, receiver_maps.size());
 
-  ElementsKind kind = receiver_maps[0]->elements_kind();
-  for (Handle<Map> map : receiver_maps) {
-    MapRef receiver_map(broker(), map);
-    receiver_map.SerializePrototype();
-    if (!CanInlineArrayResizeOperation(isolate(), receiver_map))
-      return NoChange();
-    // TODO(turbofan): Extend this to also handle fast holey double elements
-    // once we got the hole NaN mess sorted out in TurboFan/V8.
-    if (receiver_map.elements_kind() == HOLEY_DOUBLE_ELEMENTS)
-      return NoChange();
-    if (!UnionElementsKindUptoSize(&kind, receiver_map.elements_kind()))
-      return NoChange();
+  ElementsKind kind;
+  if (!CanInlineArrayResizingBuiltin(broker(), receiver_maps, &kind)) {
+    return NoChange();
   }
 
-  // Install code dependencies on the {receiver} global array protector cell.
-  dependencies()->DependOnProtector(no_elements_protector);
+  dependencies()->DependOnProtector(
+      PropertyCellRef(broker(), factory()->no_elements_protector()));
 
   // If the {receiver_maps} information is not reliable, we need
   // to check that the {receiver} still has one of these maps.
@@ -4588,12 +4539,6 @@ Reduction JSCallReducer::ReduceArrayPrototypeShift(Node* node) {
     return NoChange();
   }
 
-  PropertyCellRef no_elements_protector(broker(),
-                                        factory()->no_elements_protector());
-  if (no_elements_protector.value().AsSmi() != Isolate::kProtectorValid) {
-    return NoChange();
-  }
-
   Node* target = NodeProperties::GetValueInput(node, 0);
   Node* receiver = NodeProperties::GetValueInput(node, 1);
   Node* context = NodeProperties::GetContextInput(node);
@@ -4608,22 +4553,13 @@ Reduction JSCallReducer::ReduceArrayPrototypeShift(Node* node) {
   if (result == NodeProperties::kNoReceiverMaps) return NoChange();
   DCHECK_NE(0, receiver_maps.size());
 
-  ElementsKind kind = receiver_maps[0]->elements_kind();
-  for (Handle<Map> map : receiver_maps) {
-    MapRef receiver_map(broker(), map);
-    receiver_map.SerializePrototype();
-    if (!CanInlineArrayResizeOperation(isolate(), receiver_map))
-      return NoChange();
-    // TODO(turbofan): Extend this to also handle fast holey double elements
-    // once we got the hole NaN mess sorted out in TurboFan/V8.
-    if (receiver_map.elements_kind() == HOLEY_DOUBLE_ELEMENTS)
-      return NoChange();
-    if (!UnionElementsKindUptoSize(&kind, receiver_map.elements_kind()))
-      return NoChange();
+  ElementsKind kind;
+  if (!CanInlineArrayResizingBuiltin(broker(), receiver_maps, &kind)) {
+    return NoChange();
   }
 
-  // Install code dependencies on the {receiver} global array protector cell.
-  dependencies()->DependOnProtector(no_elements_protector);
+  dependencies()->DependOnProtector(
+      PropertyCellRef(broker(), factory()->no_elements_protector()));
 
   // If the {receiver_maps} information is not reliable, we need
   // to check that the {receiver} still has one of these maps.
@@ -4827,9 +4763,7 @@ Reduction JSCallReducer::ReduceArrayPrototypeSlice(Node* node) {
   bool can_be_holey = false;
   for (Handle<Map> map : receiver_maps) {
     MapRef receiver_map(broker(), map);
-    if (!CanInlineArrayIteratingBuiltin(isolate(), receiver_map)) {
-      return NoChange();
-    }
+    if (!receiver_map.supports_fast_array_iteration()) return NoChange();
 
     if (IsHoleyElementsKind(receiver_map.elements_kind())) {
       can_be_holey = true;
@@ -5014,14 +4948,14 @@ Reduction JSCallReducer::ReduceArrayIteratorPrototypeNext(Node* node) {
       iterated_object, effect, control);
 
   if (IsFixedTypedArrayElementsKind(elements_kind)) {
-    // See if we can skip the neutering check.
-    if (isolate()->IsArrayBufferNeuteringIntact()) {
+    // See if we can skip the detaching check.
+    if (isolate()->IsArrayBufferDetachingIntact()) {
       // Add a code dependency so we are deoptimized in case an ArrayBuffer
-      // gets neutered.
+      // gets detached.
       dependencies()->DependOnProtector(PropertyCellRef(
-          broker(), factory()->array_buffer_neutering_protector()));
+          broker(), factory()->array_buffer_detaching_protector()));
     } else {
-      // Bail out if the {iterated_object}s JSArrayBuffer was neutered.
+      // Bail out if the {iterated_object}s JSArrayBuffer was detached.
       Node* buffer = effect = graph()->NewNode(
           simplified()->LoadField(AccessBuilder::ForJSArrayBufferViewBuffer()),
           iterated_object, effect, control);
@@ -5032,10 +4966,10 @@ Reduction JSCallReducer::ReduceArrayIteratorPrototypeNext(Node* node) {
           simplified()->NumberEqual(),
           graph()->NewNode(
               simplified()->NumberBitwiseAnd(), buffer_bit_field,
-              jsgraph()->Constant(JSArrayBuffer::WasNeuteredBit::kMask)),
+              jsgraph()->Constant(JSArrayBuffer::WasDetachedBit::kMask)),
           jsgraph()->ZeroConstant());
       effect = graph()->NewNode(
-          simplified()->CheckIf(DeoptimizeReason::kArrayBufferWasNeutered,
+          simplified()->CheckIf(DeoptimizeReason::kArrayBufferWasDetached,
                                 p.feedback()),
           check, effect, control);
     }
@@ -5047,11 +4981,11 @@ Reduction JSCallReducer::ReduceArrayIteratorPrototypeNext(Node* node) {
   // latter case we even know that it's a Smi in UnsignedSmall range.
   FieldAccess index_access = AccessBuilder::ForJSArrayIteratorNextIndex();
   if (IsFixedTypedArrayElementsKind(elements_kind)) {
-    index_access.type = TypeCache::Get().kJSTypedArrayLengthType;
+    index_access.type = TypeCache::Get()->kJSTypedArrayLengthType;
     index_access.machine_type = MachineType::TaggedSigned();
     index_access.write_barrier_kind = kNoWriteBarrier;
   } else {
-    index_access.type = TypeCache::Get().kJSArrayLengthType;
+    index_access.type = TypeCache::Get()->kJSArrayLengthType;
   }
   Node* index = effect = graph()->NewNode(simplified()->LoadField(index_access),
                                           iterator, effect, control);
@@ -5607,21 +5541,20 @@ Reduction JSCallReducer::ReducePromiseConstructor(Node* node) {
   Node* promise_context = effect = graph()->NewNode(
       javascript()->CreateFunctionContext(
           handle(native_context().object()->scope_info(), isolate()),
-          PromiseBuiltinsAssembler::kPromiseContextLength -
-              Context::MIN_CONTEXT_SLOTS,
+          PromiseBuiltins::kPromiseContextLength - Context::MIN_CONTEXT_SLOTS,
           FUNCTION_SCOPE),
       context, effect, control);
-  effect =
-      graph()->NewNode(simplified()->StoreField(AccessBuilder::ForContextSlot(
-                           PromiseBuiltinsAssembler::kPromiseSlot)),
-                       promise_context, promise, effect, control);
   effect = graph()->NewNode(
-      simplified()->StoreField(AccessBuilder::ForContextSlot(
-          PromiseBuiltinsAssembler::kAlreadyResolvedSlot)),
+      simplified()->StoreField(
+          AccessBuilder::ForContextSlot(PromiseBuiltins::kPromiseSlot)),
+      promise_context, promise, effect, control);
+  effect = graph()->NewNode(
+      simplified()->StoreField(
+          AccessBuilder::ForContextSlot(PromiseBuiltins::kAlreadyResolvedSlot)),
       promise_context, jsgraph()->FalseConstant(), effect, control);
   effect = graph()->NewNode(
-      simplified()->StoreField(AccessBuilder::ForContextSlot(
-          PromiseBuiltinsAssembler::kDebugEventSlot)),
+      simplified()->StoreField(
+          AccessBuilder::ForContextSlot(PromiseBuiltins::kDebugEventSlot)),
       promise_context, jsgraph()->TrueConstant(), effect, control);
 
   // Allocate the closure for the resolve case.
@@ -5927,18 +5860,18 @@ Reduction JSCallReducer::ReducePromisePrototypeFinally(Node* node) {
     context = etrue = graph()->NewNode(
         javascript()->CreateFunctionContext(
             handle(native_context().object()->scope_info(), isolate()),
-            PromiseBuiltinsAssembler::kPromiseFinallyContextLength -
+            PromiseBuiltins::kPromiseFinallyContextLength -
                 Context::MIN_CONTEXT_SLOTS,
             FUNCTION_SCOPE),
         context, etrue, if_true);
-    etrue =
-        graph()->NewNode(simplified()->StoreField(AccessBuilder::ForContextSlot(
-                             PromiseBuiltinsAssembler::kOnFinallySlot)),
-                         context, on_finally, etrue, if_true);
-    etrue =
-        graph()->NewNode(simplified()->StoreField(AccessBuilder::ForContextSlot(
-                             PromiseBuiltinsAssembler::kConstructorSlot)),
-                         context, constructor, etrue, if_true);
+    etrue = graph()->NewNode(
+        simplified()->StoreField(
+            AccessBuilder::ForContextSlot(PromiseBuiltins::kOnFinallySlot)),
+        context, on_finally, etrue, if_true);
+    etrue = graph()->NewNode(
+        simplified()->StoreField(
+            AccessBuilder::ForContextSlot(PromiseBuiltins::kConstructorSlot)),
+        context, constructor, etrue, if_true);
 
     // Allocate the closure for the reject case.
     SharedFunctionInfoRef catch_finally =
@@ -6518,7 +6451,7 @@ Reduction JSCallReducer::ReduceCollectionIteratorPrototypeNext(
                          jsgraph()->NoContextConstant(), effect);
 
     index = effect = graph()->NewNode(
-        common()->TypeGuard(TypeCache::Get().kFixedArrayLengthType), index,
+        common()->TypeGuard(TypeCache::Get()->kFixedArrayLengthType), index,
         effect, control);
 
     // Update the {index} and {table} on the {receiver}.
@@ -6582,7 +6515,7 @@ Reduction JSCallReducer::ReduceCollectionIteratorPrototypeNext(
         common()->Phi(MachineRepresentation::kTagged, 2), index, index, loop);
 
     Node* index = effect = graph()->NewNode(
-        common()->TypeGuard(TypeCache::Get().kFixedArrayLengthType), iloop,
+        common()->TypeGuard(TypeCache::Get()->kFixedArrayLengthType), iloop,
         eloop, control);
     {
       Node* check0 = graph()->NewNode(simplified()->NumberLessThan(), index,
@@ -6608,8 +6541,8 @@ Reduction JSCallReducer::ReduceCollectionIteratorPrototypeNext(
       Node* etrue0 = effect;
       {
         // Load the key of the entry.
-        STATIC_ASSERT(OrderedHashMap::kHashTableStartIndex ==
-                      OrderedHashSet::kHashTableStartIndex);
+        STATIC_ASSERT(OrderedHashMap::HashTableStartIndex() ==
+                      OrderedHashSet::HashTableStartIndex());
         Node* entry_start_position = graph()->NewNode(
             simplified()->NumberAdd(),
             graph()->NewNode(
@@ -6617,7 +6550,7 @@ Reduction JSCallReducer::ReduceCollectionIteratorPrototypeNext(
                 graph()->NewNode(simplified()->NumberMultiply(), index,
                                  jsgraph()->Constant(entry_size)),
                 number_of_buckets),
-            jsgraph()->Constant(OrderedHashMap::kHashTableStartIndex));
+            jsgraph()->Constant(OrderedHashMap::HashTableStartIndex()));
         Node* entry_key = etrue0 = graph()->NewNode(
             simplified()->LoadElement(AccessBuilder::ForFixedArrayElement()),
             table, entry_start_position, etrue0, if_true0);
@@ -6742,14 +6675,14 @@ Reduction JSCallReducer::ReduceArrayBufferViewAccessor(
     Node* value = effect = graph()->NewNode(simplified()->LoadField(access),
                                             receiver, effect, control);
 
-    // See if we can skip the neutering check.
-    if (isolate()->IsArrayBufferNeuteringIntact()) {
+    // See if we can skip the detaching check.
+    if (isolate()->IsArrayBufferDetachingIntact()) {
       // Add a code dependency so we are deoptimized in case an ArrayBuffer
-      // gets neutered.
+      // gets detached.
       dependencies()->DependOnProtector(PropertyCellRef(
-          broker(), factory()->array_buffer_neutering_protector()));
+          broker(), factory()->array_buffer_detaching_protector()));
     } else {
-      // Check whether {receiver}s JSArrayBuffer was neutered.
+      // Check whether {receiver}s JSArrayBuffer was detached.
       Node* buffer = effect = graph()->NewNode(
           simplified()->LoadField(AccessBuilder::ForJSArrayBufferViewBuffer()),
           receiver, effect, control);
@@ -6760,11 +6693,11 @@ Reduction JSCallReducer::ReduceArrayBufferViewAccessor(
           simplified()->NumberEqual(),
           graph()->NewNode(
               simplified()->NumberBitwiseAnd(), buffer_bit_field,
-              jsgraph()->Constant(JSArrayBuffer::WasNeuteredBit::kMask)),
+              jsgraph()->Constant(JSArrayBuffer::WasDetachedBit::kMask)),
           jsgraph()->ZeroConstant());
 
       // TODO(turbofan): Ideally we would bail out here if the {receiver}s
-      // JSArrayBuffer was neutered, but there's no way to guard against
+      // JSArrayBuffer was detached, but there's no way to guard against
       // deoptimization loops right now, since the JSCall {node} is usually
       // created from a LOAD_IC inlining, and so there's no CALL_IC slot
       // from which we could use the speculation bit.
@@ -6887,18 +6820,18 @@ Reduction JSCallReducer::ReduceDataViewAccess(Node* node, DataViewAccess access,
           value, effect, control);
     }
 
-    // Get the underlying buffer and check that it has not been neutered.
+    // Get the underlying buffer and check that it has not been detached.
     Node* buffer = effect = graph()->NewNode(
         simplified()->LoadField(AccessBuilder::ForJSArrayBufferViewBuffer()),
         receiver, effect, control);
 
-    if (isolate()->IsArrayBufferNeuteringIntact()) {
+    if (isolate()->IsArrayBufferDetachingIntact()) {
       // Add a code dependency so we are deoptimized in case an ArrayBuffer
-      // gets neutered.
+      // gets detached.
       dependencies()->DependOnProtector(PropertyCellRef(
-          broker(), factory()->array_buffer_neutering_protector()));
+          broker(), factory()->array_buffer_detaching_protector()));
     } else {
-      // Bail out if the {buffer} was neutered.
+      // Bail out if the {buffer} was detached.
       Node* buffer_bit_field = effect = graph()->NewNode(
           simplified()->LoadField(AccessBuilder::ForJSArrayBufferBitField()),
           buffer, effect, control);
@@ -6906,10 +6839,10 @@ Reduction JSCallReducer::ReduceDataViewAccess(Node* node, DataViewAccess access,
           simplified()->NumberEqual(),
           graph()->NewNode(
               simplified()->NumberBitwiseAnd(), buffer_bit_field,
-              jsgraph()->Constant(JSArrayBuffer::WasNeuteredBit::kMask)),
+              jsgraph()->Constant(JSArrayBuffer::WasDetachedBit::kMask)),
           jsgraph()->ZeroConstant());
       effect = graph()->NewNode(
-          simplified()->CheckIf(DeoptimizeReason::kArrayBufferWasNeutered,
+          simplified()->CheckIf(DeoptimizeReason::kArrayBufferWasDetached,
                                 p.feedback()),
           check, effect, control);
     }

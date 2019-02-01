@@ -18,74 +18,79 @@ namespace internal {
 
 enum InstanceType : uint16_t;
 
-#define VISITOR_ID_LIST(V)               \
-  V(AllocationSite)                      \
-  V(BigInt)                              \
-  V(ByteArray)                           \
-  V(BytecodeArray)                       \
-  V(Cell)                                \
-  V(Code)                                \
-  V(CodeDataContainer)                   \
-  V(ConsString)                          \
-  V(Context)                             \
-  V(DataHandler)                         \
-  V(DataObject)                          \
-  V(DescriptorArray)                     \
-  V(EmbedderDataArray)                   \
-  V(EphemeronHashTable)                  \
-  V(FeedbackCell)                        \
-  V(FeedbackVector)                      \
-  V(FixedArray)                          \
-  V(FixedDoubleArray)                    \
-  V(FixedFloat64Array)                   \
-  V(FixedTypedArrayBase)                 \
-  V(FreeSpace)                           \
-  V(JSApiObject)                         \
-  V(JSArrayBuffer)                       \
-  V(JSDataView)                          \
-  V(JSObject)                            \
-  V(JSObjectFast)                        \
-  V(JSTypedArray)                        \
-  V(JSWeakCell)                          \
-  V(JSWeakCollection)                    \
-  V(Map)                                 \
-  V(NativeContext)                       \
-  V(Oddball)                             \
-  V(PreParsedScopeData)                  \
-  V(PropertyArray)                       \
-  V(PropertyCell)                        \
-  V(PrototypeInfo)                       \
-  V(SeqOneByteString)                    \
-  V(SeqTwoByteString)                    \
-  V(SharedFunctionInfo)                  \
-  V(ShortcutCandidate)                   \
-  V(SlicedString)                        \
-  V(SmallOrderedHashMap)                 \
-  V(SmallOrderedHashSet)                 \
-  V(SmallOrderedNameDictionary)          \
-  V(Struct)                              \
-  V(Symbol)                              \
-  V(ThinString)                          \
-  V(TransitionArray)                     \
-  V(UncompiledDataWithoutPreParsedScope) \
-  V(UncompiledDataWithPreParsedScope)    \
-  V(WasmInstanceObject)                  \
-  V(WeakArray)
+#define DATA_ONLY_VISITOR_ID_LIST(V) \
+  V(BigInt)                          \
+  V(ByteArray)                       \
+  V(DataObject)                      \
+  V(FixedDoubleArray)                \
+  V(SeqOneByteString)                \
+  V(SeqTwoByteString)
 
-// For data objects, JS objects and structs along with generic visitor which
-// can visit object of any size we provide visitors specialized by
-// object size in words.
-// Ids of specialized visitors are declared in a linear order (without
-// holes) starting from the id of visitor specialized for 2 words objects
-// (base visitor id) and ending with the id of generic visitor.
-// Method GetVisitorIdForSize depends on this ordering to calculate visitor
-// id of specialized visitor from given instance size, base visitor id and
-// generic visitor's id.
+#define POINTER_VISITOR_ID_LIST(V)     \
+  V(AllocationSite)                    \
+  V(BytecodeArray)                     \
+  V(Cell)                              \
+  V(Code)                              \
+  V(CodeDataContainer)                 \
+  V(ConsString)                        \
+  V(Context)                           \
+  V(DataHandler)                       \
+  V(DescriptorArray)                   \
+  V(EmbedderDataArray)                 \
+  V(EphemeronHashTable)                \
+  V(FeedbackCell)                      \
+  V(FeedbackVector)                    \
+  V(FixedArray)                        \
+  V(FixedFloat64Array)                 \
+  V(FixedTypedArrayBase)               \
+  V(FreeSpace)                         \
+  V(JSApiObject)                       \
+  V(JSArrayBuffer)                     \
+  V(JSDataView)                        \
+  V(JSFunction)                        \
+  V(JSObject)                          \
+  V(JSObjectFast)                      \
+  V(JSTypedArray)                      \
+  V(JSWeakRef)                         \
+  V(JSWeakCollection)                  \
+  V(Map)                               \
+  V(NativeContext)                     \
+  V(Oddball)                           \
+  V(PreparseData)                      \
+  V(PropertyArray)                     \
+  V(PropertyCell)                      \
+  V(PrototypeInfo)                     \
+  V(SharedFunctionInfo)                \
+  V(ShortcutCandidate)                 \
+  V(SlicedString)                      \
+  V(SmallOrderedHashMap)               \
+  V(SmallOrderedHashSet)               \
+  V(SmallOrderedNameDictionary)        \
+  V(Struct)                            \
+  V(Symbol)                            \
+  V(ThinString)                        \
+  V(TransitionArray)                   \
+  V(UncompiledDataWithoutPreparseData) \
+  V(UncompiledDataWithPreparseData)    \
+  V(WasmInstanceObject)                \
+  V(WeakArray)                         \
+  V(WeakCell)
+
+// Objects with the same visitor id are processed in the same way by
+// the heap visitors. The visitor ids for data only objects must precede
+// other visitor ids. We rely on kDataOnlyVisitorIdCount for quick check
+// of whether an object contains only data or may contain pointers.
 enum VisitorId {
 #define VISITOR_ID_ENUM_DECL(id) kVisit##id,
-  VISITOR_ID_LIST(VISITOR_ID_ENUM_DECL)
+  DATA_ONLY_VISITOR_ID_LIST(VISITOR_ID_ENUM_DECL) kDataOnlyVisitorIdCount,
+  POINTER_VISITOR_ID_LIST(VISITOR_ID_ENUM_DECL)
 #undef VISITOR_ID_ENUM_DECL
       kVisitorIdCount
+};
+
+enum class ObjectFields {
+  kDataOnly,
+  kMaybePointers,
 };
 
 typedef std::vector<Handle<Map>> MapHandles;
@@ -175,7 +180,7 @@ typedef std::vector<Handle<Map>> MapHandles;
 // | TaggedPointer | [dependent_code]                            |
 // +---------------+---------------------------------------------+
 
-class Map : public HeapObjectPtr {
+class Map : public HeapObject {
  public:
   // Instance size.
   // Size in bytes or kVariableSizeSentinel if instances do not have
@@ -205,8 +210,8 @@ class Map : public HeapObjectPtr {
       Handle<Map> map, Handle<Context> native_context);
 
   // Retrieve interceptors.
-  inline InterceptorInfo* GetNamedInterceptor();
-  inline InterceptorInfo* GetIndexedInterceptor();
+  inline InterceptorInfo GetNamedInterceptor();
+  inline InterceptorInfo GetIndexedInterceptor();
 
   // Instance type.
   DECL_PRIMITIVE_ACCESSORS(instance_type, InstanceType)
@@ -422,7 +427,7 @@ class Map : public HeapObjectPtr {
   // [raw_transitions]: Provides access to the transitions storage field.
   // Don't call set_raw_transitions() directly to overwrite transitions, use
   // the TransitionArray::ReplaceTransitions() wrapper instead!
-  DECL_ACCESSORS2(raw_transitions, MaybeObject)
+  DECL_ACCESSORS(raw_transitions, MaybeObject)
   // [prototype_info]: Per-prototype metadata. Aliased with transitions
   // (which prototype maps don't have).
   DECL_ACCESSORS(prototype_info, Object)
@@ -499,11 +504,10 @@ class Map : public HeapObjectPtr {
                               int modify_index, PropertyConstness new_constness,
                               Representation new_representation,
                               Handle<FieldType> new_field_type);
-  // Returns true if |descriptor|'th property is a field that may be generalized
-  // by just updating current map.
-  static inline bool IsInplaceGeneralizableField(PropertyConstness constness,
-                                                 Representation representation,
-                                                 FieldType field_type);
+  // Returns true if the |field_type| is the most general one for
+  // given |representation|.
+  static inline bool IsMostGeneralFieldType(Representation representation,
+                                            FieldType field_type);
 
   // Generalizes constness, representation and field_type if objects with given
   // instance type can have fast elements that can be transitioned by stubs or
@@ -562,21 +566,24 @@ class Map : public HeapObjectPtr {
   // Returns null_value if there's neither a constructor function nor a
   // FunctionTemplateInfo available.
   DECL_ACCESSORS(constructor_or_backpointer, Object)
-  inline Object* GetConstructor() const;
-  inline FunctionTemplateInfo* GetFunctionTemplateInfo() const;
-  inline void SetConstructor(Object* constructor,
+  inline Object GetConstructor() const;
+  inline FunctionTemplateInfo GetFunctionTemplateInfo() const;
+  inline void SetConstructor(Object constructor,
                              WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
   // [back pointer]: points back to the parent map from which a transition
   // leads to this map. The field overlaps with the constructor (see above).
-  inline Object* GetBackPointer() const;
-  inline void SetBackPointer(Object* value,
+  inline Object GetBackPointer() const;
+  inline void SetBackPointer(Object value,
                              WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
   // [instance descriptors]: describes the object.
-  DECL_ACCESSORS(instance_descriptors, DescriptorArray)
+  inline DescriptorArray instance_descriptors() const;
+  inline DescriptorArray synchronized_instance_descriptors() const;
+  void SetInstanceDescriptors(Isolate* isolate, DescriptorArray descriptors,
+                              int number_of_own_descriptors);
 
   // [layout descriptor]: describes the object layout.
-  DECL_ACCESSORS2(layout_descriptor, LayoutDescriptor)
+  DECL_ACCESSORS(layout_descriptor, LayoutDescriptor)
   // |layout descriptor| accessor which can be used from GC.
   inline LayoutDescriptor layout_descriptor_gc_safe() const;
   inline bool HasFastPointerLayout() const;
@@ -586,9 +593,11 @@ class Map : public HeapObjectPtr {
   // |layout_descriptor| field at all).
   inline LayoutDescriptor GetLayoutDescriptor() const;
 
-  inline void UpdateDescriptors(DescriptorArray* descriptors,
-                                LayoutDescriptor layout_descriptor);
-  inline void InitializeDescriptors(DescriptorArray* descriptors,
+  inline void UpdateDescriptors(Isolate* isolate, DescriptorArray descriptors,
+                                LayoutDescriptor layout_descriptor,
+                                int number_of_own_descriptors);
+  inline void InitializeDescriptors(Isolate* isolate,
+                                    DescriptorArray descriptors,
                                     LayoutDescriptor layout_descriptor);
 
   // [dependent code]: list of optimized codes that weakly embed this map.
@@ -619,7 +628,7 @@ class Map : public HeapObjectPtr {
   inline int NumberOfOwnDescriptors() const;
   inline void SetNumberOfOwnDescriptors(int number);
 
-  inline Cell* RetrieveDescriptorsPointer();
+  inline Cell RetrieveDescriptorsPointer();
 
   // Checks whether all properties are stored either in the map or on the object
   // (inobject, properties, or elements backing store), requiring no special
@@ -730,7 +739,7 @@ class Map : public HeapObjectPtr {
                                                  PropertyKind kind,
                                                  PropertyAttributes attributes);
 
-  inline void AppendDescriptor(Descriptor* desc);
+  inline void AppendDescriptor(Isolate* isolate, Descriptor* desc);
 
   // Returns a copy of the map, prepared for inserting into the transition
   // tree (if the |map| owns descriptors then the new one will share
@@ -750,7 +759,7 @@ class Map : public HeapObjectPtr {
   // Returns the number of enumerable properties.
   int NumberOfEnumerableProperties() const;
 
-  DECL_CAST2(Map)
+  DECL_CAST(Map)
 
   static inline int SlackForArraySize(int old_size, int size_limit);
 
@@ -790,7 +799,7 @@ class Map : public HeapObjectPtr {
   bool IsMapInArrayPrototypeChain(Isolate* isolate) const;
 
   // Dispatched behavior.
-  DECL_PRINTER(Map)
+  void MapPrint(std::ostream& os);
   DECL_VERIFIER(Map)
 
 #ifdef VERIFY_HEAP
@@ -798,6 +807,12 @@ class Map : public HeapObjectPtr {
 #endif
 
   DECL_PRIMITIVE_ACCESSORS(visitor_id, VisitorId)
+
+  static ObjectFields ObjectFieldsFrom(VisitorId visitor_id) {
+    return (visitor_id < kDataOnlyVisitorIdCount)
+               ? ObjectFields::kDataOnly
+               : ObjectFields::kMaybePointers;
+  }
 
   static Handle<Map> TransitionToPrototype(Isolate* isolate, Handle<Map> map,
                                            Handle<Object> prototype);
@@ -943,7 +958,7 @@ class Map : public HeapObjectPtr {
 
   void DeprecateTransitionTree(Isolate* isolate);
 
-  void ReplaceDescriptors(Isolate* isolate, DescriptorArray* new_descriptors,
+  void ReplaceDescriptors(Isolate* isolate, DescriptorArray new_descriptors,
                           LayoutDescriptor new_layout_descriptor);
 
   // Update field type of the given descriptor to new representation and new
@@ -964,20 +979,25 @@ class Map : public HeapObjectPtr {
       Representation old_representation, Representation new_representation,
       MaybeHandle<FieldType> old_field_type, MaybeHandle<Object> old_value,
       MaybeHandle<FieldType> new_field_type, MaybeHandle<Object> new_value);
+
+  // Use the high-level instance_descriptors/SetInstanceDescriptors instead.
+  inline void set_synchronized_instance_descriptors(
+      DescriptorArray array, WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
+
   static const int kFastPropertiesSoftLimit = 12;
   static const int kMaxFastProperties = 128;
 
   friend class MapUpdater;
 
-  OBJECT_CONSTRUCTORS(Map, HeapObjectPtr);
+  OBJECT_CONSTRUCTORS(Map, HeapObject);
 };
 
 // The cache for maps used by normalized (dictionary mode) objects.
 // Such maps do not have property descriptors, so a typical program
 // needs very limited number of distinct normalized maps.
-class NormalizedMapCache : public WeakFixedArray,
-                           public NeverReadOnlySpaceObject {
+class NormalizedMapCache : public WeakFixedArray {
  public:
+  NEVER_READ_ONLY_SPACE
   static Handle<NormalizedMapCache> New(Isolate* isolate);
 
   V8_WARN_UNUSED_RESULT MaybeHandle<Map> Get(Handle<Map> fast_map,
@@ -986,7 +1006,7 @@ class NormalizedMapCache : public WeakFixedArray,
 
   DECL_CAST(NormalizedMapCache)
 
-  static inline bool IsNormalizedMapCache(const HeapObject* obj);
+  static inline bool IsNormalizedMapCache(const HeapObject obj);
 
   DECL_VERIFIER(NormalizedMapCache)
 
@@ -996,8 +1016,10 @@ class NormalizedMapCache : public WeakFixedArray,
   static inline int GetIndex(Handle<Map> map);
 
   // The following declarations hide base class methods.
-  Object* get(int index);
-  void set(int index, Object* value);
+  Object get(int index);
+  void set(int index, Object value);
+
+  OBJECT_CONSTRUCTORS(NormalizedMapCache, WeakFixedArray)
 };
 
 }  // namespace internal

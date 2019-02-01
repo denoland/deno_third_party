@@ -119,6 +119,47 @@ bool StreamingDecoder::SetCompiledModuleBytes(
   return true;
 }
 
+namespace {
+
+class TopTierCompiledCallback {
+ public:
+  TopTierCompiledCallback(std::weak_ptr<NativeModule> native_module,
+                          StreamingDecoder::ModuleCompiledCallback callback)
+      : native_module_(std::move(native_module)),
+        callback_(std::move(callback)) {}
+
+  void operator()(CompilationEvent event) const {
+    if (event != CompilationEvent::kFinishedTopTierCompilation) return;
+    // If the native module is still alive, get back a shared ptr and call the
+    // callback.
+    if (std::shared_ptr<NativeModule> native_module = native_module_.lock()) {
+      callback_(native_module);
+    }
+#ifdef DEBUG
+    DCHECK(!called_);
+    called_ = true;
+#endif
+  }
+
+ private:
+  const std::weak_ptr<NativeModule> native_module_;
+  const StreamingDecoder::ModuleCompiledCallback callback_;
+#ifdef DEBUG
+  mutable bool called_ = false;
+#endif
+};
+
+}  // namespace
+
+void StreamingDecoder::NotifyNativeModuleCreated(
+    const std::shared_ptr<NativeModule>& native_module) {
+  if (!module_compiled_callback_) return;
+  auto* comp_state = native_module->compilation_state();
+  comp_state->AddCallback(TopTierCompiledCallback{
+      std::move(native_module), std::move(module_compiled_callback_)});
+  module_compiled_callback_ = {};
+}
+
 // An abstract class to share code among the states which decode VarInts. This
 // class takes over the decoding of the VarInt and then calls the actual decode
 // code with the decoded value.
@@ -288,7 +329,7 @@ size_t StreamingDecoder::DecodeVarInt32::ReadBytes(
   if (decoder.failed()) {
     if (new_bytes == remaining_buf.size()) {
       // We only report an error if we read all bytes.
-      streaming->Error(decoder.toResult(nullptr));
+      streaming->Error(decoder.error());
     }
     set_offset(offset() + new_bytes);
     return new_bytes;
@@ -445,7 +486,7 @@ StreamingDecoder::SectionBuffer* StreamingDecoder::CreateNewBuffer(
   // Check the order of sections. Unknown sections can appear at any position.
   if (section_id != kUnknownSectionCode) {
     if (section_id < next_section_id_) {
-      Error("Unexpected section");
+      Error("unexpected section");
       return nullptr;
     }
     next_section_id_ = section_id + 1;

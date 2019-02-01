@@ -4,7 +4,7 @@
 
 #include <functional>
 
-#include "src/codegen.h"
+#include "src/base/overflowing-math.h"
 #include "src/compiler/js-operator.h"
 #include "src/compiler/node-properties.h"
 #include "src/compiler/operator-properties.h"
@@ -303,11 +303,14 @@ class TyperTest : public TypedGraphTest {
 
 namespace {
 
-int32_t shift_left(int32_t x, int32_t y) { return x << (y & 0x1F); }
+int32_t shift_left(int32_t x, int32_t y) {
+  return static_cast<uint32_t>(x) << (y & 0x1F);
+}
 int32_t shift_right(int32_t x, int32_t y) { return x >> (y & 0x1F); }
 int32_t bit_or(int32_t x, int32_t y) { return x | y; }
 int32_t bit_and(int32_t x, int32_t y) { return x & y; }
 int32_t bit_xor(int32_t x, int32_t y) { return x ^ y; }
+double divide_double_double(double x, double y) { return base::Divide(x, y); }
 double modulo_double_double(double x, double y) { return Modulo(x, y); }
 
 }  // namespace
@@ -332,7 +335,7 @@ TEST_F(TyperTest, TypeJSMultiply) {
 }
 
 TEST_F(TyperTest, TypeJSDivide) {
-  TestBinaryArithOp(javascript_.Divide(), std::divides<double>());
+  TestBinaryArithOp(javascript_.Divide(), divide_double_double);
 }
 
 TEST_F(TyperTest, TypeJSModulus) {

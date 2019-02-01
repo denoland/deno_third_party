@@ -17,7 +17,6 @@
 namespace v8 {
 namespace internal {
 
-#ifndef V8_INTERPRETED_REGEXP
 /*
  * This assembler uses the following register assignment convention
  * - edx : Current character.  Must be loaded using LoadCurrentCharacter
@@ -79,12 +78,14 @@ namespace internal {
 
 #define __ ACCESS_MASM(masm_)
 
+const int RegExpMacroAssemblerIA32::kRegExpCodeSize;
+
 RegExpMacroAssemblerIA32::RegExpMacroAssemblerIA32(Isolate* isolate, Zone* zone,
                                                    Mode mode,
                                                    int registers_to_save)
     : NativeRegExpMacroAssembler(isolate, zone),
-      masm_(new MacroAssembler(isolate, nullptr, kRegExpCodeSize,
-                               CodeObjectRequired::kYes)),
+      masm_(new MacroAssembler(isolate, CodeObjectRequired::kYes,
+                               NewAssemblerBuffer(kRegExpCodeSize))),
       mode_(mode),
       num_registers_(registers_to_save),
       num_saved_registers_(registers_to_save),
@@ -100,7 +101,6 @@ RegExpMacroAssemblerIA32::RegExpMacroAssemblerIA32(Isolate* isolate, Zone* zone,
   __ jmp(&entry_label_);   // We'll write the entry code later.
   __ bind(&start_label_);  // And then continue from here.
 }
-
 
 RegExpMacroAssemblerIA32::~RegExpMacroAssemblerIA32() {
   delete masm_;
@@ -904,7 +904,6 @@ Handle<HeapObject> RegExpMacroAssemblerIA32::GetCode(Handle<String> source) {
     SafeCallTarget(&stack_overflow_label_);
     // Reached if the backtrack-stack limit has been hit.
 
-    Label grow_failed;
     // Save registers before calling C function
     __ push(esi);
     __ push(edi);
@@ -1128,7 +1127,7 @@ static T* frame_entry_address(Address re_frame, int frame_offset) {
 int RegExpMacroAssemblerIA32::CheckStackGuardState(Address* return_address,
                                                    Address raw_code,
                                                    Address re_frame) {
-  Code re_code = Code::cast(ObjectPtr(raw_code));
+  Code re_code = Code::cast(Object(raw_code));
   return NativeRegExpMacroAssembler::CheckStackGuardState(
       frame_entry<Isolate*>(re_frame, kIsolate),
       frame_entry<int>(re_frame, kStartIndex),
@@ -1275,8 +1274,6 @@ void RegExpMacroAssemblerIA32::LoadCurrentCharacterUnchecked(int cp_offset,
 
 
 #undef __
-
-#endif  // V8_INTERPRETED_REGEXP
 
 }  // namespace internal
 }  // namespace v8

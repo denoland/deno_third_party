@@ -90,10 +90,12 @@ bool InstructionOperand::InterferesWith(const InstructionOperand& other) const {
     // the gap resolver may break a move into 2 or 4 equivalent smaller moves.
     DCHECK_EQ(LocationOperand::STACK_SLOT, kind);
     int index_hi = loc.index();
-    int index_lo = index_hi - (1 << ElementSizeLog2Of(rep)) / kPointerSize + 1;
+    int index_lo =
+        index_hi - (1 << ElementSizeLog2Of(rep)) / kSystemPointerSize + 1;
     int other_index_hi = other_loc.index();
     int other_index_lo =
-        other_index_hi - (1 << ElementSizeLog2Of(other_rep)) / kPointerSize + 1;
+        other_index_hi -
+        (1 << ElementSizeLog2Of(other_rep)) / kSystemPointerSize + 1;
     return other_index_hi >= index_lo && index_hi >= other_index_lo;
   }
   return false;
@@ -176,7 +178,7 @@ std::ostream& operator<<(std::ostream& os, const InstructionOperand& op) {
         const char* name =
             allocated.register_code() < Register::kNumRegisters
                 ? RegisterName(Register::from_code(allocated.register_code()))
-                : Assembler::GetSpecialRegisterName(allocated.register_code());
+                : Register::GetSpecialRegisterName(allocated.register_code());
         os << "[" << name << "|R";
       } else if (op.IsDoubleRegister()) {
         os << "[" << DoubleRegister::from_code(allocated.register_code())
@@ -627,6 +629,10 @@ static InstructionBlock* InstructionBlockFor(Zone* zone,
   for (BasicBlock* predecessor : block->predecessors()) {
     instr_block->predecessors().push_back(GetRpo(predecessor));
   }
+  if (block->PredecessorCount() == 1 &&
+      block->predecessors()[0]->control() == BasicBlock::Control::kSwitch) {
+    instr_block->set_switch_target(true);
+  }
   return instr_block;
 }
 
@@ -779,6 +785,9 @@ void InstructionSequence::ComputeAssemblyOrder() {
         }
       }
       block->set_alignment(header_align);
+    }
+    if (block->loop_header().IsValid() && block->IsSwitchTarget()) {
+      block->set_alignment(true);
     }
     block->set_ao_number(RpoNumber::FromInt(ao++));
     ao_blocks_->push_back(block);

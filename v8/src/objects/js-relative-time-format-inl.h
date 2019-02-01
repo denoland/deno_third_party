@@ -18,8 +18,10 @@
 namespace v8 {
 namespace internal {
 
+OBJECT_CONSTRUCTORS_IMPL(JSRelativeTimeFormat, JSObject)
+
 // Base relative time format accessors.
-ACCESSORS2(JSRelativeTimeFormat, locale, String, kLocaleOffset)
+ACCESSORS(JSRelativeTimeFormat, locale, String, kLocaleOffset)
 ACCESSORS(JSRelativeTimeFormat, icu_formatter,
           Managed<icu::RelativeDateTimeFormatter>, kICUFormatterOffset)
 SMI_ACCESSORS(JSRelativeTimeFormat, flags, kFlagsOffset)

@@ -13,9 +13,11 @@
 #include "src/globals.h"
 #include "src/objects/map.h"
 #include "src/objects/name.h"
-#include "src/objects/object-macros.h"
 #include "src/type-hints.h"
 #include "src/zone/zone-containers.h"
+
+// Has to be the last include (doesn't have include guards):
+#include "src/objects/object-macros.h"
 
 namespace v8 {
 namespace internal {
@@ -145,17 +147,18 @@ class FeedbackMetadata;
 //  - optimized code cell (weak cell or Smi marker)
 // followed by an array of feedback slots, of length determined by the feedback
 // metadata.
-class FeedbackVector : public HeapObject, public NeverReadOnlySpaceObject {
+class FeedbackVector : public HeapObject {
  public:
-  // Casting.
-  static inline FeedbackVector* cast(Object* obj);
+  NEVER_READ_ONLY_SPACE
+
+  DECL_CAST(FeedbackVector)
 
   inline void ComputeCounts(int* with_type_info, int* generic,
                             int* vector_ic_count);
 
   inline bool is_empty() const;
 
-  inline FeedbackMetadata* metadata() const;
+  inline FeedbackMetadata metadata() const;
 
   // [shared_function_info]: The shared function info for the function with this
   // feedback vector.
@@ -163,7 +166,7 @@ class FeedbackVector : public HeapObject, public NeverReadOnlySpaceObject {
 
   // [optimized_code_weak_or_smi]: weak reference to optimized code or a Smi
   // marker defining optimization behaviour.
-  DECL_ACCESSORS2(optimized_code_weak_or_smi, MaybeObject)
+  DECL_ACCESSORS(optimized_code_weak_or_smi, MaybeObject)
 
   // [length]: The length of the feedback vector (not including the header, i.e.
   // the number of feedback slots).
@@ -187,7 +190,7 @@ class FeedbackVector : public HeapObject, public NeverReadOnlySpaceObject {
   inline bool has_optimized_code() const;
   inline bool has_optimization_marker() const;
   void ClearOptimizedCode();
-  void EvictOptimizedCodeMarkedForDeoptimization(SharedFunctionInfo* shared,
+  void EvictOptimizedCodeMarkedForDeoptimization(SharedFunctionInfo shared,
                                                  const char* reason);
   static void SetOptimizedCode(Handle<FeedbackVector> vector,
                                Handle<Code> code);
@@ -207,9 +210,9 @@ class FeedbackVector : public HeapObject, public NeverReadOnlySpaceObject {
                   WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
   inline void set(int index, MaybeObject value,
                   WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
-  inline void Set(FeedbackSlot slot, Object* value,
+  inline void Set(FeedbackSlot slot, Object value,
                   WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
-  inline void set(int index, Object* value,
+  inline void set(int index, Object value,
                   WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
 
   // Gives access to raw memory which stores the array's data.
@@ -275,14 +278,14 @@ class FeedbackVector : public HeapObject, public NeverReadOnlySpaceObject {
   static inline Symbol RawUninitializedSentinel(Isolate* isolate);
 
 // Layout description.
-#define FEEDBACK_VECTOR_FIELDS(V)            \
-  /* Header fields. */                       \
-  V(kSharedFunctionInfoOffset, kPointerSize) \
-  V(kOptimizedCodeOffset, kPointerSize)      \
-  V(kLengthOffset, kInt32Size)               \
-  V(kInvocationCountOffset, kInt32Size)      \
-  V(kProfilerTicksOffset, kInt32Size)        \
-  V(kDeoptCountOffset, kInt32Size)           \
+#define FEEDBACK_VECTOR_FIELDS(V)           \
+  /* Header fields. */                      \
+  V(kSharedFunctionInfoOffset, kTaggedSize) \
+  V(kOptimizedCodeOffset, kTaggedSize)      \
+  V(kLengthOffset, kInt32Size)              \
+  V(kInvocationCountOffset, kInt32Size)     \
+  V(kProfilerTicksOffset, kInt32Size)       \
+  V(kDeoptCountOffset, kInt32Size)          \
   V(kUnalignedHeaderSize, 0)
 
   DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize, FEEDBACK_VECTOR_FIELDS)
@@ -296,14 +299,14 @@ class FeedbackVector : public HeapObject, public NeverReadOnlySpaceObject {
 
   // Garbage collection support.
   static constexpr int SizeFor(int length) {
-    return kFeedbackSlotsOffset + length * kPointerSize;
+    return kFeedbackSlotsOffset + length * kTaggedSize;
   }
 
  private:
   static void AddToVectorsForProfilingTools(Isolate* isolate,
                                             Handle<FeedbackVector> vector);
 
-  DISALLOW_IMPLICIT_CONSTRUCTORS(FeedbackVector);
+  OBJECT_CONSTRUCTORS(FeedbackVector, HeapObject);
 };
 
 class V8_EXPORT_PRIVATE FeedbackVectorSpec {
@@ -450,8 +453,7 @@ class SharedFeedbackSlot {
 // the number of slots is static once an instance is created.
 class FeedbackMetadata : public HeapObject {
  public:
-  // Casting.
-  static inline FeedbackMetadata* cast(Object* obj);
+  DECL_CAST(FeedbackMetadata)
 
   // The number of slots that this metadata contains. Stored as an int32.
   DECL_INT32_ACCESSORS(slot_count)
@@ -515,7 +517,7 @@ class FeedbackMetadata : public HeapObject {
                          kInt32Size * kBitsPerByte, uint32_t>
       VectorICComputer;
 
-  DISALLOW_IMPLICIT_CONSTRUCTORS(FeedbackMetadata);
+  OBJECT_CONSTRUCTORS(FeedbackMetadata, HeapObject);
 };
 
 // Verify that an empty hash field looks like a tagged object, but can't
@@ -532,7 +534,7 @@ class FeedbackMetadataIterator {
         next_slot_(FeedbackSlot(0)),
         slot_kind_(FeedbackSlotKind::kInvalid) {}
 
-  explicit FeedbackMetadataIterator(FeedbackMetadata* metadata)
+  explicit FeedbackMetadataIterator(FeedbackMetadata metadata)
       : metadata_(metadata),
         next_slot_(FeedbackSlot(0)),
         slot_kind_(FeedbackSlotKind::kInvalid) {}
@@ -552,7 +554,7 @@ class FeedbackMetadataIterator {
   inline int entry_size() const;
 
  private:
-  FeedbackMetadata* metadata() const {
+  FeedbackMetadata metadata() const {
     return !metadata_handle_.is_null() ? *metadata_handle_ : metadata_;
   }
 
@@ -560,7 +562,7 @@ class FeedbackMetadataIterator {
   // to have a single iterator implementation for both "handlified" and raw
   // pointer use cases.
   Handle<FeedbackMetadata> metadata_handle_;
-  FeedbackMetadata* metadata_;
+  FeedbackMetadata metadata_;
   FeedbackSlot cur_slot_;
   FeedbackSlot next_slot_;
   FeedbackSlotKind slot_kind_;
@@ -570,18 +572,21 @@ class FeedbackMetadataIterator {
 class FeedbackNexus final {
  public:
   FeedbackNexus(Handle<FeedbackVector> vector, FeedbackSlot slot)
-      : vector_handle_(vector),
-        vector_(nullptr),
-        slot_(slot),
-        kind_(vector->GetKind(slot)) {}
-  FeedbackNexus(FeedbackVector* vector, FeedbackSlot slot)
-      : vector_(vector), slot_(slot), kind_(vector->GetKind(slot)) {}
+      : vector_handle_(vector), slot_(slot) {
+    kind_ =
+        (vector.is_null()) ? FeedbackSlotKind::kInvalid : vector->GetKind(slot);
+  }
+  FeedbackNexus(FeedbackVector vector, FeedbackSlot slot)
+      : vector_(vector), slot_(slot) {
+    kind_ =
+        (vector.is_null()) ? FeedbackSlotKind::kInvalid : vector->GetKind(slot);
+  }
 
   Handle<FeedbackVector> vector_handle() const {
-    DCHECK_NULL(vector_);
+    DCHECK(vector_.is_null());
     return vector_handle_;
   }
-  FeedbackVector* vector() const {
+  FeedbackVector vector() const {
     return vector_handle_.is_null() ? vector_ : *vector_handle_;
   }
   FeedbackSlot slot() const { return slot_; }
@@ -691,16 +696,16 @@ class FeedbackNexus final {
 
   // Add a type to the list of types for source position <position>.
   void Collect(Handle<String> type, int position);
-  JSObject* GetTypeProfile() const;
+  JSObject GetTypeProfile() const;
 
   std::vector<int> GetSourcePositions() const;
   std::vector<Handle<String>> GetTypesForSourcePositions(uint32_t pos) const;
 
-  inline void SetFeedback(Object* feedback,
+  inline void SetFeedback(Object feedback,
                           WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
   inline void SetFeedback(MaybeObject feedback,
                           WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
-  inline void SetFeedbackExtra(Object* feedback_extra,
+  inline void SetFeedbackExtra(Object feedback_extra,
                                WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
   inline void SetFeedbackExtra(MaybeObject feedback_extra,
                                WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
@@ -714,7 +719,7 @@ class FeedbackNexus final {
   // you have a handle to the vector that is better because more operations can
   // be done, like allocation.
   Handle<FeedbackVector> vector_handle_;
-  FeedbackVector* vector_;
+  FeedbackVector vector_;
   FeedbackSlot slot_;
   FeedbackSlotKind kind_;
 };
@@ -725,5 +730,7 @@ inline ForInHint ForInHintFromFeedback(int type_feedback);
 
 }  // namespace internal
 }  // namespace v8
+
+#include "src/objects/object-macros-undef.h"
 
 #endif  // V8_FEEDBACK_VECTOR_H_

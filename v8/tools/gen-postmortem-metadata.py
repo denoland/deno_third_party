@@ -190,10 +190,10 @@ consts_misc = [
     { 'name': 'scopeinfo_idx_first_vars',
         'value': 'ScopeInfo::kVariablePartIndex' },
 
-    { 'name': 'jsarray_buffer_was_neutered_mask',
-        'value': 'JSArrayBuffer::WasNeuteredBit::kMask' },
-    { 'name': 'jsarray_buffer_was_neutered_shift',
-        'value': 'JSArrayBuffer::WasNeuteredBit::kShift' },
+    { 'name': 'jsarray_buffer_was_detached_mask',
+        'value': 'JSArrayBuffer::WasDetachedBit::kMask' },
+    { 'name': 'jsarray_buffer_was_detached_shift',
+        'value': 'JSArrayBuffer::WasDetachedBit::kShift' },
 
     { 'name': 'context_idx_scope_info',
         'value': 'Context::SCOPE_INFO_INDEX' },
@@ -230,6 +230,9 @@ consts_misc = [
         'value': 'SimpleNumberDictionaryShape::kEntrySize' },
 
     { 'name': 'type_JSError__JS_ERROR_TYPE', 'value': 'JS_ERROR_TYPE' },
+
+    { 'name': 'class_SharedFunctionInfo__function_data__Object',
+        'value': 'SharedFunctionInfo::kFunctionDataOffset' },
 ];
 
 #
@@ -242,6 +245,7 @@ consts_misc = [
 #
 extras_accessors = [
     'JSFunction, context, Context, kContextOffset',
+    'JSFunction, shared, SharedFunctionInfo, kSharedFunctionInfoOffset',
     'HeapObject, map, Map, kMapOffset',
     'JSObject, elements, Object, kElementsOffset',
     'JSObject, internal_fields, uintptr_t, kHeaderSize',
@@ -516,7 +520,8 @@ def parse_field(call):
 
         consts = [];
 
-        if (kind == 'ACCESSORS' or kind == 'ACCESSORS_GCSAFE'):
+        if (kind == 'ACCESSORS' or kind == 'ACCESSORS2' or
+            kind == 'ACCESSORS_GCSAFE'):
                 klass = args[0];
                 field = args[1];
                 dtype = args[2].replace('<', '_').replace('>', '_')
@@ -559,7 +564,7 @@ def load_fields_from_file(filename):
         # may span multiple lines and may contain nested parentheses.  We also
         # call parse_field() to pick apart the invocation.
         #
-        prefixes = [ 'ACCESSORS', 'ACCESSORS_GCSAFE',
+        prefixes = [ 'ACCESSORS', 'ACCESSORS2', 'ACCESSORS_GCSAFE',
                      'SMI_ACCESSORS', 'ACCESSORS_TO_SMI' ];
         current = '';
         opens = 0;

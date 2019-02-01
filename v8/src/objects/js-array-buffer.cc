@@ -38,18 +38,18 @@ inline int ConvertToMb(size_t size) {
 
 }  // anonymous namespace
 
-void JSArrayBuffer::Neuter() {
-  CHECK(is_neuterable());
-  CHECK(!was_neutered());
+void JSArrayBuffer::Detach() {
+  CHECK(is_detachable());
+  CHECK(!was_detached());
   CHECK(is_external());
   set_backing_store(nullptr);
   set_byte_length(0);
-  set_was_neutered(true);
-  set_is_neuterable(false);
-  // Invalidate the neutering protector.
+  set_was_detached(true);
+  set_is_detachable(false);
+  // Invalidate the detaching protector.
   Isolate* const isolate = GetIsolate();
-  if (isolate->IsArrayBufferNeuteringIntact()) {
-    isolate->InvalidateArrayBufferNeuteringProtector();
+  if (isolate->IsArrayBufferDetachingIntact()) {
+    isolate->InvalidateArrayBufferDetachingProtector();
   }
 }
 
@@ -93,7 +93,7 @@ void JSArrayBuffer::Setup(Handle<JSArrayBuffer> array_buffer, Isolate* isolate,
   array_buffer->set_bit_field(0);
   array_buffer->clear_padding();
   array_buffer->set_is_external(is_external);
-  array_buffer->set_is_neuterable(shared_flag == SharedFlag::kNotShared);
+  array_buffer->set_is_detachable(shared_flag == SharedFlag::kNotShared);
   array_buffer->set_is_shared(shared_flag == SharedFlag::kShared);
   array_buffer->set_is_wasm_memory(is_wasm_memory);
   // Initialize backing store at last to avoid handling of |JSArrayBuffers| that
@@ -200,7 +200,7 @@ Handle<JSArrayBuffer> JSTypedArray::GetBuffer() {
                                        GetIsolate());
     return array_buffer;
   }
-  Handle<JSTypedArray> self(this, GetIsolate());
+  Handle<JSTypedArray> self(*this, GetIsolate());
   return MaterializeArrayBuffer(self);
 }
 
@@ -210,7 +210,7 @@ Maybe<bool> JSTypedArray::DefineOwnProperty(Isolate* isolate,
                                             Handle<JSTypedArray> o,
                                             Handle<Object> key,
                                             PropertyDescriptor* desc,
-                                            ShouldThrow should_throw) {
+                                            Maybe<ShouldThrow> should_throw) {
   // 1. Assert: IsPropertyKey(P) is true.
   DCHECK(key->IsName() || key->IsNumber());
   // 2. Assert: O is an Object that has a [[ViewedArrayBuffer]] internal slot.
@@ -226,19 +226,19 @@ Maybe<bool> JSTypedArray::DefineOwnProperty(Isolate* isolate,
       // FIXME: the standard allows up to 2^53 elements.
       uint32_t index;
       if (numeric_index->IsMinusZero() || !numeric_index->ToUint32(&index)) {
-        RETURN_FAILURE(isolate, should_throw,
+        RETURN_FAILURE(isolate, GetShouldThrow(isolate, should_throw),
                        NewTypeError(MessageTemplate::kInvalidTypedArrayIndex));
       }
       // 3b iv. Let length be O.[[ArrayLength]].
       size_t length = o->length_value();
       // 3b v. If numericIndex ≥ length, return false.
-      if (o->WasNeutered() || index >= length) {
-        RETURN_FAILURE(isolate, should_throw,
+      if (o->WasDetached() || index >= length) {
+        RETURN_FAILURE(isolate, GetShouldThrow(isolate, should_throw),
                        NewTypeError(MessageTemplate::kInvalidTypedArrayIndex));
       }
       // 3b vi. If IsAccessorDescriptor(Desc) is true, return false.
       if (PropertyDescriptor::IsAccessorDescriptor(desc)) {
-        RETURN_FAILURE(isolate, should_throw,
+        RETURN_FAILURE(isolate, GetShouldThrow(isolate, should_throw),
                        NewTypeError(MessageTemplate::kRedefineDisallowed, key));
       }
       // 3b vii. If Desc has a [[Configurable]] field and if
@@ -250,7 +250,7 @@ Maybe<bool> JSTypedArray::DefineOwnProperty(Isolate* isolate,
       if ((desc->has_configurable() && desc->configurable()) ||
           (desc->has_enumerable() && !desc->enumerable()) ||
           (desc->has_writable() && !desc->writable())) {
-        RETURN_FAILURE(isolate, should_throw,
+        RETURN_FAILURE(isolate, GetShouldThrow(isolate, should_throw),
                        NewTypeError(MessageTemplate::kRedefineDisallowed, key));
       }
       // 3b x. If Desc has a [[Value]] field, then

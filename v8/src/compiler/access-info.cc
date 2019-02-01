@@ -13,7 +13,9 @@
 #include "src/field-type.h"
 #include "src/ic/call-optimization.h"
 #include "src/objects-inl.h"
+#include "src/objects/cell-inl.h"
 #include "src/objects/module-inl.h"
+#include "src/objects/struct-inl.h"
 #include "src/objects/templates.h"
 
 namespace v8 {
@@ -339,14 +341,13 @@ bool AccessInfoFactory::ComputeElementAccessInfos(
 bool AccessInfoFactory::ComputePropertyAccessInfo(
     Handle<Map> map, Handle<Name> name, AccessMode access_mode,
     PropertyAccessInfo* access_info) {
+  CHECK(name->IsUniqueName());
+
   // Check if it is safe to inline property access for the {map}.
   if (!CanInlinePropertyAccess(map)) return false;
 
   // Compute the receiver type.
   Handle<Map> receiver_map = map;
-
-  // Property lookups require the name to be internalized.
-  name = isolate()->factory()->InternalizeName(name);
 
   // We support fast inline cases for certain JSObject getters.
   if (access_mode == AccessMode::kLoad &&
@@ -389,7 +390,7 @@ bool AccessInfoFactory::ComputePropertyAccessInfo(
             field_type = Type::SignedSmall();
             field_representation = MachineRepresentation::kTaggedSigned;
           } else if (details_representation.IsDouble()) {
-            field_type = type_cache_.kFloat64;
+            field_type = type_cache_->kFloat64;
             field_representation = MachineRepresentation::kFloat64;
           } else if (details_representation.IsHeapObject()) {
             // Extract the field type from the property details (make sure its
@@ -435,8 +436,8 @@ bool AccessInfoFactory::ComputePropertyAccessInfo(
           DCHECK_EQ(kAccessor, details.kind());
           if (map->instance_type() == JS_MODULE_NAMESPACE_TYPE) {
             DCHECK(map->is_prototype_map());
-            Handle<PrototypeInfo> proto_info =
-                Map::GetOrCreatePrototypeInfo(map, isolate());
+            Handle<PrototypeInfo> proto_info(
+                PrototypeInfo::cast(map->prototype_info()), isolate());
             Handle<JSModuleNamespace> module_namespace(
                 JSModuleNamespace::cast(proto_info->module_namespace()),
                 isolate());
@@ -566,22 +567,28 @@ bool AccessInfoFactory::ComputePropertyAccessInfo(
 bool AccessInfoFactory::ComputePropertyAccessInfos(
     MapHandles const& maps, Handle<Name> name, AccessMode access_mode,
     ZoneVector<PropertyAccessInfo>* access_infos) {
+  ZoneVector<PropertyAccessInfo> infos(zone());
+  infos.reserve(maps.size());
   for (Handle<Map> map : maps) {
     if (Map::TryUpdate(isolate(), map).ToHandle(&map)) {
       PropertyAccessInfo access_info;
       if (!ComputePropertyAccessInfo(map, name, access_mode, &access_info)) {
         return false;
       }
-      // Try to merge the {access_info} with an existing one.
-      bool merged = false;
-      for (PropertyAccessInfo& other_info : *access_infos) {
-        if (other_info.Merge(&access_info, access_mode, zone())) {
-          merged = true;
-          break;
-        }
-      }
-      if (!merged) access_infos->push_back(access_info);
+      infos.push_back(access_info);
     }
+  }
+
+  // Merge as many as possible and push into {access_infos}.
+  for (auto it = infos.begin(), end = infos.end(); it != end; ++it) {
+    bool merged = false;
+    for (auto ot = it + 1; ot != end; ++ot) {
+      if (ot->Merge(&(*it), access_mode, zone())) {
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) access_infos->push_back(*it);
   }
   return true;
 }
@@ -650,13 +657,13 @@ bool AccessInfoFactory::LookupSpecialFieldAccessor(
       // in case of other fast elements, and [0, kMaxUInt32] in
       // case of other arrays.
       if (IsDoubleElementsKind(map->elements_kind())) {
-        field_type = type_cache_.kFixedDoubleArrayLengthType;
+        field_type = type_cache_->kFixedDoubleArrayLengthType;
         field_representation = MachineRepresentation::kTaggedSigned;
       } else if (IsFastElementsKind(map->elements_kind())) {
-        field_type = type_cache_.kFixedArrayLengthType;
+        field_type = type_cache_->kFixedArrayLengthType;
         field_representation = MachineRepresentation::kTaggedSigned;
       } else {
-        field_type = type_cache_.kJSArrayLengthType;
+        field_type = type_cache_->kJSArrayLengthType;
       }
     }
     // Special fields are always mutable.
@@ -696,7 +703,7 @@ bool AccessInfoFactory::LookupTransition(Handle<Map> map, Handle<Name> name,
     field_type = Type::SignedSmall();
     field_representation = MachineRepresentation::kTaggedSigned;
   } else if (details_representation.IsDouble()) {
-    field_type = type_cache_.kFloat64;
+    field_type = type_cache_->kFloat64;
     field_representation = MachineRepresentation::kFloat64;
   } else if (details_representation.IsHeapObject()) {
     // Extract the field type from the property details (make sure its

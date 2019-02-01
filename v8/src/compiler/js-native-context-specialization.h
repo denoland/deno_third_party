@@ -186,7 +186,7 @@ class V8_EXPORT_PRIVATE JSNativeContextSpecialization final
                                KeyedAccessLoadMode load_mode);
 
   // Construct appropriate subgraph to extend properties backing store.
-  Node* BuildExtendPropertiesBackingStore(Handle<Map> map, Node* properties,
+  Node* BuildExtendPropertiesBackingStore(const MapRef& map, Node* properties,
                                           Node* effect, Node* control);
 
   // Construct appropriate subgraph to check that the {value} matches
@@ -251,7 +251,7 @@ class V8_EXPORT_PRIVATE JSNativeContextSpecialization final
   CompilationDependencies* const dependencies_;
   Zone* const zone_;
   Zone* const shared_zone_;
-  TypeCache const& type_cache_;
+  TypeCache const* type_cache_;
 
   DISALLOW_COPY_AND_ASSIGN(JSNativeContextSpecialization);
 };

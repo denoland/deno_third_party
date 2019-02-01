@@ -20,12 +20,12 @@ namespace internal {
 // For long smis it has the following format:
 //     [32 bit signed int] [31 bits zero padding] 0
 // Smi stands for small integer.
-class Smi : public ObjectPtr {
+class Smi : public Object {
  public:
   // This replaces the OBJECT_CONSTRUCTORS macro, because Smis are special
   // in that we want them to be constexprs.
-  constexpr Smi() : ObjectPtr() {}
-  explicit constexpr Smi(Address ptr) : ObjectPtr(ptr) {
+  constexpr Smi() : Object() {}
+  explicit constexpr Smi(Address ptr) : Object(ptr) {
 #if V8_CAN_HAVE_DCHECK_IN_CONSTEXPR
     DCHECK(HAS_SMI_TAG(ptr));
 #endif
@@ -41,14 +41,7 @@ class Smi : public ObjectPtr {
   }
 
   // Convert a Smi object to an int.
-  static inline int ToInt(const Object* object);
-  static inline int ToInt(ObjectPtr object);
-
-  // TODO(3770): Drop this when merging Object and ObjectPtr.
-  bool ToInt32(int32_t* value) {
-    *value = this->value();
-    return true;
-  }
+  static inline int ToInt(const Object object);
 
   // Convert a value to a Smi object.
   static inline constexpr Smi FromInt(int value) {
@@ -61,7 +54,7 @@ class Smi : public ObjectPtr {
   static inline Smi FromIntptr(intptr_t value) {
     DCHECK(Smi::IsValid(value));
     int smi_shift_bits = kSmiTagSize + kSmiShiftSize;
-    return Smi((value << smi_shift_bits) | kSmiTag);
+    return Smi((static_cast<Address>(value) << smi_shift_bits) | kSmiTag);
   }
 
   template <typename E,
@@ -89,16 +82,16 @@ class Smi : public ObjectPtr {
   // usage.
   static Address LexicographicCompare(Isolate* isolate, Smi x, Smi y);
 
-  DECL_CAST2(Smi)
+  DECL_CAST(Smi)
 
   // Dispatched behavior.
   V8_EXPORT_PRIVATE void SmiPrint(std::ostream& os) const;  // NOLINT
   DECL_VERIFIER(Smi)
 
   // C++ does not allow us to have an object of type Smi within class Smi,
-  // so the kZero value has type ObjectPtr. Consider it deprecated; new code
+  // so the kZero value has type Object. Consider it deprecated; new code
   // should use zero() instead.
-  static constexpr ObjectPtr kZero = ObjectPtr(0);
+  V8_EXPORT_PRIVATE static constexpr Object kZero = Object(0);
   // If you need something with type Smi, call zero() instead. Since it is
   // a constexpr, "calling" it is just as efficient as reading kZero.
   static inline constexpr Smi zero() { return Smi::FromInt(0); }

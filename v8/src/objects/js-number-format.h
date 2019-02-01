@@ -44,7 +44,8 @@ class JSNumberFormat : public JSObject {
                                           Handle<JSNumberFormat> number_format);
 
   V8_WARN_UNUSED_RESULT static MaybeHandle<JSArray> FormatToParts(
-      Isolate* isolate, Handle<JSNumberFormat> number_format, double number);
+      Isolate* isolate, Handle<JSNumberFormat> number_format,
+      Handle<Object> numeric_obj);
 
   // A utility function used by the above JSNumberFormat::FormatToParts()
   // and JSRelativeTimeFormat::FormatToParts().
@@ -56,10 +57,12 @@ class JSNumberFormat : public JSObject {
   // unit as "unit" to each added object.
   V8_WARN_UNUSED_RESULT static Maybe<int> FormatToParts(
       Isolate* isolate, Handle<JSArray> result, int start_index,
-      const icu::NumberFormat& fmt, double number, Handle<String> unit);
+      const icu::NumberFormat& fmt, Handle<Object> numeric_obj,
+      Handle<String> unit);
 
-  V8_WARN_UNUSED_RESULT static MaybeHandle<String> FormatNumber(
-      Isolate* isolate, const icu::NumberFormat& number_format, double number);
+  V8_WARN_UNUSED_RESULT static MaybeHandle<String> FormatNumeric(
+      Isolate* isolate, const icu::NumberFormat& number_format,
+      Handle<Object> numeric_obj);
 
   static std::set<std::string> GetAvailableLocales();
 
@@ -122,13 +125,12 @@ class JSNumberFormat : public JSObject {
   STATIC_ASSERT(CurrencyDisplay::SYMBOL <= CurrencyDisplayBits::kMax);
   STATIC_ASSERT(CurrencyDisplay::NAME <= CurrencyDisplayBits::kMax);
 
-  DECL_ACCESSORS2(locale, String)
+  DECL_ACCESSORS(locale, String)
   DECL_ACCESSORS(icu_number_format, Managed<icu::NumberFormat>)
   DECL_ACCESSORS(bound_format, Object)
   DECL_INT_ACCESSORS(flags)
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSNumberFormat);
+  OBJECT_CONSTRUCTORS(JSNumberFormat, JSObject);
 };
 
 struct NumberFormatSpan {
