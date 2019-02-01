@@ -6,6 +6,7 @@
 #define V8_BUILTINS_BUILTINS_TYPED_ARRAY_GEN_H_
 
 #include "src/code-stub-assembler.h"
+#include "torque-generated/builtins-typed-array-from-dsl-gen.h"
 
 namespace v8 {
 namespace internal {
@@ -30,26 +31,6 @@ class TypedArrayBuiltinsAssembler : public CodeStubAssembler {
                                                   const char* method_name,
                                                   IterationKind iteration_kind);
 
-  void ConstructByLength(TNode<Context> context, TNode<JSTypedArray> holder,
-                         TNode<Object> length, TNode<Smi> element_size);
-  void ConstructByArrayBuffer(TNode<Context> context,
-                              TNode<JSTypedArray> holder,
-                              TNode<JSArrayBuffer> buffer,
-                              TNode<Object> byte_offset, TNode<Object> length,
-                              TNode<Smi> element_size);
-  void ConstructByTypedArray(TNode<Context> context, TNode<JSTypedArray> holder,
-                             TNode<JSTypedArray> typed_array,
-                             TNode<Smi> element_size);
-  void ConstructByArrayLike(TNode<Context> context, TNode<JSTypedArray> holder,
-                            TNode<HeapObject> array_like,
-                            TNode<Object> initial_length,
-                            TNode<Smi> element_size,
-                            TNode<JSReceiver> buffer_constructor);
-  void ConstructByIterable(TNode<Context> context, TNode<JSTypedArray> holder,
-                           TNode<JSReceiver> iterable,
-                           TNode<JSReceiver> iterator_fn,
-                           TNode<Smi> element_size);
-
   void SetupTypedArray(TNode<JSTypedArray> holder, TNode<Smi> length,
                        TNode<UintPtrT> byte_offset,
                        TNode<UintPtrT> byte_length);
@@ -71,6 +52,10 @@ class TypedArrayBuiltinsAssembler : public CodeStubAssembler {
 
   // Returns the byte size of an element for a TypedArray elements kind.
   TNode<IntPtrT> GetTypedArrayElementSize(TNode<Word32T> elements_kind);
+
+  // Returns information (byte size and map) about a TypedArray's elements.
+  TypedArrayBuiltinsFromDSLAssembler::TypedArrayElementsInfo
+  GetTypedArrayElementsInfo(TNode<JSTypedArray> typed_array);
 
   TNode<JSArrayBuffer> LoadTypedArrayBuffer(TNode<JSTypedArray> typed_array) {
     return LoadObjectField<JSArrayBuffer>(typed_array,
@@ -109,6 +94,9 @@ class TypedArrayBuiltinsAssembler : public CodeStubAssembler {
   void CallCMemmove(TNode<IntPtrT> dest_ptr, TNode<IntPtrT> src_ptr,
                     TNode<IntPtrT> byte_length);
 
+  void CallCMemcpy(TNode<RawPtrT> dest_ptr, TNode<RawPtrT> src_ptr,
+                   TNode<UintPtrT> byte_length);
+
   void CallCCopyFastNumberJSArrayElementsToTypedArray(
       TNode<Context> context, TNode<JSArray> source, TNode<JSTypedArray> dest,
       TNode<IntPtrT> source_length, TNode<IntPtrT> offset);
@@ -127,6 +115,8 @@ class TypedArrayBuiltinsAssembler : public CodeStubAssembler {
 
   void DispatchTypedArrayByElementsKind(
       TNode<Word32T> elements_kind, const TypedArraySwitchCase& case_function);
+
+  TNode<BoolT> IsSharedArrayBuffer(TNode<JSArrayBuffer> buffer);
 };
 
 }  // namespace internal

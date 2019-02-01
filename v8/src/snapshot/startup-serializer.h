@@ -33,25 +33,24 @@ class StartupSerializer : public RootsSerializer {
   // read-only object cache if not already present and emits a
   // ReadOnlyObjectCache bytecode into |sink|. Returns whether this was
   // successful.
-  bool SerializeUsingReadOnlyObjectCache(SnapshotByteSink* sink,
-                                         HeapObject* obj, HowToCode how_to_code,
+  bool SerializeUsingReadOnlyObjectCache(SnapshotByteSink* sink, HeapObject obj,
+                                         HowToCode how_to_code,
                                          WhereToPoint where_to_point, int skip);
 
   // Adds |obj| to the partial snapshot object cache if not already present and
   // emits a PartialSnapshotCache bytecode into |sink|.
   void SerializeUsingPartialSnapshotCache(SnapshotByteSink* sink,
-                                          HeapObject* obj,
-                                          HowToCode how_to_code,
+                                          HeapObject obj, HowToCode how_to_code,
                                           WhereToPoint where_to_point,
                                           int skip);
 
  private:
-  void SerializeObject(HeapObject* o, HowToCode how_to_code,
+  void SerializeObject(HeapObject o, HowToCode how_to_code,
                        WhereToPoint where_to_point, int skip) override;
 
   ReadOnlySerializer* read_only_serializer_;
-  std::vector<AccessorInfo*> accessor_infos_;
-  std::vector<CallHandlerInfo*> call_handler_infos_;
+  std::vector<AccessorInfo> accessor_infos_;
+  std::vector<CallHandlerInfo> call_handler_infos_;
 
   DISALLOW_COPY_AND_ASSIGN(StartupSerializer);
 };
@@ -59,15 +58,15 @@ class StartupSerializer : public RootsSerializer {
 class SerializedHandleChecker : public RootVisitor {
  public:
   SerializedHandleChecker(Isolate* isolate, std::vector<Context>* contexts);
-  void VisitRootPointers(Root root, const char* description, ObjectSlot start,
-                         ObjectSlot end) override;
+  void VisitRootPointers(Root root, const char* description,
+                         FullObjectSlot start, FullObjectSlot end) override;
   bool CheckGlobalAndEternalHandles();
 
  private:
   void AddToSet(FixedArray serialized);
 
   Isolate* isolate_;
-  std::unordered_set<Object*> serialized_;
+  std::unordered_set<Object, Object::Hasher> serialized_;
   bool ok_ = true;
 };
 

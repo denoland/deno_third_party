@@ -125,8 +125,8 @@ bool IsKeywordLikeName(const std::string& s) {
 // naming convention and are those exempt from the normal type convention.
 bool IsMachineType(const std::string& s) {
   static const char* const machine_types[]{
-      "void",    "never",   "int32",   "uint32", "int64",  "intptr",
-      "uintptr", "float32", "float64", "bool",   "string", "int31"};
+      "void",    "never",   "int32", "uint32", "int64", "intptr", "uintptr",
+      "float32", "float64", "bool",  "string", "bint",  "int31"};
 
   return std::find(std::begin(machine_types), std::end(machine_types), s) !=
          std::end(machine_types);
@@ -161,6 +161,19 @@ bool IsValidTypeName(const std::string& s) {
   if (IsMachineType(s)) return true;
 
   return IsUpperCamelCase(s);
+}
+
+std::string CapifyStringWithUnderscores(const std::string& camellified_string) {
+  std::string result;
+  bool previousWasLower = false;
+  for (auto current : camellified_string) {
+    if (previousWasLower && isupper(current)) {
+      result += "_";
+    }
+    result += toupper(current);
+    previousWasLower = (islower(current));
+  }
+  return result;
 }
 
 std::string CamelifyString(const std::string& underscore_string) {

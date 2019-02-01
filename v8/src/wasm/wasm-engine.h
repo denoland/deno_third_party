@@ -8,6 +8,7 @@
 #include <memory>
 #include <unordered_set>
 
+#include "src/cancelable-task.h"
 #include "src/wasm/wasm-code-manager.h"
 #include "src/wasm/wasm-memory.h"
 #include "src/wasm/wasm-tier.h"
@@ -19,6 +20,7 @@ namespace internal {
 class AsmWasmData;
 class CodeTracer;
 class CompilationStatistics;
+class HeapNumber;
 class WasmInstanceObject;
 class WasmModuleObject;
 
@@ -98,10 +100,10 @@ class V8_EXPORT_PRIVATE WasmEngine {
       Isolate* isolate, const WasmFeatures& enabled, Handle<Context> context,
       std::shared_ptr<CompilationResultResolver> resolver);
 
-  // Compiles the function with the given index at a specific compilation tier
-  // and returns true on success, false otherwise. This is mostly used for
-  // testing to force a function into a specific tier.
-  bool CompileFunction(Isolate* isolate, NativeModule* native_module,
+  // Compiles the function with the given index at a specific compilation tier.
+  // Errors are stored internally in the CompilationState.
+  // This is mostly used for testing to force a function into a specific tier.
+  void CompileFunction(Isolate* isolate, NativeModule* native_module,
                        uint32_t function_index, ExecutionTier tier);
 
   // Exports the sharable parts of the given module object so that they can be
@@ -145,6 +147,30 @@ class V8_EXPORT_PRIVATE WasmEngine {
   void AddIsolate(Isolate* isolate);
   void RemoveIsolate(Isolate* isolate);
 
+  template <typename T, typename... Args>
+  std::unique_ptr<T> NewBackgroundCompileTask(Args&&... args) {
+    return base::make_unique<T>(&background_compile_task_manager_,
+                                std::forward<Args>(args)...);
+  }
+
+  // Trigger code logging for this WasmCode in all Isolates which have access to
+  // the NativeModule containing this code. This method can be called from
+  // background threads.
+  void LogCode(WasmCode*);
+
+  // Create a new NativeModule. The caller is responsible for its
+  // lifetime. The native module will be given some memory for code,
+  // which will be page size aligned. The size of the initial memory
+  // is determined with a heuristic based on the total size of wasm
+  // code. The native module may later request more memory.
+  // TODO(titzer): isolate is only required here for CompilationState.
+  std::unique_ptr<NativeModule> NewNativeModule(
+      Isolate* isolate, const WasmFeatures& enabled_features,
+      size_t code_size_estimate, bool can_request_more,
+      std::shared_ptr<const WasmModule> module);
+
+  void FreeNativeModule(NativeModule*);
+
   // Call on process start and exit.
   static void InitializeOncePerProcess();
   static void GlobalTearDown();
@@ -154,6 +180,8 @@ class V8_EXPORT_PRIVATE WasmEngine {
   static std::shared_ptr<WasmEngine> GetWasmEngine();
 
  private:
+  struct IsolateInfo;
+
   AsyncCompileJob* CreateAsyncCompileJob(
       Isolate* isolate, const WasmFeatures& enabled,
       std::unique_ptr<byte[]> bytes_copy, size_t length,
@@ -163,6 +191,10 @@ class V8_EXPORT_PRIVATE WasmEngine {
   WasmMemoryTracker memory_tracker_;
   WasmCodeManager code_manager_;
   AccountingAllocator allocator_;
+
+  // Task manager managing all background compile jobs. Before shut down of the
+  // engine, they must all be finished because they access the allocator.
+  CancelableTaskManager background_compile_task_manager_;
 
   // This mutex protects all information which is mutated concurrently or
   // fields that are initialized lazily on the first access.
@@ -178,8 +210,13 @@ class V8_EXPORT_PRIVATE WasmEngine {
   std::unique_ptr<CompilationStatistics> compilation_stats_;
   std::unique_ptr<CodeTracer> code_tracer_;
 
-  // Set of isolates which use this WasmEngine. Used for cross-isolate GCs.
-  std::unordered_set<Isolate*> isolates_;
+  // Set of isolates which use this WasmEngine.
+  std::unordered_map<Isolate*, std::unique_ptr<IsolateInfo>> isolates_;
+
+  // Maps each NativeModule to the set of Isolates that have access to that
+  // NativeModule. The isolate sets currently only grow, they never shrink.
+  std::unordered_map<NativeModule*, std::unordered_set<Isolate*>>
+      isolates_per_native_module_;
 
   // End of fields protected by {mutex_}.
   //////////////////////////////////////////////////////////////////////////////

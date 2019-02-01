@@ -32,6 +32,7 @@
 #include "src/heap/factory.h"
 #include "src/heap/spaces-inl.h"
 #include "src/objects-inl.h"
+#include "src/objects/free-space.h"
 #include "src/snapshot/snapshot.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-tester.h"
@@ -307,14 +308,12 @@ TEST(LargeObjectSpace) {
 
   int lo_size = Page::kPageSize;
 
-  Object* obj = lo->AllocateRaw(lo_size).ToObjectChecked();
+  Object obj = lo->AllocateRaw(lo_size).ToObjectChecked();
   CHECK(obj->IsHeapObject());
 
-  HeapObject* ho = HeapObject::cast(obj);
+  HeapObject ho = HeapObject::cast(obj);
 
   CHECK(lo->Contains(HeapObject::cast(obj)));
-
-  CHECK(lo->FindObject(ho->address()) == obj);
 
   CHECK(lo->Contains(ho));
 
@@ -394,30 +393,30 @@ TEST(SizeOfInitialHeap) {
 }
 #endif  // DEBUG
 
-static HeapObject* AllocateUnaligned(NewSpace* space, int size) {
+static HeapObject AllocateUnaligned(NewSpace* space, int size) {
   AllocationResult allocation = space->AllocateRawUnaligned(size);
   CHECK(!allocation.IsRetry());
-  HeapObject* filler = nullptr;
+  HeapObject filler;
   CHECK(allocation.To(&filler));
   space->heap()->CreateFillerObjectAt(filler->address(), size,
                                       ClearRecordedSlots::kNo);
   return filler;
 }
 
-static HeapObject* AllocateUnaligned(PagedSpace* space, int size) {
+static HeapObject AllocateUnaligned(PagedSpace* space, int size) {
   AllocationResult allocation = space->AllocateRaw(size, kDoubleUnaligned);
   CHECK(!allocation.IsRetry());
-  HeapObject* filler = nullptr;
+  HeapObject filler;
   CHECK(allocation.To(&filler));
   space->heap()->CreateFillerObjectAt(filler->address(), size,
                                       ClearRecordedSlots::kNo);
   return filler;
 }
 
-static HeapObject* AllocateUnaligned(LargeObjectSpace* space, int size) {
+static HeapObject AllocateUnaligned(LargeObjectSpace* space, int size) {
   AllocationResult allocation = space->AllocateRaw(size);
   CHECK(!allocation.IsRetry());
-  HeapObject* filler = nullptr;
+  HeapObject filler;
   CHECK(allocation.To(&filler));
   return filler;
 }
@@ -579,7 +578,7 @@ HEAP_TEST(Regress777177) {
     AlwaysAllocateScope always_allocate(isolate);
     heap::SimulateFullSpace(old_space);
     AllocationResult result = old_space->AllocateRaw(filler_size, kWordAligned);
-    HeapObject* obj = result.ToObjectChecked();
+    HeapObject obj = result.ToObjectChecked();
     heap->CreateFillerObjectAt(obj->address(), filler_size,
                                ClearRecordedSlots::kNo);
   }
@@ -589,7 +588,7 @@ HEAP_TEST(Regress777177) {
     // top_on_previous_step_ to the next page.
     AllocationResult result =
         old_space->AllocateRaw(max_object_size, kWordAligned);
-    HeapObject* obj = result.ToObjectChecked();
+    HeapObject obj = result.ToObjectChecked();
     // Simulate allocation folding moving the top pointer back.
     old_space->SetTopAndLimit(obj->address(), old_space->limit());
   }
@@ -597,7 +596,7 @@ HEAP_TEST(Regress777177) {
   {
     // This triggers assert in crbug.com/777177.
     AllocationResult result = old_space->AllocateRaw(filler_size, kWordAligned);
-    HeapObject* obj = result.ToObjectChecked();
+    HeapObject obj = result.ToObjectChecked();
     heap->CreateFillerObjectAt(obj->address(), filler_size,
                                ClearRecordedSlots::kNo);
   }
@@ -616,7 +615,7 @@ HEAP_TEST(Regress791582) {
 
   int until_page_end = static_cast<int>(new_space->limit() - new_space->top());
 
-  if (until_page_end % kPointerSize != 0) {
+  if (!IsAligned(until_page_end, kTaggedSize)) {
     // The test works if the size of allocation area size is a multiple of
     // pointer size. This is usually the case unless some allocation observer
     // is already active (e.g. incremental marking observer).
@@ -629,7 +628,7 @@ HEAP_TEST(Regress791582) {
   {
     AllocationResult result =
         new_space->AllocateRaw(until_page_end, kWordAligned);
-    HeapObject* obj = result.ToObjectChecked();
+    HeapObject obj = result.ToObjectChecked();
     heap->CreateFillerObjectAt(obj->address(), until_page_end,
                                ClearRecordedSlots::kNo);
     // Simulate allocation folding moving the top pointer back.
@@ -639,7 +638,7 @@ HEAP_TEST(Regress791582) {
   {
     // This triggers assert in crbug.com/791582
     AllocationResult result = new_space->AllocateRaw(256, kWordAligned);
-    HeapObject* obj = result.ToObjectChecked();
+    HeapObject obj = result.ToObjectChecked();
     heap->CreateFillerObjectAt(obj->address(), 256, ClearRecordedSlots::kNo);
   }
   new_space->RemoveAllocationObserver(&observer);
@@ -656,15 +655,14 @@ TEST(ShrinkPageToHighWaterMarkFreeSpaceEnd) {
   // Prepare page that only contains a single object and a trailing FreeSpace
   // filler.
   Handle<FixedArray> array = isolate->factory()->NewFixedArray(128, TENURED);
-  Page* page = Page::FromAddress(array->address());
+  Page* page = Page::FromHeapObject(*array);
 
   // Reset space so high water mark is consistent.
   PagedSpace* old_space = CcTest::heap()->old_space();
   old_space->FreeLinearAllocationArea();
   old_space->ResetFreeList();
 
-  HeapObject* filler =
-      HeapObject::FromAddress(array->address() + array->Size());
+  HeapObject filler = HeapObject::FromAddress(array->address() + array->Size());
   CHECK(filler->IsFreeSpace());
   size_t shrunk = old_space->ShrinkPageToHighWaterMark(page);
   size_t should_have_shrunk = RoundDown(
@@ -684,7 +682,7 @@ TEST(ShrinkPageToHighWaterMarkNoFiller) {
   std::vector<Handle<FixedArray>> arrays =
       heap::FillOldSpacePageWithFixedArrays(CcTest::heap(), kFillerSize);
   Handle<FixedArray> array = arrays.back();
-  Page* page = Page::FromAddress(array->address());
+  Page* page = Page::FromHeapObject(*array);
   CHECK_EQ(page->area_end(), array->address() + array->Size() + kFillerSize);
 
   // Reset space so high water mark and fillers are consistent.
@@ -703,11 +701,11 @@ TEST(ShrinkPageToHighWaterMarkOneWordFiller) {
 
   heap::SealCurrentObjects(CcTest::heap());
 
-  const int kFillerSize = kPointerSize;
+  const int kFillerSize = kTaggedSize;
   std::vector<Handle<FixedArray>> arrays =
       heap::FillOldSpacePageWithFixedArrays(CcTest::heap(), kFillerSize);
   Handle<FixedArray> array = arrays.back();
-  Page* page = Page::FromAddress(array->address());
+  Page* page = Page::FromHeapObject(*array);
   CHECK_EQ(page->area_end(), array->address() + array->Size() + kFillerSize);
 
   // Reset space so high water mark and fillers are consistent.
@@ -715,8 +713,7 @@ TEST(ShrinkPageToHighWaterMarkOneWordFiller) {
   old_space->FreeLinearAllocationArea();
   old_space->ResetFreeList();
 
-  HeapObject* filler =
-      HeapObject::FromAddress(array->address() + array->Size());
+  HeapObject filler = HeapObject::FromAddress(array->address() + array->Size());
   CHECK_EQ(filler->map(),
            ReadOnlyRoots(CcTest::heap()).one_pointer_filler_map());
 
@@ -731,11 +728,11 @@ TEST(ShrinkPageToHighWaterMarkTwoWordFiller) {
 
   heap::SealCurrentObjects(CcTest::heap());
 
-  const int kFillerSize = 2 * kPointerSize;
+  const int kFillerSize = 2 * kTaggedSize;
   std::vector<Handle<FixedArray>> arrays =
       heap::FillOldSpacePageWithFixedArrays(CcTest::heap(), kFillerSize);
   Handle<FixedArray> array = arrays.back();
-  Page* page = Page::FromAddress(array->address());
+  Page* page = Page::FromHeapObject(*array);
   CHECK_EQ(page->area_end(), array->address() + array->Size() + kFillerSize);
 
   // Reset space so high water mark and fillers are consistent.
@@ -743,8 +740,7 @@ TEST(ShrinkPageToHighWaterMarkTwoWordFiller) {
   old_space->FreeLinearAllocationArea();
   old_space->ResetFreeList();
 
-  HeapObject* filler =
-      HeapObject::FromAddress(array->address() + array->Size());
+  HeapObject filler = HeapObject::FromAddress(array->address() + array->Size());
   CHECK_EQ(filler->map(),
            ReadOnlyRoots(CcTest::heap()).two_pointer_filler_map());
 

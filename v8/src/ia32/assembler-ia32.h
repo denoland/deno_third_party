@@ -41,6 +41,7 @@
 
 #include "src/assembler.h"
 #include "src/ia32/constants-ia32.h"
+#include "src/ia32/register-ia32.h"
 #include "src/ia32/sse-instr.h"
 #include "src/isolate.h"
 #include "src/label.h"
@@ -50,113 +51,7 @@
 namespace v8 {
 namespace internal {
 
-#define GENERAL_REGISTERS(V) \
-  V(eax)                     \
-  V(ecx)                     \
-  V(edx)                     \
-  V(ebx)                     \
-  V(esp)                     \
-  V(ebp)                     \
-  V(esi)                     \
-  V(edi)
-
-#define ALLOCATABLE_GENERAL_REGISTERS(V) \
-  V(eax)                                 \
-  V(ecx)                                 \
-  V(edx)                                 \
-  V(esi)                                 \
-  V(edi)
-
-#define DOUBLE_REGISTERS(V) \
-  V(xmm0)                   \
-  V(xmm1)                   \
-  V(xmm2)                   \
-  V(xmm3)                   \
-  V(xmm4)                   \
-  V(xmm5)                   \
-  V(xmm6)                   \
-  V(xmm7)
-
-#define FLOAT_REGISTERS DOUBLE_REGISTERS
-#define SIMD128_REGISTERS DOUBLE_REGISTERS
-
-#define ALLOCATABLE_DOUBLE_REGISTERS(V) \
-  V(xmm1)                               \
-  V(xmm2)                               \
-  V(xmm3)                               \
-  V(xmm4)                               \
-  V(xmm5)                               \
-  V(xmm6)                               \
-  V(xmm7)
-
-enum RegisterCode {
-#define REGISTER_CODE(R) kRegCode_##R,
-  GENERAL_REGISTERS(REGISTER_CODE)
-#undef REGISTER_CODE
-      kRegAfterLast
-};
-
-class Register : public RegisterBase<Register, kRegAfterLast> {
- public:
-  bool is_byte_register() const { return reg_code_ <= 3; }
-
- private:
-  friend class RegisterBase<Register, kRegAfterLast>;
-  explicit constexpr Register(int code) : RegisterBase(code) {}
-};
-
-ASSERT_TRIVIALLY_COPYABLE(Register);
-static_assert(sizeof(Register) == sizeof(int),
-              "Register can efficiently be passed by value");
-
-#define DEFINE_REGISTER(R) \
-  constexpr Register R = Register::from_code<kRegCode_##R>();
-GENERAL_REGISTERS(DEFINE_REGISTER)
-#undef DEFINE_REGISTER
-constexpr Register no_reg = Register::no_reg();
-
-constexpr bool kPadArguments = false;
-constexpr bool kSimpleFPAliasing = true;
-constexpr bool kSimdMaskRegisters = false;
-
-enum DoubleCode {
-#define REGISTER_CODE(R) kDoubleCode_##R,
-  DOUBLE_REGISTERS(REGISTER_CODE)
-#undef REGISTER_CODE
-      kDoubleAfterLast
-};
-
-class XMMRegister : public RegisterBase<XMMRegister, kDoubleAfterLast> {
-  friend class RegisterBase<XMMRegister, kDoubleAfterLast>;
-  explicit constexpr XMMRegister(int code) : RegisterBase(code) {}
-};
-
-typedef XMMRegister FloatRegister;
-
-typedef XMMRegister DoubleRegister;
-
-typedef XMMRegister Simd128Register;
-
-#define DEFINE_REGISTER(R) \
-  constexpr DoubleRegister R = DoubleRegister::from_code<kDoubleCode_##R>();
-DOUBLE_REGISTERS(DEFINE_REGISTER)
-#undef DEFINE_REGISTER
-constexpr DoubleRegister no_dreg = DoubleRegister::no_reg();
-
-// Note that the bit values must match those used in actual instruction encoding
-constexpr int kNumRegs = 8;
-
-// Caller-saved registers
-constexpr RegList kJSCallerSaved =
-    Register::ListOf<eax, ecx, edx,
-                     ebx,  // used as a caller-saved register in JavaScript code
-                     edi   // callee function
-                     >();
-
-constexpr int kNumJSCallerSaved = 5;
-
-// Number of registers for which space is reserved in safepoints.
-constexpr int kNumSafepointRegisters = 8;
+class SafepointTableBuilder;
 
 enum Condition {
   // any value < 0 is considered no_condition
@@ -223,7 +118,6 @@ class Immediate {
       : Immediate(static_cast<intptr_t>(value.ptr())) {}
 
   static Immediate EmbeddedNumber(double number);  // Smi or HeapNumber.
-  static Immediate EmbeddedCode(CodeStub* code);
   static Immediate EmbeddedStringConstant(const StringConstantBase* str);
 
   static Immediate CodeRelativeOffset(Label* label) {
@@ -383,8 +277,8 @@ class V8_EXPORT_PRIVATE Operand {
   inline void set_disp8(int8_t disp);
   inline void set_dispr(int32_t disp, RelocInfo::Mode rmode) {
     DCHECK(len_ == 1 || len_ == 2);
-    int32_t* p = reinterpret_cast<int32_t*>(&buf_[len_]);
-    *p = disp;
+    Address p = reinterpret_cast<Address>(&buf_[len_]);
+    WriteUnalignedValue(p, disp);
     len_ += sizeof(int32_t);
     rmode_ = rmode;
   }
@@ -476,21 +370,24 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   // for a detailed comment on the layout (globals.h).
   //
   // If the provided buffer is nullptr, the assembler allocates and grows its
-  // own buffer, and buffer_size determines the initial buffer size. The buffer
-  // is owned by the assembler and deallocated upon destruction of the
-  // assembler.
-  //
-  // If the provided buffer is not nullptr, the assembler uses the provided
-  // buffer for code generation and assumes its size to be buffer_size. If the
-  // buffer is too small, a fatal error occurs. No deallocation of the buffer is
-  // done upon destruction of the assembler.
-  Assembler(const AssemblerOptions& options, void* buffer, int buffer_size);
+  // own buffer. Otherwise it takes ownership of the provided buffer.
+  explicit Assembler(const AssemblerOptions&,
+                     std::unique_ptr<AssemblerBuffer> = {});
   virtual ~Assembler() {}
 
-  // GetCode emits any pending (non-emitted) code and fills the descriptor
-  // desc. GetCode() is idempotent; it returns the same result if no other
-  // Assembler functions are invoked in between GetCode() calls.
-  void GetCode(Isolate* isolate, CodeDesc* desc);
+  // GetCode emits any pending (non-emitted) code and fills the descriptor desc.
+  static constexpr int kNoHandlerTable = 0;
+  static constexpr SafepointTableBuilder* kNoSafepointTable = nullptr;
+  void GetCode(Isolate* isolate, CodeDesc* desc,
+               SafepointTableBuilder* safepoint_table_builder,
+               int handler_table_offset);
+
+  // Convenience wrapper for code without safepoint or handler tables.
+  void GetCode(Isolate* isolate, CodeDesc* desc) {
+    GetCode(isolate, desc, kNoSafepointTable, kNoHandlerTable);
+  }
+
+  void FinalizeJumpOptimizationInfo();
 
   // Read/Modify the code target in the branch/call instruction at pc.
   // The isolate argument is unused (and may be nullptr) when skipping flushing.
@@ -840,7 +737,6 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void call(Register reg) { call(Operand(reg)); }
   void call(Operand adr);
   void call(Handle<Code> code, RelocInfo::Mode rmode);
-  void call(CodeStub* stub);
   void wasm_call(Address address, RelocInfo::Mode rmode);
 
   // Jumps
@@ -1722,9 +1618,6 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
     return pc_offset() - label->pos();
   }
 
-  // Use --code-comments to enable.
-  void RecordComment(const char* msg);
-
   // Record a deoptimization reason that can be used by a log or cpu profiler.
   // Use --trace-deopt to enable.
   void RecordDeoptReason(DeoptimizeReason reason, SourcePosition position,
@@ -1751,14 +1644,14 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   static bool IsNop(Address addr);
 
   int relocation_writer_size() {
-    return (buffer_ + buffer_size_) - reloc_info_writer.pos();
+    return (buffer_start_ + buffer_->size()) - reloc_info_writer.pos();
   }
 
   // Avoid overflows for displacements etc.
   static constexpr int kMaximalBufferSize = 512 * MB;
 
-  byte byte_at(int pos) { return buffer_[pos]; }
-  void set_byte_at(int pos, byte value) { buffer_[pos] = value; }
+  byte byte_at(int pos) { return buffer_start_[pos]; }
+  void set_byte_at(int pos, byte value) { buffer_start_[pos] = value; }
 
  protected:
   void emit_sse_operand(XMMRegister reg, Operand adr);
@@ -1766,14 +1659,16 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void emit_sse_operand(Register dst, XMMRegister src);
   void emit_sse_operand(XMMRegister dst, Register src);
 
-  byte* addr_at(int pos) { return buffer_ + pos; }
+  Address addr_at(int pos) {
+    return reinterpret_cast<Address>(buffer_start_ + pos);
+  }
 
  private:
   uint32_t long_at(int pos)  {
-    return *reinterpret_cast<uint32_t*>(addr_at(pos));
+    return ReadUnalignedValue<uint32_t>(addr_at(pos));
   }
   void long_at_put(int pos, uint32_t x)  {
-    *reinterpret_cast<uint32_t*>(addr_at(pos)) = x;
+    WriteUnalignedValue(addr_at(pos), x);
   }
 
   // code emission
@@ -1849,6 +1744,8 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
 
   void AllocateAndInstallRequestedHeapObjects(Isolate* isolate);
 
+  int WriteCodeComments();
+
   friend class EnsureSpace;
 
   // Internal reference positions, required for (potential) patching in
@@ -1892,10 +1789,6 @@ class EnsureSpace {
   int space_before_;
 #endif
 };
-
-// Define {RegisterName} methods for the register types.
-DEFINE_REGISTER_NAMES(Register, GENERAL_REGISTERS)
-DEFINE_REGISTER_NAMES(XMMRegister, DOUBLE_REGISTERS)
 
 }  // namespace internal
 }  // namespace v8

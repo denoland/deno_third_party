@@ -10,6 +10,7 @@
 #include "src/objects-inl.h"
 #include "src/objects/shared-function-info.h"
 #include "src/source-position.h"
+#include "src/wasm/function-compiler.h"
 
 namespace v8 {
 namespace internal {
@@ -149,6 +150,16 @@ StackFrame::Type OptimizedCompilationInfo::GetOutputStackFrameType() const {
   }
 }
 
+void OptimizedCompilationInfo::SetWasmCompilationResult(
+    std::unique_ptr<wasm::WasmCompilationResult> wasm_compilation_result) {
+  wasm_compilation_result_ = std::move(wasm_compilation_result);
+}
+
+std::unique_ptr<wasm::WasmCompilationResult>
+OptimizedCompilationInfo::ReleaseWasmCompilationResult() {
+  return std::move(wasm_compilation_result_);
+}
+
 bool OptimizedCompilationInfo::has_context() const {
   return !closure().is_null();
 }
@@ -171,7 +182,7 @@ bool OptimizedCompilationInfo::has_global_object() const {
   return has_native_context();
 }
 
-JSGlobalObject* OptimizedCompilationInfo::global_object() const {
+JSGlobalObject OptimizedCompilationInfo::global_object() const {
   DCHECK(has_global_object());
   return native_context()->global_object();
 }

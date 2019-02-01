@@ -9,7 +9,6 @@
 
 #include "src/assembler.h"
 #include "src/base/bits.h"
-#include "src/codegen.h"
 #include "src/compiler.h"
 #include "src/compiler/linkage.h"
 #include "src/compiler/wasm-compiler.h"
@@ -126,7 +125,7 @@ std::unique_ptr<wasm::NativeModule> AllocateNativeModule(Isolate* isolate,
   // We have to add the code object to a NativeModule, because the
   // WasmCallDescriptor assumes that code is on the native heap and not
   // within a code object.
-  return isolate->wasm_engine()->code_manager()->NewNativeModule(
+  return isolate->wasm_engine()->NewNativeModule(
       isolate, wasm::kAllWasmFeatures, code_size, false, std::move(module));
 }
 

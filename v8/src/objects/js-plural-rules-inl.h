@@ -19,7 +19,9 @@
 namespace v8 {
 namespace internal {
 
-ACCESSORS2(JSPluralRules, locale, String, kLocaleOffset)
+OBJECT_CONSTRUCTORS_IMPL(JSPluralRules, JSObject)
+
+ACCESSORS(JSPluralRules, locale, String, kLocaleOffset)
 SMI_ACCESSORS(JSPluralRules, flags, kFlagsOffset)
 ACCESSORS(JSPluralRules, icu_plural_rules, Managed<icu::PluralRules>,
           kICUPluralRulesOffset)

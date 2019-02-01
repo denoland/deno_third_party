@@ -7,18 +7,17 @@
 #include "src/regexp/arm64/regexp-macro-assembler-arm64.h"
 
 #include "src/arm64/macro-assembler-arm64-inl.h"
-#include "src/code-stubs.h"
 #include "src/log.h"
 #include "src/macro-assembler.h"
 #include "src/objects-inl.h"
 #include "src/regexp/regexp-macro-assembler.h"
 #include "src/regexp/regexp-stack.h"
+#include "src/snapshot/embedded-data.h"
 #include "src/unicode.h"
 
 namespace v8 {
 namespace internal {
 
-#ifndef V8_INTERPRETED_REGEXP
 /*
  * This assembler uses the following register assignment convention:
  * - w19     : Used to temporarely store a value before a call to C code.
@@ -101,12 +100,14 @@ namespace internal {
 
 #define __ ACCESS_MASM(masm_)
 
+const int RegExpMacroAssemblerARM64::kRegExpCodeSize;
+
 RegExpMacroAssemblerARM64::RegExpMacroAssemblerARM64(Isolate* isolate,
                                                      Zone* zone, Mode mode,
                                                      int registers_to_save)
     : NativeRegExpMacroAssembler(isolate, zone),
-      masm_(new MacroAssembler(isolate, nullptr, kRegExpCodeSize,
-                               CodeObjectRequired::kYes)),
+      masm_(new MacroAssembler(isolate, CodeObjectRequired::kYes,
+                               NewAssemblerBuffer(kRegExpCodeSize))),
       mode_(mode),
       num_registers_(registers_to_save),
       num_saved_registers_(registers_to_save),
@@ -122,7 +123,6 @@ RegExpMacroAssemblerARM64::RegExpMacroAssemblerARM64(Isolate* isolate,
   __ B(&entry_label_);   // We'll write the entry code later.
   __ Bind(&start_label_);  // And then continue from here.
 }
-
 
 RegExpMacroAssemblerARM64::~RegExpMacroAssemblerARM64() {
   delete masm_;
@@ -1329,7 +1329,7 @@ static T* frame_entry_address(Address re_frame, int frame_offset) {
 int RegExpMacroAssemblerARM64::CheckStackGuardState(
     Address* return_address, Address raw_code, Address re_frame,
     int start_index, const byte** input_start, const byte** input_end) {
-  Code re_code = Code::cast(ObjectPtr(raw_code));
+  Code re_code = Code::cast(Object(raw_code));
   return NativeRegExpMacroAssembler::CheckStackGuardState(
       frame_entry<Isolate*>(re_frame, kIsolate), start_index,
       frame_entry<int>(re_frame, kDirectCall) == 1, return_address, re_code,
@@ -1353,6 +1353,9 @@ void RegExpMacroAssemblerARM64::CheckPosition(int cp_offset,
 // Private methods:
 
 void RegExpMacroAssemblerARM64::CallCheckStackGuardState(Register scratch) {
+  DCHECK(!isolate()->ShouldLoadConstantsFromRootList());
+  DCHECK(!masm_->options().isolate_independent_code);
+
   // Allocate space on the stack to store the return address. The
   // CheckStackGuardState C++ function will override it if the code
   // moved. Allocate extra space for 2 arguments passed by pointers.
@@ -1377,15 +1380,30 @@ void RegExpMacroAssemblerARM64::CallCheckStackGuardState(Register scratch) {
   __ Mov(x1, Operand(masm_->CodeObject()));
 
   // We need to pass a pointer to the return address as first argument.
-  // The DirectCEntry stub will place the return address on the stack before
-  // calling so the stack pointer will point to it.
+  // DirectCEntry will place the return address on the stack before calling so
+  // the stack pointer will point to it.
   __ Mov(x0, sp);
 
+  DCHECK_EQ(scratch, x10);
   ExternalReference check_stack_guard_state =
       ExternalReference::re_check_stack_guard_state(isolate());
   __ Mov(scratch, check_stack_guard_state);
-  DirectCEntryStub stub(isolate());
-  stub.GenerateCall(masm_, scratch);
+
+  if (FLAG_embedded_builtins) {
+    UseScratchRegisterScope temps(masm_);
+    Register scratch = temps.AcquireX();
+
+    EmbeddedData d = EmbeddedData::FromBlob();
+    CHECK(Builtins::IsIsolateIndependent(Builtins::kDirectCEntry));
+    Address entry = d.InstructionStartOfBuiltin(Builtins::kDirectCEntry);
+
+    __ Ldr(scratch, Operand(entry, RelocInfo::OFF_HEAP_TARGET));
+    __ Call(scratch);
+  } else {
+    // TODO(v8:8519): Remove this once embedded builtins are on unconditionally.
+    Handle<Code> code = BUILTIN_CODE(isolate(), DirectCEntry);
+    __ Call(code, RelocInfo::CODE_TARGET);
+  }
 
   // The input string may have been moved in memory, we need to reload it.
   __ Peek(input_start(), kPointerSize);
@@ -1638,8 +1656,6 @@ void RegExpMacroAssemblerARM64::LoadCurrentCharacterUnchecked(int cp_offset,
     }
   }
 }
-
-#endif  // V8_INTERPRETED_REGEXP
 
 }  // namespace internal
 }  // namespace v8

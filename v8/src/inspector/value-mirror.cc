@@ -56,10 +56,14 @@ Response toProtocolValue(v8::Local<v8::Context> context,
   }
   if (value->IsNumber()) {
     double doubleValue = value.As<v8::Number>()->Value();
-    int intValue = static_cast<int>(doubleValue);
-    if (intValue == doubleValue) {
-      *result = protocol::FundamentalValue::create(intValue);
-      return Response::OK();
+    if (doubleValue >= std::numeric_limits<int>::min() &&
+        doubleValue <= std::numeric_limits<int>::max() &&
+        bit_cast<int64_t>(doubleValue) != bit_cast<int64_t>(-0.0)) {
+      int intValue = static_cast<int>(doubleValue);
+      if (intValue == doubleValue) {
+        *result = protocol::FundamentalValue::create(intValue);
+        return Response::OK();
+      }
     }
     *result = protocol::FundamentalValue::create(doubleValue);
     return Response::OK();
@@ -205,7 +209,7 @@ String16 descriptionForError(v8::Local<v8::Context> context,
   if (!object->Get(context, toV8String(isolate, "stack"))
            .ToLocal(&stackValue) ||
       !stackValue->IsString()) {
-    return String16();
+    return className;
   }
   String16 stack = toProtocolString(isolate, stackValue.As<v8::String>());
   String16 description = stack;
@@ -325,9 +329,10 @@ class PrimitiveValueMirror final : public ValueMirror {
   PrimitiveValueMirror(v8::Local<v8::Value> value, const String16& type)
       : m_value(value), m_type(type) {}
 
-  v8::Local<v8::Value> v8Value() override { return m_value; }
-  Response buildRemoteObject(v8::Local<v8::Context> context, WrapMode mode,
-                             std::unique_ptr<RemoteObject>* result) override {
+  v8::Local<v8::Value> v8Value() const override { return m_value; }
+  Response buildRemoteObject(
+      v8::Local<v8::Context> context, WrapMode mode,
+      std::unique_ptr<RemoteObject>* result) const override {
     std::unique_ptr<protocol::Value> protocolValue;
     toProtocolValue(context, m_value, &protocolValue);
     *result = RemoteObject::create()
@@ -339,9 +344,9 @@ class PrimitiveValueMirror final : public ValueMirror {
     return Response::OK();
   }
 
-  void buildEntryPreview(v8::Local<v8::Context> context, int* nameLimit,
-                         int* indexLimit,
-                         std::unique_ptr<ObjectPreview>* preview) override {
+  void buildEntryPreview(
+      v8::Local<v8::Context> context, int* nameLimit, int* indexLimit,
+      std::unique_ptr<ObjectPreview>* preview) const override {
     *preview =
         ObjectPreview::create()
             .setType(m_type)
@@ -355,7 +360,7 @@ class PrimitiveValueMirror final : public ValueMirror {
 
   void buildPropertyPreview(
       v8::Local<v8::Context> context, const String16& name,
-      std::unique_ptr<PropertyPreview>* preview) override {
+      std::unique_ptr<PropertyPreview>* preview) const override {
     *preview = PropertyPreview::create()
                    .setName(name)
                    .setValue(abbreviateString(
@@ -375,10 +380,11 @@ class PrimitiveValueMirror final : public ValueMirror {
 class NumberMirror final : public ValueMirror {
  public:
   explicit NumberMirror(v8::Local<v8::Number> value) : m_value(value) {}
-  v8::Local<v8::Value> v8Value() override { return m_value; }
+  v8::Local<v8::Value> v8Value() const override { return m_value; }
 
-  Response buildRemoteObject(v8::Local<v8::Context> context, WrapMode mode,
-                             std::unique_ptr<RemoteObject>* result) override {
+  Response buildRemoteObject(
+      v8::Local<v8::Context> context, WrapMode mode,
+      std::unique_ptr<RemoteObject>* result) const override {
     bool unserializable = false;
     String16 descriptionValue = description(&unserializable);
     *result = RemoteObject::create()
@@ -392,9 +398,9 @@ class NumberMirror final : public ValueMirror {
     }
     return Response::OK();
   }
-  void buildPropertyPreview(v8::Local<v8::Context> context,
-                            const String16& name,
-                            std::unique_ptr<PropertyPreview>* result) override {
+  void buildPropertyPreview(
+      v8::Local<v8::Context> context, const String16& name,
+      std::unique_ptr<PropertyPreview>* result) const override {
     bool unserializable = false;
     *result = PropertyPreview::create()
                   .setName(name)
@@ -402,9 +408,9 @@ class NumberMirror final : public ValueMirror {
                   .setValue(description(&unserializable))
                   .build();
   }
-  void buildEntryPreview(v8::Local<v8::Context> context, int* nameLimit,
-                         int* indexLimit,
-                         std::unique_ptr<ObjectPreview>* preview) override {
+  void buildEntryPreview(
+      v8::Local<v8::Context> context, int* nameLimit, int* indexLimit,
+      std::unique_ptr<ObjectPreview>* preview) const override {
     bool unserializable = false;
     *preview = ObjectPreview::create()
                    .setType(RemoteObject::TypeEnum::Number)
@@ -415,7 +421,7 @@ class NumberMirror final : public ValueMirror {
   }
 
  private:
-  String16 description(bool* unserializable) {
+  String16 description(bool* unserializable) const {
     *unserializable = true;
     double rawValue = m_value->Value();
     if (std::isnan(rawValue)) return "NaN";
@@ -434,8 +440,9 @@ class BigIntMirror final : public ValueMirror {
  public:
   explicit BigIntMirror(v8::Local<v8::BigInt> value) : m_value(value) {}
 
-  Response buildRemoteObject(v8::Local<v8::Context> context, WrapMode mode,
-                             std::unique_ptr<RemoteObject>* result) override {
+  Response buildRemoteObject(
+      v8::Local<v8::Context> context, WrapMode mode,
+      std::unique_ptr<RemoteObject>* result) const override {
     String16 description = descriptionForBigInt(context, m_value);
     *result = RemoteObject::create()
                   .setType(RemoteObject::TypeEnum::Bigint)
@@ -445,9 +452,10 @@ class BigIntMirror final : public ValueMirror {
     return Response::OK();
   }
 
-  void buildPropertyPreview(
-      v8::Local<v8::Context> context, const String16& name,
-      std::unique_ptr<protocol::Runtime::PropertyPreview>* preview) override {
+  void buildPropertyPreview(v8::Local<v8::Context> context,
+                            const String16& name,
+                            std::unique_ptr<protocol::Runtime::PropertyPreview>*
+                                preview) const override {
     *preview = PropertyPreview::create()
                    .setName(name)
                    .setType(RemoteObject::TypeEnum::Bigint)
@@ -456,9 +464,10 @@ class BigIntMirror final : public ValueMirror {
                    .build();
   }
 
-  void buildEntryPreview(
-      v8::Local<v8::Context> context, int* nameLimit, int* indexLimit,
-      std::unique_ptr<protocol::Runtime::ObjectPreview>* preview) override {
+  void buildEntryPreview(v8::Local<v8::Context> context, int* nameLimit,
+                         int* indexLimit,
+                         std::unique_ptr<protocol::Runtime::ObjectPreview>*
+                             preview) const override {
     *preview = ObjectPreview::create()
                    .setType(RemoteObject::TypeEnum::Bigint)
                    .setDescription(descriptionForBigInt(context, m_value))
@@ -467,7 +476,7 @@ class BigIntMirror final : public ValueMirror {
                    .build();
   }
 
-  v8::Local<v8::Value> v8Value() override { return m_value; }
+  v8::Local<v8::Value> v8Value() const override { return m_value; }
 
  private:
   v8::Local<v8::BigInt> m_value;
@@ -478,8 +487,9 @@ class SymbolMirror final : public ValueMirror {
   explicit SymbolMirror(v8::Local<v8::Value> value)
       : m_symbol(value.As<v8::Symbol>()) {}
 
-  Response buildRemoteObject(v8::Local<v8::Context> context, WrapMode mode,
-                             std::unique_ptr<RemoteObject>* result) override {
+  Response buildRemoteObject(
+      v8::Local<v8::Context> context, WrapMode mode,
+      std::unique_ptr<RemoteObject>* result) const override {
     if (mode == WrapMode::kForceValue) {
       return Response::Error("Object couldn't be returned by value");
     }
@@ -490,9 +500,10 @@ class SymbolMirror final : public ValueMirror {
     return Response::OK();
   }
 
-  void buildPropertyPreview(
-      v8::Local<v8::Context> context, const String16& name,
-      std::unique_ptr<protocol::Runtime::PropertyPreview>* preview) override {
+  void buildPropertyPreview(v8::Local<v8::Context> context,
+                            const String16& name,
+                            std::unique_ptr<protocol::Runtime::PropertyPreview>*
+                                preview) const override {
     *preview = PropertyPreview::create()
                    .setName(name)
                    .setType(RemoteObject::TypeEnum::Symbol)
@@ -501,7 +512,7 @@ class SymbolMirror final : public ValueMirror {
                    .build();
   }
 
-  v8::Local<v8::Value> v8Value() override { return m_symbol; }
+  v8::Local<v8::Value> v8Value() const override { return m_symbol; }
 
  private:
   v8::Local<v8::Symbol> m_symbol;
@@ -530,8 +541,9 @@ class LocationMirror final : public ValueMirror {
                   suspendedLocation.GetColumnNumber());
   }
 
-  Response buildRemoteObject(v8::Local<v8::Context> context, WrapMode mode,
-                             std::unique_ptr<RemoteObject>* result) override {
+  Response buildRemoteObject(
+      v8::Local<v8::Context> context, WrapMode mode,
+      std::unique_ptr<RemoteObject>* result) const override {
     auto location = protocol::DictionaryValue::create();
     location->setString("scriptId", String16::fromInteger(m_scriptId));
     location->setInteger("lineNumber", m_lineNumber);
@@ -544,7 +556,7 @@ class LocationMirror final : public ValueMirror {
                   .build();
     return Response::OK();
   }
-  v8::Local<v8::Value> v8Value() override { return m_value; }
+  v8::Local<v8::Value> v8Value() const override { return m_value; }
 
  private:
   static std::unique_ptr<LocationMirror> create(v8::Local<v8::Value> value,
@@ -577,10 +589,11 @@ class FunctionMirror final : public ValueMirror {
   explicit FunctionMirror(v8::Local<v8::Value> value)
       : m_value(value.As<v8::Function>()) {}
 
-  v8::Local<v8::Value> v8Value() override { return m_value; }
+  v8::Local<v8::Value> v8Value() const override { return m_value; }
 
-  Response buildRemoteObject(v8::Local<v8::Context> context, WrapMode mode,
-                             std::unique_ptr<RemoteObject>* result) override {
+  Response buildRemoteObject(
+      v8::Local<v8::Context> context, WrapMode mode,
+      std::unique_ptr<RemoteObject>* result) const override {
     // TODO(alph): drop this functionality.
     if (mode == WrapMode::kForceValue) {
       std::unique_ptr<protocol::Value> protocolValue;
@@ -601,18 +614,18 @@ class FunctionMirror final : public ValueMirror {
     return Response::OK();
   }
 
-  void buildPropertyPreview(v8::Local<v8::Context> context,
-                            const String16& name,
-                            std::unique_ptr<PropertyPreview>* result) override {
+  void buildPropertyPreview(
+      v8::Local<v8::Context> context, const String16& name,
+      std::unique_ptr<PropertyPreview>* result) const override {
     *result = PropertyPreview::create()
                   .setName(name)
                   .setType(RemoteObject::TypeEnum::Function)
                   .setValue(String16())
                   .build();
   }
-  void buildEntryPreview(v8::Local<v8::Context> context, int* nameLimit,
-                         int* indexLimit,
-                         std::unique_ptr<ObjectPreview>* preview) override {
+  void buildEntryPreview(
+      v8::Local<v8::Context> context, int* nameLimit, int* indexLimit,
+      std::unique_ptr<ObjectPreview>* preview) const override {
     *preview = ObjectPreview::create()
                    .setType(RemoteObject::TypeEnum::Function)
                    .setDescription(descriptionForFunction(context, m_value))
@@ -809,10 +822,11 @@ class ObjectMirror final : public ValueMirror {
         m_hasSubtype(true),
         m_subtype(subtype) {}
 
-  v8::Local<v8::Value> v8Value() override { return m_value; }
+  v8::Local<v8::Value> v8Value() const override { return m_value; }
 
-  Response buildRemoteObject(v8::Local<v8::Context> context, WrapMode mode,
-                             std::unique_ptr<RemoteObject>* result) override {
+  Response buildRemoteObject(
+      v8::Local<v8::Context> context, WrapMode mode,
+      std::unique_ptr<RemoteObject>* result) const override {
     if (mode == WrapMode::kForceValue) {
       std::unique_ptr<protocol::Value> protocolValue;
       Response response = toProtocolValue(context, m_value, &protocolValue);
@@ -842,26 +856,26 @@ class ObjectMirror final : public ValueMirror {
     return Response::OK();
   }
 
-  void buildObjectPreview(v8::Local<v8::Context> context,
-                          bool generatePreviewForTable, int* nameLimit,
-                          int* indexLimit,
-                          std::unique_ptr<ObjectPreview>* result) override {
+  void buildObjectPreview(
+      v8::Local<v8::Context> context, bool generatePreviewForTable,
+      int* nameLimit, int* indexLimit,
+      std::unique_ptr<ObjectPreview>* result) const override {
     buildObjectPreviewInternal(context, false /* forEntry */,
                                generatePreviewForTable, nameLimit, indexLimit,
                                result);
   }
 
-  void buildEntryPreview(v8::Local<v8::Context> context, int* nameLimit,
-                         int* indexLimit,
-                         std::unique_ptr<ObjectPreview>* result) override {
+  void buildEntryPreview(
+      v8::Local<v8::Context> context, int* nameLimit, int* indexLimit,
+      std::unique_ptr<ObjectPreview>* result) const override {
     buildObjectPreviewInternal(context, true /* forEntry */,
                                false /* generatePreviewForTable */, nameLimit,
                                indexLimit, result);
   }
 
-  void buildPropertyPreview(v8::Local<v8::Context> context,
-                            const String16& name,
-                            std::unique_ptr<PropertyPreview>* result) override {
+  void buildPropertyPreview(
+      v8::Local<v8::Context> context, const String16& name,
+      std::unique_ptr<PropertyPreview>* result) const override {
     *result = PropertyPreview::create()
                   .setName(name)
                   .setType(RemoteObject::TypeEnum::Object)
@@ -874,10 +888,10 @@ class ObjectMirror final : public ValueMirror {
   }
 
  private:
-  void buildObjectPreviewInternal(v8::Local<v8::Context> context, bool forEntry,
-                                  bool generatePreviewForTable, int* nameLimit,
-                                  int* indexLimit,
-                                  std::unique_ptr<ObjectPreview>* result) {
+  void buildObjectPreviewInternal(
+      v8::Local<v8::Context> context, bool forEntry,
+      bool generatePreviewForTable, int* nameLimit, int* indexLimit,
+      std::unique_ptr<ObjectPreview>* result) const {
     std::unique_ptr<protocol::Array<PropertyPreview>> properties =
         protocol::Array<PropertyPreview>::create();
     std::unique_ptr<protocol::Array<EntryPreview>> entriesPreview;

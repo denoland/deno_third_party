@@ -59,7 +59,8 @@ class Typer::Visitor : public Reducer {
   explicit Visitor(Typer* typer, LoopVariableOptimizer* induction_vars)
       : typer_(typer),
         induction_vars_(induction_vars),
-        weakened_nodes_(typer->zone()) {}
+        weakened_nodes_(typer->zone()),
+        remembered_types_(typer->zone()) {}
 
   const char* reducer_name() const override { return "Typer"; }
 
@@ -205,6 +206,8 @@ class Typer::Visitor : public Reducer {
   Typer* typer_;
   LoopVariableOptimizer* induction_vars_;
   ZoneSet<NodeId> weakened_nodes_;
+  // TODO(tebbi): remove once chromium:906567 is resolved.
+  ZoneUnorderedMap<std::pair<Node*, int>, Type> remembered_types_;
 
 #define DECLARE_METHOD(x) inline Type Type##x(Node* node);
   DECLARE_METHOD(Start)
@@ -329,12 +332,50 @@ class Typer::Visitor : public Reducer {
       }
 
       if (V8_UNLIKELY(!previous.Is(current))) {
+        AllowHandleDereference allow;
         std::ostringstream ostream;
-        previous.PrintTo(ostream);
-        ostream << " -> ";
-        current.PrintTo(ostream);
-        FATAL("UpdateType error for operator %s:\n%s\n",
-              IrOpcode::Mnemonic(node->opcode()), ostream.str().c_str());
+        node->Print(ostream);
+
+        if (V8_UNLIKELY(node->opcode() == IrOpcode::kNumberAdd)) {
+          ostream << "Previous UpdateType run (inputs first):";
+          for (int i = 0; i < 3; ++i) {
+            ostream << "  ";
+            if (remembered_types_[{node, i}].IsInvalid()) {
+              ostream << "untyped";
+            } else {
+              remembered_types_[{node, i}].PrintTo(ostream);
+            }
+          }
+
+          ostream << "\nCurrent (output) type:  ";
+          previous.PrintTo(ostream);
+
+          ostream << "\nThis UpdateType run (inputs first):";
+          for (int i = 0; i < 2; ++i) {
+            ostream << "  ";
+            Node* input = NodeProperties::GetValueInput(node, i);
+            if (NodeProperties::IsTyped(input)) {
+              NodeProperties::GetType(input).PrintTo(ostream);
+            } else {
+              ostream << "untyped";
+            }
+          }
+          ostream << "  ";
+          current.PrintTo(ostream);
+          ostream << "\n";
+        }
+
+        FATAL("UpdateType error for node %s", ostream.str().c_str());
+      }
+
+      if (V8_UNLIKELY(node->opcode() == IrOpcode::kNumberAdd)) {
+        for (int i = 0; i < 2; ++i) {
+          Node* input = NodeProperties::GetValueInput(node, i);
+          remembered_types_[{node, i}] = NodeProperties::IsTyped(input)
+                                             ? NodeProperties::GetType(input)
+                                             : Type::Invalid();
+        }
+        remembered_types_[{node, 2}] = current;
       }
 
       NodeProperties::SetType(node, current);
@@ -344,6 +385,16 @@ class Typer::Visitor : public Reducer {
       }
       return NoChange();
     } else {
+      if (V8_UNLIKELY(node->opcode() == IrOpcode::kNumberAdd)) {
+        for (int i = 0; i < 2; ++i) {
+          Node* input = NodeProperties::GetValueInput(node, i);
+          remembered_types_[{node, i}] = NodeProperties::IsTyped(input)
+                                             ? NodeProperties::GetType(input)
+                                             : Type::Invalid();
+        }
+        remembered_types_[{node, 2}] = current;
+      }
+
       // No previous type, simply update the type.
       NodeProperties::SetType(node, current);
       return Changed(node);
@@ -448,7 +499,7 @@ Type Typer::Visitor::FalsifyUndefined(ComparisonOutcome outcome, Typer* t) {
 Type Typer::Visitor::BitwiseNot(Type type, Typer* t) {
   type = ToNumeric(type, t);
   if (type.Is(Type::Number())) {
-    return NumberBitwiseXor(type, t->cache_.kSingletonMinusOne, t);
+    return NumberBitwiseXor(type, t->cache_->kSingletonMinusOne, t);
   }
   return Type::Numeric();
 }
@@ -456,7 +507,7 @@ Type Typer::Visitor::BitwiseNot(Type type, Typer* t) {
 Type Typer::Visitor::Decrement(Type type, Typer* t) {
   type = ToNumeric(type, t);
   if (type.Is(Type::Number())) {
-    return NumberSubtract(type, t->cache_.kSingletonOne, t);
+    return NumberSubtract(type, t->cache_->kSingletonOne, t);
   }
   return Type::Numeric();
 }
@@ -464,7 +515,7 @@ Type Typer::Visitor::Decrement(Type type, Typer* t) {
 Type Typer::Visitor::Increment(Type type, Typer* t) {
   type = ToNumeric(type, t);
   if (type.Is(Type::Number())) {
-    return NumberAdd(type, t->cache_.kSingletonOne, t);
+    return NumberAdd(type, t->cache_->kSingletonOne, t);
   }
   return Type::Numeric();
 }
@@ -472,7 +523,7 @@ Type Typer::Visitor::Increment(Type type, Typer* t) {
 Type Typer::Visitor::Negate(Type type, Typer* t) {
   type = ToNumeric(type, t);
   if (type.Is(Type::Number())) {
-    return NumberMultiply(type, t->cache_.kSingletonMinusOne, t);
+    return NumberMultiply(type, t->cache_->kSingletonMinusOne, t);
   }
   return Type::Numeric();
 }
@@ -495,13 +546,13 @@ Type Typer::Visitor::ToBoolean(Type type, Typer* t) {
 Type Typer::Visitor::ToInteger(Type type, Typer* t) {
   // ES6 section 7.1.4 ToInteger ( argument )
   type = ToNumber(type, t);
-  if (type.Is(t->cache_.kIntegerOrMinusZero)) return type;
-  if (type.Is(t->cache_.kIntegerOrMinusZeroOrNaN)) {
+  if (type.Is(t->cache_->kIntegerOrMinusZero)) return type;
+  if (type.Is(t->cache_->kIntegerOrMinusZeroOrNaN)) {
     return Type::Union(
-        Type::Intersect(type, t->cache_.kIntegerOrMinusZero, t->zone()),
-        t->cache_.kSingletonZero, t->zone());
+        Type::Intersect(type, t->cache_->kIntegerOrMinusZero, t->zone()),
+        t->cache_->kSingletonZero, t->zone());
   }
-  return t->cache_.kIntegerOrMinusZero;
+  return t->cache_->kIntegerOrMinusZero;
 }
 
 
@@ -700,7 +751,7 @@ Type Typer::Visitor::TypeParameter(Node* node) {
       return Type::Union(Type::Receiver(), Type::Undefined(), typer_->zone());
     }
   } else if (index == Linkage::GetJSCallArgCountParamIndex(parameter_count)) {
-    return Type::Range(0.0, Code::kMaxArguments, typer_->zone());
+    return Type::Range(0.0, FixedArray::kMaxLength, typer_->zone());
   } else if (index == Linkage::GetJSCallContextParamIndex(parameter_count)) {
     return Type::OtherInternal();
   }
@@ -763,8 +814,8 @@ Type Typer::Visitor::TypeInductionVariablePhi(Node* node) {
 
   // We only handle integer induction variables (otherwise ranges
   // do not apply and we cannot do anything).
-  if (!initial_type.Is(typer_->cache_.kInteger) ||
-      !increment_type.Is(typer_->cache_.kInteger)) {
+  if (!initial_type.Is(typer_->cache_->kInteger) ||
+      !increment_type.Is(typer_->cache_->kInteger)) {
     // Fallback to normal phi typing, but ensure monotonicity.
     // (Unfortunately, without baking in the previous type, monotonicity might
     // be violated because we might not yet have retyped the incrementing
@@ -780,7 +831,7 @@ Type Typer::Visitor::TypeInductionVariablePhi(Node* node) {
   // If we do not have enough type information for the initial value or
   // the increment, just return the initial value's type.
   if (initial_type.IsNone() ||
-      increment_type.Is(typer_->cache_.kSingletonZero)) {
+      increment_type.Is(typer_->cache_->kSingletonZero)) {
     return initial_type;
   }
 
@@ -811,7 +862,7 @@ Type Typer::Visitor::TypeInductionVariablePhi(Node* node) {
     for (auto bound : induction_var->upper_bounds()) {
       Type bound_type = TypeOrNone(bound.bound);
       // If the type is not an integer, just skip the bound.
-      if (!bound_type.Is(typer_->cache_.kInteger)) continue;
+      if (!bound_type.Is(typer_->cache_->kInteger)) continue;
       // If the type is not inhabited, then we can take the initial value.
       if (bound_type.IsNone()) {
         max = initial_type.Max();
@@ -831,7 +882,7 @@ Type Typer::Visitor::TypeInductionVariablePhi(Node* node) {
     for (auto bound : induction_var->lower_bounds()) {
       Type bound_type = TypeOrNone(bound.bound);
       // If the type is not an integer, just skip the bound.
-      if (!bound_type.Is(typer_->cache_.kInteger)) continue;
+      if (!bound_type.Is(typer_->cache_->kInteger)) continue;
       // If the type is not inhabited, then we can take the initial value.
       if (bound_type.IsNone()) {
         min = initial_type.Min();
@@ -848,7 +899,7 @@ Type Typer::Visitor::TypeInductionVariablePhi(Node* node) {
   } else {
     // Shortcut: If the increment can be both positive and negative,
     // the variable can go arbitrarily far, so just return integer.
-    return typer_->cache_.kInteger;
+    return typer_->cache_->kInteger;
   }
   if (FLAG_trace_turbo_loop) {
     StdoutStream{} << std::setprecision(10) << "Loop ("
@@ -1288,7 +1339,7 @@ Type Typer::Visitor::Weaken(Node* node, Type current_type, Type previous_type) {
   STATIC_ASSERT(arraysize(kWeakenMinLimits) == arraysize(kWeakenMaxLimits));
 
   // If the types have nothing to do with integers, return the types.
-  Type const integer = typer_->cache_.kInteger;
+  Type const integer = typer_->cache_->kInteger;
   if (!previous_type.Maybe(integer)) {
     return current_type;
   }
@@ -1449,7 +1500,7 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     case BuiltinFunctionId::kMathCeil:
     case BuiltinFunctionId::kMathRound:
     case BuiltinFunctionId::kMathTrunc:
-      return t->cache_.kIntegerOrMinusZeroOrNaN;
+      return t->cache_->kIntegerOrMinusZeroOrNaN;
     // Unary math functions.
     case BuiltinFunctionId::kMathAbs:
     case BuiltinFunctionId::kMathExp:
@@ -1473,7 +1524,7 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     case BuiltinFunctionId::kMathTan:
       return Type::Number();
     case BuiltinFunctionId::kMathSign:
-      return t->cache_.kMinusOneToOneOrMinusZeroOrNaN;
+      return t->cache_->kMinusOneToOneOrMinusZeroOrNaN;
     // Binary math functions.
     case BuiltinFunctionId::kMathAtan2:
     case BuiltinFunctionId::kMathPow:
@@ -1483,29 +1534,29 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     case BuiltinFunctionId::kMathImul:
       return Type::Signed32();
     case BuiltinFunctionId::kMathClz32:
-      return t->cache_.kZeroToThirtyTwo;
+      return t->cache_->kZeroToThirtyTwo;
     // Date functions.
     case BuiltinFunctionId::kDateNow:
-      return t->cache_.kTimeValueType;
+      return t->cache_->kTimeValueType;
     case BuiltinFunctionId::kDateGetDate:
-      return t->cache_.kJSDateDayType;
+      return t->cache_->kJSDateDayType;
     case BuiltinFunctionId::kDateGetDay:
-      return t->cache_.kJSDateWeekdayType;
+      return t->cache_->kJSDateWeekdayType;
     case BuiltinFunctionId::kDateGetFullYear:
-      return t->cache_.kJSDateYearType;
+      return t->cache_->kJSDateYearType;
     case BuiltinFunctionId::kDateGetHours:
-      return t->cache_.kJSDateHourType;
+      return t->cache_->kJSDateHourType;
     case BuiltinFunctionId::kDateGetMilliseconds:
       return Type::Union(Type::Range(0.0, 999.0, t->zone()), Type::NaN(),
                          t->zone());
     case BuiltinFunctionId::kDateGetMinutes:
-      return t->cache_.kJSDateMinuteType;
+      return t->cache_->kJSDateMinuteType;
     case BuiltinFunctionId::kDateGetMonth:
-      return t->cache_.kJSDateMonthType;
+      return t->cache_->kJSDateMonthType;
     case BuiltinFunctionId::kDateGetSeconds:
-      return t->cache_.kJSDateSecondType;
+      return t->cache_->kJSDateSecondType;
     case BuiltinFunctionId::kDateGetTime:
-      return t->cache_.kJSDateValueType;
+      return t->cache_->kJSDateValueType;
 
     // Symbol functions.
     case BuiltinFunctionId::kSymbolConstructor:
@@ -1530,7 +1581,7 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     case BuiltinFunctionId::kNumberParseFloat:
       return Type::Number();
     case BuiltinFunctionId::kNumberParseInt:
-      return t->cache_.kIntegerOrMinusZeroOrNaN;
+      return t->cache_->kIntegerOrMinusZeroOrNaN;
     case BuiltinFunctionId::kNumberToString:
       return Type::String();
 
@@ -1615,7 +1666,7 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     case BuiltinFunctionId::kArrayMap:
       return Type::Receiver();
     case BuiltinFunctionId::kArrayPush:
-      return t->cache_.kPositiveSafeInteger;
+      return t->cache_->kPositiveSafeInteger;
     case BuiltinFunctionId::kArrayReverse:
     case BuiltinFunctionId::kArraySlice:
       return Type::Receiver();
@@ -1624,7 +1675,7 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     case BuiltinFunctionId::kArraySplice:
       return Type::Receiver();
     case BuiltinFunctionId::kArrayUnshift:
-      return t->cache_.kPositiveSafeInteger;
+      return t->cache_->kPositiveSafeInteger;
 
     // ArrayBuffer functions.
     case BuiltinFunctionId::kArrayBufferIsView:
@@ -1786,7 +1837,7 @@ Type Typer::Visitor::TypeJSForInPrepare(Node* node) {
   Type const cache_type =
       Type::Union(Type::SignedSmall(), Type::OtherInternal(), zone());
   Type const cache_array = Type::OtherInternal();
-  Type const cache_length = typer_->cache_.kFixedArrayLengthType;
+  Type const cache_length = typer_->cache_->kFixedArrayLengthType;
   return Type::Tuple(cache_type, cache_array, cache_length, zone());
 }
 
@@ -1961,7 +2012,7 @@ Type Typer::Visitor::TypeStringToUpperCaseIntl(Node* node) {
 }
 
 Type Typer::Visitor::TypeStringCharCodeAt(Node* node) {
-  return typer_->cache_.kUint16;
+  return typer_->cache_->kUint16;
 }
 
 Type Typer::Visitor::TypeStringCodePointAt(Node* node) {
@@ -1981,13 +2032,13 @@ Type Typer::Visitor::TypeStringIndexOf(Node* node) {
 }
 
 Type Typer::Visitor::TypeStringLength(Node* node) {
-  return typer_->cache_.kStringLengthType;
+  return typer_->cache_->kStringLengthType;
 }
 
 Type Typer::Visitor::TypeStringSubstring(Node* node) { return Type::String(); }
 
 Type Typer::Visitor::TypePoisonIndex(Node* node) {
-  return Type::Union(Operand(node, 0), typer_->cache_.kSingletonZero, zone());
+  return Type::Union(Operand(node, 0), typer_->cache_->kSingletonZero, zone());
 }
 
 Type Typer::Visitor::TypeCheckBounds(Node* node) {
@@ -2080,6 +2131,8 @@ Type Typer::Visitor::TypeLoadField(Node* node) {
   return FieldAccessOf(node->op()).type;
 }
 
+Type Typer::Visitor::TypeLoadMessage(Node* node) { return Type::Any(); }
+
 Type Typer::Visitor::TypeLoadElement(Node* node) {
   return ElementAccessOf(node->op()).type;
 }
@@ -2088,7 +2141,7 @@ Type Typer::Visitor::TypeLoadTypedElement(Node* node) {
   switch (ExternalArrayTypeOf(node->op())) {
 #define TYPED_ARRAY_CASE(ElemType, type, TYPE, ctype) \
   case kExternal##ElemType##Array:                    \
-    return typer_->cache_.k##ElemType;
+    return typer_->cache_->k##ElemType;
     TYPED_ARRAYS(TYPED_ARRAY_CASE)
 #undef TYPED_ARRAY_CASE
   }
@@ -2099,7 +2152,7 @@ Type Typer::Visitor::TypeLoadDataViewElement(Node* node) {
   switch (ExternalArrayTypeOf(node->op())) {
 #define TYPED_ARRAY_CASE(ElemType, type, TYPE, ctype) \
   case kExternal##ElemType##Array:                    \
-    return typer_->cache_.k##ElemType;
+    return typer_->cache_->k##ElemType;
     TYPED_ARRAYS(TYPED_ARRAY_CASE)
 #undef TYPED_ARRAY_CASE
   }
@@ -2107,6 +2160,7 @@ Type Typer::Visitor::TypeLoadDataViewElement(Node* node) {
 }
 
 Type Typer::Visitor::TypeStoreField(Node* node) { UNREACHABLE(); }
+Type Typer::Visitor::TypeStoreMessage(Node* node) { UNREACHABLE(); }
 
 Type Typer::Visitor::TypeStoreElement(Node* node) { UNREACHABLE(); }
 
@@ -2213,7 +2267,7 @@ Type Typer::Visitor::TypeObjectIsUndetectable(Node* node) {
 }
 
 Type Typer::Visitor::TypeArgumentsLength(Node* node) {
-  return TypeCache::Get().kArgumentsLengthType;
+  return TypeCache::Get()->kArgumentsLengthType;
 }
 
 Type Typer::Visitor::TypeArgumentsFrame(Node* node) {

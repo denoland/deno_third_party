@@ -2181,7 +2181,7 @@ void InstructionSelector::EmitPrepareArguments(
       if (input.node == nullptr) continue;
       num_slots += input.location.GetType().representation() ==
                            MachineRepresentation::kFloat64
-                       ? kDoubleSize / kPointerSize
+                       ? kDoubleSize / kSystemPointerSize
                        : 1;
     }
     Emit(kS390_StackClaim, g.NoOutput(), g.TempImmediate(num_slots));
@@ -2192,7 +2192,7 @@ void InstructionSelector::EmitPrepareArguments(
              g.TempImmediate(slot));
         slot += input.location.GetType().representation() ==
                         MachineRepresentation::kFloat64
-                    ? (kDoubleSize / kPointerSize)
+                    ? (kDoubleSize / kSystemPointerSize)
                     : 1;
       }
     }
@@ -2743,6 +2743,8 @@ void InstructionSelector::VisitI8x16ShrS(Node* node) { UNIMPLEMENTED(); }
 void InstructionSelector::VisitI8x16ShrU(Node* node) { UNIMPLEMENTED(); }
 
 void InstructionSelector::VisitI8x16Mul(Node* node) { UNIMPLEMENTED(); }
+
+void InstructionSelector::VisitS8x16Shuffle(Node* node) { UNIMPLEMENTED(); }
 
 // static
 MachineOperatorBuilder::Flags

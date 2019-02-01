@@ -74,7 +74,7 @@ void TypedArrayBuiltinsAssembler::SetupTypedArray(TNode<JSTypedArray> holder,
                                  byte_length,
                                  MachineType::PointerRepresentation());
   for (int offset = JSTypedArray::kHeaderSize;
-       offset < JSTypedArray::kSizeWithEmbedderFields; offset += kPointerSize) {
+       offset < JSTypedArray::kSizeWithEmbedderFields; offset += kTaggedSize) {
     StoreObjectField(holder, offset, SmiConstant(0));
   }
 }
@@ -103,24 +103,6 @@ void TypedArrayBuiltinsAssembler::AttachBuffer(TNode<JSTypedArray> holder,
       MachineType::PointerRepresentation());
 
   StoreObjectField(holder, JSObject::kElementsOffset, elements);
-}
-
-TF_BUILTIN(TypedArrayInitializeWithBuffer, TypedArrayBuiltinsAssembler) {
-  TNode<JSTypedArray> holder = CAST(Parameter(Descriptor::kHolder));
-  TNode<Smi> length = CAST(Parameter(Descriptor::kLength));
-  TNode<JSArrayBuffer> buffer = CAST(Parameter(Descriptor::kBuffer));
-  TNode<Smi> element_size = CAST(Parameter(Descriptor::kElementSize));
-  TNode<Number> byte_offset = CAST(Parameter(Descriptor::kByteOffset));
-
-  TNode<Map> fixed_typed_map = LoadMapForType(holder);
-
-  // SmiMul returns a heap number in case of Smi overflow.
-  TNode<Number> byte_length = SmiMul(length, element_size);
-
-  SetupTypedArray(holder, length, ChangeNonnegativeNumberToUintPtr(byte_offset),
-                  ChangeNonnegativeNumberToUintPtr(byte_length));
-  AttachBuffer(holder, buffer, fixed_typed_map, length, byte_offset);
-  Return(UndefinedConstant());
 }
 
 TF_BUILTIN(TypedArrayInitialize, TypedArrayBuiltinsAssembler) {
@@ -185,18 +167,18 @@ TF_BUILTIN(TypedArrayInitialize, TypedArrayBuiltinsAssembler) {
                                    empty_fixed_array);
     // Setup the ArrayBuffer.
     //  - Set BitField to 0.
-    //  - Set IsExternal and IsNeuterable bits of BitFieldSlot.
+    //  - Set IsExternal and IsDetachable bits of BitFieldSlot.
     //  - Set the byte_length field to byte_length.
     //  - Set backing_store to null/Smi(0).
     //  - Set all embedder fields to Smi(0).
-    if (FIELD_SIZE(JSArrayBuffer::kOptionalPaddingOffset)) {
+    if (FIELD_SIZE(JSArrayBuffer::kOptionalPaddingOffset) != 0) {
       DCHECK_EQ(4, FIELD_SIZE(JSArrayBuffer::kOptionalPaddingOffset));
       StoreObjectFieldNoWriteBarrier(
           buffer, JSArrayBuffer::kOptionalPaddingOffset, Int32Constant(0),
           MachineRepresentation::kWord32);
     }
     int32_t bitfield_value = (1 << JSArrayBuffer::IsExternalBit::kShift) |
-                             (1 << JSArrayBuffer::IsNeuterableBit::kShift);
+                             (1 << JSArrayBuffer::IsDetachableBit::kShift);
     StoreObjectFieldNoWriteBarrier(buffer, JSArrayBuffer::kBitFieldOffset,
                                    Int32Constant(bitfield_value),
                                    MachineRepresentation::kWord32);
@@ -317,232 +299,6 @@ TF_BUILTIN(TypedArrayInitialize, TypedArrayBuiltinsAssembler) {
   Return(UndefinedConstant());
 }
 
-// ES6 #sec-typedarray-length
-void TypedArrayBuiltinsAssembler::ConstructByLength(TNode<Context> context,
-                                                    TNode<JSTypedArray> holder,
-                                                    TNode<Object> length,
-                                                    TNode<Smi> element_size) {
-  // TODO(7881): support larger-than-smi typed array lengths
-  CSA_ASSERT(this, TaggedIsPositiveSmi(element_size));
-
-  Label invalid_length(this, Label::kDeferred), done(this);
-
-  TNode<Number> converted_length =
-      ToInteger_Inline(context, length, CodeStubAssembler::kTruncateMinusZero);
-
-  // The maximum length of a TypedArray is MaxSmi().
-  // Note: this is not per spec, but rather a constraint of our current
-  // representation (which uses Smis).
-  // TODO(7881): support larger-than-smi typed array lengths
-  GotoIf(TaggedIsNotSmi(converted_length), &invalid_length);
-  // The goto above ensures that byte_length is a Smi.
-  TNode<Smi> smi_converted_length = CAST(converted_length);
-  GotoIf(SmiLessThan(smi_converted_length, SmiConstant(0)), &invalid_length);
-
-  Node* initialize = TrueConstant();
-  TNode<JSFunction> default_constructor = CAST(LoadContextElement(
-      LoadNativeContext(context), Context::ARRAY_BUFFER_FUN_INDEX));
-  CallBuiltin(Builtins::kTypedArrayInitialize, context, holder,
-              converted_length, element_size, initialize, default_constructor);
-  Goto(&done);
-
-  BIND(&invalid_length);
-  {
-    ThrowRangeError(context, MessageTemplate::kInvalidTypedArrayLength,
-                    converted_length);
-  }
-
-  BIND(&done);
-}
-
-// ES6 #sec-typedarray-buffer-byteoffset-length
-void TypedArrayBuiltinsAssembler::ConstructByArrayBuffer(
-    TNode<Context> context, TNode<JSTypedArray> holder,
-    TNode<JSArrayBuffer> buffer, TNode<Object> byte_offset,
-    TNode<Object> length, TNode<Smi> element_size) {
-  CSA_ASSERT(this, TaggedIsPositiveSmi(element_size));
-
-  VARIABLE(new_byte_length, MachineRepresentation::kTagged, SmiConstant(0));
-  VARIABLE(offset, MachineRepresentation::kTagged, SmiConstant(0));
-
-  Label start_offset_error(this, Label::kDeferred),
-      byte_length_error(this, Label::kDeferred),
-      invalid_offset_error(this, Label::kDeferred);
-  Label offset_is_smi(this), offset_not_smi(this, Label::kDeferred),
-      check_length(this), call_init(this), invalid_length(this),
-      length_undefined(this), length_defined(this), done(this);
-
-  GotoIf(IsUndefined(byte_offset), &check_length);
-
-  offset.Bind(ToInteger_Inline(context, byte_offset,
-                               CodeStubAssembler::kTruncateMinusZero));
-  Branch(TaggedIsSmi(offset.value()), &offset_is_smi, &offset_not_smi);
-
-  // Check that the offset is a multiple of the element size.
-  BIND(&offset_is_smi);
-  {
-    TNode<Smi> smi_offset = CAST(offset.value());
-    GotoIf(SmiEqual(smi_offset, SmiConstant(0)), &check_length);
-    GotoIf(SmiLessThan(smi_offset, SmiConstant(0)), &invalid_length);
-    TNode<Number> remainder = SmiMod(smi_offset, element_size);
-    // TODO(ishell): remove <Object, Object>
-    Branch(WordEqual<Object, Object>(remainder, SmiConstant(0)), &check_length,
-           &start_offset_error);
-  }
-  BIND(&offset_not_smi);
-  {
-    GotoIf(IsTrue(CallBuiltin(Builtins::kLessThan, context, offset.value(),
-                              SmiConstant(0))),
-           &invalid_length);
-    Node* remainder =
-        CallBuiltin(Builtins::kModulus, context, offset.value(), element_size);
-    // Remainder can be a heap number.
-    Branch(IsTrue(CallBuiltin(Builtins::kEqual, context, remainder,
-                              SmiConstant(0))),
-           &check_length, &start_offset_error);
-  }
-
-  BIND(&check_length);
-  Branch(IsUndefined(length), &length_undefined, &length_defined);
-
-  BIND(&length_undefined);
-  {
-    ThrowIfArrayBufferIsDetached(context, buffer, "Construct");
-    TNode<Number> buffer_byte_length = ChangeUintPtrToTagged(
-        LoadObjectField<UintPtrT>(buffer, JSArrayBuffer::kByteLengthOffset));
-
-    Node* remainder = CallBuiltin(Builtins::kModulus, context,
-                                  buffer_byte_length, element_size);
-    // Remainder can be a heap number.
-    GotoIf(IsFalse(CallBuiltin(Builtins::kEqual, context, remainder,
-                               SmiConstant(0))),
-           &byte_length_error);
-
-    new_byte_length.Bind(CallBuiltin(Builtins::kSubtract, context,
-                                     buffer_byte_length, offset.value()));
-
-    Branch(IsTrue(CallBuiltin(Builtins::kLessThan, context,
-                              new_byte_length.value(), SmiConstant(0))),
-           &invalid_offset_error, &call_init);
-  }
-
-  BIND(&length_defined);
-  {
-    TNode<Smi> new_length = ToSmiIndex(length, context, &invalid_length);
-    ThrowIfArrayBufferIsDetached(context, buffer, "Construct");
-    new_byte_length.Bind(SmiMul(new_length, element_size));
-    // Reading the byte length must come after the ToIndex operation, which
-    // could cause the buffer to become detached.
-    TNode<Number> buffer_byte_length = ChangeUintPtrToTagged(
-        LoadObjectField<UintPtrT>(buffer, JSArrayBuffer::kByteLengthOffset));
-
-    Node* end = CallBuiltin(Builtins::kAdd, context, offset.value(),
-                            new_byte_length.value());
-
-    Branch(IsTrue(CallBuiltin(Builtins::kGreaterThan, context, end,
-                              buffer_byte_length)),
-           &invalid_length, &call_init);
-  }
-
-  BIND(&call_init);
-  {
-    TNode<Object> raw_length = CallBuiltin(
-        Builtins::kDivide, context, new_byte_length.value(), element_size);
-    // Force the result into a Smi, or throw a range error if it doesn't fit.
-    TNode<Smi> new_length = ToSmiIndex(raw_length, context, &invalid_length);
-
-    CallBuiltin(Builtins::kTypedArrayInitializeWithBuffer, context, holder,
-                new_length, buffer, element_size, offset.value());
-    Goto(&done);
-  }
-
-  BIND(&invalid_offset_error);
-  { ThrowRangeError(context, MessageTemplate::kInvalidOffset, byte_offset); }
-
-  BIND(&start_offset_error);
-  {
-    Node* holder_map = LoadMap(holder);
-    Node* problem_string = StringConstant("start offset");
-    CallRuntime(Runtime::kThrowInvalidTypedArrayAlignment, context, holder_map,
-                problem_string);
-
-    Unreachable();
-  }
-
-  BIND(&byte_length_error);
-  {
-    Node* holder_map = LoadMap(holder);
-    Node* problem_string = StringConstant("byte length");
-    CallRuntime(Runtime::kThrowInvalidTypedArrayAlignment, context, holder_map,
-                problem_string);
-
-    Unreachable();
-  }
-
-  BIND(&invalid_length);
-  {
-    ThrowRangeError(context, MessageTemplate::kInvalidTypedArrayLength, length);
-  }
-
-  BIND(&done);
-}
-
-void TypedArrayBuiltinsAssembler::ConstructByTypedArray(
-    TNode<Context> context, TNode<JSTypedArray> holder,
-    TNode<JSTypedArray> typed_array, TNode<Smi> element_size) {
-  CSA_ASSERT(this, TaggedIsPositiveSmi(element_size));
-
-  TNode<JSFunction> const default_constructor = CAST(LoadContextElement(
-      LoadNativeContext(context), Context::ARRAY_BUFFER_FUN_INDEX));
-
-  Label construct(this), if_detached(this), if_notdetached(this),
-      check_for_sab(this), if_buffernotshared(this), check_prototype(this),
-      done(this);
-  TVARIABLE(JSReceiver, buffer_constructor, default_constructor);
-
-  TNode<JSArrayBuffer> source_buffer = LoadObjectField<JSArrayBuffer>(
-      typed_array, JSArrayBufferView::kBufferOffset);
-  Branch(IsDetachedBuffer(source_buffer), &if_detached, &if_notdetached);
-
-  // TODO(petermarshall): Throw on detached typedArray.
-  TVARIABLE(Smi, source_length);
-  BIND(&if_detached);
-  source_length = SmiConstant(0);
-  Goto(&check_for_sab);
-
-  BIND(&if_notdetached);
-  source_length = LoadJSTypedArrayLength(typed_array);
-  Goto(&check_for_sab);
-
-  // The spec requires that constructing a typed array using a SAB-backed typed
-  // array use the ArrayBuffer constructor, not the species constructor. See
-  // https://tc39.github.io/ecma262/#sec-typedarray-typedarray.
-  BIND(&check_for_sab);
-  TNode<Uint32T> bitfield =
-      LoadObjectField<Uint32T>(source_buffer, JSArrayBuffer::kBitFieldOffset);
-  Branch(IsSetWord32<JSArrayBuffer::IsSharedBit>(bitfield), &construct,
-         &if_buffernotshared);
-
-  BIND(&if_buffernotshared);
-  {
-    buffer_constructor =
-        SpeciesConstructor(context, source_buffer, default_constructor);
-    // TODO(petermarshall): Throw on detached typedArray.
-    GotoIfNot(IsDetachedBuffer(source_buffer), &construct);
-    source_length = SmiConstant(0);
-    Goto(&construct);
-  }
-
-  BIND(&construct);
-  {
-    ConstructByArrayLike(context, holder, typed_array, source_length.value(),
-                         element_size, buffer_constructor.value());
-    Goto(&done);
-  }
-
-  BIND(&done);
-}
-
 Node* TypedArrayBuiltinsAssembler::LoadDataPtr(Node* typed_array) {
   CSA_ASSERT(this, IsJSTypedArray(typed_array));
   Node* elements = LoadElements(typed_array);
@@ -573,197 +329,10 @@ TNode<BoolT> TypedArrayBuiltinsAssembler::ByteLengthIsValid(
   return is_valid.value();
 }
 
-void TypedArrayBuiltinsAssembler::ConstructByArrayLike(
-    TNode<Context> context, TNode<JSTypedArray> holder,
-    TNode<HeapObject> array_like, TNode<Object> initial_length,
-    TNode<Smi> element_size, TNode<JSReceiver> buffer_constructor) {
-  Label invalid_length(this, Label::kDeferred), fill(this), fast_copy(this),
-      detached_check(this), done(this);
-
-  // The caller has looked up length on array_like, which is observable.
-  TNode<Smi> length = ToSmiLength(initial_length, context, &invalid_length);
-
-  Node* initialize = FalseConstant();
-  CallBuiltin(Builtins::kTypedArrayInitialize, context, holder, length,
-              element_size, initialize, buffer_constructor);
-
-  GotoIf(IsJSTypedArray(array_like), &detached_check);
-  Goto(&fill);
-
-  BIND(&detached_check);
-  ThrowIfArrayBufferViewBufferIsDetached(context, CAST(array_like),
-                                         "Construct");
-  Goto(&fill);
-
-  BIND(&fill);
-  GotoIf(SmiEqual(length, SmiConstant(0)), &done);
-  TNode<Int32T> holder_kind = LoadElementsKind(holder);
-  TNode<Int32T> source_kind = LoadElementsKind(array_like);
-  GotoIf(Word32Equal(holder_kind, source_kind), &fast_copy);
-
-  // Copy using the elements accessor.
-  CallRuntime(Runtime::kTypedArrayCopyElements, context, holder, array_like,
-              length);
-  Goto(&done);
-
-  BIND(&fast_copy);
-  {
-    Node* holder_data_ptr = LoadDataPtr(holder);
-    Node* source_data_ptr = LoadDataPtr(array_like);
-
-    // Calculate the byte length. We shouldn't be trying to copy if the typed
-    // array was neutered.
-    CSA_ASSERT(this, SmiNotEqual(length, SmiConstant(0)));
-    CSA_ASSERT(this, Word32Equal(IsDetachedBuffer(LoadObjectField(
-                                     array_like, JSTypedArray::kBufferOffset)),
-                                 Int32Constant(0)));
-
-    TNode<Number> byte_length = SmiMul(length, element_size);
-    CSA_ASSERT(this, ByteLengthIsValid(byte_length));
-    TNode<UintPtrT> byte_length_intptr =
-        ChangeNonnegativeNumberToUintPtr(byte_length);
-    CSA_ASSERT(this, UintPtrLessThanOrEqual(
-                         byte_length_intptr,
-                         IntPtrConstant(FixedTypedArrayBase::kMaxByteLength)));
-
-    Node* memcpy = ExternalConstant(ExternalReference::libc_memcpy_function());
-    CallCFunction3(MachineType::AnyTagged(), MachineType::Pointer(),
-                   MachineType::Pointer(), MachineType::UintPtr(), memcpy,
-                   holder_data_ptr, source_data_ptr, byte_length_intptr);
-    Goto(&done);
-  }
-
-  BIND(&invalid_length);
-  {
-    ThrowRangeError(context, MessageTemplate::kInvalidTypedArrayLength,
-                    initial_length);
-  }
-
-  BIND(&done);
-}
-
-void TypedArrayBuiltinsAssembler::ConstructByIterable(
-    TNode<Context> context, TNode<JSTypedArray> holder,
-    TNode<JSReceiver> iterable, TNode<JSReceiver> iterator_fn,
-    TNode<Smi> element_size) {
-  Label fast_path(this), slow_path(this), done(this);
-  CSA_ASSERT(this, IsCallable(iterator_fn));
-
-  TNode<JSArray> array_like =
-      CAST(CallBuiltin(Builtins::kIterableToListMayPreserveHoles, context,
-                       iterable, iterator_fn));
-  TNode<Object> initial_length = LoadJSArrayLength(array_like);
-
-  TNode<JSFunction> default_constructor = CAST(LoadContextElement(
-      LoadNativeContext(context), Context::ARRAY_BUFFER_FUN_INDEX));
-  ConstructByArrayLike(context, holder, array_like, initial_length,
-                       element_size, default_constructor);
-}
-
 TF_BUILTIN(TypedArrayBaseConstructor, TypedArrayBuiltinsAssembler) {
   TNode<Context> context = CAST(Parameter(Descriptor::kContext));
   ThrowTypeError(context, MessageTemplate::kConstructAbstractClass,
                  "TypedArray");
-}
-
-// ES #sec-typedarray-constructors
-TF_BUILTIN(CreateTypedArray, TypedArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<JSFunction> target = CAST(Parameter(Descriptor::kTarget));
-  TNode<JSReceiver> new_target = CAST(Parameter(Descriptor::kNewTarget));
-  TNode<Object> arg1 = CAST(Parameter(Descriptor::kArg1));
-  TNode<Object> arg2 = CAST(Parameter(Descriptor::kArg2));
-  TNode<Object> arg3 = CAST(Parameter(Descriptor::kArg3));
-
-  CSA_ASSERT(this, IsConstructor(target));
-  CSA_ASSERT(this, IsJSReceiver(new_target));
-
-  Label if_arg1isbuffer(this), if_arg1istypedarray(this),
-      if_arg1isreceiver(this), if_arg1isnumber(this), return_result(this);
-
-  ConstructorBuiltinsAssembler constructor_assembler(this->state());
-  TNode<JSTypedArray> result = CAST(
-      constructor_assembler.EmitFastNewObject(context, target, new_target));
-  // We need to set the byte_offset / byte_length to some sane values
-  // to keep the heap verifier happy.
-  // TODO(bmeurer): Fix this initialization to not use EmitFastNewObject,
-  // which causes the problem, since it puts Undefined into all slots of
-  // the object even though that doesn't make any sense for these fields.
-  StoreObjectFieldNoWriteBarrier(result, JSTypedArray::kByteOffsetOffset,
-                                 UintPtrConstant(0),
-                                 MachineType::PointerRepresentation());
-  StoreObjectFieldNoWriteBarrier(result, JSTypedArray::kByteLengthOffset,
-                                 UintPtrConstant(0),
-                                 MachineType::PointerRepresentation());
-
-  TNode<Smi> element_size =
-      SmiTag(GetTypedArrayElementSize(LoadElementsKind(result)));
-
-  GotoIf(TaggedIsSmi(arg1), &if_arg1isnumber);
-  TNode<HeapObject> arg1_heap_object = UncheckedCast<HeapObject>(arg1);
-  GotoIf(IsJSArrayBuffer(arg1_heap_object), &if_arg1isbuffer);
-  GotoIf(IsJSTypedArray(arg1_heap_object), &if_arg1istypedarray);
-  GotoIf(IsJSReceiver(arg1_heap_object), &if_arg1isreceiver);
-  Goto(&if_arg1isnumber);
-
-  // https://tc39.github.io/ecma262/#sec-typedarray-buffer-byteoffset-length
-  BIND(&if_arg1isbuffer);
-  {
-    ConstructByArrayBuffer(context, result, CAST(arg1), arg2, arg3,
-                           element_size);
-    Goto(&return_result);
-  }
-
-  // https://tc39.github.io/ecma262/#sec-typedarray-typedarray
-  BIND(&if_arg1istypedarray);
-  {
-    TNode<JSTypedArray> typed_array = CAST(arg1_heap_object);
-    ConstructByTypedArray(context, result, typed_array, element_size);
-    Goto(&return_result);
-  }
-
-  // https://tc39.github.io/ecma262/#sec-typedarray-object
-  BIND(&if_arg1isreceiver);
-  {
-    Label if_iteratorundefined(this), if_iteratornotcallable(this);
-    // Get iterator symbol
-    TNode<Object> iteratorFn = CAST(GetMethod(
-        context, arg1_heap_object, isolate()->factory()->iterator_symbol(),
-        &if_iteratorundefined));
-    GotoIf(TaggedIsSmi(iteratorFn), &if_iteratornotcallable);
-    GotoIfNot(IsCallable(CAST(iteratorFn)), &if_iteratornotcallable);
-
-    ConstructByIterable(context, result, CAST(arg1_heap_object),
-                        CAST(iteratorFn), element_size);
-    Goto(&return_result);
-
-    BIND(&if_iteratorundefined);
-    {
-      TNode<HeapObject> array_like = arg1_heap_object;
-      TNode<Object> initial_length =
-          GetProperty(context, arg1, LengthStringConstant());
-
-      TNode<JSFunction> default_constructor = CAST(LoadContextElement(
-          LoadNativeContext(context), Context::ARRAY_BUFFER_FUN_INDEX));
-      ConstructByArrayLike(context, result, array_like, initial_length,
-                           element_size, default_constructor);
-      Goto(&return_result);
-    }
-
-    BIND(&if_iteratornotcallable);
-    { ThrowTypeError(context, MessageTemplate::kIteratorSymbolNonCallable); }
-  }
-
-  // The first argument was a number or fell through and is treated as
-  // a number. https://tc39.github.io/ecma262/#sec-typedarray-length
-  BIND(&if_arg1isnumber);
-  {
-    ConstructByLength(context, result, arg1, element_size);
-    Goto(&return_result);
-  }
-
-  BIND(&return_result);
-  Return(result);
 }
 
 // ES #sec-typedarray-constructors
@@ -805,7 +374,7 @@ TF_BUILTIN(TypedArrayPrototypeByteLength, TypedArrayBuiltinsAssembler) {
   // Check if the {receiver} is actually a JSTypedArray.
   ThrowIfNotInstanceType(context, receiver, JS_TYPED_ARRAY_TYPE, kMethodName);
 
-  // Default to zero if the {receiver}s buffer was neutered.
+  // Default to zero if the {receiver}s buffer was detached.
   TNode<JSArrayBuffer> receiver_buffer =
       LoadJSArrayBufferViewBuffer(CAST(receiver));
   TNode<UintPtrT> byte_length = Select<UintPtrT>(
@@ -823,7 +392,7 @@ TF_BUILTIN(TypedArrayPrototypeByteOffset, TypedArrayBuiltinsAssembler) {
   // Check if the {receiver} is actually a JSTypedArray.
   ThrowIfNotInstanceType(context, receiver, JS_TYPED_ARRAY_TYPE, kMethodName);
 
-  // Default to zero if the {receiver}s buffer was neutered.
+  // Default to zero if the {receiver}s buffer was detached.
   TNode<JSArrayBuffer> receiver_buffer =
       LoadJSArrayBufferViewBuffer(CAST(receiver));
   TNode<UintPtrT> byte_offset = Select<UintPtrT>(
@@ -841,7 +410,7 @@ TF_BUILTIN(TypedArrayPrototypeLength, TypedArrayBuiltinsAssembler) {
   // Check if the {receiver} is actually a JSTypedArray.
   ThrowIfNotInstanceType(context, receiver, JS_TYPED_ARRAY_TYPE, kMethodName);
 
-  // Default to zero if the {receiver}s buffer was neutered.
+  // Default to zero if the {receiver}s buffer was detached.
   TNode<JSArrayBuffer> receiver_buffer =
       LoadJSArrayBufferViewBuffer(CAST(receiver));
   TNode<Smi> length = Select<Smi>(
@@ -873,6 +442,28 @@ TNode<IntPtrT> TypedArrayBuiltinsAssembler::GetTypedArrayElementSize(
       });
 
   return element_size.value();
+}
+
+TypedArrayBuiltinsFromDSLAssembler::TypedArrayElementsInfo
+TypedArrayBuiltinsAssembler::GetTypedArrayElementsInfo(
+    TNode<JSTypedArray> typed_array) {
+  TNode<Int32T> elements_kind = LoadElementsKind(typed_array);
+  TVARIABLE(Smi, var_element_size);
+  TVARIABLE(Map, var_map);
+  ReadOnlyRoots roots(isolate());
+
+  DispatchTypedArrayByElementsKind(
+      elements_kind,
+      [&](ElementsKind kind, int size, int typed_array_fun_index) {
+        DCHECK_GT(size, 0);
+        var_element_size = SmiConstant(size);
+
+        Handle<Map> map(roots.MapForFixedTypedArray(kind), isolate());
+        var_map = HeapConstant(map);
+      });
+
+  return TypedArrayBuiltinsFromDSLAssembler::TypedArrayElementsInfo{
+      var_element_size.value(), var_map.value(), elements_kind};
 }
 
 TNode<JSFunction> TypedArrayBuiltinsAssembler::GetDefaultConstructor(
@@ -1150,6 +741,16 @@ void TypedArrayBuiltinsAssembler::CallCMemmove(TNode<IntPtrT> dest_ptr,
                  dest_ptr, src_ptr, byte_length);
 }
 
+void TypedArrayBuiltinsAssembler::CallCMemcpy(TNode<RawPtrT> dest_ptr,
+                                              TNode<RawPtrT> src_ptr,
+                                              TNode<UintPtrT> byte_length) {
+  TNode<ExternalReference> memcpy =
+      ExternalConstant(ExternalReference::libc_memcpy_function());
+  CallCFunction3(MachineType::AnyTagged(), MachineType::Pointer(),
+                 MachineType::Pointer(), MachineType::UintPtr(), memcpy,
+                 dest_ptr, src_ptr, byte_length);
+}
+
 void TypedArrayBuiltinsAssembler::
     CallCCopyFastNumberJSArrayElementsToTypedArray(TNode<Context> context,
                                                    TNode<JSArray> source,
@@ -1227,6 +828,13 @@ void TypedArrayBuiltinsAssembler::DispatchTypedArrayByElementsKind(
   BIND(&next);
 }
 
+TNode<BoolT> TypedArrayBuiltinsAssembler::IsSharedArrayBuffer(
+    TNode<JSArrayBuffer> buffer) {
+  TNode<Uint32T> bitfield =
+      LoadObjectField<Uint32T>(buffer, JSArrayBuffer::kBitFieldOffset);
+  return IsSetWord32<JSArrayBuffer::IsSharedBit>(bitfield);
+}
+
 // ES #sec-get-%typedarray%.prototype.set
 TF_BUILTIN(TypedArrayPrototypeSet, TypedArrayBuiltinsAssembler) {
   const char* method_name = "%TypedArray%.prototype.set";
@@ -1260,7 +868,7 @@ TF_BUILTIN(TypedArrayPrototypeSet, TypedArrayBuiltinsAssembler) {
   GotoIfNot(TaggedIsPositiveSmi(offset_num), &if_offset_is_out_of_bounds);
   TNode<Smi> offset_smi = CAST(offset_num);
 
-  // Check the receiver is not neutered.
+  // Check the receiver is not detached.
   ThrowIfArrayBufferViewBufferIsDetached(context, CAST(receiver), method_name);
 
   // Check the source argument is valid and whether a fast path can be taken.
@@ -1274,7 +882,7 @@ TF_BUILTIN(TypedArrayPrototypeSet, TypedArrayBuiltinsAssembler) {
   // Fast path for a typed array source argument.
   BIND(&if_source_is_typed_array);
   {
-    // Check the source argument is not neutered.
+    // Check the source argument is not detached.
     ThrowIfArrayBufferViewBufferIsDetached(context, CAST(source), method_name);
 
     SetTypedArraySource(context, CAST(source), CAST(receiver),
@@ -1348,8 +956,8 @@ TF_BUILTIN(TypedArrayPrototypeSlice, TypedArrayBuiltinsAssembler) {
   args.PopAndReturn(result_array);
 
   BIND(&if_count_is_not_zero);
-  // Check the source array is neutered or not. We don't need to check if the
-  // result array is neutered or not since TypedArraySpeciesCreate checked it.
+  // Check the source array is detached or not. We don't need to check if the
+  // result array is detached or not since TypedArraySpeciesCreate checked it.
   CSA_ASSERT(this, Word32BinaryNot(IsDetachedBuffer(LoadObjectField(
                        result_array, JSTypedArray::kBufferOffset))));
   TNode<JSArrayBuffer> receiver_buffer =
@@ -1539,7 +1147,7 @@ void TypedArrayBuiltinsAssembler::GenerateTypedArrayPrototypeIterationMethod(
   GotoIf(TaggedIsSmi(receiver), &throw_bad_receiver);
   GotoIfNot(IsJSTypedArray(CAST(receiver)), &throw_bad_receiver);
 
-  // Check if the {receiver}'s JSArrayBuffer was neutered.
+  // Check if the {receiver}'s JSArrayBuffer was detached.
   ThrowIfArrayBufferViewBufferIsDetached(context, CAST(receiver), method_name);
 
   Return(CreateArrayIterator(context, receiver, kind));
@@ -1586,7 +1194,7 @@ TF_BUILTIN(TypedArrayOf, TypedArrayBuiltinsAssembler) {
                          CodeStubArguments::ReceiverMode::kHasReceiver);
 
   Label if_not_constructor(this, Label::kDeferred),
-      if_neutered(this, Label::kDeferred);
+      if_detached(this, Label::kDeferred);
 
   // 3. Let C be the this value.
   // 4. If IsConstructor(C) is false, throw a TypeError exception.
@@ -1619,16 +1227,16 @@ TF_BUILTIN(TypedArrayOf, TypedArrayBuiltinsAssembler) {
               if (kind == BIGINT64_ELEMENTS || kind == BIGUINT64_ELEMENTS) {
                 EmitBigTypedArrayElementStore(new_typed_array, elements,
                                               intptr_index, item, context,
-                                              &if_neutered);
+                                              &if_detached);
               } else {
                 Node* value =
                     PrepareValueForWriteToTypedArray(item, kind, context);
 
-                // ToNumber may execute JavaScript code, which could neuter
+                // ToNumber may execute JavaScript code, which could detach
                 // the array's buffer.
                 Node* buffer = LoadObjectField(new_typed_array,
                                                JSTypedArray::kBufferOffset);
-                GotoIf(IsDetachedBuffer(buffer), &if_neutered);
+                GotoIf(IsDetachedBuffer(buffer), &if_detached);
 
                 // GC may move backing store in ToNumber, thus load backing
                 // store everytime in this loop.
@@ -1647,7 +1255,7 @@ TF_BUILTIN(TypedArrayOf, TypedArrayBuiltinsAssembler) {
   BIND(&if_not_constructor);
   ThrowTypeError(context, MessageTemplate::kNotConstructor, receiver);
 
-  BIND(&if_neutered);
+  BIND(&if_detached);
   ThrowTypeError(context, MessageTemplate::kDetachedOperation,
                  "%TypedArray%.of");
 }
@@ -1661,7 +1269,7 @@ TF_BUILTIN(TypedArrayFrom, TypedArrayBuiltinsAssembler) {
       if_not_constructor(this, Label::kDeferred),
       if_map_fn_not_callable(this, Label::kDeferred),
       if_iterator_fn_not_callable(this, Label::kDeferred),
-      if_neutered(this, Label::kDeferred);
+      if_detached(this, Label::kDeferred);
 
   CodeStubArguments args(
       this,
@@ -1795,7 +1403,7 @@ TF_BUILTIN(TypedArrayFrom, TypedArrayBuiltinsAssembler) {
     // 10. Let len be ? ToLength(? Get(arrayLike, "length")).
     TNode<Object> raw_length =
         GetProperty(context, final_source.value(), LengthStringConstant());
-    final_length = ToSmiLength(raw_length, context, &if_length_not_smi);
+    final_length = ToSmiLength(context, raw_length, &if_length_not_smi);
     Goto(&create_typed_array);
 
     BIND(&if_length_not_smi);
@@ -1849,16 +1457,16 @@ TF_BUILTIN(TypedArrayFrom, TypedArrayBuiltinsAssembler) {
               if (kind == BIGINT64_ELEMENTS || kind == BIGUINT64_ELEMENTS) {
                 EmitBigTypedArrayElementStore(target_obj.value(), elements,
                                               intptr_index, mapped_value,
-                                              context, &if_neutered);
+                                              context, &if_detached);
               } else {
                 Node* const final_value = PrepareValueForWriteToTypedArray(
                     mapped_value, kind, context);
 
-                // ToNumber may execute JavaScript code, which could neuter
+                // ToNumber may execute JavaScript code, which could detach
                 // the array's buffer.
                 Node* buffer = LoadObjectField(target_obj.value(),
                                                JSTypedArray::kBufferOffset);
-                GotoIf(IsDetachedBuffer(buffer), &if_neutered);
+                GotoIf(IsDetachedBuffer(buffer), &if_detached);
 
                 // GC may move backing store in map_fn, thus load backing
                 // store in each iteration of this loop.
@@ -1882,7 +1490,7 @@ TF_BUILTIN(TypedArrayFrom, TypedArrayBuiltinsAssembler) {
   BIND(&if_iterator_fn_not_callable);
   ThrowTypeError(context, MessageTemplate::kIteratorSymbolNonCallable);
 
-  BIND(&if_neutered);
+  BIND(&if_detached);
   ThrowTypeError(context, MessageTemplate::kDetachedOperation,
                  "%TypedArray%.from");
 }

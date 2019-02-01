@@ -209,18 +209,20 @@ class StringToIntHelper {
 
   bool IsOneByte() const {
     return raw_one_byte_subject_ != nullptr ||
-           subject_->IsOneByteRepresentationUnderneath();
+           String::IsOneByteRepresentationUnderneath(*subject_);
   }
 
   Vector<const uint8_t> GetOneByteVector() {
     if (raw_one_byte_subject_ != nullptr) {
       return Vector<const uint8_t>(raw_one_byte_subject_, length_);
     }
-    return subject_->GetFlatContent().ToOneByteVector();
+    DisallowHeapAllocation no_gc;
+    return subject_->GetFlatContent(no_gc).ToOneByteVector();
   }
 
   Vector<const uc16> GetTwoByteVector() {
-    return subject_->GetFlatContent().ToUC16Vector();
+    DisallowHeapAllocation no_gc;
+    return subject_->GetFlatContent(no_gc).ToUC16Vector();
   }
 
   // Subclasses get access to internal state:
@@ -934,6 +936,11 @@ const char* DoubleToCString(double v, Vector<char> buffer) {
     case FP_INFINITE: return (v < 0.0 ? "-Infinity" : "Infinity");
     case FP_ZERO: return "0";
     default: {
+      if (IsInt32Double(v)) {
+        // This will trigger if v is -0 and -0.0 is stringified to "0".
+        // (see ES section 7.1.12.1 #sec-tostring-applied-to-the-number-type)
+        return IntToCString(FastD2I(v), buffer);
+      }
       SimpleStringBuilder builder(buffer.start(), buffer.length());
       int decimal_point;
       int sign;
@@ -984,18 +991,17 @@ const char* DoubleToCString(double v, Vector<char> buffer) {
 
 
 const char* IntToCString(int n, Vector<char> buffer) {
-  bool negative = false;
-  if (n < 0) {
-    // We must not negate the most negative int.
-    if (n == kMinInt) return DoubleToCString(n, buffer);
-    negative = true;
+  bool negative = true;
+  if (n >= 0) {
     n = -n;
+    negative = false;
   }
   // Build the string backwards from the least significant digit.
   int i = buffer.length();
   buffer[--i] = '\0';
   do {
-    buffer[--i] = '0' + (n % 10);
+    // We ensured n <= 0, so the subtraction does the right addition.
+    buffer[--i] = '0' - (n % 10);
     n /= 10;
   } while (n);
   if (negative) buffer[--i] = '-';
@@ -1311,7 +1317,7 @@ double StringToDouble(Isolate* isolate, Handle<String> string, int flags,
   Handle<String> flattened = String::Flatten(isolate, string);
   {
     DisallowHeapAllocation no_gc;
-    String::FlatContent flat = flattened->GetFlatContent();
+    String::FlatContent flat = flattened->GetFlatContent(no_gc);
     DCHECK(flat.IsFlat());
     if (flat.IsOneByte()) {
       return StringToDouble(flat.ToOneByteVector(), flags, empty_string_val);

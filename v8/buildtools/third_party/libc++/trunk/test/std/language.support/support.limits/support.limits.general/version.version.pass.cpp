@@ -24,6 +24,7 @@
     __cpp_lib_boyer_moore_searcher              201603L
     __cpp_lib_byte                              201603L
     __cpp_lib_chrono                            201611L
+    __cpp_lib_chrono_udls                       201304L
     __cpp_lib_clamp                             201603L
     __cpp_lib_complex_udls                      201309L
     __cpp_lib_concepts                          201806L
@@ -87,13 +88,14 @@
 */
 
 #include <version>
+#include <cassert>
 #include "test_macros.h"
 
 int main()
 {
 //  ensure that the macros that are supposed to be defined in <version> are defined.
 
-#if _TEST_STD_VER > 14
+#if TEST_STD_VER > 14
 # if !defined(__cpp_lib_atomic_is_always_lock_free)
 #  error "__cpp_lib_atomic_is_always_lock_free is not defined"
 # elif __cpp_lib_atomic_is_always_lock_free < 201603L
@@ -101,7 +103,7 @@ int main()
 # endif
 #endif
 
-#if _TEST_STD_VER > 14
+#if TEST_STD_VER > 14
 # if !defined(__cpp_lib_filesystem)
 #  error "__cpp_lib_filesystem is not defined"
 # elif __cpp_lib_filesystem < 201703L
@@ -109,7 +111,7 @@ int main()
 # endif
 #endif
 
-#if _TEST_STD_VER > 14
+#if TEST_STD_VER > 14
 # if !defined(__cpp_lib_invoke)
 #  error "__cpp_lib_invoke is not defined"
 # elif __cpp_lib_invoke < 201411L
@@ -117,11 +119,21 @@ int main()
 # endif
 #endif
 
-#if _TEST_STD_VER > 14
+#if TEST_STD_VER > 14
 # if !defined(__cpp_lib_void_t)
 #  error "__cpp_lib_void_t is not defined"
 # elif __cpp_lib_void_t < 201411L
 #  error "__cpp_lib_void_t has an invalid value"
+# endif
+#endif
+
+#if TEST_STD_VER > 17 && defined(__cpp_char8_t)
+# if !defined(__cpp_lib_char8_t)  
+  LIBCPP_STATIC_ASSERT(false, "__cpp_lib_char8_t is not defined");
+# else
+#  if __cpp_lib_char8_t < 201811L
+#   error "__cpp_lib_char8_t has an invalid value"
+#  endif
 # endif
 #endif
 

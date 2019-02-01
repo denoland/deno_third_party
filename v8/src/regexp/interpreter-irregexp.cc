@@ -4,8 +4,6 @@
 
 // A simple interpreter for the Irregexp byte code.
 
-#ifdef V8_INTERPRETED_REGEXP
-
 #include "src/regexp/interpreter-irregexp.h"
 
 #include "src/ast/ast.h"
@@ -598,7 +596,7 @@ RegExpImpl::IrregexpResult IrregexpInterpreter::Match(
   DisallowHeapAllocation no_gc;
   const byte* code_base = code_array->GetDataStartAddress();
   uc16 previous_char = '\n';
-  String::FlatContent subject_content = subject->GetFlatContent();
+  String::FlatContent subject_content = subject->GetFlatContent(no_gc);
   if (subject_content.IsOneByte()) {
     Vector<const uint8_t> subject_vector = subject_content.ToOneByteVector();
     if (start_position != 0) previous_char = subject_vector[start_position - 1];
@@ -623,5 +621,3 @@ RegExpImpl::IrregexpResult IrregexpInterpreter::Match(
 
 }  // namespace internal
 }  // namespace v8
-
-#endif  // V8_INTERPRETED_REGEXP

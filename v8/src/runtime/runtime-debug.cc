@@ -65,7 +65,7 @@ RUNTIME_FUNCTION_RETURN_PAIR(Runtime_DebugBreakOnBytecode) {
   DCHECK(it.frame()->is_interpreted());
   InterpretedFrame* interpreted_frame =
       reinterpret_cast<InterpretedFrame*>(it.frame());
-  SharedFunctionInfo* shared = interpreted_frame->function()->shared();
+  SharedFunctionInfo shared = interpreted_frame->function()->shared();
   BytecodeArray bytecode_array = shared->GetBytecodeArray();
   int bytecode_offset = interpreted_frame->GetBytecodeOffset();
   Bytecode bytecode = Bytecodes::FromByte(bytecode_array->get(bytecode_offset));
@@ -96,7 +96,7 @@ RUNTIME_FUNCTION_RETURN_PAIR(Runtime_DebugBreakOnBytecode) {
     return MakePair(ReadOnlyRoots(isolate).exception(),
                     Smi::FromInt(static_cast<uint8_t>(bytecode)));
   }
-  Object* interrupt_object = isolate->stack_guard()->HandleInterrupts();
+  Object interrupt_object = isolate->stack_guard()->HandleInterrupts();
   if (interrupt_object->IsException(isolate)) {
     return MakePair(interrupt_object,
                     Smi::FromInt(static_cast<uint8_t>(bytecode)));
@@ -575,8 +575,8 @@ Handle<Object> ScriptLocationFromLine(Isolate* isolate, Handle<Script> script,
 // Slow traversal over all scripts on the heap.
 bool GetScriptById(Isolate* isolate, int needle, Handle<Script>* result) {
   Script::Iterator iterator(isolate);
-  Script* script = nullptr;
-  while ((script = iterator.Next()) != nullptr) {
+  for (Script script = iterator.Next(); !script.is_null();
+       script = iterator.Next()) {
     if (script->id() == needle) {
       *result = handle(script, isolate);
       return true;
@@ -746,7 +746,7 @@ RUNTIME_FUNCTION(Runtime_IncBlockCounter) {
   // coverage collection mode, which triggers deletion of all coverage infos in
   // order to avoid memory leaks.
 
-  SharedFunctionInfo* shared = function->shared();
+  SharedFunctionInfo shared = function->shared();
   if (shared->HasCoverageInfo()) {
     CoverageInfo coverage_info = shared->GetCoverageInfo();
     coverage_info->IncrementBlockCount(coverage_array_slot_index);

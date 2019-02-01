@@ -17,12 +17,11 @@
 #include "src/frames.h"
 #include "src/interface-descriptors.h"
 #include "src/interpreter/bytecodes.h"
-#include "src/lsan.h"
 #include "src/machine-type.h"
 #include "src/macro-assembler.h"
+#include "src/memcopy.h"
 #include "src/objects-inl.h"
 #include "src/objects/smi.h"
-#include "src/utils.h"
 #include "src/zone/zone.h"
 
 namespace v8 {
@@ -45,7 +44,7 @@ static_assert(
 CodeAssemblerState::CodeAssemblerState(
     Isolate* isolate, Zone* zone, const CallInterfaceDescriptor& descriptor,
     Code::Kind kind, const char* name, PoisoningMitigationLevel poisoning_level,
-    uint32_t stub_key, int32_t builtin_index)
+    int32_t builtin_index)
     // TODO(rmcilroy): Should we use Linkage::GetBytecodeDispatchDescriptor for
     // bytecode handlers?
     : CodeAssemblerState(
@@ -53,7 +52,7 @@ CodeAssemblerState::CodeAssemblerState(
           Linkage::GetStubCallDescriptor(
               zone, descriptor, descriptor.GetStackParameterCount(),
               CallDescriptor::kNoFlags, Operator::kNoProperties),
-          kind, name, poisoning_level, stub_key, builtin_index) {}
+          kind, name, poisoning_level, builtin_index) {}
 
 CodeAssemblerState::CodeAssemblerState(Isolate* isolate, Zone* zone,
                                        int parameter_count, Code::Kind kind,
@@ -67,13 +66,13 @@ CodeAssemblerState::CodeAssemblerState(Isolate* isolate, Zone* zone,
               (kind == Code::BUILTIN ? CallDescriptor::kPushArgumentCount
                                      : CallDescriptor::kNoFlags) |
                   CallDescriptor::kCanUseRoots),
-          kind, name, poisoning_level, 0, builtin_index) {}
+          kind, name, poisoning_level, builtin_index) {}
 
 CodeAssemblerState::CodeAssemblerState(Isolate* isolate, Zone* zone,
                                        CallDescriptor* call_descriptor,
                                        Code::Kind kind, const char* name,
                                        PoisoningMitigationLevel poisoning_level,
-                                       uint32_t stub_key, int32_t builtin_index)
+                                       int32_t builtin_index)
     : raw_assembler_(new RawMachineAssembler(
           isolate, new (zone) Graph(zone), call_descriptor,
           MachineType::PointerRepresentation(),
@@ -81,7 +80,6 @@ CodeAssemblerState::CodeAssemblerState(Isolate* isolate, Zone* zone,
           InstructionSelector::AlignmentRequirements(), poisoning_level)),
       kind_(kind),
       name_(name),
-      stub_key_(stub_key),
       builtin_index_(builtin_index),
       code_generated_(false),
       variables_(zone) {}
@@ -107,6 +105,7 @@ void CodeAssemblerState::SetInitialDebugInformation(const char* msg,
                                                     int line) {
 #if DEBUG
   AssemblerDebugInfo debug_info = {msg, file, line};
+  raw_assembler_->SetSourcePosition(file, line);
   raw_assembler_->SetInitialDebugInformation(debug_info);
 #endif  // DEBUG
 }
@@ -176,43 +175,13 @@ Handle<Code> CodeAssembler::GenerateCode(CodeAssemblerState* state,
   RawMachineAssembler* rasm = state->raw_assembler_.get();
 
   Handle<Code> code;
-  if (FLAG_optimize_csa) {
-    // TODO(tebbi): Support jump rewriting also when FLAG_optimize_csa.
-    DCHECK(!FLAG_turbo_rewrite_far_jumps);
-    Graph* graph = rasm->ExportForOptimization();
+  Graph* graph = rasm->ExportForOptimization();
 
-    code = Pipeline::GenerateCodeForCodeStub(
-               rasm->isolate(), rasm->call_descriptor(), graph, nullptr,
-               state->kind_, state->name_, state->stub_key_,
-               state->builtin_index_, nullptr, rasm->poisoning_level(), options)
-               .ToHandleChecked();
-  } else {
-    Schedule* schedule = rasm->Export();
-
-    JumpOptimizationInfo jump_opt;
-    bool should_optimize_jumps =
-        rasm->isolate()->serializer_enabled() && FLAG_turbo_rewrite_far_jumps;
-
-    code =
-        Pipeline::GenerateCodeForCodeStub(
-            rasm->isolate(), rasm->call_descriptor(), rasm->graph(), schedule,
-            state->kind_, state->name_, state->stub_key_, state->builtin_index_,
-            should_optimize_jumps ? &jump_opt : nullptr,
-            rasm->poisoning_level(), options)
-            .ToHandleChecked();
-
-    if (jump_opt.is_optimizable()) {
-      jump_opt.set_optimizing();
-
-      // Regenerate machine code
-      code = Pipeline::GenerateCodeForCodeStub(
-                 rasm->isolate(), rasm->call_descriptor(), rasm->graph(),
-                 schedule, state->kind_, state->name_, state->stub_key_,
-                 state->builtin_index_, &jump_opt, rasm->poisoning_level(),
-                 options)
-                 .ToHandleChecked();
-    }
-  }
+  code = Pipeline::GenerateCodeForCodeStub(
+             rasm->isolate(), rasm->call_descriptor(), graph,
+             rasm->source_positions(), state->kind_, state->name_,
+             state->builtin_index_, rasm->poisoning_level(), options)
+             .ToHandleChecked();
 
   state->code_generated_ = true;
   return code;
@@ -451,25 +420,13 @@ void CodeAssembler::Unreachable() {
   raw_assembler()->Unreachable();
 }
 
-void CodeAssembler::Comment(const char* format, ...) {
+void CodeAssembler::Comment(std::string str) {
   if (!FLAG_code_comments) return;
-  char buffer[4 * KB];
-  StringBuilder builder(buffer, arraysize(buffer));
-  va_list arguments;
-  va_start(arguments, format);
-  builder.AddFormattedList(format, arguments);
-  va_end(arguments);
+  raw_assembler()->Comment(str);
+}
 
-  // Copy the string before recording it in the assembler to avoid
-  // issues when the stack allocated buffer goes out of scope.
-  const int prefix_len = 2;
-  int length = builder.position() + 1;
-  char* copy = reinterpret_cast<char*>(malloc(length + prefix_len));
-  LSAN_IGNORE_OBJECT(copy);
-  MemCopy(copy + prefix_len, builder.Finalize(), length);
-  copy[0] = ';';
-  copy[1] = ' ';
-  raw_assembler()->Comment(copy);
+void CodeAssembler::SetSourcePosition(const char* file, int line) {
+  raw_assembler()->SetSourcePosition(file, line);
 }
 
 void CodeAssembler::Bind(Label* label) { return label->Bind(); }
@@ -1023,15 +980,21 @@ Node* CodeAssembler::Store(Node* base, Node* value) {
                                 kFullWriteBarrier);
 }
 
+void CodeAssembler::OptimizedStoreField(MachineRepresentation rep,
+                                        TNode<HeapObject> object, int offset,
+                                        Node* value,
+                                        WriteBarrierKind write_barrier) {
+  raw_assembler()->OptimizedStoreField(rep, object, offset, value,
+                                       write_barrier);
+}
+void CodeAssembler::OptimizedStoreMap(TNode<HeapObject> object,
+                                      TNode<Map> map) {
+  raw_assembler()->OptimizedStoreMap(object, map);
+}
+
 Node* CodeAssembler::Store(Node* base, Node* offset, Node* value) {
   return raw_assembler()->Store(MachineRepresentation::kTagged, base, offset,
                                 value, kFullWriteBarrier);
-}
-
-Node* CodeAssembler::StoreWithMapWriteBarrier(Node* base, Node* offset,
-                                              Node* value) {
-  return raw_assembler()->Store(MachineRepresentation::kTagged, base, offset,
-                                value, kMapWriteBarrier);
 }
 
 Node* CodeAssembler::StoreNoWriteBarrier(MachineRepresentation rep, Node* base,
@@ -1087,7 +1050,7 @@ Node* CodeAssembler::Retain(Node* value) {
 }
 
 Node* CodeAssembler::Projection(int index, Node* value) {
-  DCHECK(index < value->op()->ValueOutputCount());
+  DCHECK_LT(index, value->op()->ValueOutputCount());
   return raw_assembler()->Projection(index, value);
 }
 
@@ -1118,6 +1081,12 @@ void CodeAssembler::GotoIfException(Node* node, Label* if_exception,
 
   Bind(&success);
   raw_assembler()->AddNode(raw_assembler()->common()->IfSuccess(), node);
+}
+
+TNode<HeapObject> CodeAssembler::OptimizedAllocate(TNode<IntPtrT> size,
+                                                   PretenureFlag pretenure) {
+  return UncheckedCast<HeapObject>(
+      raw_assembler()->OptimizedAllocate(size, pretenure));
 }
 
 void CodeAssembler::HandleException(Node* node) {
@@ -1231,9 +1200,13 @@ void CodeAssembler::TailCallRuntimeWithCEntryImpl(
   raw_assembler()->TailCallN(call_descriptor, inputs.size(), inputs.data());
 }
 
-Node* CodeAssembler::CallStubN(const CallInterfaceDescriptor& descriptor,
+Node* CodeAssembler::CallStubN(StubCallMode call_mode,
+                               const CallInterfaceDescriptor& descriptor,
                                size_t result_size, int input_count,
                                Node* const* inputs) {
+  DCHECK(call_mode == StubCallMode::kCallCodeObject ||
+         call_mode == StubCallMode::kCallBuiltinPointer);
+
   // implicit nodes are target and optionally context.
   int implicit_nodes = descriptor.HasContextParameter() ? 2 : 1;
   DCHECK_LE(implicit_nodes, input_count);
@@ -1246,7 +1219,7 @@ Node* CodeAssembler::CallStubN(const CallInterfaceDescriptor& descriptor,
 
   auto call_descriptor = Linkage::GetStubCallDescriptor(
       zone(), descriptor, stack_parameter_count, CallDescriptor::kNoFlags,
-      Operator::kNoProperties);
+      Operator::kNoProperties, call_mode);
 
   CallPrologue();
   Node* return_value =
@@ -1276,10 +1249,14 @@ void CodeAssembler::TailCallStubImpl(const CallInterfaceDescriptor& descriptor,
   raw_assembler()->TailCallN(call_descriptor, inputs.size(), inputs.data());
 }
 
-Node* CodeAssembler::CallStubRImpl(const CallInterfaceDescriptor& descriptor,
-                                   size_t result_size, SloppyTNode<Code> target,
+Node* CodeAssembler::CallStubRImpl(StubCallMode call_mode,
+                                   const CallInterfaceDescriptor& descriptor,
+                                   size_t result_size, Node* target,
                                    SloppyTNode<Object> context,
                                    std::initializer_list<Node*> args) {
+  DCHECK(call_mode == StubCallMode::kCallCodeObject ||
+         call_mode == StubCallMode::kCallBuiltinPointer);
+
   constexpr size_t kMaxNumArgs = 10;
   DCHECK_GE(kMaxNumArgs, args.size());
 
@@ -1290,7 +1267,8 @@ Node* CodeAssembler::CallStubRImpl(const CallInterfaceDescriptor& descriptor,
     inputs.Add(context);
   }
 
-  return CallStubN(descriptor, result_size, inputs.size(), inputs.data());
+  return CallStubN(call_mode, descriptor, result_size, inputs.size(),
+                   inputs.data());
 }
 
 Node* CodeAssembler::TailCallStubThenBytecodeDispatchImpl(
@@ -1760,6 +1738,7 @@ void CodeAssemblerLabel::Bind(AssemblerDebugInfo debug_info) {
         << "\n#    previous: " << *label_->block();
     FATAL("%s", str.str().c_str());
   }
+  state_->raw_assembler_->SetSourcePosition(debug_info.file, debug_info.line);
   state_->raw_assembler_->Bind(label_, debug_info);
   UpdateVariablesAfterBind();
 }
@@ -1930,10 +1909,12 @@ CodeAssemblerScopedExceptionHandler::~CodeAssemblerScopedExceptionHandler() {
 
 }  // namespace compiler
 
-Address CheckObjectType(Object* value, Address raw_type, Address raw_location) {
+Address CheckObjectType(Address raw_value, Address raw_type,
+                        Address raw_location) {
 #ifdef DEBUG
+  Object value(raw_value);
   Smi type(raw_type);
-  String location = String::cast(ObjectPtr(raw_location));
+  String location = String::cast(Object(raw_location));
   const char* expected;
   switch (static_cast<ObjectType>(type->value())) {
 #define TYPE_CASE(Name)                                  \

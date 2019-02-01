@@ -172,21 +172,6 @@ void ReplaceEffectControlUses(Node* node, Node* effect, Node* control) {
   }
 }
 
-void ChangeToPureOp(Node* node, const Operator* new_op) {
-  DCHECK(new_op->HasProperty(Operator::kPure));
-  if (node->op()->EffectInputCount() > 0) {
-    DCHECK_LT(0, node->op()->ControlInputCount());
-    // Disconnect the node from effect and control chains.
-    Node* control = NodeProperties::GetControlInput(node);
-    Node* effect = NodeProperties::GetEffectInput(node);
-    ReplaceEffectControlUses(node, effect, control);
-    node->TrimInputCount(new_op->ValueInputCount());
-  } else {
-    DCHECK_EQ(0, node->op()->ControlInputCount());
-  }
-  NodeProperties::ChangeOp(node, new_op);
-}
-
 bool CanOverflowSigned32(const Operator* op, Type left, Type right,
                          Zone* type_zone) {
   // We assume the inputs are checked Signed32 (or known statically
@@ -567,7 +552,7 @@ class RepresentationSelector {
 
   Type Weaken(Node* node, Type previous_type, Type current_type) {
     // If the types have nothing to do with integers, return the types.
-    Type const integer = type_cache_.kInteger;
+    Type const integer = type_cache_->kInteger;
     if (!previous_type.Maybe(integer)) {
       return current_type;
     }
@@ -756,6 +741,31 @@ class RepresentationSelector {
     DCHECK_EQ(2, node->op()->ValueInputCount());
     return !GetUpperBound(node->InputAt(0)).Maybe(type) ||
            !GetUpperBound(node->InputAt(1)).Maybe(type);
+  }
+
+  void ChangeToPureOp(Node* node, const Operator* new_op) {
+    DCHECK(new_op->HasProperty(Operator::kPure));
+    if (node->op()->EffectInputCount() > 0) {
+      DCHECK_LT(0, node->op()->ControlInputCount());
+      Node* control = NodeProperties::GetControlInput(node);
+      Node* effect = NodeProperties::GetEffectInput(node);
+      if (TypeOf(node).IsNone()) {
+        // If the node is unreachable, insert an Unreachable node and mark the
+        // value dead.
+        // TODO(jarin,tebbi) Find a way to unify/merge this insertion with
+        // InsertUnreachableIfNecessary.
+        Node* unreachable = effect = graph()->NewNode(
+            jsgraph_->common()->Unreachable(), effect, control);
+        new_op = jsgraph_->common()->DeadValue(GetInfo(node)->representation());
+        node->ReplaceInput(0, unreachable);
+      }
+      // Rewire the effect and control chains.
+      node->TrimInputCount(new_op->ValueInputCount());
+      ReplaceEffectControlUses(node, effect, control);
+    } else {
+      DCHECK_EQ(0, node->op()->ControlInputCount());
+    }
+    NodeProperties::ChangeOp(node, new_op);
   }
 
   // Converts input {index} of {node} according to given UseInfo {use},
@@ -1062,6 +1072,15 @@ class RepresentationSelector {
     }
   }
 
+  void MaskShiftOperand(Node* node, Type rhs_type) {
+    if (!rhs_type.Is(type_cache_->kZeroToThirtyOne)) {
+      Node* const rhs = NodeProperties::GetValueInput(node, 1);
+      node->ReplaceInput(1,
+                         graph()->NewNode(jsgraph_->machine()->Word32And(), rhs,
+                                          jsgraph_->Int32Constant(0x1F)));
+    }
+  }
+
   static MachineSemantic DeoptValueSemanticOf(Type type) {
     // We only need signedness to do deopt correctly.
     if (type.Is(Type::Signed32())) {
@@ -1083,7 +1102,7 @@ class RepresentationSelector {
     }
     // Word64 representation is only valid for safe integer values.
     if (rep == MachineRepresentation::kWord64) {
-      DCHECK(type.Is(TypeCache::Get().kSafeInteger));
+      DCHECK(type.Is(TypeCache::Get()->kSafeInteger));
       return MachineType(rep, MachineSemantic::kInt64);
     }
     MachineType machine_type(rep, DeoptValueSemanticOf(type));
@@ -1297,8 +1316,8 @@ class RepresentationSelector {
     Type left_upper = GetUpperBound(node->InputAt(0));
     Type right_upper = GetUpperBound(node->InputAt(1));
 
-    if (left_upper.Is(type_cache_.kAdditiveSafeIntegerOrMinusZero) &&
-        right_upper.Is(type_cache_.kAdditiveSafeIntegerOrMinusZero)) {
+    if (left_upper.Is(type_cache_->kAdditiveSafeIntegerOrMinusZero) &&
+        right_upper.Is(type_cache_->kAdditiveSafeIntegerOrMinusZero)) {
       // Only eliminate the node if its typing rule can be satisfied, namely
       // that a safe integer is produced.
       if (truncation.IsUnused()) return VisitUnused(node);
@@ -1373,7 +1392,7 @@ class RepresentationSelector {
 
   void VisitSpeculativeAdditiveOp(Node* node, Truncation truncation,
                                   SimplifiedLowering* lowering) {
-    if (BothInputsAre(node, type_cache_.kAdditiveSafeIntegerOrMinusZero) &&
+    if (BothInputsAre(node, type_cache_->kAdditiveSafeIntegerOrMinusZero) &&
         (GetUpperBound(node).Is(Type::Signed32()) ||
          GetUpperBound(node).Is(Type::Unsigned32()) ||
          truncation.IsUsedAsWord32())) {
@@ -1508,9 +1527,10 @@ class RepresentationSelector {
     if (node->op()->ValueOutputCount() > 0 &&
         node->op()->EffectOutputCount() > 0 &&
         node->opcode() != IrOpcode::kUnreachable && TypeOf(node).IsNone()) {
-      Node* control = node->op()->ControlOutputCount() > 0
-                          ? node
-                          : NodeProperties::GetControlInput(node, 0);
+      Node* control =
+          (node->op()->ControlOutputCount() == 0)
+              ? NodeProperties::GetControlInput(node, 0)
+              : NodeProperties::FindSuccessfulControlProjection(node);
 
       Node* unreachable =
           graph()->NewNode(common()->Unreachable(), node, control);
@@ -1518,9 +1538,18 @@ class RepresentationSelector {
       // Insert unreachable node and replace all the effect uses of the {node}
       // with the new unreachable node.
       for (Edge edge : node->use_edges()) {
-        if (NodeProperties::IsEffectEdge(edge) && edge.from() != unreachable) {
-          edge.UpdateTo(unreachable);
+        if (!NodeProperties::IsEffectEdge(edge)) continue;
+        // Make sure to not overwrite the unreachable node's input. That would
+        // create a cycle.
+        if (edge.from() == unreachable) continue;
+        // Avoid messing up the exceptional path.
+        if (edge.from()->opcode() == IrOpcode::kIfException) {
+          DCHECK(!node->op()->HasProperty(Operator::kNoThrow));
+          DCHECK_EQ(NodeProperties::GetControlInput(edge.from()), node);
+          continue;
         }
+
+        edge.UpdateTo(unreachable);
       }
     }
   }
@@ -1561,7 +1590,7 @@ class RepresentationSelector {
         }
       }
     } else {
-      DCHECK(length_type.Is(type_cache_.kPositiveSafeInteger));
+      DCHECK(length_type.Is(type_cache_->kPositiveSafeInteger));
       VisitBinop(node,
                  UseInfo::CheckedSigned64AsWord64(kIdentifyZeros, p.feedback()),
                  UseInfo::Word64(), MachineRepresentation::kWord64);
@@ -1723,7 +1752,7 @@ class RepresentationSelector {
              rhs_type.Is(Type::Unsigned32OrMinusZero())) ||
             (lhs_type.Is(Type::Unsigned32OrMinusZeroOrNaN()) &&
              rhs_type.Is(Type::Unsigned32OrMinusZeroOrNaN()) &&
-             OneInputCannotBe(node, type_cache_.kZeroish))) {
+             OneInputCannotBe(node, type_cache_->kZeroish))) {
           // => unsigned Int32Cmp
           VisitBinop(node, UseInfo::TruncatingWord32(),
                      MachineRepresentation::kBit);
@@ -1734,7 +1763,7 @@ class RepresentationSelector {
              rhs_type.Is(Type::Signed32OrMinusZero())) ||
             (lhs_type.Is(Type::Signed32OrMinusZeroOrNaN()) &&
              rhs_type.Is(Type::Signed32OrMinusZeroOrNaN()) &&
-             OneInputCannotBe(node, type_cache_.kZeroish))) {
+             OneInputCannotBe(node, type_cache_->kZeroish))) {
           // => signed Int32Cmp
           VisitBinop(node, UseInfo::TruncatingWord32(),
                      MachineRepresentation::kBit);
@@ -1864,9 +1893,9 @@ class RepresentationSelector {
       case IrOpcode::kNumberAdd:
       case IrOpcode::kNumberSubtract: {
         if (TypeOf(node->InputAt(0))
-                .Is(type_cache_.kAdditiveSafeIntegerOrMinusZero) &&
+                .Is(type_cache_->kAdditiveSafeIntegerOrMinusZero) &&
             TypeOf(node->InputAt(1))
-                .Is(type_cache_.kAdditiveSafeIntegerOrMinusZero) &&
+                .Is(type_cache_->kAdditiveSafeIntegerOrMinusZero) &&
             (TypeOf(node).Is(Type::Signed32()) ||
              TypeOf(node).Is(Type::Unsigned32()) ||
              truncation.IsUsedAsWord32())) {
@@ -1874,8 +1903,8 @@ class RepresentationSelector {
           VisitWord32TruncatingBinop(node);
           if (lower()) ChangeToPureOp(node, Int32Op(node));
         } else if (jsgraph_->machine()->Is64() &&
-                   BothInputsAre(node, type_cache_.kSafeInteger) &&
-                   GetUpperBound(node).Is(type_cache_.kSafeInteger)) {
+                   BothInputsAre(node, type_cache_->kSafeInteger) &&
+                   GetUpperBound(node).Is(type_cache_->kSafeInteger)) {
           // => Int64Add/Sub
           VisitInt64Binop(node);
           if (lower()) ChangeToPureOp(node, Int64Op(node));
@@ -1892,7 +1921,7 @@ class RepresentationSelector {
              NodeProperties::GetType(node).Is(Type::Unsigned32()) ||
              (truncation.IsUsedAsWord32() &&
               NodeProperties::GetType(node).Is(
-                  type_cache_.kSafeIntegerOrMinusZero)))) {
+                  type_cache_->kSafeIntegerOrMinusZero)))) {
           // Multiply reduces to Int32Mul if the inputs are integers, and
           // (a) the output is either known to be Signed32, or
           // (b) the output is known to be Unsigned32, or
@@ -1947,7 +1976,7 @@ class RepresentationSelector {
             (TypeOf(node).Is(Type::Signed32()) ||
              TypeOf(node).Is(Type::Unsigned32()) ||
              (truncation.IsUsedAsWord32() &&
-              TypeOf(node).Is(type_cache_.kSafeIntegerOrMinusZero)))) {
+              TypeOf(node).Is(type_cache_->kSafeIntegerOrMinusZero)))) {
           // Multiply reduces to Int32Mul if the inputs are integers, and
           // (a) the output is either known to be Signed32, or
           // (b) the output is known to be Unsigned32, or
@@ -2117,7 +2146,8 @@ class RepresentationSelector {
         VisitBinop(node, UseInfo::TruncatingWord32(),
                    UseInfo::TruncatingWord32(), MachineRepresentation::kWord32);
         if (lower()) {
-          lowering->DoShift(node, lowering->machine()->Word32Shl(), rhs_type);
+          MaskShiftOperand(node, rhs_type);
+          ChangeToPureOp(node, lowering->machine()->Word32Shl());
         }
         return;
       }
@@ -2128,7 +2158,8 @@ class RepresentationSelector {
                      UseInfo::TruncatingWord32(),
                      MachineRepresentation::kWord32);
           if (lower()) {
-            lowering->DoShift(node, lowering->machine()->Word32Shl(), rhs_type);
+            MaskShiftOperand(node, rhs_type);
+            ChangeToPureOp(node, lowering->machine()->Word32Shl());
           }
           return;
         }
@@ -2137,7 +2168,8 @@ class RepresentationSelector {
         VisitBinop(node, CheckedUseInfoAsWord32FromHint(hint),
                    MachineRepresentation::kWord32, Type::Signed32());
         if (lower()) {
-          lowering->DoShift(node, lowering->machine()->Word32Shl(), rhs_type);
+          MaskShiftOperand(node, rhs_type);
+          ChangeToPureOp(node, lowering->machine()->Word32Shl());
         }
         return;
       }
@@ -2146,7 +2178,8 @@ class RepresentationSelector {
         VisitBinop(node, UseInfo::TruncatingWord32(),
                    UseInfo::TruncatingWord32(), MachineRepresentation::kWord32);
         if (lower()) {
-          lowering->DoShift(node, lowering->machine()->Word32Sar(), rhs_type);
+          MaskShiftOperand(node, rhs_type);
+          ChangeToPureOp(node, lowering->machine()->Word32Sar());
         }
         return;
       }
@@ -2157,7 +2190,8 @@ class RepresentationSelector {
                      UseInfo::TruncatingWord32(),
                      MachineRepresentation::kWord32);
           if (lower()) {
-            lowering->DoShift(node, lowering->machine()->Word32Sar(), rhs_type);
+            MaskShiftOperand(node, rhs_type);
+            ChangeToPureOp(node, lowering->machine()->Word32Sar());
           }
           return;
         }
@@ -2166,7 +2200,8 @@ class RepresentationSelector {
         VisitBinop(node, CheckedUseInfoAsWord32FromHint(hint),
                    MachineRepresentation::kWord32, Type::Signed32());
         if (lower()) {
-          lowering->DoShift(node, lowering->machine()->Word32Sar(), rhs_type);
+          MaskShiftOperand(node, rhs_type);
+          ChangeToPureOp(node, lowering->machine()->Word32Sar());
         }
         return;
       }
@@ -2175,14 +2210,15 @@ class RepresentationSelector {
         VisitBinop(node, UseInfo::TruncatingWord32(),
                    UseInfo::TruncatingWord32(), MachineRepresentation::kWord32);
         if (lower()) {
-          lowering->DoShift(node, lowering->machine()->Word32Shr(), rhs_type);
+          MaskShiftOperand(node, rhs_type);
+          ChangeToPureOp(node, lowering->machine()->Word32Shr());
         }
         return;
       }
       case IrOpcode::kSpeculativeNumberShiftRightLogical: {
         NumberOperationHint hint = NumberOperationHintOf(node->op());
         Type rhs_type = GetUpperBound(node->InputAt(1));
-        if (rhs_type.Is(type_cache_.kZeroish) &&
+        if (rhs_type.Is(type_cache_->kZeroish) &&
             (hint == NumberOperationHint::kSignedSmall ||
              hint == NumberOperationHint::kSigned32) &&
             !truncation.IsUsedAsWord32()) {
@@ -2204,14 +2240,16 @@ class RepresentationSelector {
                      UseInfo::TruncatingWord32(),
                      MachineRepresentation::kWord32);
           if (lower()) {
-            lowering->DoShift(node, lowering->machine()->Word32Shr(), rhs_type);
+            MaskShiftOperand(node, rhs_type);
+            ChangeToPureOp(node, lowering->machine()->Word32Shr());
           }
           return;
         }
         VisitBinop(node, CheckedUseInfoAsWord32FromHint(hint),
                    MachineRepresentation::kWord32, Type::Unsigned32());
         if (lower()) {
-          lowering->DoShift(node, lowering->machine()->Word32Shr(), rhs_type);
+          MaskShiftOperand(node, rhs_type);
+          ChangeToPureOp(node, lowering->machine()->Word32Shr());
         }
         return;
       }
@@ -2228,7 +2266,7 @@ class RepresentationSelector {
           VisitUnop(node, UseInfo::TruncatingWord32(),
                     MachineRepresentation::kWord32);
           if (lower()) DeferReplacement(node, lowering->Int32Abs(node));
-        } else if (input_type.Is(type_cache_.kPositiveIntegerOrNaN)) {
+        } else if (input_type.Is(type_cache_->kPositiveIntegerOrNaN)) {
           VisitUnop(node, UseInfo::TruncatingFloat64(kIdentifyZeros),
                     MachineRepresentation::kFloat64);
           if (lower()) DeferReplacement(node, node->InputAt(0));
@@ -2287,8 +2325,8 @@ class RepresentationSelector {
                             MachineRepresentation::kWord32);
           }
         } else if (jsgraph_->machine()->Is64() &&
-                   lhs_type.Is(type_cache_.kSafeInteger) &&
-                   rhs_type.Is(type_cache_.kSafeInteger)) {
+                   lhs_type.Is(type_cache_->kSafeInteger) &&
+                   rhs_type.Is(type_cache_->kSafeInteger)) {
           VisitInt64Binop(node);
           if (lower()) {
             lowering->DoMax(node, lowering->machine()->Int64LessThan(),
@@ -2345,8 +2383,8 @@ class RepresentationSelector {
                             MachineRepresentation::kWord32);
           }
         } else if (jsgraph_->machine()->Is64() &&
-                   lhs_type.Is(type_cache_.kSafeInteger) &&
-                   rhs_type.Is(type_cache_.kSafeInteger)) {
+                   lhs_type.Is(type_cache_->kSafeInteger) &&
+                   rhs_type.Is(type_cache_->kSafeInteger)) {
           VisitInt64Binop(node);
           if (lower()) {
             lowering->DoMin(node, lowering->machine()->Int64LessThan(),
@@ -2393,7 +2431,7 @@ class RepresentationSelector {
         VisitUnop(node, UseInfo::TruncatingFloat64(truncation.identify_zeros()),
                   MachineRepresentation::kFloat64);
         if (lower()) {
-          if (input_type.Is(type_cache_.kIntegerOrMinusZeroOrNaN)) {
+          if (input_type.Is(type_cache_->kIntegerOrMinusZeroOrNaN)) {
             DeferReplacement(node, node->InputAt(0));
           } else if (node->opcode() == IrOpcode::kNumberRound) {
             DeferReplacement(node, lowering->Float64Round(node));
@@ -2502,7 +2540,7 @@ class RepresentationSelector {
       }
       case IrOpcode::kNumberToUint8Clamped: {
         Type const input_type = TypeOf(node->InputAt(0));
-        if (input_type.Is(type_cache_.kUint8OrMinusZeroOrNaN)) {
+        if (input_type.Is(type_cache_->kUint8OrMinusZeroOrNaN)) {
           VisitUnop(node, UseInfo::TruncatingWord32(),
                     MachineRepresentation::kWord32);
           if (lower()) DeferReplacement(node, node->InputAt(0));
@@ -2514,7 +2552,7 @@ class RepresentationSelector {
           VisitUnop(node, UseInfo::TruncatingWord32(),
                     MachineRepresentation::kWord32);
           if (lower()) lowering->DoSigned32ToUint8Clamped(node);
-        } else if (input_type.Is(type_cache_.kIntegerOrMinusZeroOrNaN)) {
+        } else if (input_type.Is(type_cache_->kIntegerOrMinusZeroOrNaN)) {
           VisitUnop(node, UseInfo::TruncatingFloat64(),
                     MachineRepresentation::kFloat64);
           if (lower()) lowering->DoIntegerToUint8Clamped(node);
@@ -2687,6 +2725,18 @@ class RepresentationSelector {
         ProcessInput(node, 0, UseInfo::Word());
         ProcessRemainingInputs(node, 1);
         SetOutput(node, MachineRepresentation::kTaggedPointer);
+        return;
+      }
+      case IrOpcode::kLoadMessage: {
+        if (truncation.IsUnused()) return VisitUnused(node);
+        VisitUnop(node, UseInfo::Word(), MachineRepresentation::kTagged);
+        return;
+      }
+      case IrOpcode::kStoreMessage: {
+        ProcessInput(node, 0, UseInfo::Word());
+        ProcessInput(node, 1, UseInfo::AnyTagged());
+        ProcessRemainingInputs(node, 2);
+        SetOutput(node, MachineRepresentation::kNone);
         return;
       }
       case IrOpcode::kLoadFieldByIndex: {
@@ -2965,7 +3015,7 @@ class RepresentationSelector {
       }
       case IrOpcode::kObjectIsFiniteNumber: {
         Type const input_type = GetUpperBound(node->InputAt(0));
-        if (input_type.Is(type_cache_.kSafeInteger)) {
+        if (input_type.Is(type_cache_->kSafeInteger)) {
           VisitUnop(node, UseInfo::None(), MachineRepresentation::kBit);
           if (lower()) {
             DeferReplacement(node, lowering->jsgraph()->Int32Constant(1));
@@ -2994,7 +3044,7 @@ class RepresentationSelector {
       }
       case IrOpcode::kObjectIsSafeInteger: {
         Type const input_type = GetUpperBound(node->InputAt(0));
-        if (input_type.Is(type_cache_.kSafeInteger)) {
+        if (input_type.Is(type_cache_->kSafeInteger)) {
           VisitUnop(node, UseInfo::None(), MachineRepresentation::kBit);
           if (lower()) {
             DeferReplacement(node, lowering->jsgraph()->Int32Constant(1));
@@ -3021,7 +3071,7 @@ class RepresentationSelector {
       }
       case IrOpcode::kObjectIsInteger: {
         Type const input_type = GetUpperBound(node->InputAt(0));
-        if (input_type.Is(type_cache_.kSafeInteger)) {
+        if (input_type.Is(type_cache_->kSafeInteger)) {
           VisitUnop(node, UseInfo::None(), MachineRepresentation::kBit);
           if (lower()) {
             DeferReplacement(node, lowering->jsgraph()->Int32Constant(1));
@@ -3443,7 +3493,7 @@ class RepresentationSelector {
   // position information via the SourcePositionWrapper like all other reducers.
   SourcePositionTable* source_positions_;
   NodeOriginTable* node_origins_;
-  TypeCache const& type_cache_;
+  TypeCache const* type_cache_;
   OperationTyper op_typer_;  // helper for the feedback typer
 
   NodeInfo* GetInfo(Node* node) {
@@ -4003,16 +4053,6 @@ void SimplifiedLowering::DoMin(Node* node, Operator const* op,
   DCHECK_EQ(lhs, node->InputAt(1));
   DCHECK_EQ(rhs, node->InputAt(2));
   NodeProperties::ChangeOp(node, common()->Select(rep));
-}
-
-void SimplifiedLowering::DoShift(Node* node, Operator const* op,
-                                 Type rhs_type) {
-  if (!rhs_type.Is(type_cache_.kZeroToThirtyOne)) {
-    Node* const rhs = NodeProperties::GetValueInput(node, 1);
-    node->ReplaceInput(1, graph()->NewNode(machine()->Word32And(), rhs,
-                                           jsgraph()->Int32Constant(0x1F)));
-  }
-  ChangeToPureOp(node, op);
 }
 
 void SimplifiedLowering::DoIntegral32ToBit(Node* node) {

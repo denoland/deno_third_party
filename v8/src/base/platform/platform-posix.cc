@@ -92,8 +92,8 @@ bool g_hard_abort = false;
 
 const char* g_gc_fake_mmap = nullptr;
 
-static LazyInstance<RandomNumberGenerator>::type
-    platform_random_number_generator = LAZY_INSTANCE_INITIALIZER;
+DEFINE_LAZY_LEAKY_OBJECT_GETTER(RandomNumberGenerator,
+                                GetPlatformRandomNumberGenerator);
 static LazyMutex rng_mutex = LAZY_MUTEX_INITIALIZER;
 
 #if !V8_OS_FUCHSIA
@@ -188,7 +188,7 @@ size_t OS::CommitPageSize() {
 void OS::SetRandomMmapSeed(int64_t seed) {
   if (seed) {
     MutexGuard guard(rng_mutex.Pointer());
-    platform_random_number_generator.Pointer()->SetSeed(seed);
+    GetPlatformRandomNumberGenerator()->SetSeed(seed);
   }
 }
 
@@ -197,8 +197,7 @@ void* OS::GetRandomMmapAddr() {
   uintptr_t raw_addr;
   {
     MutexGuard guard(rng_mutex.Pointer());
-    platform_random_number_generator.Pointer()->NextBytes(&raw_addr,
-                                                          sizeof(raw_addr));
+    GetPlatformRandomNumberGenerator()->NextBytes(&raw_addr, sizeof(raw_addr));
   }
 #if defined(V8_USE_ADDRESS_SANITIZER) || defined(MEMORY_SANITIZER) || \
     defined(THREAD_SANITIZER) || defined(LEAK_SANITIZER)
@@ -449,7 +448,8 @@ OS::MemoryMappedFile* OS::MemoryMappedFile::open(const char* name) {
   if (FILE* file = fopen(name, "r+")) {
     if (fseek(file, 0, SEEK_END) == 0) {
       long size = ftell(file);  // NOLINT(runtime/int)
-      if (size >= 0) {
+      if (size == 0) return new PosixMemoryMappedFile(file, nullptr, 0);
+      if (size > 0) {
         void* const memory =
             mmap(OS::GetRandomMmapAddr(), size, PROT_READ | PROT_WRITE,
                  MAP_SHARED, fileno(file), 0);
@@ -468,6 +468,7 @@ OS::MemoryMappedFile* OS::MemoryMappedFile::open(const char* name) {
 OS::MemoryMappedFile* OS::MemoryMappedFile::create(const char* name,
                                                    size_t size, void* initial) {
   if (FILE* file = fopen(name, "w+")) {
+    if (size == 0) return new PosixMemoryMappedFile(file, 0, 0);
     size_t result = fwrite(initial, 1, size, file);
     if (result == size && !ferror(file)) {
       void* memory = mmap(OS::GetRandomMmapAddr(), result,

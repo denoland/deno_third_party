@@ -72,10 +72,11 @@ class IA32OperandGenerator final : public OperandGenerator {
 // really have to this here, then we need to find a way to put this
 // information on the HeapConstant node already.
 #if 0
-        // Constants in new space cannot be used as immediates in V8 because
-        // the GC does not scan code objects when collecting the new generation.
+        // Constants in young generation cannot be used as immediates in V8
+        // because the GC does not scan code objects when collecting the young
+        // generation.
         Handle<HeapObject> value = HeapConstantOf(node->op());
-        return !Heap::InNewSpace(*value);
+        return !Heap::InYoungGeneration(*value);
 #else
         return false;
 #endif
@@ -185,8 +186,12 @@ namespace {
 void VisitRO(InstructionSelector* selector, Node* node, ArchOpcode opcode) {
   IA32OperandGenerator g(selector);
   InstructionOperand temps[] = {g.TempRegister()};
-  selector->Emit(opcode, g.DefineAsRegister(node), g.Use(node->InputAt(0)),
-                 arraysize(temps), temps);
+  Node* input = node->InputAt(0);
+  // We have to use a byte register as input to movsxb.
+  InstructionOperand input_op =
+      opcode == kIA32Movsxbl ? g.UseFixed(input, eax) : g.Use(input);
+  selector->Emit(opcode, g.DefineAsRegister(node), input_op, arraysize(temps),
+                 temps);
 }
 
 void VisitRR(InstructionSelector* selector, Node* node,
@@ -1251,15 +1256,17 @@ void VisitWordCompare(InstructionSelector* selector, Node* node,
 
 void VisitWordCompare(InstructionSelector* selector, Node* node,
                       FlagsContinuation* cont) {
-  StackCheckMatcher<Int32BinopMatcher, IrOpcode::kUint32LessThan> m(
-      selector->isolate(), node);
-  if (m.Matched()) {
-    // Compare(Load(js_stack_limit), LoadStackPointer)
-    if (!node->op()->HasProperty(Operator::kCommutative)) cont->Commute();
-    InstructionCode opcode = cont->Encode(kIA32StackCheck);
-    CHECK(cont->IsBranch());
-    selector->EmitWithContinuation(opcode, cont);
-    return;
+  if (selector->isolate() != nullptr) {
+    StackCheckMatcher<Int32BinopMatcher, IrOpcode::kUint32LessThan> m(
+        selector->isolate(), node);
+    if (m.Matched()) {
+      // Compare(Load(js_stack_limit), LoadStackPointer)
+      if (!node->op()->HasProperty(Operator::kCommutative)) cont->Commute();
+      InstructionCode opcode = cont->Encode(kIA32StackCheck);
+      CHECK(cont->IsBranch());
+      selector->EmitWithContinuation(opcode, cont);
+      return;
+    }
   }
   WasmStackCheckMatcher<Int32BinopMatcher, IrOpcode::kUint32LessThan> wasm_m(
       node);

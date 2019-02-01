@@ -27,8 +27,6 @@ class StatsCounter;
   V(builtins_address, "builtins")                                              \
   V(handle_scope_implementer_address,                                          \
     "Isolate::handle_scope_implementer_address")                               \
-  V(default_microtask_queue_address,                                           \
-    "Isolate::default_microtask_queue_address()")                              \
   V(address_of_interpreter_entry_trampoline_instruction_start,                 \
     "Address of the InterpreterEntryTrampoline instruction start")             \
   V(interpreter_dispatch_counters, "Interpreter::dispatch_counters")           \
@@ -70,7 +68,20 @@ class StatsCounter;
   V(debug_suspended_generator_address,                                         \
     "Debug::step_suspended_generator_address()")                               \
   V(debug_restart_fp_address, "Debug::restart_fp_address()")                   \
-  EXTERNAL_REFERENCE_LIST_NON_INTERPRETED_REGEXP(V)
+  V(fast_c_call_caller_fp_address,                                             \
+    "IsolateData::fast_c_call_caller_fp_address")                              \
+  V(fast_c_call_caller_pc_address,                                             \
+    "IsolateData::fast_c_call_caller_pc_address")                              \
+  V(address_of_regexp_stack_limit, "RegExpStack::limit_address()")             \
+  V(address_of_regexp_stack_memory_address, "RegExpStack::memory_address()")   \
+  V(address_of_regexp_stack_memory_size, "RegExpStack::memory_size()")         \
+  V(address_of_static_offsets_vector, "OffsetsVector::static_offsets_vector")  \
+  V(re_case_insensitive_compare_uc16,                                          \
+    "NativeRegExpMacroAssembler::CaseInsensitiveCompareUC16()")                \
+  V(re_check_stack_guard_state,                                                \
+    "RegExpMacroAssembler*::CheckStackGuardState()")                           \
+  V(re_grow_stack, "NativeRegExpMacroAssembler::GrowStack()")                  \
+  V(re_word_character_map, "NativeRegExpMacroAssembler::word_character_map")
 
 #define EXTERNAL_REFERENCE_LIST(V)                                            \
   V(abort_with_reason, "abort_with_reason")                                   \
@@ -179,7 +190,10 @@ class StatsCounter;
   V(wasm_word32_ror, "wasm::word32_ror")                                      \
   V(wasm_word64_ctz, "wasm::word64_ctz")                                      \
   V(wasm_word64_popcnt, "wasm::word64_popcnt")                                \
+  V(wasm_memory_copy, "wasm::memory_copy")                                    \
+  V(wasm_memory_fill, "wasm::memory_fill")                                    \
   V(call_enqueue_microtask_function, "MicrotaskQueue::CallEnqueueMicrotask")  \
+  V(call_enter_context_function, "call_enter_context_function")               \
   V(atomic_pair_load_function, "atomic_pair_load_function")                   \
   V(atomic_pair_store_function, "atomic_pair_store_function")                 \
   V(atomic_pair_add_function, "atomic_pair_add_function")                     \
@@ -191,22 +205,6 @@ class StatsCounter;
   V(atomic_pair_compare_exchange_function,                                    \
     "atomic_pair_compare_exchange_function")                                  \
   EXTERNAL_REFERENCE_LIST_INTL(V)
-
-#ifndef V8_INTERPRETED_REGEXP
-#define EXTERNAL_REFERENCE_LIST_NON_INTERPRETED_REGEXP(V)                     \
-  V(address_of_regexp_stack_limit, "RegExpStack::limit_address()")            \
-  V(address_of_regexp_stack_memory_address, "RegExpStack::memory_address()")  \
-  V(address_of_regexp_stack_memory_size, "RegExpStack::memory_size()")        \
-  V(address_of_static_offsets_vector, "OffsetsVector::static_offsets_vector") \
-  V(re_case_insensitive_compare_uc16,                                         \
-    "NativeRegExpMacroAssembler::CaseInsensitiveCompareUC16()")               \
-  V(re_check_stack_guard_state,                                               \
-    "RegExpMacroAssembler*::CheckStackGuardState()")                          \
-  V(re_grow_stack, "NativeRegExpMacroAssembler::GrowStack()")                 \
-  V(re_word_character_map, "NativeRegExpMacroAssembler::word_character_map")
-#else
-#define EXTERNAL_REFERENCE_LIST_NON_INTERPRETED_REGEXP(V)
-#endif  // V8_INTERPRETED_REGEXP
 
 #ifdef V8_INTL_SUPPORT
 #define EXTERNAL_REFERENCE_LIST_INTL(V)                               \
@@ -226,7 +224,7 @@ class ExternalReference {
   // Used in the simulator to support different native api calls.
   enum Type {
     // Builtin call.
-    // Object* f(v8::internal::Arguments).
+    // Address f(v8::internal::Arguments).
     BUILTIN_CALL,  // default
 
     // Builtin call returning object pair.
@@ -296,7 +294,7 @@ class ExternalReference {
 #undef DECL_EXTERNAL_REFERENCE
 
 #define DECL_EXTERNAL_REFERENCE(name, desc) \
-  static ExternalReference name(Isolate* isolate);
+  static V8_EXPORT_PRIVATE ExternalReference name(Isolate* isolate);
   EXTERNAL_REFERENCE_LIST_WITH_ISOLATE(DECL_EXTERNAL_REFERENCE)
 #undef DECL_EXTERNAL_REFERENCE
 
@@ -326,6 +324,9 @@ size_t hash_value(ExternalReference);
 V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream&, ExternalReference);
 
 void abort_with_reason(int reason);
+
+// Computes pow(x, y) with the special cases in the spec for Math.pow.
+double power_double_double(double x, double y);
 
 }  // namespace internal
 }  // namespace v8

@@ -12,7 +12,6 @@
 #include "src/base/hashmap.h"
 #include "src/builtins/builtins-constructor.h"
 #include "src/builtins/builtins.h"
-#include "src/code-stubs.h"
 #include "src/contexts.h"
 #include "src/conversions-inl.h"
 #include "src/double.h"
@@ -65,15 +64,6 @@ void AstNode::Print(Isolate* isolate) {
 
 IterationStatement* AstNode::AsIterationStatement() {
   switch (node_type()) {
-    ITERATION_NODE_LIST(RETURN_NODE);
-    default:
-      return nullptr;
-  }
-}
-
-BreakableStatement* AstNode::AsBreakableStatement() {
-  switch (node_type()) {
-    BREAKABLE_NODE_LIST(RETURN_NODE);
     ITERATION_NODE_LIST(RETURN_NODE);
     default:
       return nullptr;
@@ -487,15 +477,10 @@ void ObjectLiteral::BuildBoilerplateDescription(Isolate* isolate) {
       has_seen_proto = true;
       continue;
     }
-    if (property->is_computed_name()) {
-      continue;
-    }
+    if (property->is_computed_name()) continue;
 
     Literal* key = property->key()->AsLiteral();
-
-    if (!key->IsPropertyName()) {
-      index_keys++;
-    }
+    if (!key->IsPropertyName()) index_keys++;
   }
 
   Handle<ObjectBoilerplateDescription> boilerplate_description =

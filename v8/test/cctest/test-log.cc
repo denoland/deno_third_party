@@ -458,7 +458,7 @@ TEST(EquivalenceOfLoggingAndTraversal) {
         "  obj.test =\n"
         "    (function a(j) { return function b() { return j; } })(100);\n"
         "})(this);");
-    logger.logger()->StopProfiler();
+    logger.logger()->StopProfilerThread();
     CcTest::PreciseCollectAllGarbage();
     logger.StringEvent("test-logging-done", "");
 
@@ -535,10 +535,10 @@ TEST(Issue539892) {
 
     void CodeMoveEvent(i::AbstractCode from, i::AbstractCode to) override {}
     void CodeDisableOptEvent(i::AbstractCode code,
-                             i::SharedFunctionInfo* shared) override {}
+                             i::SharedFunctionInfo shared) override {}
 
    private:
-    void LogRecordedBuffer(i::AbstractCode code, i::SharedFunctionInfo* shared,
+    void LogRecordedBuffer(i::AbstractCode code, i::SharedFunctionInfo shared,
                            const char* name, int length) override {}
     void LogRecordedBuffer(const i::wasm::WasmCode* code, const char* name,
                            int length) override {}
@@ -586,7 +586,7 @@ TEST(LogAll) {
   SETUP_FLAGS();
   i::FLAG_log_all = true;
   i::FLAG_turbo_inlining = false;
-  i::FLAG_enable_one_shot_optimization = false;
+  i::FLAG_allow_natives_syntax = true;
   v8::Isolate::CreateParams create_params;
   create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
   v8::Isolate* isolate = v8::Isolate::New(create_params);
@@ -594,12 +594,27 @@ TEST(LogAll) {
   {
     ScopedLoggerInitializer logger(saved_log, saved_prof, isolate);
 
-    const char* source_text =
-        "function testAddFn(a,b) { return a + b };"
-        "let result;"
-        "for (let i = 0; i < 100000; i++) { result = testAddFn(i, i); };"
-        "testAddFn('1', 1);"
-        "for (let i = 0; i < 100000; i++) { result = testAddFn('1', i); }";
+    const char* source_text = R"(
+        function testAddFn(a,b) {
+          return a + b
+        };
+        let result;
+
+        // Warm up the ICs.
+        for (let i = 0; i < 100000; i++) {
+          result = testAddFn(i, i);
+        };
+
+        // Enforce optimization.
+        %OptimizeFunctionOnNextCall(testAddFn);
+        result = testAddFn(1, 1);
+
+        // Cause deopt.
+        testAddFn('1', 1)
+        for (let i = 0; i < 100000; i++) {
+          result = testAddFn('1', i);
+        }
+      )";
     CompileRun(source_text);
 
     logger.StopLogging();
@@ -611,10 +626,9 @@ TEST(LogAll) {
     CHECK(logger.ContainsLine({"code-creation,Script", ":1:1"}));
     CHECK(logger.ContainsLine({"api,v8::Script::Run"}));
     CHECK(logger.ContainsLine({"code-creation,LazyCompile,", "testAddFn"}));
+
     if (i::FLAG_opt && !i::FLAG_always_opt) {
       CHECK(logger.ContainsLine({"code-deopt,", "not a Smi"}));
-      if (i::FLAG_enable_one_shot_optimization)
-        CHECK(logger.ContainsLine({"code-deopt,", "DeoptimizeNow"}));
       CHECK(logger.ContainsLine({"timer-event-start", "V8.DeoptimizeCode"}));
       CHECK(logger.ContainsLine({"timer-event-end", "V8.DeoptimizeCode"}));
     }
@@ -622,6 +636,7 @@ TEST(LogAll) {
   isolate->Dispose();
 }
 
+#ifndef V8_TARGET_ARCH_ARM
 TEST(LogInterpretedFramesNativeStack) {
   SETUP_FLAGS();
   i::FLAG_interpreted_frames_native_stack = true;
@@ -644,6 +659,7 @@ TEST(LogInterpretedFramesNativeStack) {
   }
   isolate->Dispose();
 }
+#endif  // V8_TARGET_ARCH_ARM
 
 TEST(ExternalCodeEventListener) {
   i::FLAG_log = false;
@@ -657,7 +673,7 @@ TEST(ExternalCodeEventListener) {
     v8::HandleScope scope(isolate);
     v8::Isolate::Scope isolate_scope(isolate);
     v8::Local<v8::Context> context = v8::Context::New(isolate);
-    context->Enter();
+    v8::Context::Scope context_scope(context);
 
     TestCodeEventHandler code_event_handler(isolate);
 
@@ -684,12 +700,69 @@ TEST(ExternalCodeEventListener) {
     CHECK_GE(code_event_handler.CountLines("LazyCompile",
                                            "testCodeEventListenerAfterStart"),
              1);
-
-    context->Exit();
   }
   isolate->Dispose();
 }
 
+TEST(ExternalCodeEventListenerInnerFunctions) {
+  i::FLAG_log = false;
+  i::FLAG_prof = false;
+
+  v8::ScriptCompiler::CachedData* cache;
+  static const char* source_cstring =
+      "(function f1() { return (function f2() {}); })()";
+
+  v8::Isolate::CreateParams create_params;
+  create_params.array_buffer_allocator = CcTest::array_buffer_allocator();
+  v8::Isolate* isolate1 = v8::Isolate::New(create_params);
+  {  // Test that we emit the correct code events from eagerly compiling.
+    v8::HandleScope scope(isolate1);
+    v8::Isolate::Scope isolate_scope(isolate1);
+    v8::Local<v8::Context> context = v8::Context::New(isolate1);
+    v8::Context::Scope context_scope(context);
+
+    TestCodeEventHandler code_event_handler(isolate1);
+    code_event_handler.Enable();
+
+    v8::Local<v8::String> source_string = v8_str(source_cstring);
+    v8::ScriptOrigin origin(v8_str("test"));
+    v8::ScriptCompiler::Source source(source_string, origin);
+    v8::Local<v8::UnboundScript> script =
+        v8::ScriptCompiler::CompileUnboundScript(isolate1, &source)
+            .ToLocalChecked();
+    CHECK_EQ(code_event_handler.CountLines("Script", "f1"), 1);
+    CHECK_EQ(code_event_handler.CountLines("Script", "f2"), 1);
+    cache = v8::ScriptCompiler::CreateCodeCache(script);
+  }
+  isolate1->Dispose();
+
+  v8::Isolate* isolate2 = v8::Isolate::New(create_params);
+  {  // Test that we emit the correct code events from deserialization.
+    v8::HandleScope scope(isolate2);
+    v8::Isolate::Scope isolate_scope(isolate2);
+    v8::Local<v8::Context> context = v8::Context::New(isolate2);
+    v8::Context::Scope context_scope(context);
+
+    TestCodeEventHandler code_event_handler(isolate2);
+    code_event_handler.Enable();
+
+    v8::Local<v8::String> source_string = v8_str(source_cstring);
+    v8::ScriptOrigin origin(v8_str("test"));
+    v8::ScriptCompiler::Source source(source_string, origin, cache);
+    {
+      i::DisallowCompilation no_compile_expected(
+          reinterpret_cast<i::Isolate*>(isolate2));
+      v8::ScriptCompiler::CompileUnboundScript(
+          isolate2, &source, v8::ScriptCompiler::kConsumeCodeCache)
+          .ToLocalChecked();
+    }
+    CHECK_EQ(code_event_handler.CountLines("Script", "f1"), 1);
+    CHECK_EQ(code_event_handler.CountLines("Script", "f2"), 1);
+  }
+  isolate2->Dispose();
+}
+
+#ifndef V8_TARGET_ARCH_ARM
 TEST(ExternalCodeEventListenerWithInterpretedFramesNativeStack) {
   i::FLAG_log = false;
   i::FLAG_prof = false;
@@ -739,6 +812,7 @@ TEST(ExternalCodeEventListenerWithInterpretedFramesNativeStack) {
   }
   isolate->Dispose();
 }
+#endif  // V8_TARGET_ARCH_ARM
 
 TEST(TraceMaps) {
   SETUP_FLAGS();
@@ -797,11 +871,11 @@ void ValidateMapDetailsLogging(v8::Isolate* isolate,
   i::HeapIterator iterator(heap);
   i::DisallowHeapAllocation no_gc;
   size_t i = 0;
-  for (i::HeapObject* obj = iterator.next(); obj != nullptr;
+  for (i::HeapObject obj = iterator.next(); !obj.is_null();
        obj = iterator.next()) {
     if (!obj->IsMap()) continue;
     i++;
-    uintptr_t address = reinterpret_cast<uintptr_t>(obj);
+    uintptr_t address = obj->ptr();
     if (map_create_addresses.find(address) == map_create_addresses.end()) {
       // logger->PrintLog();
       i::Map::cast(obj)->Print();
@@ -809,7 +883,8 @@ void ValidateMapDetailsLogging(v8::Isolate* isolate,
                "Map (%p, #%zu) creation not logged during startup with "
                "--trace-maps!"
                "\n# Expected Log Line: map-create, ... %p",
-               reinterpret_cast<void*>(obj), i, reinterpret_cast<void*>(obj));
+               reinterpret_cast<void*>(obj->ptr()), i,
+               reinterpret_cast<void*>(obj->ptr()));
     } else if (map_details_addresses.find(address) ==
                map_details_addresses.end()) {
       // logger->PrintLog();
@@ -818,7 +893,8 @@ void ValidateMapDetailsLogging(v8::Isolate* isolate,
                "Map (%p, #%zu) details not logged during startup with "
                "--trace-maps!"
                "\n# Expected Log Line: map-details, ... %p",
-               reinterpret_cast<void*>(obj), i, reinterpret_cast<void*>(obj));
+               reinterpret_cast<void*>(obj->ptr()), i,
+               reinterpret_cast<void*>(obj->ptr()));
     }
   }
 }

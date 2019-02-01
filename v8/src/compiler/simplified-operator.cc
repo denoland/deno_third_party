@@ -1151,11 +1151,13 @@ struct SimplifiedOperatorGlobalCache final {
       kSpeculativeToNumberNumberOrOddballOperator;
 };
 
-static base::LazyInstance<SimplifiedOperatorGlobalCache>::type
-    kSimplifiedOperatorGlobalCache = LAZY_INSTANCE_INITIALIZER;
+namespace {
+DEFINE_LAZY_LEAKY_OBJECT_GETTER(SimplifiedOperatorGlobalCache,
+                                GetSimplifiedOperatorGlobalCache);
+}
 
 SimplifiedOperatorBuilder::SimplifiedOperatorBuilder(Zone* zone)
-    : cache_(kSimplifiedOperatorGlobalCache.Get()), zone_(zone) {}
+    : cache_(*GetSimplifiedOperatorGlobalCache()), zone_(zone) {}
 
 #define GET_FROM_CACHE(Name, ...) \
   const Operator* SimplifiedOperatorBuilder::Name() { return &cache_.k##Name; }
@@ -1644,6 +1646,20 @@ SPECULATIVE_NUMBER_BINOP_LIST(SPECULATIVE_NUMBER_BINOP)
   }
 ACCESS_OP_LIST(ACCESS)
 #undef ACCESS
+
+const Operator* SimplifiedOperatorBuilder::LoadMessage() {
+  return new (zone())
+      Operator(IrOpcode::kLoadMessage,
+               Operator::kNoDeopt | Operator::kNoThrow | Operator::kNoWrite,
+               "LoadMessage", 1, 1, 1, 1, 1, 0);
+}
+
+const Operator* SimplifiedOperatorBuilder::StoreMessage() {
+  return new (zone())
+      Operator(IrOpcode::kStoreMessage,
+               Operator::kNoDeopt | Operator::kNoThrow | Operator::kNoRead,
+               "StoreMessage", 2, 1, 1, 0, 1, 0);
+}
 
 const Operator* SimplifiedOperatorBuilder::TransitionAndStoreElement(
     Handle<Map> double_map, Handle<Map> fast_map) {

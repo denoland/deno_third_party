@@ -16,10 +16,13 @@
 #include "src/lookup-cache.h"
 #include "src/objects-inl.h"
 #include "src/objects/arguments.h"
+#include "src/objects/cell-inl.h"
 #include "src/objects/data-handler.h"
 #include "src/objects/debug-objects.h"
 #include "src/objects/descriptor-array.h"
 #include "src/objects/dictionary.h"
+#include "src/objects/foreign.h"
+#include "src/objects/heap-number.h"
 #include "src/objects/instance-type-inl.h"
 #include "src/objects/js-generator.h"
 #include "src/objects/js-weak-refs.h"
@@ -27,6 +30,7 @@
 #include "src/objects/map.h"
 #include "src/objects/microtask.h"
 #include "src/objects/module.h"
+#include "src/objects/oddball-inl.h"
 #include "src/objects/promise.h"
 #include "src/objects/script.h"
 #include "src/objects/shared-function-info.h"
@@ -101,7 +105,7 @@ AllocationResult Heap::AllocateMap(InstanceType instance_type,
                      !Map::CanHaveFastTransitionableElementsKind(instance_type),
                  IsDictionaryElementsKind(elements_kind) ||
                      IsTerminalElementsKind(elements_kind));
-  HeapObject* result = nullptr;
+  HeapObject result;
   // JSObjects have maps with a mutable prototype_validity_cell, so they cannot
   // go in RO_SPACE.
   AllocationResult allocation =
@@ -119,7 +123,7 @@ AllocationResult Heap::AllocateMap(InstanceType instance_type,
 
 AllocationResult Heap::AllocatePartialMap(InstanceType instance_type,
                                           int instance_size) {
-  Object* result = nullptr;
+  Object result;
   AllocationResult allocation = AllocateRaw(Map::kSize, RO_SPACE);
   if (!allocation.To(&result)) return allocation;
   // Map::cast cannot be used due to uninitialized map field.
@@ -154,7 +158,7 @@ void Heap::FinalizePartialMap(Map map) {
   ReadOnlyRoots roots(this);
   map->set_dependent_code(DependentCode::cast(roots.empty_weak_fixed_array()));
   map->set_raw_transitions(MaybeObject::FromSmi(Smi::zero()));
-  map->set_instance_descriptors(roots.empty_descriptor_array());
+  map->SetInstanceDescriptors(isolate(), roots.empty_descriptor_array(), 0);
   if (FLAG_unbox_double_fields) {
     map->set_layout_descriptor(LayoutDescriptor::FastPointerLayout());
   }
@@ -165,7 +169,7 @@ void Heap::FinalizePartialMap(Map map) {
 AllocationResult Heap::Allocate(Map map, AllocationSpace space) {
   DCHECK(map->instance_type() != MAP_TYPE);
   int size = map->instance_size();
-  HeapObject* result = nullptr;
+  HeapObject result;
   AllocationResult allocation = AllocateRaw(size, space);
   if (!allocation.To(&result)) return allocation;
   // New space objects are allocated white.
@@ -179,7 +183,7 @@ AllocationResult Heap::AllocateEmptyFixedTypedArray(
     ExternalArrayType array_type) {
   int size = OBJECT_POINTER_ALIGN(FixedTypedArrayBase::kDataOffset);
 
-  HeapObject* object = nullptr;
+  HeapObject object;
   AllocationResult allocation = AllocateRaw(
       size, RO_SPACE,
       array_type == kExternalFloat64Array ? kDoubleAligned : kWordAligned);
@@ -199,7 +203,7 @@ AllocationResult Heap::AllocateEmptyFixedTypedArray(
 }
 
 bool Heap::CreateInitialMaps() {
-  HeapObject* obj = nullptr;
+  HeapObject obj;
   {
     AllocationResult allocation = AllocatePartialMap(MAP_TYPE, Map::kSize);
     if (!allocation.To(&obj)) return false;
@@ -295,7 +299,7 @@ bool Heap::CreateInitialMaps() {
     const StructTable& entry = struct_table[i];
     Map map;
     if (!AllocatePartialMap(entry.type, entry.size).To(&map)) return false;
-    roots_table()[entry.index] = map;
+    roots_table()[entry.index] = map->ptr();
   }
 
   // Allocate the empty enum cache.
@@ -313,7 +317,7 @@ bool Heap::CreateInitialMaps() {
     if (!AllocateRaw(size, RO_SPACE).To(&obj)) return false;
     obj->set_map_after_allocation(roots.descriptor_array_map(),
                                   SKIP_WRITE_BARRIER);
-    DescriptorArray* array = DescriptorArray::cast(obj);
+    DescriptorArray array = DescriptorArray::cast(obj);
     array->Initialize(roots.empty_enum_cache(), roots.undefined_value(), 0, 0);
   }
   set_empty_descriptor_array(DescriptorArray::cast(obj));
@@ -332,7 +336,7 @@ bool Heap::CreateInitialMaps() {
   FinalizePartialMap(roots.the_hole_map());
   for (unsigned i = 0; i < arraysize(struct_table); ++i) {
     const StructTable& entry = struct_table[i];
-    FinalizePartialMap(Map::cast(roots_table()[entry.index]));
+    FinalizePartialMap(Map::cast(Object(roots_table()[entry.index])));
   }
 
   {  // Map allocation
@@ -384,7 +388,7 @@ bool Heap::CreateInitialMaps() {
       // Mark cons string maps as unstable, because their objects can change
       // maps during GC.
       if (StringShape(entry.type).IsCons()) map->mark_unstable();
-      roots_table()[entry.index] = map;
+      roots_table()[entry.index] = map->ptr();
     }
 
     {  // Create a separate external one byte string map for native sources.
@@ -431,8 +435,8 @@ bool Heap::CreateInitialMaps() {
     }
 
     ALLOCATE_MAP(PROPERTY_CELL_TYPE, PropertyCell::kSize, global_property_cell)
-    ALLOCATE_MAP(FILLER_TYPE, kPointerSize, one_pointer_filler)
-    ALLOCATE_MAP(FILLER_TYPE, 2 * kPointerSize, two_pointer_filler)
+    ALLOCATE_MAP(FILLER_TYPE, kTaggedSize, one_pointer_filler)
+    ALLOCATE_MAP(FILLER_TYPE, 2 * kTaggedSize, two_pointer_filler)
 
     // The "no closures" and "one closure" FeedbackCell maps need
     // to be marked unstable because their objects can change maps.
@@ -485,21 +489,24 @@ bool Heap::CreateInitialMaps() {
     ALLOCATE_MAP(CALL_HANDLER_INFO_TYPE, CallHandlerInfo::kSize,
                  next_call_side_effect_free_call_handler_info)
 
-    ALLOCATE_VARSIZE_MAP(PRE_PARSED_SCOPE_DATA_TYPE, pre_parsed_scope_data)
-    ALLOCATE_MAP(UNCOMPILED_DATA_WITHOUT_PRE_PARSED_SCOPE_TYPE,
-                 UncompiledDataWithoutPreParsedScope::kSize,
-                 uncompiled_data_without_pre_parsed_scope)
-    ALLOCATE_MAP(UNCOMPILED_DATA_WITH_PRE_PARSED_SCOPE_TYPE,
-                 UncompiledDataWithPreParsedScope::kSize,
-                 uncompiled_data_with_pre_parsed_scope)
+    ALLOCATE_VARSIZE_MAP(PREPARSE_DATA_TYPE, preparse_data)
+    ALLOCATE_MAP(UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE,
+                 UncompiledDataWithoutPreparseData::kSize,
+                 uncompiled_data_without_preparse_data)
+    ALLOCATE_MAP(UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE,
+                 UncompiledDataWithPreparseData::kSize,
+                 uncompiled_data_with_preparse_data)
     ALLOCATE_MAP(SHARED_FUNCTION_INFO_TYPE, SharedFunctionInfo::kAlignedSize,
                  shared_function_info)
 
     ALLOCATE_MAP(CODE_DATA_CONTAINER_TYPE, CodeDataContainer::kSize,
                  code_data_container)
 
+    ALLOCATE_MAP(WEAK_CELL_TYPE, WeakCell::kSize, weak_cell)
+
     ALLOCATE_MAP(JS_MESSAGE_OBJECT_TYPE, JSMessageObject::kSize, message_object)
-    ALLOCATE_MAP(JS_OBJECT_TYPE, JSObject::kHeaderSize + kEmbedderDataSlotSize,
+    ALLOCATE_MAP(JS_OBJECT_TYPE,
+                 JSObject::kHeaderSizeForEmbedderFields + kEmbedderDataSlotSize,
                  external)
     external_map()->set_is_extensible(false);
 #undef ALLOCATE_PRIMITIVE_MAP
@@ -630,7 +637,7 @@ void Heap::CreateInitialObjects() {
   // There's no "current microtask" in the beginning.
   set_current_microtask(roots.undefined_value());
 
-  set_dirty_js_weak_factories(roots.undefined_value());
+  set_dirty_js_finalization_groups(roots.undefined_value());
   set_weak_refs_keep_during_job(roots.undefined_value());
 
   // Allocate cache for single character one byte strings.
@@ -643,7 +650,7 @@ void Heap::CreateInitialObjects() {
   for (unsigned i = 0; i < arraysize(constant_string_table); i++) {
     Handle<String> str =
         factory->InternalizeUtf8String(constant_string_table[i].contents);
-    roots_table()[constant_string_table[i].index] = *str;
+    roots_table()[constant_string_table[i].index] = str->ptr();
   }
 
   // Allocate
@@ -705,17 +712,13 @@ void Heap::CreateInitialObjects() {
 
   set_interpreter_entry_trampoline_for_profiling(roots.undefined_value());
 
-  // Create the code_stubs dictionary. The initial size is set to avoid
-  // expanding the dictionary during bootstrapping.
-  set_code_stubs(*SimpleNumberDictionary::New(isolate(), 128));
-
   {
     HandleScope scope(isolate());
 #define SYMBOL_INIT(_, name)                                        \
   {                                                                 \
     Handle<Symbol> symbol(                                          \
         isolate()->factory()->NewPrivateSymbol(TENURED_READ_ONLY)); \
-    roots_table()[RootIndex::k##name] = *symbol;                    \
+    roots_table()[RootIndex::k##name] = symbol->ptr();              \
   }
     PRIVATE_SYMBOL_LIST_GENERATOR(SYMBOL_INIT, /* not used */)
 #undef SYMBOL_INIT
@@ -727,7 +730,7 @@ void Heap::CreateInitialObjects() {
   Handle<Symbol> name = factory->NewSymbol(TENURED_READ_ONLY);           \
   Handle<String> name##d = factory->InternalizeUtf8String(#description); \
   name->set_name(*name##d);                                              \
-  roots_table()[RootIndex::k##name] = *name;
+  roots_table()[RootIndex::k##name] = name->ptr();
     PUBLIC_SYMBOL_LIST_GENERATOR(SYMBOL_INIT, /* not used */)
 #undef SYMBOL_INIT
 
@@ -736,7 +739,7 @@ void Heap::CreateInitialObjects() {
   Handle<String> name##d = factory->InternalizeUtf8String(#description); \
   name->set_is_well_known_symbol(true);                                  \
   name->set_name(*name##d);                                              \
-  roots_table()[RootIndex::k##name] = *name;
+  roots_table()[RootIndex::k##name] = name->ptr();
     WELL_KNOWN_SYMBOL_LIST_GENERATOR(SYMBOL_INIT, /* not used */)
 #undef SYMBOL_INIT
 
@@ -802,7 +805,7 @@ void Heap::CreateInitialObjects() {
 
   // Allocate the empty OrderedHashMap.
   Handle<FixedArray> empty_ordered_hash_map = factory->NewFixedArray(
-      OrderedHashMap::kHashTableStartIndex, TENURED_READ_ONLY);
+      OrderedHashMap::HashTableStartIndex(), TENURED_READ_ONLY);
   empty_ordered_hash_map->set_map_no_write_barrier(
       *factory->ordered_hash_map_map());
   for (int i = 0; i < empty_ordered_hash_map->length(); ++i) {
@@ -812,7 +815,7 @@ void Heap::CreateInitialObjects() {
 
   // Allocate the empty OrderedHashSet.
   Handle<FixedArray> empty_ordered_hash_set = factory->NewFixedArray(
-      OrderedHashSet::kHashTableStartIndex, TENURED_READ_ONLY);
+      OrderedHashSet::HashTableStartIndex(), TENURED_READ_ONLY);
   empty_ordered_hash_set->set_map_no_write_barrier(
       *factory->ordered_hash_set_map());
   for (int i = 0; i < empty_ordered_hash_set->length(); ++i) {
@@ -887,7 +890,7 @@ void Heap::CreateInitialObjects() {
 
   cell = factory->NewPropertyCell(factory->empty_string());
   cell->set_value(Smi::FromInt(Isolate::kProtectorValid));
-  set_array_buffer_neutering_protector(*cell);
+  set_array_buffer_detaching_protector(*cell);
 
   cell = factory->NewPropertyCell(factory->empty_string());
   cell->set_value(Smi::FromInt(Isolate::kProtectorValid));
@@ -926,19 +929,21 @@ void Heap::CreateInitialObjects() {
 void Heap::CreateInternalAccessorInfoObjects() {
   Isolate* isolate = this->isolate();
   HandleScope scope(isolate);
-  Handle<AccessorInfo> acessor_info;
+  Handle<AccessorInfo> accessor_info;
 
 #define INIT_ACCESSOR_INFO(_, accessor_name, AccessorName, ...) \
-  acessor_info = Accessors::Make##AccessorName##Info(isolate);  \
-  roots_table()[RootIndex::k##AccessorName##Accessor] = *acessor_info;
+  accessor_info = Accessors::Make##AccessorName##Info(isolate); \
+  roots_table()[RootIndex::k##AccessorName##Accessor] = accessor_info->ptr();
   ACCESSOR_INFO_LIST_GENERATOR(INIT_ACCESSOR_INFO, /* not used */)
 #undef INIT_ACCESSOR_INFO
 
 #define INIT_SIDE_EFFECT_FLAG(_, accessor_name, AccessorName, GetterType, \
                               SetterType)                                 \
-  AccessorInfo::cast(roots_table()[RootIndex::k##AccessorName##Accessor]) \
+  AccessorInfo::cast(                                                     \
+      Object(roots_table()[RootIndex::k##AccessorName##Accessor]))        \
       ->set_getter_side_effect_type(SideEffectType::GetterType);          \
-  AccessorInfo::cast(roots_table()[RootIndex::k##AccessorName##Accessor]) \
+  AccessorInfo::cast(                                                     \
+      Object(roots_table()[RootIndex::k##AccessorName##Accessor]))        \
       ->set_setter_side_effect_type(SideEffectType::SetterType);
   ACCESSOR_INFO_LIST_GENERATOR(INIT_SIDE_EFFECT_FLAG, /* not used */)
 #undef INIT_SIDE_EFFECT_FLAG

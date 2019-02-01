@@ -12,8 +12,6 @@
 namespace v8 {
 namespace internal {
 
-
-#ifndef V8_INTERPRETED_REGEXP
 class RegExpMacroAssemblerARM64: public NativeRegExpMacroAssembler {
  public:
   RegExpMacroAssemblerARM64(Isolate* isolate, Zone* zone, Mode mode,
@@ -127,7 +125,7 @@ class RegExpMacroAssemblerARM64: public NativeRegExpMacroAssembler {
   static const int kFirstCaptureOnStack = kSuccessCounter - kXRegSize;
 
   // Initial size of code buffer.
-  static const size_t kRegExpCodeSize = 1024;
+  static const int kRegExpCodeSize = 1024;
 
   // When initializing registers to a non-position value we can unroll
   // the loop. Set the limit of registers to unroll.
@@ -284,9 +282,6 @@ class RegExpMacroAssemblerARM64: public NativeRegExpMacroAssembler {
   Label check_preempt_label_;
   Label stack_overflow_label_;
 };
-
-#endif  // V8_INTERPRETED_REGEXP
-
 
 }  // namespace internal
 }  // namespace v8

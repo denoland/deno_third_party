@@ -29,7 +29,9 @@ class RuntimeFunction;
   V(PokeInstruction)                  \
   V(DeleteRangeInstruction)           \
   V(PushUninitializedInstruction)     \
-  V(PushCodePointerInstruction)       \
+  V(PushBuiltinPointerInstruction)    \
+  V(LoadObjectFieldInstruction)       \
+  V(StoreObjectFieldInstruction)      \
   V(CallCsaMacroInstruction)          \
   V(CallIntrinsicInstruction)         \
   V(NamespaceConstantInstruction)     \
@@ -109,9 +111,10 @@ class Instruction {
     return nullptr;
   }
 
-  Instruction(const Instruction& other)
-      : kind_(other.kind_), instruction_(other.instruction_->Clone()) {}
-  Instruction& operator=(const Instruction& other) {
+  Instruction(const Instruction& other) V8_NOEXCEPT
+      : kind_(other.kind_),
+        instruction_(other.instruction_->Clone()) {}
+  Instruction& operator=(const Instruction& other) V8_NOEXCEPT {
     if (kind_ == other.kind_) {
       instruction_->Assign(*other.instruction_);
     } else {
@@ -122,6 +125,17 @@ class Instruction {
   }
 
   InstructionKind kind() const { return kind_; }
+  const char* Mnemonic() const {
+    switch (kind()) {
+#define ENUM_ITEM(name)          \
+  case InstructionKind::k##name: \
+    return #name;
+      TORQUE_INSTRUCTION_LIST(ENUM_ITEM)
+#undef ENUM_ITEM
+      default:
+        UNREACHABLE();
+    }
+  }
   void TypeInstruction(Stack<const Type*>* stack, ControlFlowGraph* cfg) const {
     return instruction_->TypeInstruction(stack, cfg);
   }
@@ -170,11 +184,11 @@ struct PushUninitializedInstruction : InstructionBase {
   const Type* type;
 };
 
-struct PushCodePointerInstruction : InstructionBase {
+struct PushBuiltinPointerInstruction : InstructionBase {
   TORQUE_INSTRUCTION_BOILERPLATE()
-  PushCodePointerInstruction(std::string external_name, const Type* type)
+  PushBuiltinPointerInstruction(std::string external_name, const Type* type)
       : external_name(std::move(external_name)), type(type) {
-    DCHECK(type->IsFunctionPointerType());
+    DCHECK(type->IsBuiltinPointerType());
   }
 
   std::string external_name;
@@ -189,13 +203,35 @@ struct NamespaceConstantInstruction : InstructionBase {
   NamespaceConstant* constant;
 };
 
+struct LoadObjectFieldInstruction : InstructionBase {
+  TORQUE_INSTRUCTION_BOILERPLATE()
+  LoadObjectFieldInstruction(const ClassType* class_type,
+                             std::string field_name)
+      : class_type(class_type), field_name(std::move(field_name)) {}
+  const ClassType* class_type;
+  std::string field_name;
+};
+
+struct StoreObjectFieldInstruction : InstructionBase {
+  TORQUE_INSTRUCTION_BOILERPLATE()
+  StoreObjectFieldInstruction(const ClassType* class_type,
+                              std::string field_name)
+      : class_type(class_type), field_name(std::move(field_name)) {}
+  const ClassType* class_type;
+  std::string field_name;
+};
+
 struct CallIntrinsicInstruction : InstructionBase {
   TORQUE_INSTRUCTION_BOILERPLATE()
   CallIntrinsicInstruction(Intrinsic* intrinsic,
+                           TypeVector specialization_types,
                            std::vector<std::string> constexpr_arguments)
-      : intrinsic(intrinsic), constexpr_arguments(constexpr_arguments) {}
+      : intrinsic(intrinsic),
+        specialization_types(std::move(specialization_types)),
+        constexpr_arguments(constexpr_arguments) {}
 
   Intrinsic* intrinsic;
+  TypeVector specialization_types;
   std::vector<std::string> constexpr_arguments;
 };
 
@@ -265,11 +301,11 @@ struct CallBuiltinPointerInstruction : InstructionBase {
   TORQUE_INSTRUCTION_BOILERPLATE()
   bool IsBlockTerminator() const override { return is_tailcall; }
   CallBuiltinPointerInstruction(bool is_tailcall,
-                                const FunctionPointerType* type, size_t argc)
+                                const BuiltinPointerType* type, size_t argc)
       : is_tailcall(is_tailcall), type(type), argc(argc) {}
 
   bool is_tailcall;
-  const FunctionPointerType* type;
+  const BuiltinPointerType* type;
   size_t argc;
 };
 
@@ -357,10 +393,8 @@ struct ReturnInstruction : InstructionBase {
 
 struct PrintConstantStringInstruction : InstructionBase {
   TORQUE_INSTRUCTION_BOILERPLATE()
-  explicit PrintConstantStringInstruction(std::string message) {
-    // The normal way to write this triggers a bug in Clang on Windows.
-    this->message = std::move(message);
-  }
+  explicit PrintConstantStringInstruction(std::string message)
+      : message(std::move(message)) {}
 
   std::string message;
 };
@@ -369,10 +403,8 @@ struct AbortInstruction : InstructionBase {
   TORQUE_INSTRUCTION_BOILERPLATE()
   enum class Kind { kDebugBreak, kUnreachable, kAssertionFailure };
   bool IsBlockTerminator() const override { return kind != Kind::kDebugBreak; }
-  explicit AbortInstruction(Kind kind, std::string message = "") : kind(kind) {
-    // The normal way to write this triggers a bug in Clang on Windows.
-    this->message = std::move(message);
-  }
+  explicit AbortInstruction(Kind kind, std::string message = "")
+      : kind(kind), message(std::move(message)) {}
 
   Kind kind;
   std::string message;

@@ -6,14 +6,17 @@
 #define V8_COMPILER_RAW_MACHINE_ASSEMBLER_H_
 
 #include "src/assembler.h"
+#include "src/compiler/access-builder.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph.h"
 #include "src/compiler/linkage.h"
 #include "src/compiler/machine-operator.h"
 #include "src/compiler/node.h"
 #include "src/compiler/operator.h"
+#include "src/compiler/simplified-operator.h"
 #include "src/globals.h"
 #include "src/heap/factory.h"
+#include "src/isolate.h"
 
 namespace v8 {
 namespace internal {
@@ -22,7 +25,7 @@ namespace compiler {
 class BasicBlock;
 class RawMachineLabel;
 class Schedule;
-
+class SourcePositionTable;
 
 // The RawMachineAssembler produces a low-level IR graph. All nodes are wired
 // into a graph and also placed into a schedule immediately, hence subsequent
@@ -54,6 +57,7 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   Zone* zone() const { return graph()->zone(); }
   MachineOperatorBuilder* machine() { return &machine_; }
   CommonOperatorBuilder* common() { return &common_; }
+  SimplifiedOperatorBuilder* simplified() { return &simplified_; }
   CallDescriptor* call_descriptor() const { return call_descriptor_; }
   PoisoningMitigationLevel poisoning_level() const { return poisoning_level_; }
 
@@ -79,8 +83,8 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   }
   Node* IntPtrConstant(intptr_t value) {
     // TODO(dcarney): mark generated code as unserializable if value != 0.
-    return kPointerSize == 8 ? Int64Constant(value)
-                             : Int32Constant(static_cast<int>(value));
+    return kSystemPointerSize == 8 ? Int64Constant(value)
+                                   : Int32Constant(static_cast<int>(value));
   }
   Node* RelocatableIntPtrConstant(intptr_t value, RelocInfo::Mode rmode);
   Node* Int32Constant(int32_t value) {
@@ -142,7 +146,20 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
     return AddNode(machine()->Store(StoreRepresentation(rep, write_barrier)),
                    base, index, value);
   }
+  void OptimizedStoreField(MachineRepresentation rep, Node* object, int offset,
+                           Node* value, WriteBarrierKind write_barrier) {
+    AddNode(simplified()->StoreField(FieldAccess(
+                BaseTaggedness::kTaggedBase, offset, MaybeHandle<Name>(),
+                MaybeHandle<Map>(), Type::Any(),
+                MachineType::TypeForRepresentation(rep), write_barrier)),
+            object, value);
+  }
+  void OptimizedStoreMap(Node* object, Node* value) {
+    AddNode(simplified()->StoreField(AccessBuilder::ForMap()), object, value);
+  }
   Node* Retain(Node* value) { return AddNode(common()->Retain(), value); }
+
+  Node* OptimizedAllocate(Node* size, PretenureFlag pretenure);
 
   // Unaligned memory operations
   Node* UnalignedLoad(MachineType type, Node* base) {
@@ -473,10 +490,10 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
     return AddNode(machine()->Word32PairSar(), low_word, high_word, shift);
   }
 
-#define INTPTR_BINOP(prefix, name)                     \
-  Node* IntPtr##name(Node* a, Node* b) {               \
-    return kPointerSize == 8 ? prefix##64##name(a, b)  \
-                             : prefix##32##name(a, b); \
+#define INTPTR_BINOP(prefix, name)                           \
+  Node* IntPtr##name(Node* a, Node* b) {                     \
+    return kSystemPointerSize == 8 ? prefix##64##name(a, b)  \
+                                   : prefix##32##name(a, b); \
   }
 
   INTPTR_BINOP(Int, Add);
@@ -494,10 +511,10 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
 
 #undef INTPTR_BINOP
 
-#define UINTPTR_BINOP(prefix, name)                    \
-  Node* UintPtr##name(Node* a, Node* b) {              \
-    return kPointerSize == 8 ? prefix##64##name(a, b)  \
-                             : prefix##32##name(a, b); \
+#define UINTPTR_BINOP(prefix, name)                          \
+  Node* UintPtr##name(Node* a, Node* b) {                    \
+    return kSystemPointerSize == 8 ? prefix##64##name(a, b)  \
+                                   : prefix##32##name(a, b); \
   }
 
   UINTPTR_BINOP(Uint, LessThan);
@@ -516,8 +533,8 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   }
 
   Node* IntPtrAbsWithOverflow(Node* a) {
-    return kPointerSize == 8 ? Int64AbsWithOverflow(a)
-                             : Int32AbsWithOverflow(a);
+    return kSystemPointerSize == 8 ? Int64AbsWithOverflow(a)
+                                   : Int32AbsWithOverflow(a);
   }
 
   Node* Float32Add(Node* a, Node* b) {
@@ -625,25 +642,16 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
 
   // Conversions.
   Node* BitcastTaggedToWord(Node* a) {
-    if (FLAG_verify_csa || FLAG_optimize_csa) {
       return AddNode(machine()->BitcastTaggedToWord(), a);
-    }
-    return a;
   }
   Node* BitcastMaybeObjectToWord(Node* a) {
-    if (FLAG_verify_csa || FLAG_optimize_csa) {
       return AddNode(machine()->BitcastMaybeObjectToWord(), a);
-    }
-    return a;
   }
   Node* BitcastWordToTagged(Node* a) {
     return AddNode(machine()->BitcastWordToTagged(), a);
   }
   Node* BitcastWordToTaggedSigned(Node* a) {
-    if (FLAG_verify_csa || FLAG_optimize_csa) {
       return AddNode(machine()->BitcastWordToTaggedSigned(), a);
-    }
-    return a;
   }
   Node* TruncateFloat64ToWord32(Node* a) {
     return AddNode(machine()->TruncateFloat64ToWord32(), a);
@@ -933,7 +941,7 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   void DebugAbort(Node* message);
   void DebugBreak();
   void Unreachable();
-  void Comment(const char* msg);
+  void Comment(std::string msg);
 
 #if DEBUG
   void Bind(RawMachineLabel* label, AssemblerDebugInfo info);
@@ -977,6 +985,9 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
     return AddNode(op, sizeof...(args) + 1, buffer);
   }
 
+  void SetSourcePosition(const char* file, int line);
+  SourcePositionTable* source_positions() { return source_positions_; }
+
  private:
   Node* MakeNode(const Operator* op, int input_count, Node* const* inputs);
   BasicBlock* Use(RawMachineLabel* label);
@@ -1001,8 +1012,10 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   Isolate* isolate_;
   Graph* graph_;
   Schedule* schedule_;
+  SourcePositionTable* source_positions_;
   MachineOperatorBuilder machine_;
   CommonOperatorBuilder common_;
+  SimplifiedOperatorBuilder simplified_;
   CallDescriptor* call_descriptor_;
   Node* target_parameter_;
   NodeVector parameters_;

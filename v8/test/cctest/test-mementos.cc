@@ -49,12 +49,13 @@ static void SetUpNewSpaceWithPoisonedMementoAtTop() {
 
   // Create an allocation memento behind the string with a garbage allocation
   // site pointer.
-  AllocationMemento* memento =
-      reinterpret_cast<AllocationMemento*>(new_space->top() + kHeapObjectTag);
+  AllocationMemento memento = AllocationMemento::unchecked_cast(
+      Object(new_space->top() + kHeapObjectTag));
   memento->set_map_after_allocation(
       ReadOnlyRoots(heap).allocation_memento_map(), SKIP_WRITE_BARRIER);
   memento->set_allocation_site(
-      reinterpret_cast<AllocationSite*>(kHeapObjectTag), SKIP_WRITE_BARRIER);
+      AllocationSite::unchecked_cast(Object(kHeapObjectTag)),
+      SKIP_WRITE_BARRIER);
 }
 
 

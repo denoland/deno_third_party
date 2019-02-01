@@ -7,27 +7,20 @@
 
 #include <vector>
 
-#include "src/allocation.h"
-#include "src/base/atomicops.h"
-#include "src/base/hashmap.h"
-#include "src/base/platform/platform.h"
 #include "src/debug/debug-interface.h"
 #include "src/debug/interface-types.h"
-#include "src/execution.h"
-#include "src/flags.h"
 #include "src/frames.h"
 #include "src/globals.h"
-#include "src/heap/factory.h"
+#include "src/handles.h"
+#include "src/isolate.h"
 #include "src/objects/debug-objects.h"
-#include "src/runtime/runtime.h"
 #include "src/source-position-table.h"
-#include "src/string-stream.h"
-#include "src/v8threads.h"
 
 namespace v8 {
 namespace internal {
 
 // Forward declarations.
+class AbstractCode;
 class DebugScope;
 class JSGeneratorObject;
 
@@ -92,7 +85,7 @@ class BreakLocation {
 
   debug::BreakLocationType type() const;
 
-  JSGeneratorObject* GetGeneratorObjectForSuspendedFrame(
+  JSGeneratorObject GetGeneratorObjectForSuspendedFrame(
       JavaScriptFrame* frame) const;
 
  private:
@@ -170,7 +163,7 @@ class BreakIterator {
 // weak handles to avoid a debug info object to keep a function alive.
 class DebugInfoListNode {
  public:
-  DebugInfoListNode(Isolate* isolate, DebugInfo* debug_info);
+  DebugInfoListNode(Isolate* isolate, DebugInfo debug_info);
   ~DebugInfoListNode();
 
   DebugInfoListNode* next() { return next_; }
@@ -349,8 +342,8 @@ class Debug {
   StackFrame::Id break_frame_id() { return thread_local_.break_frame_id_; }
 
   Handle<Object> return_value_handle();
-  Object* return_value() { return thread_local_.return_value_; }
-  void set_return_value(Object* value) { thread_local_.return_value_ = value; }
+  Object return_value() { return thread_local_.return_value_; }
+  void set_return_value(Object value) { thread_local_.return_value_ = value; }
 
   // Support for embedding into generated code.
   Address is_active_address() {
@@ -509,7 +502,7 @@ class Debug {
 
     // If set, next PrepareStepIn will ignore this function until stepped into
     // another function, at which point this will be cleared.
-    Object* ignore_step_into_function_;
+    Object ignore_step_into_function_;
 
     // If set then we need to repeat StepOut action at return.
     bool fast_forward_to_return_;
@@ -524,10 +517,10 @@ class Debug {
     int target_frame_count_;
 
     // Value of the accumulator at the point of entering the debugger.
-    Object* return_value_;
+    Object return_value_;
 
     // The suspended generator object to track when stepping.
-    Object* suspended_generator_;
+    Object suspended_generator_;
 
     // The new frame pointer to drop to when restarting a frame.
     Address restart_fp_;

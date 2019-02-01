@@ -145,9 +145,9 @@ TF_BUILTIN(NewArgumentsElements, CodeStubAssembler) {
         GotoIf(WordEqual(index, length), &done_loop2);
 
         // Load the parameter at the given {index}.
-        TNode<Object> value =
-            CAST(Load(MachineType::AnyTagged(), frame,
-                      TimesPointerSize(IntPtrSub(offset, index))));
+        TNode<Object> value = BitcastWordToTagged(
+            Load(MachineType::Pointer(), frame,
+                 TimesSystemPointerSize(IntPtrSub(offset, index))));
 
         // Store the {value} into the {result}.
         StoreFixedArrayElement(result, index, value, SKIP_WRITE_BARRIER);
@@ -249,7 +249,7 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
     {
       // Temp variable to calculate cell offset in bitmap.
       Node* r0;
-      int shift = Bitmap::kBitsPerCellLog2 + kPointerSizeLog2 -
+      int shift = Bitmap::kBitsPerCellLog2 + kTaggedSizeLog2 -
                   Bitmap::kBytesPerCellLog2;
       r0 = WordShr(object, IntPtrConstant(shift));
       r0 = WordAnd(r0, IntPtrConstant((kPageAlignmentMask >> shift) &
@@ -259,7 +259,7 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
     {
       // Temp variable to calculate bit offset in cell.
       Node* r1;
-      r1 = WordShr(object, IntPtrConstant(kPointerSizeLog2));
+      r1 = WordShr(object, IntPtrConstant(kTaggedSizeLog2));
       r1 = WordAnd(r1, IntPtrConstant((1 << Bitmap::kBitsPerCellLog2) - 1));
       // It seems that LSB(e.g. cl) is automatically used, so no manual masking
       // is needed. Uncomment the following line otherwise.
@@ -329,7 +329,7 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
     StoreNoWriteBarrier(MachineType::PointerRepresentation(), store_buffer_top,
                         slot);
     Node* new_store_buffer_top =
-        IntPtrAdd(store_buffer_top, IntPtrConstant(kPointerSize));
+        IntPtrAdd(store_buffer_top, IntPtrConstant(kSystemPointerSize));
     StoreNoWriteBarrier(MachineType::PointerRepresentation(),
                         store_buffer_top_addr, new_store_buffer_top);
 
@@ -361,7 +361,7 @@ TF_BUILTIN(RecordWrite, RecordWriteCodeStubAssembler) {
 
   BIND(&generational_wb);
   {
-    Label test_old_to_new_flags(this);
+    Label test_old_to_young_flags(this);
     Label store_buffer_exit(this), store_buffer_incremental_wb(this);
 
     // When incremental marking is not on, we skip cross generation pointer
@@ -371,23 +371,22 @@ TF_BUILTIN(RecordWrite, RecordWriteCodeStubAssembler) {
     // `src/compiler/<arch>/code-generator-<arch>.cc` before calling this stub,
     // which serves as the cross generation checking.
     Node* slot = Parameter(Descriptor::kSlot);
-    Branch(IsMarking(), &test_old_to_new_flags, &store_buffer_exit);
+    Branch(IsMarking(), &test_old_to_young_flags, &store_buffer_exit);
 
-    BIND(&test_old_to_new_flags);
+    BIND(&test_old_to_young_flags);
     {
       Node* value = Load(MachineType::Pointer(), slot);
 
       // TODO(albertnetymk): Try to cache the page flag for value and object,
       // instead of calling IsPageFlagSet each time.
-      Node* value_in_new_space =
-          IsPageFlagSet(value, MemoryChunk::kIsInNewSpaceMask);
-      GotoIfNot(value_in_new_space, &incremental_wb);
+      Node* value_is_young =
+          IsPageFlagSet(value, MemoryChunk::kIsInYoungGenerationMask);
+      GotoIfNot(value_is_young, &incremental_wb);
 
       Node* object = BitcastTaggedToWord(Parameter(Descriptor::kObject));
-      Node* object_in_new_space =
-          IsPageFlagSet(object, MemoryChunk::kIsInNewSpaceMask);
-      Branch(object_in_new_space, &incremental_wb,
-             &store_buffer_incremental_wb);
+      Node* object_is_young =
+          IsPageFlagSet(object, MemoryChunk::kIsInYoungGenerationMask);
+      Branch(object_is_young, &incremental_wb, &store_buffer_incremental_wb);
     }
 
     BIND(&store_buffer_exit);
@@ -758,33 +757,23 @@ void Builtins::Generate_CEntry_Return2_SaveFPRegs_ArgvOnStack_BuiltinExit(
   Generate_CEntry(masm, 2, kSaveFPRegs, kArgvOnStack, true);
 }
 
-void Builtins::Generate_CallApiGetter(MacroAssembler* masm) {
-  // CallApiGetterStub only exists as a stub to avoid duplicating code between
-  // here and code-stubs-<arch>.cc. For example, see CallApiFunctionAndReturn.
-  // Here we abuse the instantiated stub to generate code.
-  CallApiGetterStub stub(masm->isolate());
-  stub.Generate(masm);
+#if !defined(V8_TARGET_ARCH_ARM) && !defined(V8_TARGET_ARCH_MIPS)
+void Builtins::Generate_MemCopyUint8Uint8(MacroAssembler* masm) {
+  masm->Call(BUILTIN_CODE(masm->isolate(), Illegal), RelocInfo::CODE_TARGET);
 }
+#endif  // !defined(V8_TARGET_ARCH_ARM) && !defined(V8_TARGET_ARCH_MIPS)
 
-void Builtins::Generate_CallApiCallback_Argc0(MacroAssembler* masm) {
-  // The common variants of CallApiCallbackStub (i.e. all that are embedded into
-  // the snapshot) are generated as builtins. The rest remain available as code
-  // stubs. Here we abuse the instantiated stub to generate code and avoid
-  // duplication.
-  const int kArgc = 0;
-  CallApiCallbackStub stub(masm->isolate(), kArgc);
-  stub.Generate(masm);
+#ifndef V8_TARGET_ARCH_ARM
+void Builtins::Generate_MemCopyUint16Uint8(MacroAssembler* masm) {
+  masm->Call(BUILTIN_CODE(masm->isolate(), Illegal), RelocInfo::CODE_TARGET);
 }
+#endif  // V8_TARGET_ARCH_ARM
 
-void Builtins::Generate_CallApiCallback_Argc1(MacroAssembler* masm) {
-  // The common variants of CallApiCallbackStub (i.e. all that are embedded into
-  // the snapshot) are generated as builtins. The rest remain available as code
-  // stubs. Here we abuse the instantiated stub to generate code and avoid
-  // duplication.
-  const int kArgc = 1;
-  CallApiCallbackStub stub(masm->isolate(), kArgc);
-  stub.Generate(masm);
+#ifndef V8_TARGET_ARCH_IA32
+void Builtins::Generate_MemMove(MacroAssembler* masm) {
+  masm->Call(BUILTIN_CODE(masm->isolate(), Illegal), RelocInfo::CODE_TARGET);
 }
+#endif  // V8_TARGET_ARCH_IA32
 
 // ES6 [[Get]] operation.
 TF_BUILTIN(GetProperty, CodeStubAssembler) {

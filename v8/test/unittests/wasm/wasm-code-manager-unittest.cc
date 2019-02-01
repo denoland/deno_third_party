@@ -165,8 +165,8 @@ class WasmCodeManagerTest : public TestWithContext,
     std::shared_ptr<WasmModule> module(new WasmModule);
     module->num_declared_functions = kNumFunctions;
     bool can_request_more = style == Growable;
-    return manager()->NewNativeModule(i_isolate(), kAllWasmFeatures, size,
-                                      can_request_more, std::move(module));
+    return engine()->NewNativeModule(i_isolate(), kAllWasmFeatures, size,
+                                     can_request_more, std::move(module));
   }
 
   WasmCode* AddCode(NativeModule* native_module, uint32_t index, size_t size) {
@@ -175,15 +175,16 @@ class WasmCodeManagerTest : public TestWithContext,
     std::unique_ptr<byte[]> exec_buff(new byte[size]);
     desc.buffer = exec_buff.get();
     desc.instr_size = static_cast<int>(size);
-    return native_module->AddCode(index, desc, 0, 0, 0, {}, OwnedVector<byte>(),
-                                  WasmCode::kFunction, WasmCode::kOther);
+    return native_module->AddCode(index, desc, 0, 0, 0, 0, {},
+                                  OwnedVector<byte>(), WasmCode::kFunction,
+                                  WasmCode::kOther);
   }
 
   size_t page() const { return AllocatePageSize(); }
 
-  WasmCodeManager* manager() {
-    return i_isolate()->wasm_engine()->code_manager();
-  }
+  WasmEngine* engine() { return i_isolate()->wasm_engine(); }
+
+  WasmCodeManager* manager() { return engine()->code_manager(); }
 
   void SetMaxCommittedMemory(size_t limit) {
     manager()->SetMaxCommittedMemoryForTesting(limit);

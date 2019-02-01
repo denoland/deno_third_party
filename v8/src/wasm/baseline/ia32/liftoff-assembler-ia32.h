@@ -34,8 +34,10 @@ inline Operand GetStackSlot(uint32_t index) {
   return Operand(ebp, -kFirstStackSlotOffset - offset);
 }
 
-inline Operand GetHalfStackSlot(uint32_t half_index) {
-  int32_t offset = half_index * (LiftoffAssembler::kStackSlotSize / 2);
+inline MemOperand GetHalfStackSlot(uint32_t index, RegPairHalf half) {
+  int32_t half_offset =
+      half == kLowWord ? 0 : LiftoffAssembler::kStackSlotSize / 2;
+  int32_t offset = index * LiftoffAssembler::kStackSlotSize - half_offset;
   return Operand(ebp, -kFirstStackSlotOffset - offset);
 }
 
@@ -123,6 +125,28 @@ inline void SignExtendI32ToI64(Assembler* assm, LiftoffRegister reg) {
   assm->sar(reg.high_gp(), 31);
 }
 
+// Get a temporary byte register, using {candidate} if possible.
+// Might spill, but always keeps status flags intact.
+inline Register GetTmpByteRegister(LiftoffAssembler* assm, Register candidate) {
+  if (candidate.is_byte_register()) return candidate;
+  // {GetUnusedRegister()} may insert move instructions to spill registers to
+  // the stack. This is OK because {mov} does not change the status flags.
+  return assm->GetUnusedRegister(liftoff::kByteRegs).gp();
+}
+
+inline void MoveStackValue(LiftoffAssembler* assm, const Operand& src,
+                           const Operand& dst) {
+  if (assm->cache_state()->has_unused_register(kGpReg)) {
+    Register tmp = assm->cache_state()->unused_register(kGpReg).gp();
+    assm->mov(tmp, src);
+    assm->mov(dst, tmp);
+  } else {
+    // No free register, move via the stack.
+    assm->push(src);
+    assm->pop(dst);
+  }
+}
+
 constexpr DoubleRegister kScratchDoubleReg = xmm7;
 
 constexpr int kSubSpSize = 6;  // 6 bytes for "sub esp, <imm32>"
@@ -143,8 +167,9 @@ void LiftoffAssembler::PatchPrepareStackFrame(int offset,
   // We can't run out of space, just pass anything big enough to not cause the
   // assembler to try to grow the buffer.
   constexpr int kAvailableSpace = 64;
-  Assembler patching_assembler(AssemblerOptions{}, buffer_ + offset,
-                               kAvailableSpace);
+  Assembler patching_assembler(
+      AssemblerOptions{},
+      ExternalAssemblerBuffer(buffer_start_ + offset, kAvailableSpace));
 #if V8_OS_WIN
   constexpr int kPageSize = 4 * 1024;
   if (bytes > kPageSize) {
@@ -213,12 +238,26 @@ void LiftoffAssembler::LoadFromInstance(Register dst, uint32_t offset,
   mov(dst, Operand(dst, offset));
 }
 
+void LiftoffAssembler::LoadTaggedPointerFromInstance(Register dst,
+                                                     uint32_t offset) {
+  LoadFromInstance(dst, offset, kTaggedSize);
+}
+
 void LiftoffAssembler::SpillInstance(Register instance) {
   mov(liftoff::GetInstanceOperand(), instance);
 }
 
 void LiftoffAssembler::FillInstanceInto(Register dst) {
   mov(dst, liftoff::GetInstanceOperand());
+}
+
+void LiftoffAssembler::LoadTaggedPointer(Register dst, Register src_addr,
+                                         Register offset_reg,
+                                         uint32_t offset_imm,
+                                         LiftoffRegList pinned) {
+  STATIC_ASSERT(kTaggedSize == kInt32Size);
+  Load(LiftoffRegister(dst), src_addr, offset_reg, offset_imm,
+       LoadType::kI32Load, pinned);
 }
 
 void LiftoffAssembler::Load(LiftoffRegister dst, Register src_addr,
@@ -370,19 +409,22 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
 void LiftoffAssembler::LoadCallerFrameSlot(LiftoffRegister dst,
                                            uint32_t caller_slot_idx,
                                            ValueType type) {
-  liftoff::Load(this, dst, ebp, kPointerSize * (caller_slot_idx + 1), type);
+  liftoff::Load(this, dst, ebp, kSystemPointerSize * (caller_slot_idx + 1),
+                type);
 }
 
 void LiftoffAssembler::MoveStackValue(uint32_t dst_index, uint32_t src_index,
                                       ValueType type) {
-  DCHECK_NE(dst_index, src_index);
-  if (cache_state_.has_unused_register(kGpReg)) {
-    LiftoffRegister reg = GetUnusedRegister(kGpReg);
-    Fill(reg, src_index, type);
-    Spill(dst_index, reg, type);
+  if (needs_reg_pair(type)) {
+    liftoff::MoveStackValue(this,
+                            liftoff::GetHalfStackSlot(src_index, kLowWord),
+                            liftoff::GetHalfStackSlot(dst_index, kLowWord));
+    liftoff::MoveStackValue(this,
+                            liftoff::GetHalfStackSlot(src_index, kHighWord),
+                            liftoff::GetHalfStackSlot(dst_index, kHighWord));
   } else {
-    push(liftoff::GetStackSlot(src_index));
-    pop(liftoff::GetStackSlot(dst_index));
+    liftoff::MoveStackValue(this, liftoff::GetStackSlot(src_index),
+                            liftoff::GetStackSlot(dst_index));
   }
 }
 
@@ -412,8 +454,8 @@ void LiftoffAssembler::Spill(uint32_t index, LiftoffRegister reg,
       mov(dst, reg.gp());
       break;
     case kWasmI64:
-      mov(dst, reg.low_gp());
-      mov(liftoff::GetHalfStackSlot(2 * index - 1), reg.high_gp());
+      mov(liftoff::GetHalfStackSlot(index, kLowWord), reg.low_gp());
+      mov(liftoff::GetHalfStackSlot(index, kHighWord), reg.high_gp());
       break;
     case kWasmF32:
       movss(dst, reg.fp());
@@ -436,8 +478,8 @@ void LiftoffAssembler::Spill(uint32_t index, WasmValue value) {
     case kWasmI64: {
       int32_t low_word = value.to_i64();
       int32_t high_word = value.to_i64() >> 32;
-      mov(dst, Immediate(low_word));
-      mov(liftoff::GetHalfStackSlot(2 * index - 1), Immediate(high_word));
+      mov(liftoff::GetHalfStackSlot(index, kLowWord), Immediate(low_word));
+      mov(liftoff::GetHalfStackSlot(index, kHighWord), Immediate(high_word));
       break;
     }
     default:
@@ -454,8 +496,8 @@ void LiftoffAssembler::Fill(LiftoffRegister reg, uint32_t index,
       mov(reg.gp(), src);
       break;
     case kWasmI64:
-      mov(reg.low_gp(), src);
-      mov(reg.high_gp(), liftoff::GetHalfStackSlot(2 * index - 1));
+      mov(reg.low_gp(), liftoff::GetHalfStackSlot(index, kLowWord));
+      mov(reg.high_gp(), liftoff::GetHalfStackSlot(index, kHighWord));
       break;
     case kWasmF32:
       movss(reg.fp(), src);
@@ -468,8 +510,9 @@ void LiftoffAssembler::Fill(LiftoffRegister reg, uint32_t index,
   }
 }
 
-void LiftoffAssembler::FillI64Half(Register reg, uint32_t half_index) {
-  mov(reg, liftoff::GetHalfStackSlot(half_index));
+void LiftoffAssembler::FillI64Half(Register reg, uint32_t index,
+                                   RegPairHalf half) {
+  mov(reg, liftoff::GetHalfStackSlot(index, half));
 }
 
 void LiftoffAssembler::emit_i32_add(Register dst, Register lhs, Register rhs) {
@@ -481,12 +524,17 @@ void LiftoffAssembler::emit_i32_add(Register dst, Register lhs, Register rhs) {
 }
 
 void LiftoffAssembler::emit_i32_sub(Register dst, Register lhs, Register rhs) {
-  if (dst == rhs) {
-    neg(dst);
-    add(dst, lhs);
-  } else {
+  if (dst != rhs) {
+    // Default path.
     if (dst != lhs) mov(dst, lhs);
     sub(dst, rhs);
+  } else if (lhs == rhs) {
+    // Degenerate case.
+    xor_(dst, dst);
+  } else {
+    // Emit {dst = lhs + -rhs} if dst == rhs.
+    neg(dst);
+    add(dst, lhs);
   }
 }
 
@@ -846,7 +894,9 @@ inline void Emit64BitShiftOperation(
   // Temporary registers cannot overlap with {dst}.
   pinned.set(dst);
 
-  std::vector<LiftoffAssembler::ParallelRegisterMoveTuple> reg_moves;
+  constexpr size_t kMaxRegMoves = 3;
+  base::SmallVector<LiftoffAssembler::ParallelRegisterMoveTuple, kMaxRegMoves>
+      reg_moves;
 
   // If {dst} contains {ecx}, replace it by an unused register, which is then
   // moved to {ecx} in the end.
@@ -866,7 +916,7 @@ inline void Emit64BitShiftOperation(
 
   reg_moves.emplace_back(dst, src, kWasmI64);
   reg_moves.emplace_back(ecx, amount, kWasmI32);
-  assm->ParallelRegisterMove({reg_moves.data(), reg_moves.size()});
+  assm->ParallelRegisterMove(VectorOf(reg_moves));
 
   // Do the actual shift.
   (assm->*emit_shift)(dst.high_gp(), dst.low_gp());
@@ -1393,7 +1443,9 @@ bool LiftoffAssembler::emit_type_conversion(WasmOpcode opcode,
 }
 
 void LiftoffAssembler::emit_i32_signextend_i8(Register dst, Register src) {
-  movsx_b(dst, src);
+  Register byte_reg = liftoff::GetTmpByteRegister(this, src);
+  if (byte_reg != src) mov(byte_reg, src);
+  movsx_b(dst, byte_reg);
 }
 
 void LiftoffAssembler::emit_i32_signextend_i16(Register dst, Register src) {
@@ -1402,7 +1454,9 @@ void LiftoffAssembler::emit_i32_signextend_i16(Register dst, Register src) {
 
 void LiftoffAssembler::emit_i64_signextend_i8(LiftoffRegister dst,
                                               LiftoffRegister src) {
-  movsx_b(dst.low_gp(), src.low_gp());
+  Register byte_reg = liftoff::GetTmpByteRegister(this, src.low_gp());
+  if (byte_reg != src.low_gp()) mov(byte_reg, src.low_gp());
+  movsx_b(dst.low_gp(), byte_reg);
   liftoff::SignExtendI32ToI64(this, dst);
 }
 
@@ -1442,16 +1496,6 @@ void LiftoffAssembler::emit_cond_jump(Condition cond, Label* label,
 }
 
 namespace liftoff {
-
-// Get a temporary byte register, using {candidate} if possible.
-// Might spill, but always keeps status flags intact.
-inline Register GetTmpByteRegister(LiftoffAssembler* assm, Register candidate) {
-  if (candidate.is_byte_register()) return candidate;
-  LiftoffRegList pinned = LiftoffRegList::ForRegs(candidate);
-  // {GetUnusedRegister()} may insert move instructions to spill registers to
-  // the stack. This is OK because {mov} does not change the status flags.
-  return assm->GetUnusedRegister(liftoff::kByteRegs, pinned).gp();
-}
 
 // Setcc into dst register, given a scratch byte register (might be the same as
 // dst). Never spills.
@@ -1633,8 +1677,9 @@ void LiftoffAssembler::PopRegisters(LiftoffRegList regs) {
 }
 
 void LiftoffAssembler::DropStackSlotsAndRet(uint32_t num_stack_slots) {
-  DCHECK_LT(num_stack_slots, (1 << 16) / kPointerSize);  // 16 bit immediate
-  ret(static_cast<int>(num_stack_slots * kPointerSize));
+  DCHECK_LT(num_stack_slots,
+            (1 << 16) / kSystemPointerSize);  // 16 bit immediate
+  ret(static_cast<int>(num_stack_slots * kSystemPointerSize));
 }
 
 void LiftoffAssembler::CallC(wasm::FunctionSig* sig,
@@ -1722,10 +1767,9 @@ void LiftoffStackSlots::Construct() {
       case LiftoffAssembler::VarState::kStack:
         if (src.type() == kWasmF64) {
           DCHECK_EQ(kLowWord, slot.half_);
-          asm_->push(liftoff::GetHalfStackSlot(2 * slot.src_index_ - 1));
+          asm_->push(liftoff::GetHalfStackSlot(slot.src_index_, kHighWord));
         }
-        asm_->push(liftoff::GetHalfStackSlot(2 * slot.src_index_ -
-                                             (slot.half_ == kLowWord ? 0 : 1)));
+        asm_->push(liftoff::GetHalfStackSlot(slot.src_index_, slot.half_));
         break;
       case LiftoffAssembler::VarState::kRegister:
         if (src.type() == kWasmI64) {
@@ -1736,7 +1780,7 @@ void LiftoffStackSlots::Construct() {
           liftoff::push(asm_, src.reg(), src.type());
         }
         break;
-      case LiftoffAssembler::VarState::KIntConst:
+      case LiftoffAssembler::VarState::kIntConst:
         // The high word is the sign extension of the low word.
         asm_->push(Immediate(slot.half_ == kLowWord ? src.i32_const()
                                                     : src.i32_const() >> 31));

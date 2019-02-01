@@ -42,13 +42,13 @@ std::unique_ptr<NativeModule> CompileToNativeModule(
     std::shared_ptr<const WasmModule> module, const ModuleWireBytes& wire_bytes,
     Handle<FixedArray>* export_wrappers_out);
 
-MaybeHandle<WasmInstanceObject> InstantiateToInstanceObject(
-    Isolate* isolate, ErrorThrower* thrower,
-    Handle<WasmModuleObject> module_object, MaybeHandle<JSReceiver> imports,
-    MaybeHandle<JSArrayBuffer> memory);
+void CompileNativeModuleWithExplicitBoundsChecks(Isolate* isolate,
+                                                 ErrorThrower* thrower,
+                                                 const WasmModule* wasm_module,
+                                                 NativeModule* native_module);
 
 V8_EXPORT_PRIVATE
-void CompileJsToWasmWrappers(Isolate* isolate, NativeModule* native_module,
+void CompileJsToWasmWrappers(Isolate* isolate, const WasmModule* module,
                              Handle<FixedArray> export_wrappers);
 
 V8_EXPORT_PRIVATE Handle<Script> CreateWasmScript(
@@ -92,9 +92,6 @@ class AsyncCompileJob {
   class DecodeModule;            // Step 1  (async)
   class DecodeFail;              // Step 1b (sync)
   class PrepareAndStartCompile;  // Step 2  (sync)
-  class CompileFailed;           // Step 4b (sync)
-  class CompileWrappers;         // Step 5  (sync)
-  class FinishModule;            // Step 6  (sync)
 
   friend class AsyncStreamingProcessor;
 
@@ -105,13 +102,18 @@ class AsyncCompileJob {
     return outstanding_finishers_.fetch_sub(1) == 1;
   }
 
-  void PrepareRuntimeObjects(std::shared_ptr<const WasmModule>);
+  void CreateNativeModule(std::shared_ptr<const WasmModule> module);
+  void PrepareRuntimeObjects();
 
-  void FinishCompile(bool compile_wrappers);
+  void FinishCompile();
 
-  void AsyncCompileFailed(Handle<Object> error_reason);
+  void AsyncCompileFailed(const char* context, const WasmError&);
 
   void AsyncCompileSucceeded(Handle<WasmModuleObject> result);
+
+  void CompileWrappers();
+
+  void FinishModule();
 
   void StartForegroundTask();
   void ExecuteForegroundTaskImmediately();
@@ -158,7 +160,7 @@ class AsyncCompileJob {
 
   std::vector<DeferredHandles*> deferred_handles_;
   Handle<WasmModuleObject> module_object_;
-  NativeModule* native_module_ = nullptr;
+  std::shared_ptr<NativeModule> native_module_;
 
   std::unique_ptr<CompileStep> step_;
   CancelableTaskManager background_task_manager_;

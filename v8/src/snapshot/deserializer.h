@@ -7,6 +7,8 @@
 
 #include <vector>
 
+#include "src/objects/allocation-site.h"
+#include "src/objects/api-callbacks.h"
 #include "src/objects/code.h"
 #include "src/objects/js-array.h"
 #include "src/objects/map.h"
@@ -18,7 +20,6 @@
 namespace v8 {
 namespace internal {
 
-class AllocationSite;
 class HeapObject;
 class Object;
 class UnalignedSlot;
@@ -62,12 +63,12 @@ class Deserializer : public SerializerDeserializer {
 
   // Create Log events for newly deserialized objects.
   void LogNewObjectEvents();
-  void LogScriptEvents(Script* script);
+  void LogScriptEvents(Script script);
   void LogNewMapEvents();
 
   // This returns the address of an object that has been described in the
   // snapshot by chunk index and offset.
-  HeapObject* GetBackReferencedObject(int space);
+  HeapObject GetBackReferencedObject(int space);
 
   // Add an object to back an attached reference. The order to add objects must
   // mirror the order they are added in the serializer.
@@ -77,17 +78,17 @@ class Deserializer : public SerializerDeserializer {
 
   Isolate* isolate() const { return isolate_; }
   SnapshotByteSource* source() { return &source_; }
-  const std::vector<AllocationSite*>& new_allocation_sites() const {
+  const std::vector<AllocationSite>& new_allocation_sites() const {
     return new_allocation_sites_;
   }
   const std::vector<Code>& new_code_objects() const {
     return new_code_objects_;
   }
   const std::vector<Map>& new_maps() const { return new_maps_; }
-  const std::vector<AccessorInfo*>& accessor_infos() const {
+  const std::vector<AccessorInfo>& accessor_infos() const {
     return accessor_infos_;
   }
-  const std::vector<CallHandlerInfo*>& call_handler_infos() const {
+  const std::vector<CallHandlerInfo>& call_handler_infos() const {
     return call_handler_infos_;
   }
   const std::vector<Handle<String>>& new_internalized_strings() const {
@@ -107,8 +108,8 @@ class Deserializer : public SerializerDeserializer {
   Isolate* isolate_;
 
  private:
-  void VisitRootPointers(Root root, const char* description, ObjectSlot start,
-                         ObjectSlot end) override;
+  void VisitRootPointers(Root root, const char* description,
+                         FullObjectSlot start, FullObjectSlot end) override;
 
   void Synchronize(VisitorSynchronization::SyncTag tag) override;
 
@@ -139,7 +140,7 @@ class Deserializer : public SerializerDeserializer {
                   HeapObjectReferenceType reference_type);
 
   // Special handling for serialized code like hooking up internalized strings.
-  HeapObject* PostProcessNewObject(HeapObject* obj, int space);
+  HeapObject PostProcessNewObject(HeapObject obj, int space);
 
   // Objects from the attached object descriptions in the serialized user code.
   std::vector<Handle<HeapObject>> attached_objects_;
@@ -150,10 +151,10 @@ class Deserializer : public SerializerDeserializer {
   ExternalReferenceTable* external_reference_table_;
 
   std::vector<Map> new_maps_;
-  std::vector<AllocationSite*> new_allocation_sites_;
+  std::vector<AllocationSite> new_allocation_sites_;
   std::vector<Code> new_code_objects_;
-  std::vector<AccessorInfo*> accessor_infos_;
-  std::vector<CallHandlerInfo*> call_handler_infos_;
+  std::vector<AccessorInfo> accessor_infos_;
+  std::vector<CallHandlerInfo> call_handler_infos_;
   std::vector<Handle<String>> new_internalized_strings_;
   std::vector<Handle<Script>> new_scripts_;
   std::vector<byte*> off_heap_backing_stores_;
@@ -163,7 +164,7 @@ class Deserializer : public SerializerDeserializer {
 
   // TODO(6593): generalize rehashing, and remove this flag.
   bool can_rehash_;
-  std::vector<HeapObject*> to_rehash_;
+  std::vector<HeapObject> to_rehash_;
 
 #ifdef DEBUG
   uint32_t num_api_references_;
@@ -180,7 +181,7 @@ class StringTableInsertionKey : public StringTableKey {
  public:
   explicit StringTableInsertionKey(String string);
 
-  bool IsMatch(Object* string) override;
+  bool IsMatch(Object string) override;
 
   V8_WARN_UNUSED_RESULT Handle<String> AsHandle(Isolate* isolate) override;
 

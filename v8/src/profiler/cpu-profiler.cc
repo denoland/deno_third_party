@@ -14,7 +14,7 @@
 #include "src/deoptimizer.h"
 #include "src/frames-inl.h"
 #include "src/locked-queue-inl.h"
-#include "src/log-inl.h"
+#include "src/log.h"
 #include "src/profiler/cpu-profiler-inl.h"
 #include "src/vm-state-inl.h"
 
@@ -60,13 +60,10 @@ SamplingEventsProcessor::SamplingEventsProcessor(Isolate* isolate,
     : ProfilerEventsProcessor(isolate, generator),
       sampler_(new CpuSampler(isolate, this)),
       period_(period) {
-  sampler_->IncreaseProfilingDepth();
+  sampler_->Start();
 }
 
-SamplingEventsProcessor::~SamplingEventsProcessor() {
-  sampler_->DecreaseProfilingDepth();
-  sampler_->UnregisterIfRegistered();
-}
+SamplingEventsProcessor::~SamplingEventsProcessor() { sampler_->Stop(); }
 
 ProfilerEventsProcessor::~ProfilerEventsProcessor() = default;
 
@@ -226,7 +223,7 @@ void SamplingEventsProcessor::Run() {
 }
 
 void* SamplingEventsProcessor::operator new(size_t size) {
-  return AlignedAlloc(size, V8_ALIGNOF(SamplingEventsProcessor));
+  return AlignedAlloc(size, alignof(SamplingEventsProcessor));
 }
 
 void SamplingEventsProcessor::operator delete(void* ptr) { AlignedFree(ptr); }
@@ -289,8 +286,7 @@ class CpuProfilersManager {
   base::Mutex mutex_;
 };
 
-base::LazyInstance<CpuProfilersManager>::type g_profilers_manager =
-    LAZY_INSTANCE_INITIALIZER;
+DEFINE_LAZY_LEAKY_OBJECT_GETTER(CpuProfilersManager, GetProfilersManager);
 
 }  // namespace
 
@@ -309,12 +305,12 @@ CpuProfiler::CpuProfiler(Isolate* isolate, CpuProfilesCollection* test_profiles,
       processor_(test_processor),
       is_profiling_(false) {
   profiles_->set_cpu_profiler(this);
-  g_profilers_manager.Pointer()->AddProfiler(isolate, this);
+  GetProfilersManager()->AddProfiler(isolate, this);
 }
 
 CpuProfiler::~CpuProfiler() {
   DCHECK(!is_profiling_);
-  g_profilers_manager.Pointer()->RemoveProfiler(isolate_, this);
+  GetProfilersManager()->RemoveProfiler(isolate_, this);
 }
 
 void CpuProfiler::set_sampling_interval(base::TimeDelta value) {
@@ -343,7 +339,7 @@ void CpuProfiler::CreateEntriesForRuntimeCallStats() {
 
 // static
 void CpuProfiler::CollectSample(Isolate* isolate) {
-  g_profilers_manager.Pointer()->CallCollectSample(isolate);
+  GetProfilersManager()->CallCollectSample(isolate);
 }
 
 void CpuProfiler::CollectSample() {
@@ -373,8 +369,8 @@ void CpuProfiler::StartProcessorIfNotStarted() {
   }
   Logger* logger = isolate_->logger();
   // Disable logging when using the new implementation.
-  saved_is_logging_ = logger->is_logging_;
-  logger->is_logging_ = false;
+  saved_is_logging_ = logger->is_logging();
+  logger->set_is_logging(false);
 
   bool codemap_needs_initialization = false;
   if (!generator_) {
@@ -427,7 +423,7 @@ void CpuProfiler::StopProcessor() {
   logger->RemoveCodeEventListener(profiler_listener_.get());
   processor_->StopSynchronously();
   processor_.reset();
-  logger->is_logging_ = saved_is_logging_;
+  logger->set_is_logging(saved_is_logging_);
 }
 
 

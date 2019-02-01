@@ -21,6 +21,7 @@
 #include "src/feedback-vector.h"
 #include "src/field-index-inl.h"
 #include "src/isolate-inl.h"
+#include "src/objects/heap-number.h"
 #include "src/objects/js-array-buffer-inl.h"
 #include "src/objects/js-array-inl.h"
 #include "src/objects/templates.h"
@@ -429,6 +430,8 @@ Reduction JSNativeContextSpecialization::ReduceJSInstanceOf(Node* node) {
     }
 
     // Monomorphic property access.
+    constructor =
+        access_builder.BuildCheckHeapObject(constructor, &effect, control);
     access_builder.BuildCheckMaps(constructor, &effect, control,
                                   access_info.receiver_maps());
 
@@ -1057,7 +1060,7 @@ Reduction JSNativeContextSpecialization::ReduceNamedAccess(
   if (receiver_maps.size() == 1) {
     Handle<Map> receiver_map = receiver_maps.front();
     if (receiver_map->IsJSGlobalProxyMap()) {
-      Object* maybe_constructor = receiver_map->GetConstructor();
+      Object maybe_constructor = receiver_map->GetConstructor();
       // Detached global proxies have |null| as their constructor.
       if (maybe_constructor->IsJSFunction() &&
           JSFunction::cast(maybe_constructor)->native_context() ==
@@ -1343,15 +1346,16 @@ Reduction JSNativeContextSpecialization::ReduceJSLoadNamed(Node* node) {
   DCHECK_EQ(IrOpcode::kJSLoadNamed, node->opcode());
   NamedAccess const& p = NamedAccessOf(node->op());
   Node* const receiver = NodeProperties::GetValueInput(node, 0);
-  Node* const value = jsgraph()->Dead();
 
   // Check if we have a constant receiver.
   HeapObjectMatcher m(receiver);
   if (m.HasValue()) {
-    if (m.Value()->IsJSFunction() &&
-        p.name().is_identical_to(factory()->prototype_string())) {
+    ObjectRef object = m.Ref(broker());
+    NameRef name(broker(), p.name());
+    if (object.IsJSFunction() &&
+        name.equals(ObjectRef(broker(), factory()->prototype_string()))) {
       // Optimize "prototype" property of functions.
-      JSFunctionRef function = m.Ref(broker()).AsJSFunction();
+      JSFunctionRef function = object.AsJSFunction();
       // TODO(neis): This is a temporary hack needed because the copy reducer
       // runs only after this pass.
       function.Serialize();
@@ -1365,11 +1369,10 @@ Reduction JSNativeContextSpecialization::ReduceJSLoadNamed(Node* node) {
       Node* value = jsgraph()->Constant(prototype);
       ReplaceWithValue(node, value);
       return Replace(value);
-    } else if (m.Value()->IsString() &&
-               p.name().is_identical_to(factory()->length_string())) {
+    } else if (object.IsString() &&
+               name.equals(ObjectRef(broker(), factory()->length_string()))) {
       // Constant-fold "length" property on constant strings.
-      Handle<String> string = Handle<String>::cast(m.Value());
-      Node* value = jsgraph()->Constant(string->length());
+      Node* value = jsgraph()->Constant(object.AsString().length());
       ReplaceWithValue(node, value);
       return Replace(value);
     }
@@ -1380,7 +1383,7 @@ Reduction JSNativeContextSpecialization::ReduceJSLoadNamed(Node* node) {
   FeedbackNexus nexus(p.feedback().vector(), p.feedback().slot());
 
   // Try to lower the named access based on the {receiver_maps}.
-  return ReduceNamedAccessFromNexus(node, value, nexus, p.name(),
+  return ReduceNamedAccessFromNexus(node, jsgraph()->Dead(), nexus, p.name(),
                                     AccessMode::kLoad);
 }
 
@@ -1469,7 +1472,7 @@ Reduction JSNativeContextSpecialization::ReduceElementAccess(
       ZoneVector<Handle<Map>> prototype_maps(zone());
       for (ElementAccessInfo const& access_info : access_infos) {
         for (Handle<Map> receiver_map : access_info.receiver_maps()) {
-          // If the {receiver_map} has a prototype and it's elements backing
+          // If the {receiver_map} has a prototype and its elements backing
           // store is either holey, or we have a potentially growing store,
           // then we need to check that all prototypes have stable maps with
           // fast elements (and we need to guard against changes to that below).
@@ -1646,77 +1649,83 @@ Reduction JSNativeContextSpecialization::ReduceKeyedAccess(
   // Optimize the case where we load from a constant {receiver}.
   if (access_mode == AccessMode::kLoad) {
     HeapObjectMatcher mreceiver(receiver);
-    if (mreceiver.HasValue() && !mreceiver.Value()->IsTheHole(isolate()) &&
-        !mreceiver.Value()->IsNullOrUndefined(isolate())) {
-      // Check whether we're accessing a known element on the {receiver}
-      // that is non-configurable, non-writable (i.e. the {receiver} was
-      // frozen using Object.freeze).
-      NumberMatcher mindex(index);
-      if (mindex.IsInteger() && mindex.IsInRange(0.0, kMaxUInt32 - 1.0)) {
-        LookupIterator it(isolate(), mreceiver.Value(),
-                          static_cast<uint32_t>(mindex.Value()),
-                          LookupIterator::OWN);
-        if (it.state() == LookupIterator::DATA) {
-          if (it.IsReadOnly() && !it.IsConfigurable()) {
-            // We can safely constant-fold the {index} access to {receiver},
-            // since the element is non-configurable, non-writable and thus
-            // cannot change anymore.
-            value = jsgraph()->Constant(it.GetDataValue());
-            ReplaceWithValue(node, value, effect, control);
-            return Replace(value);
-          }
-
-          // Check if the {receiver} is a known constant with a copy-on-write
-          // backing store, and whether {index} is within the appropriate
-          // bounds. In that case we can constant-fold the access and only
-          // check that the {elements} didn't change. This is sufficient as
-          // the backing store of a copy-on-write JSArray is defensively copied
-          // whenever the length or the elements (might) change.
-          //
-          // What's interesting here is that we don't need to map check the
-          // {receiver}, since JSArray's will always have their elements in
-          // the backing store.
-          if (mreceiver.Value()->IsJSArray()) {
-            Handle<JSArray> array = Handle<JSArray>::cast(mreceiver.Value());
-            if (array->elements()->IsCowArray()) {
-              Node* elements = effect = graph()->NewNode(
-                  simplified()->LoadField(AccessBuilder::ForJSObjectElements()),
-                  receiver, effect, control);
-              Handle<FixedArray> array_elements(
-                  FixedArray::cast(array->elements()), isolate());
-              Node* check =
-                  graph()->NewNode(simplified()->ReferenceEqual(), elements,
-                                   jsgraph()->HeapConstant(array_elements));
-              effect = graph()->NewNode(
-                  simplified()->CheckIf(
-                      DeoptimizeReason::kCowArrayElementsChanged),
-                  check, effect, control);
+    if (mreceiver.HasValue()) {
+      HeapObjectRef receiver_ref = mreceiver.Ref(broker()).AsHeapObject();
+      if (receiver_ref.map().oddball_type() != OddballType::kHole &&
+          receiver_ref.map().oddball_type() != OddballType::kNull &&
+          receiver_ref.map().oddball_type() != OddballType::kUndefined) {
+        // Check whether we're accessing a known element on the {receiver}
+        // that is non-configurable, non-writable (i.e. the {receiver} was
+        // frozen using Object.freeze).
+        NumberMatcher mindex(index);
+        if (mindex.IsInteger() && mindex.IsInRange(0.0, kMaxUInt32 - 1.0)) {
+          LookupIterator it(isolate(), receiver_ref.object(),
+                            static_cast<uint32_t>(mindex.Value()),
+                            LookupIterator::OWN);
+          if (it.state() == LookupIterator::DATA) {
+            if (it.IsReadOnly() && !it.IsConfigurable()) {
+              // We can safely constant-fold the {index} access to {receiver},
+              // since the element is non-configurable, non-writable and thus
+              // cannot change anymore.
               value = jsgraph()->Constant(it.GetDataValue());
               ReplaceWithValue(node, value, effect, control);
               return Replace(value);
             }
+
+            // Check if the {receiver} is a known constant with a copy-on-write
+            // backing store, and whether {index} is within the appropriate
+            // bounds. In that case we can constant-fold the access and only
+            // check that the {elements} didn't change. This is sufficient as
+            // the backing store of a copy-on-write JSArray is defensively
+            // copied whenever the length or the elements (might) change.
+            //
+            // What's interesting here is that we don't need to map check the
+            // {receiver}, since JSArray's will always have their elements in
+            // the backing store.
+            if (receiver_ref.IsJSArray()) {
+              Handle<JSArray> array = receiver_ref.AsJSArray().object();
+              if (array->elements()->IsCowArray()) {
+                Node* elements = effect =
+                    graph()->NewNode(simplified()->LoadField(
+                                         AccessBuilder::ForJSObjectElements()),
+                                     receiver, effect, control);
+                Handle<FixedArray> array_elements(
+                    FixedArray::cast(array->elements()), isolate());
+                Node* check =
+                    graph()->NewNode(simplified()->ReferenceEqual(), elements,
+                                     jsgraph()->HeapConstant(array_elements));
+                effect = graph()->NewNode(
+                    simplified()->CheckIf(
+                        DeoptimizeReason::kCowArrayElementsChanged),
+                    check, effect, control);
+                value = jsgraph()->Constant(it.GetDataValue());
+                ReplaceWithValue(node, value, effect, control);
+                return Replace(value);
+              }
+            }
           }
         }
-      }
 
-      // For constant Strings we can eagerly strength-reduce the keyed
-      // accesses using the known length, which doesn't change.
-      if (mreceiver.Value()->IsString()) {
-        Handle<String> string = Handle<String>::cast(mreceiver.Value());
+        // For constant Strings we can eagerly strength-reduce the keyed
+        // accesses using the known length, which doesn't change.
+        if (receiver_ref.IsString()) {
+          // We can only assume that the {index} is a valid array index if the
+          // IC is in element access mode and not MEGAMORPHIC, otherwise there's
+          // no guard for the bounds check below.
+          if (nexus.ic_state() != MEGAMORPHIC &&
+              nexus.GetKeyType() == ELEMENT) {
+            // Ensure that {index} is less than {receiver} length.
+            Node* length =
+                jsgraph()->Constant(receiver_ref.AsString().length());
 
-        // We can only assume that the {index} is a valid array index if the IC
-        // is in element access mode and not MEGAMORPHIC, otherwise there's no
-        // guard for the bounds check below.
-        if (nexus.ic_state() != MEGAMORPHIC && nexus.GetKeyType() == ELEMENT) {
-          // Ensure that {index} is less than {receiver} length.
-          Node* length = jsgraph()->Constant(string->length());
-
-          // Load the single character string from {receiver} or yield undefined
-          // if the {index} is out of bounds (depending on the {load_mode}).
-          value = BuildIndexedStringLoad(receiver, index, length, &effect,
-                                         &control, load_mode);
-          ReplaceWithValue(node, value, effect, control);
-          return Replace(value);
+            // Load the single character string from {receiver} or yield
+            // undefined if the {index} is out of bounds (depending on the
+            // {load_mode}).
+            value = BuildIndexedStringLoad(receiver, index, length, &effect,
+                                           &control, load_mode);
+            ReplaceWithValue(node, value, effect, control);
+            return Replace(value);
+          }
         }
       }
     }
@@ -1738,20 +1747,19 @@ Reduction JSNativeContextSpecialization::ReduceKeyedAccess(
 
   // Optimize access for constant {index}.
   HeapObjectMatcher mindex(index);
-  if (mindex.HasValue() && mindex.Value()->IsPrimitive()) {
-    // Keyed access requires a ToPropertyKey on the {index} first before
-    // looking up the property on the object (see ES6 section 12.3.2.1).
-    // We can only do this for non-observable ToPropertyKey invocations,
-    // so we limit the constant indices to primitives at this point.
-    Handle<Name> name;
-    if (Object::ToName(isolate(), mindex.Value()).ToHandle(&name)) {
-      uint32_t array_index;
-      if (name->AsArrayIndex(&array_index)) {
-        // Use the constant array index.
+  if (mindex.HasValue()) {
+    ObjectRef name = mindex.Ref(broker());
+    if (name.IsSymbol()) {
+      return ReduceNamedAccess(node, value, receiver_maps,
+                               name.AsName().object(), access_mode);
+    }
+    if (name.IsInternalizedString()) {
+      uint32_t array_index = name.AsInternalizedString().array_index();
+      if (array_index != InternalizedStringRef::kNotAnArrayIndex) {
         index = jsgraph()->Constant(static_cast<double>(array_index));
       } else {
-        name = factory()->InternalizeName(name);
-        return ReduceNamedAccess(node, value, receiver_maps, name, access_mode);
+        return ReduceNamedAccess(node, value, receiver_maps,
+                                 name.AsName().object(), access_mode);
       }
     }
   }
@@ -2020,7 +2028,7 @@ Node* JSNativeContextSpecialization::InlineApiCall(
   // Only setters have a value.
   int const argc = value == nullptr ? 0 : 1;
   // The stub always expects the receiver as the first param on the stack.
-  Callable call_api_callback = CodeFactory::CallApiCallback(isolate(), argc);
+  Callable call_api_callback = CodeFactory::CallApiCallback(isolate());
   CallInterfaceDescriptor call_interface_descriptor =
       call_api_callback.descriptor();
   auto call_descriptor = Linkage::GetStubCallDescriptor(
@@ -2038,16 +2046,17 @@ Node* JSNativeContextSpecialization::InlineApiCall(
 
   // Add CallApiCallbackStub's register argument as well.
   Node* context = jsgraph()->Constant(native_context());
-  Node* inputs[10] = {code,    context, data, holder, function_reference,
-                      receiver};
-  int index = 6 + argc;
+  Node* inputs[11] = {
+      code,   context, function_reference, jsgraph()->Constant(argc), data,
+      holder, receiver};
+  int index = 7 + argc;
   inputs[index++] = frame_state;
   inputs[index++] = *effect;
   inputs[index++] = *control;
   // This needs to stay here because of the edge case described in
   // http://crbug.com/675648.
   if (value != nullptr) {
-    inputs[6] = value;
+    inputs[7] = value;
   }
 
   return *effect = *control =
@@ -2283,7 +2292,7 @@ JSNativeContextSpecialization::BuildPropertyStore(
 
         // Reallocate the properties {storage}.
         storage = effect = BuildExtendPropertiesBackingStore(
-            original_map, storage, effect, control);
+            MapRef(broker(), original_map), storage, effect, control);
 
         // Perform the actual store.
         effect = graph()->NewNode(simplified()->StoreField(field_access),
@@ -2342,9 +2351,9 @@ Reduction JSNativeContextSpecialization::ReduceJSStoreDataPropertyInLiteral(
   if (!Map::TryUpdate(isolate(), receiver_map).ToHandle(&receiver_map))
     return NoChange();
 
-  Handle<Name> cached_name =
-      handle(Name::cast(nexus.GetFeedbackExtra()->GetHeapObjectAssumeStrong()),
-             isolate());
+  Handle<Name> cached_name(
+      Name::cast(nexus.GetFeedbackExtra()->GetHeapObjectAssumeStrong()),
+      isolate());
 
   PropertyAccessInfo access_info;
   AccessInfoFactory access_info_factory(
@@ -2502,7 +2511,7 @@ JSNativeContextSpecialization::BuildElementAccess(
           jsgraph()->Constant(static_cast<double>(typed_array->length_value()));
 
       // Load the (known) base and external pointer for the {receiver}. The
-      // {external_pointer} might be invalid if the {buffer} was neutered, so
+      // {external_pointer} might be invalid if the {buffer} was detached, so
       // we need to make sure that any access is properly guarded.
       base_pointer = jsgraph()->ZeroConstant();
       external_pointer =
@@ -2544,15 +2553,15 @@ JSNativeContextSpecialization::BuildElementAccess(
           elements, effect, control);
     }
 
-    // See if we can skip the neutering check.
-    if (isolate()->IsArrayBufferNeuteringIntact()) {
+    // See if we can skip the detaching check.
+    if (isolate()->IsArrayBufferDetachingIntact()) {
       // Add a code dependency so we are deoptimized in case an ArrayBuffer
-      // gets neutered.
+      // gets detached.
       dependencies()->DependOnProtector(PropertyCellRef(
-          broker(), factory()->array_buffer_neutering_protector()));
+          broker(), factory()->array_buffer_detaching_protector()));
     } else {
-      // Deopt if the {buffer} was neutered.
-      // Note: A neutered buffer leads to megamorphic feedback.
+      // Deopt if the {buffer} was detached.
+      // Note: A detached buffer leads to megamorphic feedback.
       Node* buffer_bit_field = effect = graph()->NewNode(
           simplified()->LoadField(AccessBuilder::ForJSArrayBufferBitField()),
           buffer, effect, control);
@@ -2560,10 +2569,10 @@ JSNativeContextSpecialization::BuildElementAccess(
           simplified()->NumberEqual(),
           graph()->NewNode(
               simplified()->NumberBitwiseAnd(), buffer_bit_field,
-              jsgraph()->Constant(JSArrayBuffer::WasNeuteredBit::kMask)),
+              jsgraph()->Constant(JSArrayBuffer::WasDetachedBit::kMask)),
           jsgraph()->ZeroConstant());
       effect = graph()->NewNode(
-          simplified()->CheckIf(DeoptimizeReason::kArrayBufferWasNeutered),
+          simplified()->CheckIf(DeoptimizeReason::kArrayBufferWasDetached),
           check, effect, control);
     }
 
@@ -3012,7 +3021,7 @@ Node* JSNativeContextSpecialization::BuildIndexedStringLoad(
 }
 
 Node* JSNativeContextSpecialization::BuildExtendPropertiesBackingStore(
-    Handle<Map> map, Node* properties, Node* effect, Node* control) {
+    const MapRef& map, Node* properties, Node* effect, Node* control) {
   // TODO(bmeurer/jkummerow): Property deletions can undo map transitions
   // while keeping the backing store around, meaning that even though the
   // map might believe that objects have no unused property fields, there
@@ -3022,9 +3031,9 @@ Node* JSNativeContextSpecialization::BuildExtendPropertiesBackingStore(
   // difficult for escape analysis to get rid of the backing stores used
   // for intermediate states of chains of property additions. That makes
   // it unclear what the best approach is here.
-  DCHECK_EQ(0, map->UnusedPropertyFields());
+  DCHECK_EQ(0, map.UnusedPropertyFields());
   // Compute the length of the old {properties} and the new properties.
-  int length = map->NextFreePropertyIndex() - map->GetInObjectProperties();
+  int length = map.NextFreePropertyIndex() - map.GetInObjectProperties();
   int new_length = length + JSObject::kFieldsAdded;
   // Collect the field values from the {properties}.
   ZoneVector<Node*> values(zone());
@@ -3093,7 +3102,7 @@ Node* JSNativeContextSpecialization::BuildCheckEqualsName(Handle<Name> name,
 
 bool JSNativeContextSpecialization::CanTreatHoleAsUndefined(
     MapHandles const& receiver_maps) {
-  // Check if all {receiver_maps} either have one of the initial Array.prototype
+  // Check if all {receiver_maps} have one of the initial Array.prototype
   // or Object.prototype objects as their prototype (in any of the current
   // native contexts, as the global Array protector works isolate-wide).
   for (Handle<Map> map : receiver_maps) {

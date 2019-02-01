@@ -62,7 +62,6 @@ class RelocInfo {
     WASM_STUB_CALL,
 
     RUNTIME_ENTRY,
-    COMMENT,
 
     EXTERNAL_REFERENCE,  // The address of an external C++ function.
     INTERNAL_REFERENCE,  // An address inside the same function.
@@ -141,7 +140,6 @@ class RelocInfo {
   static constexpr bool IsWasmStubCall(Mode mode) {
     return mode == WASM_STUB_CALL;
   }
-  static constexpr bool IsComment(Mode mode) { return mode == COMMENT; }
   static constexpr bool IsConstPool(Mode mode) { return mode == CONST_POOL; }
   static constexpr bool IsVeneerPool(Mode mode) { return mode == VENEER_POOL; }
   static constexpr bool IsDeoptPosition(Mode mode) {
@@ -206,11 +204,6 @@ class RelocInfo {
   // constant pool, otherwise the pointer is embedded in the instruction stream.
   bool IsInConstantPool();
 
-  // Returns the deoptimization id for the entry associated with the reloc info
-  // where {kind} is the deoptimization kind.
-  // This is only used for printing RUNTIME_ENTRY relocation info.
-  int GetDeoptimizationId(Isolate* isolate, DeoptimizeKind kind);
-
   Address wasm_call_address() const;
   Address wasm_stub_call_address() const;
 
@@ -229,10 +222,10 @@ class RelocInfo {
   // this relocation applies to;
   // can only be called if IsCodeTarget(rmode_) || IsRuntimeEntry(rmode_)
   V8_INLINE Address target_address();
-  V8_INLINE HeapObject* target_object();
+  V8_INLINE HeapObject target_object();
   V8_INLINE Handle<HeapObject> target_object_handle(Assembler* origin);
   V8_INLINE void set_target_object(
-      Heap* heap, HeapObject* target,
+      Heap* heap, HeapObject target,
       WriteBarrierMode write_barrier_mode = UPDATE_WRITE_BARRIER,
       ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED);
   V8_INLINE Address target_runtime_entry(Assembler* origin);
@@ -241,11 +234,6 @@ class RelocInfo {
       WriteBarrierMode write_barrier_mode = UPDATE_WRITE_BARRIER,
       ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED);
   V8_INLINE Address target_off_heap_target();
-  V8_INLINE Cell* target_cell();
-  V8_INLINE Handle<Cell> target_cell_handle();
-  V8_INLINE void set_target_cell(
-      Cell* cell, WriteBarrierMode write_barrier_mode = UPDATE_WRITE_BARRIER,
-      ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED);
   V8_INLINE void set_target_external_reference(
       Address, ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED);
 
@@ -260,6 +248,7 @@ class RelocInfo {
   // output before the next target.  Architecture-independent code shouldn't
   // dereference the pointer it gets back from this.
   V8_INLINE Address target_address_address();
+  bool HasTargetAddressAddress() const;
 
   // This indicates how much space a target takes up when deserializing a code
   // stream.  For most architectures this is just the size of a pointer.  For

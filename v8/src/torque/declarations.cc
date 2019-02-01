@@ -19,7 +19,7 @@ template <class T>
 std::vector<T> EnsureNonempty(std::vector<T> list, const std::string& name,
                               const char* kind) {
   if (list.empty()) {
-    ReportError("there is no ", kind, "named ", name);
+    ReportError("there is no ", kind, " named ", name);
   }
   return std::move(list);
 }
@@ -27,7 +27,7 @@ std::vector<T> EnsureNonempty(std::vector<T> list, const std::string& name,
 template <class T, class Name>
 T EnsureUnique(const std::vector<T>& list, const Name& name, const char* kind) {
   if (list.empty()) {
-    ReportError("there is no ", kind, "named ", name);
+    ReportError("there is no ", kind, " named ", name);
   }
   if (list.size() >= 2) {
     ReportError("ambiguous reference to ", kind, " ", name);
@@ -89,13 +89,13 @@ const Type* Declarations::GetType(TypeExpression* type_expression) {
     for (TypeExpression* type_exp : function_type_exp->parameters) {
       argument_types.push_back(GetType(type_exp));
     }
-    return TypeOracle::GetFunctionPointerType(
+    return TypeOracle::GetBuiltinPointerType(
         argument_types, GetType(function_type_exp->return_type));
   }
 }
 
 Builtin* Declarations::FindSomeInternalBuiltinWithType(
-    const FunctionPointerType* type) {
+    const BuiltinPointerType* type) {
   for (auto& declarable : GlobalContext::AllDeclarables()) {
     if (Builtin* builtin = Builtin::DynamicCast(declarable.get())) {
       if (!builtin->IsExternal() && builtin->kind() == Builtin::kStub &&
@@ -167,10 +167,19 @@ void Declarations::DeclareType(const std::string& name, const Type* type,
   Declare(name, std::unique_ptr<TypeAlias>(new TypeAlias(type, redeclaration)));
 }
 
-void Declarations::DeclareStruct(const std::string& name,
-                                 const std::vector<NameAndType>& fields) {
-  const StructType* new_type = TypeOracle::GetStructType(name, fields);
+StructType* Declarations::DeclareStruct(const std::string& name) {
+  StructType* new_type = TypeOracle::GetStructType(name);
   DeclareType(name, new_type, false);
+  return new_type;
+}
+
+ClassType* Declarations::DeclareClass(const Type* super_type,
+                                      const std::string& name, bool transient,
+                                      const std::string& generates) {
+  ClassType* new_type =
+      TypeOracle::GetClassType(super_type, name, transient, generates);
+  DeclareType(name, new_type, false);
+  return new_type;
 }
 
 Macro* Declarations::CreateMacro(
@@ -203,9 +212,21 @@ Macro* Declarations::DeclareMacro(
       ReportError("cannot redeclare operator ", name,
                   " with identical explicit parameters");
     }
-    Declare(*op, macro);
+    DeclareOperator(*op, macro);
   }
   return macro;
+}
+
+Method* Declarations::CreateMethod(AggregateType* container_type,
+                                   const std::string& name, Signature signature,
+                                   bool transitioning, Statement* body) {
+  std::string generated_name{container_type->GetGeneratedMethodName(name)};
+  Method* result = RegisterDeclarable(std::unique_ptr<Method>(
+      new Method(container_type, container_type->GetGeneratedMethodName(name),
+                 name, CurrentNamespace()->ExternalName(), std::move(signature),
+                 transitioning, body)));
+  container_type->RegisterMethod(result);
+  return result;
 }
 
 Intrinsic* Declarations::CreateIntrinsic(const std::string& name,
@@ -278,6 +299,11 @@ std::string Declarations::GetGeneratedCallableName(
     result += std::to_string(type_string.size()) + type_string;
   }
   return result;
+}
+
+Macro* Declarations::DeclareOperator(const std::string& name, Macro* m) {
+  GlobalContext::GetDefaultNamespace()->AddDeclarable(name, m);
+  return m;
 }
 
 }  // namespace torque

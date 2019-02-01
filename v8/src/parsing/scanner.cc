@@ -65,14 +65,17 @@ Handle<String> Scanner::LiteralBuffer::Internalize(Isolate* isolate) const {
 }
 
 int Scanner::LiteralBuffer::NewCapacity(int min_capacity) {
-  int capacity = Max(min_capacity, backing_store_.length());
-  int new_capacity = Min(capacity * kGrowthFactory, capacity + kMaxGrowth);
-  return new_capacity;
+  return min_capacity < (kMaxGrowth / (kGrowthFactor - 1))
+             ? min_capacity * kGrowthFactor
+             : min_capacity + kMaxGrowth;
 }
 
 void Scanner::LiteralBuffer::ExpandBuffer() {
-  Vector<byte> new_store = Vector<byte>::New(NewCapacity(kInitialCapacity));
-  MemCopy(new_store.start(), backing_store_.start(), position_);
+  int min_capacity = Max(kInitialCapacity, backing_store_.length());
+  Vector<byte> new_store = Vector<byte>::New(NewCapacity(min_capacity));
+  if (position_ > 0) {
+    MemCopy(new_store.start(), backing_store_.start(), position_);
+  }
   backing_store_.Dispose();
   backing_store_ = new_store;
 }
@@ -122,26 +125,14 @@ void Scanner::LiteralBuffer::AddTwoByteChar(uc32 code_unit) {
 // ----------------------------------------------------------------------------
 // Scanner::BookmarkScope
 
-const size_t Scanner::BookmarkScope::kBookmarkAtFirstPos =
-    std::numeric_limits<size_t>::max() - 2;
 const size_t Scanner::BookmarkScope::kNoBookmark =
     std::numeric_limits<size_t>::max() - 1;
 const size_t Scanner::BookmarkScope::kBookmarkWasApplied =
     std::numeric_limits<size_t>::max();
 
-void Scanner::BookmarkScope::Set() {
+void Scanner::BookmarkScope::Set(size_t position) {
   DCHECK_EQ(bookmark_, kNoBookmark);
-
-  // The first token is a bit special, since current_ will still be
-  // uninitialized. In this case, store kBookmarkAtFirstPos and special-case it
-  // when
-  // applying the bookmark.
-  DCHECK_IMPLIES(scanner_->current().token == Token::UNINITIALIZED,
-                 scanner_->current().location.beg_pos ==
-                     scanner_->next().location.beg_pos);
-  bookmark_ = (scanner_->current().token == Token::UNINITIALIZED)
-                  ? kBookmarkAtFirstPos
-                  : scanner_->location().beg_pos;
+  bookmark_ = position;
 }
 
 void Scanner::BookmarkScope::Apply() {
@@ -150,13 +141,7 @@ void Scanner::BookmarkScope::Apply() {
     scanner_->set_parser_error();
   } else {
     scanner_->reset_parser_error_flag();
-    if (bookmark_ == kBookmarkAtFirstPos) {
-      scanner_->SeekNext(0);
-    } else {
-      scanner_->SeekNext(bookmark_);
-      scanner_->Next();
-      DCHECK_EQ(scanner_->location().beg_pos, static_cast<int>(bookmark_));
-    }
+    scanner_->SeekNext(bookmark_);
   }
   bookmark_ = kBookmarkWasApplied;
 }
@@ -316,9 +301,9 @@ void Scanner::TryToParseSourceURLComment() {
   if (!name.is_one_byte()) return;
   Vector<const uint8_t> name_literal = name.one_byte_literal();
   LiteralBuffer* value;
-  if (name_literal == STATIC_CHAR_VECTOR("sourceURL")) {
+  if (name_literal == StaticCharVector("sourceURL")) {
     value = &source_url_;
-  } else if (name_literal == STATIC_CHAR_VECTOR("sourceMappingURL")) {
+  } else if (name_literal == StaticCharVector("sourceMappingURL")) {
     value = &source_mapping_url_;
   } else {
     return;
@@ -376,6 +361,13 @@ Token::Value Scanner::SkipMultiLineComment() {
 
   // Unterminated multi-line comment.
   return Token::ILLEGAL;
+}
+
+void Scanner::SkipHashBang() {
+  if (c0_ == '#' && Peek() == '!' && source_pos() == 0) {
+    SkipSingleLineComment();
+    Scan();
+  }
 }
 
 Token::Value Scanner::ScanHtmlComment() {

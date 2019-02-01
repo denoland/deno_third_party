@@ -144,6 +144,7 @@ v8_source_set("unittests_sources") {
     "compiler/typer-unittest.cc",
     "compiler/value-numbering-reducer-unittest.cc",
     "compiler/zone-stats-unittest.cc",
+    "conversions-unittest.cc",
     "counters-unittest.cc",
     "detachable-vector-unittest.cc",
     "eh-frame-iterator-unittest.cc",
@@ -208,6 +209,7 @@ v8_source_set("unittests_sources") {
     "wasm/module-decoder-unittest.cc",
     "wasm/streaming-decoder-unittest.cc",
     "wasm/wasm-code-manager-unittest.cc",
+    "wasm/wasm-compiler-unittest.cc",
     "wasm/wasm-macro-gen-unittest.cc",
     "wasm/wasm-module-builder-unittest.cc",
     "wasm/wasm-opcodes-unittest.cc",
@@ -255,6 +257,7 @@ v8_source_set("unittests_sources") {
     sources += [
       "assembler/turbo-assembler-x64-unittest.cc",
       "compiler/x64/instruction-selector-x64-unittest.cc",
+      "wasm/trap-handler-x64-unittest.cc",
     ]
   } else if (v8_current_cpu == "ppc" || v8_current_cpu == "ppc64") {
     sources += [

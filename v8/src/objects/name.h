@@ -16,7 +16,7 @@ namespace internal {
 
 // The Name abstract class captures anything that can be used as a property
 // name, i.e., strings and symbols.  All names store a hash value.
-class Name : public HeapObjectPtr {
+class Name : public HeapObject {
  public:
   // Get and set the hash field of the name.
   inline uint32_t hash_field();
@@ -61,7 +61,7 @@ class Name : public HeapObjectPtr {
   V8_WARN_UNUSED_RESULT static MaybeHandle<String> ToFunctionName(
       Isolate* isolate, Handle<Name> name, Handle<String> prefix);
 
-  DECL_CAST2(Name)
+  DECL_CAST(Name)
 
   DECL_PRINTER(Name)
   void NameShortPrint();
@@ -131,7 +131,7 @@ class Name : public HeapObjectPtr {
  protected:
   static inline bool IsHashFieldComputed(uint32_t field);
 
-  OBJECT_CONSTRUCTORS(Name, HeapObjectPtr);
+  OBJECT_CONSTRUCTORS(Name, HeapObject);
 };
 
 // ES6 symbols.
@@ -169,7 +169,7 @@ class Symbol : public Name {
   inline bool is_private_name() const;
   inline void set_is_private_name();
 
-  DECL_CAST2(Symbol)
+  DECL_CAST(Symbol)
 
   // Dispatched behavior.
   DECL_PRINTER(Symbol)

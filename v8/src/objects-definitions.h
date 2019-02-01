@@ -98,6 +98,7 @@ namespace internal {
   V(ALLOCATION_MEMENTO_TYPE)                                       \
   V(ASM_WASM_DATA_TYPE)                                            \
   V(ASYNC_GENERATOR_REQUEST_TYPE)                                  \
+  V(CLASS_POSITIONS_TYPE)                                          \
   V(DEBUG_INFO_TYPE)                                               \
   V(FUNCTION_TEMPLATE_INFO_TYPE)                                   \
   V(FUNCTION_TEMPLATE_RARE_DATA_TYPE)                              \
@@ -115,6 +116,7 @@ namespace internal {
   V(TUPLE3_TYPE)                                                   \
   V(ARRAY_BOILERPLATE_DESCRIPTION_TYPE)                            \
   V(WASM_DEBUG_INFO_TYPE)                                          \
+  V(WASM_EXCEPTION_TAG_TYPE)                                       \
   V(WASM_EXPORTED_FUNCTION_DATA_TYPE)                              \
                                                                    \
   V(CALLABLE_TASK_TYPE)                                            \
@@ -122,7 +124,7 @@ namespace internal {
   V(PROMISE_FULFILL_REACTION_JOB_TASK_TYPE)                        \
   V(PROMISE_REJECT_REACTION_JOB_TASK_TYPE)                         \
   V(PROMISE_RESOLVE_THENABLE_JOB_TASK_TYPE)                        \
-  V(WEAK_FACTORY_CLEANUP_JOB_TASK_TYPE)                            \
+  V(FINALIZATION_GROUP_CLEANUP_JOB_TASK_TYPE)                      \
                                                                    \
   V(ALLOCATION_SITE_TYPE)                                          \
   V(EMBEDDER_DATA_ARRAY_TYPE)                                      \
@@ -163,7 +165,7 @@ namespace internal {
   V(FEEDBACK_CELL_TYPE)                                            \
   V(FEEDBACK_VECTOR_TYPE)                                          \
   V(LOAD_HANDLER_TYPE)                                             \
-  V(PRE_PARSED_SCOPE_DATA_TYPE)                                    \
+  V(PREPARSE_DATA_TYPE)                                            \
   V(PROPERTY_ARRAY_TYPE)                                           \
   V(PROPERTY_CELL_TYPE)                                            \
   V(SHARED_FUNCTION_INFO_TYPE)                                     \
@@ -171,9 +173,10 @@ namespace internal {
   V(SMALL_ORDERED_HASH_SET_TYPE)                                   \
   V(SMALL_ORDERED_NAME_DICTIONARY_TYPE)                            \
   V(STORE_HANDLER_TYPE)                                            \
-  V(UNCOMPILED_DATA_WITHOUT_PRE_PARSED_SCOPE_TYPE)                 \
-  V(UNCOMPILED_DATA_WITH_PRE_PARSED_SCOPE_TYPE)                    \
+  V(UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE)                    \
+  V(UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE)                       \
   V(WEAK_ARRAY_LIST_TYPE)                                          \
+  V(WEAK_CELL_TYPE)                                                \
                                                                    \
   V(JS_PROXY_TYPE)                                                 \
   V(JS_GLOBAL_OBJECT_TYPE)                                         \
@@ -207,10 +210,9 @@ namespace internal {
   V(JS_SET_KEY_VALUE_ITERATOR_TYPE)                                \
   V(JS_SET_VALUE_ITERATOR_TYPE)                                    \
   V(JS_STRING_ITERATOR_TYPE)                                       \
-  V(JS_WEAK_CELL_TYPE)                                             \
   V(JS_WEAK_REF_TYPE)                                              \
-  V(JS_WEAK_FACTORY_CLEANUP_ITERATOR_TYPE)                         \
-  V(JS_WEAK_FACTORY_TYPE)                                          \
+  V(JS_FINALIZATION_GROUP_CLEANUP_ITERATOR_TYPE)                   \
+  V(JS_FINALIZATION_GROUP_TYPE)                                    \
   V(JS_WEAK_MAP_TYPE)                                              \
   V(JS_WEAK_SET_TYPE)                                              \
   V(JS_TYPED_ARRAY_TYPE)                                           \
@@ -320,6 +322,7 @@ namespace internal {
   V(_, ASM_WASM_DATA_TYPE, AsmWasmData, asm_wasm_data)                        \
   V(_, ASYNC_GENERATOR_REQUEST_TYPE, AsyncGeneratorRequest,                   \
     async_generator_request)                                                  \
+  V(_, CLASS_POSITIONS_TYPE, ClassPositions, class_positions)                 \
   V(_, DEBUG_INFO_TYPE, DebugInfo, debug_info)                                \
   V(_, FUNCTION_TEMPLATE_INFO_TYPE, FunctionTemplateInfo,                     \
     function_template_info)                                                   \
@@ -340,6 +343,7 @@ namespace internal {
   V(_, ARRAY_BOILERPLATE_DESCRIPTION_TYPE, ArrayBoilerplateDescription,       \
     array_boilerplate_description)                                            \
   V(_, WASM_DEBUG_INFO_TYPE, WasmDebugInfo, wasm_debug_info)                  \
+  V(_, WASM_EXCEPTION_TAG_TYPE, WasmExceptionTag, wasm_exception_tag)         \
   V(_, WASM_EXPORTED_FUNCTION_DATA_TYPE, WasmExportedFunctionData,            \
     wasm_exported_function_data)                                              \
   V(_, CALLABLE_TASK_TYPE, CallableTask, callable_task)                       \
@@ -350,8 +354,8 @@ namespace internal {
     promise_reject_reaction_job_task)                                         \
   V(_, PROMISE_RESOLVE_THENABLE_JOB_TASK_TYPE, PromiseResolveThenableJobTask, \
     promise_resolve_thenable_job_task)                                        \
-  V(_, WEAK_FACTORY_CLEANUP_JOB_TASK_TYPE, WeakFactoryCleanupJobTask,         \
-    weak_factory_cleanup_job_task)
+  V(_, FINALIZATION_GROUP_CLEANUP_JOB_TASK_TYPE,                              \
+    FinalizationGroupCleanupJobTask, finalization_group_cleanup_job_task)
 
 // Adapts one STRUCT_LIST_GENERATOR entry to the STRUCT_LIST entry
 #define STRUCT_LIST_ADAPTER(V, NAME, Name, name) V(NAME, Name, name)

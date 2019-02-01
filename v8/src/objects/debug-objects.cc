@@ -64,7 +64,7 @@ bool DebugInfo::CanBreakAtEntry() const {
 bool DebugInfo::HasBreakPoint(Isolate* isolate, int source_position) {
   DCHECK(HasBreakInfo());
   // Get the break point info object for this code offset.
-  Object* break_point_info = GetBreakPointInfo(isolate, source_position);
+  Object break_point_info = GetBreakPointInfo(isolate, source_position);
 
   // If there is no break point info object or no break points in the break
   // point info object there is no break point at this code offset.
@@ -74,11 +74,11 @@ bool DebugInfo::HasBreakPoint(Isolate* isolate, int source_position) {
 }
 
 // Get the break point info object for this source position.
-Object* DebugInfo::GetBreakPointInfo(Isolate* isolate, int source_position) {
+Object DebugInfo::GetBreakPointInfo(Isolate* isolate, int source_position) {
   DCHECK(HasBreakInfo());
   for (int i = 0; i < break_points()->length(); i++) {
     if (!break_points()->get(i)->IsUndefined(isolate)) {
-      BreakPointInfo* break_point_info =
+      BreakPointInfo break_point_info =
           BreakPointInfo::cast(break_points()->get(i));
       if (break_point_info->source_position() == source_position) {
         return break_point_info;
@@ -152,7 +152,7 @@ void DebugInfo::SetBreakPoint(Isolate* isolate, Handle<DebugInfo> debug_info,
 Handle<Object> DebugInfo::GetBreakPoints(Isolate* isolate,
                                          int source_position) {
   DCHECK(HasBreakInfo());
-  Object* break_point_info = GetBreakPointInfo(isolate, source_position);
+  Object break_point_info = GetBreakPointInfo(isolate, source_position);
   if (break_point_info->IsUndefined(isolate)) {
     return isolate->factory()->undefined_value();
   }
@@ -166,7 +166,7 @@ int DebugInfo::GetBreakPointCount(Isolate* isolate) {
   int count = 0;
   for (int i = 0; i < break_points()->length(); i++) {
     if (!break_points()->get(i)->IsUndefined(isolate)) {
-      BreakPointInfo* break_point_info =
+      BreakPointInfo break_point_info =
           BreakPointInfo::cast(break_points()->get(i));
       count += break_point_info->GetBreakPointCount(isolate);
     }
@@ -215,7 +215,7 @@ DebugInfo::SideEffectState DebugInfo::GetSideEffectState(Isolate* isolate) {
 }
 
 namespace {
-bool IsEqual(BreakPoint* break_point1, BreakPoint* break_point2) {
+bool IsEqual(BreakPoint break_point1, BreakPoint break_point2) {
   return break_point1->id() == break_point2->id();
 }
 }  // namespace

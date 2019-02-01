@@ -65,8 +65,20 @@ for (var constructor of typedArrayConstructors) {
 
   // Detached Operation
   var array = new constructor([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-  %ArrayBufferNeuter(array.buffer);
+  %ArrayBufferDetach(array.buffer);
   assertThrows(() => array.sort(), TypeError);
+}
+
+// Check that TypedArray.p.sort is stable.
+for (let constructor of typedArrayConstructors) {
+  const template = [2, 1, 0, 4, 4, 4, 4, 4, 4, 4, 4];
+
+  const array = new constructor(template);
+  // Treat 0..3, 4..7, etc. as equal.
+  const compare = (a, b) => (a / 4 | 0) - (b / 4 | 0);
+  array.sort(compare);
+
+  assertArrayLikeEquals(array.slice(0, 3), [2, 1, 0], constructor);
 }
 
 // The following creates a test for each typed element kind, where the array

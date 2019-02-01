@@ -14,7 +14,7 @@
 #include "src/counters.h"
 #include "src/eh-frame.h"
 #include "src/frames.h"
-#include "src/lsan.h"
+#include "src/log.h"
 #include "src/macro-assembler-inl.h"
 #include "src/objects/smi.h"
 #include "src/optimized-compilation-info.h"
@@ -46,7 +46,8 @@ CodeGenerator::CodeGenerator(
     InstructionSequence* code, OptimizedCompilationInfo* info, Isolate* isolate,
     base::Optional<OsrHelper> osr_helper, int start_source_position,
     JumpOptimizationInfo* jump_opt, PoisoningMitigationLevel poisoning_level,
-    const AssemblerOptions& options, int32_t builtin_index)
+    const AssemblerOptions& options, int32_t builtin_index,
+    std::unique_ptr<AssemblerBuffer> buffer)
     : zone_(codegen_zone),
       isolate_(isolate),
       frame_access_state_(nullptr),
@@ -58,17 +59,14 @@ CodeGenerator::CodeGenerator(
       current_block_(RpoNumber::Invalid()),
       start_source_position_(start_source_position),
       current_source_position_(SourcePosition::Unknown()),
-      tasm_(isolate, options, nullptr, 0, CodeObjectRequired::kNo),
+      tasm_(isolate, options, CodeObjectRequired::kNo, std::move(buffer)),
       resolver_(this),
       safepoints_(zone()),
       handlers_(zone()),
       deoptimization_exits_(zone()),
       deoptimization_states_(zone()),
       deoptimization_literals_(zone()),
-      inlined_function_count_(0),
       translations_(zone()),
-      handler_table_offset_(0),
-      last_lazy_deopt_pc_(0),
       caller_registers_saved_(false),
       jump_tables_(nullptr),
       ools_(nullptr),
@@ -116,17 +114,19 @@ void CodeGenerator::CreateFrameAccessState(Frame* frame) {
 
 CodeGenerator::CodeGenResult CodeGenerator::AssembleDeoptimizerCall(
     int deoptimization_id, SourcePosition pos) {
+  if (deoptimization_id > Deoptimizer::kMaxNumberOfEntries) {
+    return kTooManyDeoptimizationBailouts;
+  }
+
   DeoptimizeKind deopt_kind = GetDeoptimizationKind(deoptimization_id);
   DeoptimizeReason deoptimization_reason =
       GetDeoptimizationReason(deoptimization_id);
-  Address deopt_entry = Deoptimizer::GetDeoptimizationEntry(
-      tasm()->isolate(), deoptimization_id, deopt_kind);
-  if (deopt_entry == kNullAddress) return kTooManyDeoptimizationBailouts;
+  Address deopt_entry =
+      Deoptimizer::GetDeoptimizationEntry(tasm()->isolate(), deopt_kind);
   if (info()->is_source_positions_enabled()) {
     tasm()->RecordDeoptReason(deoptimization_reason, pos, deoptimization_id);
   }
-  tasm()->CallForDeoptimization(deopt_entry, deoptimization_id,
-                                RelocInfo::RUNTIME_ENTRY);
+  tasm()->CallForDeoptimization(deopt_entry, deoptimization_id);
   return kSuccess;
 }
 
@@ -191,9 +191,9 @@ void CodeGenerator::AssembleCode() {
 
   // Assemble instructions in assembly order.
   for (const InstructionBlock* block : code()->ao_blocks()) {
-    // Align loop headers on 16-byte boundaries.
+    // Align loop headers on vendor recommended boundaries.
     if (block->ShouldAlign() && !tasm()->jump_optimization_info()) {
-      tasm()->Align(16);
+      tasm()->CodeTargetAlign();
     }
     if (info->trace_turbo_json_enabled()) {
       block_starts_[block->rpo_number().ToInt()] = tasm()->pc_offset();
@@ -202,29 +202,21 @@ void CodeGenerator::AssembleCode() {
     current_block_ = block->rpo_number();
     unwinding_info_writer_.BeginInstructionBlock(tasm()->pc_offset(), block);
     if (FLAG_code_comments) {
-      Vector<char> buffer = Vector<char>::New(200);
-      char* buffer_start = buffer.start();
-      LSAN_IGNORE_OBJECT(buffer_start);
-
-      int next = SNPrintF(
-          buffer, "-- B%d start%s%s%s%s", block->rpo_number().ToInt(),
-          block->IsDeferred() ? " (deferred)" : "",
-          block->needs_frame() ? "" : " (no frame)",
-          block->must_construct_frame() ? " (construct frame)" : "",
-          block->must_deconstruct_frame() ? " (deconstruct frame)" : "");
-
-      buffer = buffer.SubVector(next, buffer.length());
+      std::ostringstream buffer;
+      buffer << "-- B" << block->rpo_number().ToInt() << " start";
+      if (block->IsDeferred()) buffer << " (deferred)";
+      if (!block->needs_frame()) buffer << " (no frame)";
+      if (block->must_construct_frame()) buffer << " (construct frame)";
+      if (block->must_deconstruct_frame()) buffer << " (deconstruct frame)";
 
       if (block->IsLoopHeader()) {
-        next = SNPrintF(buffer, " (loop up to %d)", block->loop_end().ToInt());
-        buffer = buffer.SubVector(next, buffer.length());
+        buffer << " (loop up to " << block->loop_end().ToInt() << ")";
       }
       if (block->loop_header().IsValid()) {
-        next = SNPrintF(buffer, " (in loop %d)", block->loop_header().ToInt());
-        buffer = buffer.SubVector(next, buffer.length());
+        buffer << " (in loop " << block->loop_header().ToInt() << ")";
       }
-      SNPrintF(buffer, " --");
-      tasm()->RecordComment(buffer_start);
+      buffer << " --";
+      tasm()->RecordComment(buffer.str().c_str());
     }
 
     frame_access_state()->MarkHasFrame(block->needs_frame());
@@ -289,7 +281,7 @@ void CodeGenerator::AssembleCode() {
 
   // Emit the jump tables.
   if (jump_tables_) {
-    tasm()->Align(kPointerSize);
+    tasm()->Align(kSystemPointerSize);
     for (JumpTable* table = jump_tables_; table; table = table->next()) {
       tasm()->bind(table->label());
       AssembleJumpTable(table->targets(), table->target_count());
@@ -312,6 +304,8 @@ void CodeGenerator::AssembleCode() {
                                     handlers_[i].handler->pos());
     }
   }
+
+  tasm()->FinalizeJumpOptimizationInfo();
 
   result_ = kSuccess;
 }
@@ -392,14 +386,14 @@ MaybeHandle<Code> CodeGenerator::FinalizeCode() {
 
   // Allocate and install the code.
   CodeDesc desc;
-  tasm()->GetCode(isolate(), &desc);
+  tasm()->GetCode(isolate(), &desc, safepoints(), handler_table_offset_);
   if (unwinding_info_writer_.eh_frame_writer()) {
     unwinding_info_writer_.eh_frame_writer()->GetEhFrame(&desc);
   }
 
   MaybeHandle<Code> maybe_code = isolate()->factory()->TryNewCode(
       desc, info()->code_kind(), Handle<Object>(), info()->builtin_index(),
-      source_positions, deopt_data, kMovable, info()->stub_key(), true,
+      source_positions, deopt_data, kMovable, true,
       frame()->GetTotalFrameSlotCount(), safepoints()->GetCodeOffset(),
       handler_table_offset_);
 
@@ -408,6 +402,7 @@ MaybeHandle<Code> CodeGenerator::FinalizeCode() {
     tasm()->AbortedCodeGeneration();
     return MaybeHandle<Code>();
   }
+
   isolate()->counters()->total_compiled_code_size()->Increment(
       code->raw_instruction_size());
 
@@ -426,10 +421,9 @@ bool CodeGenerator::IsNextInAssemblyOrder(RpoNumber block) const {
 }
 
 void CodeGenerator::RecordSafepoint(ReferenceMap* references,
-                                    Safepoint::Kind kind, int arguments,
+                                    Safepoint::Kind kind,
                                     Safepoint::DeoptMode deopt_mode) {
-  Safepoint safepoint =
-      safepoints()->DefineSafepoint(tasm(), kind, arguments, deopt_mode);
+  Safepoint safepoint = safepoints()->DefineSafepoint(tasm(), kind, deopt_mode);
   int stackSlotToSpillSlotDelta =
       frame()->GetTotalFrameSlotCount() - frame()->GetSpillSlotCount();
   for (const InstructionOperand& operand : references->reference_operands()) {
@@ -719,7 +713,7 @@ void CodeGenerator::AssembleSourcePosition(SourcePosition source_position) {
                                              source_position, false);
   if (FLAG_code_comments) {
     OptimizedCompilationInfo* info = this->info();
-    if (info->IsStub()) return;
+    if (info->IsNotOptimizedFunctionOrWasmFunction()) return;
     std::ostringstream buffer;
     buffer << "-- ";
     // Turbolizer only needs the source position, as it can reconstruct
@@ -734,9 +728,7 @@ void CodeGenerator::AssembleSourcePosition(SourcePosition source_position) {
       buffer << source_position.InliningStack(info);
     }
     buffer << " --";
-    char* str = StrDup(buffer.str().c_str());
-    LSAN_IGNORE_OBJECT(str);
-    tasm()->RecordComment(str);
+    tasm()->RecordComment(buffer.str().c_str());
   }
 }
 
@@ -756,7 +748,7 @@ StubCallMode CodeGenerator::DetermineStubCallMode() const {
   return (code_kind == Code::WASM_FUNCTION ||
           code_kind == Code::WASM_TO_JS_FUNCTION)
              ? StubCallMode::kCallWasmRuntimeStub
-             : StubCallMode::kCallOnHeapBuiltin;
+             : StubCallMode::kCallCodeObject;
 }
 
 void CodeGenerator::AssembleGaps(Instruction* instr) {
@@ -859,7 +851,7 @@ void CodeGenerator::RecordCallPosition(Instruction* instr) {
   bool needs_frame_state = (flags & CallDescriptor::kNeedsFrameState);
 
   RecordSafepoint(
-      instr->reference_map(), Safepoint::kSimple, 0,
+      instr->reference_map(), Safepoint::kSimple,
       needs_frame_state ? Safepoint::kLazyDeopt : Safepoint::kNoLazyDeopt);
 
   if (flags & CallDescriptor::kHasExceptionHandler) {
@@ -1136,7 +1128,7 @@ void CodeGenerator::AddTranslationForOperand(Translation* translation,
         if (type.representation() == MachineRepresentation::kTagged) {
           // When pointers are 4 bytes, we can use int32 constants to represent
           // Smis.
-          DCHECK_EQ(4, kPointerSize);
+          DCHECK_EQ(4, kSystemPointerSize);
           Smi smi(static_cast<Address>(constant.ToInt32()));
           DCHECK(smi->IsSmi());
           literal = DeoptimizationLiteral(smi->value());
@@ -1164,7 +1156,7 @@ void CodeGenerator::AddTranslationForOperand(Translation* translation,
         }
         break;
       case Constant::kInt64:
-        DCHECK_EQ(8, kPointerSize);
+        DCHECK_EQ(8, kSystemPointerSize);
         if (type.representation() == MachineRepresentation::kWord64) {
           literal =
               DeoptimizationLiteral(static_cast<double>(constant.ToInt64()));

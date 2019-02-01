@@ -136,6 +136,11 @@ class Variable final : public ZoneObject {
     return kind() == SLOPPY_FUNCTION_NAME_VARIABLE;
   }
 
+  bool is_parameter() const { return kind() == PARAMETER_VARIABLE; }
+  bool is_sloppy_block_function() {
+    return kind() == SLOPPY_BLOCK_FUNCTION_VARIABLE;
+  }
+
   Variable* local_if_not_shadowed() const {
     DCHECK(mode() == VariableMode::kDynamicLocal &&
            local_if_not_shadowed_ != nullptr);
@@ -172,6 +177,13 @@ class Variable final : public ZoneObject {
     bit_field_ = LocationField::update(bit_field_, location);
     DCHECK_EQ(location, this->location());
     index_ = index;
+  }
+
+  void MakeParameterNonSimple() {
+    DCHECK(is_parameter());
+    bit_field_ = VariableModeField::update(bit_field_, VariableMode::kLet);
+    bit_field_ =
+        InitializationFlagField::update(bit_field_, kNeedsInitialization);
   }
 
   static InitializationFlag DefaultInitializationFlag(VariableMode mode) {

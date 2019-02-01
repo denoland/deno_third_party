@@ -51,6 +51,8 @@ class Intl {
   static std::set<std::string> BuildLocaleSet(
       const icu::Locale* icu_available_locales, int32_t count);
 
+  static Maybe<std::string> ToLanguageTag(const icu::Locale& locale);
+
   // Get the name of the numbering system from locale.
   // ICU doesn't expose numbering system in any way, so we have to assume that
   // for given locale NumberingSystem constructor produces the same digits as
@@ -61,8 +63,6 @@ class Intl {
       Isolate* isolate, const char* method,
       const std::set<std::string>& available_locales, Handle<Object> locales_in,
       Handle<Object> options_in);
-
-  static std::string DefaultLocale(Isolate* isolate);
 
   // ECMA402 9.2.10. GetOption( options, property, type, values, fallback)
   // ecma402/#sec-getoption
@@ -223,6 +223,8 @@ class Intl {
   // enum for "hourCycle" option: shared by Intl.Locale and Intl.DateTimeFormat.
   enum class HourCycle { kH11, kH12, kH23, kH24, kUndefined };
 
+  static HourCycle ToHourCycle(const std::string& str);
+
   // Shared function to read the "hourCycle" option.
   V8_WARN_UNUSED_RESULT static Maybe<HourCycle> GetHourCycle(
       Isolate* isolate, Handle<JSReceiver> options, const char* method);
@@ -246,7 +248,7 @@ class Intl {
       const std::set<std::string>& relevant_extension_keys);
 
   // Utility function to set text to BreakIterator.
-  static Managed<icu::UnicodeString>* SetTextToBreakIterator(
+  static Managed<icu::UnicodeString> SetTextToBreakIterator(
       Isolate* isolate, Handle<String> text,
       icu::BreakIterator* break_iterator);
 

@@ -12,6 +12,7 @@
 #include "src/isolate.h"
 #include "src/log-inl.h"
 #include "src/log.h"
+#include "src/ostreams.h"
 
 namespace v8 {
 namespace internal {
@@ -531,11 +532,16 @@ void RuntimeCallStats::Dump(v8::tracing::TracedValue* value) {
   in_use_ = false;
 }
 
-WorkerThreadRuntimeCallStats::WorkerThreadRuntimeCallStats()
-    : tls_key_(base::Thread::CreateThreadLocalKey()) {}
+WorkerThreadRuntimeCallStats::WorkerThreadRuntimeCallStats() {}
 
 WorkerThreadRuntimeCallStats::~WorkerThreadRuntimeCallStats() {
-  base::Thread::DeleteThreadLocalKey(tls_key_);
+  if (tls_key_) base::Thread::DeleteThreadLocalKey(*tls_key_);
+}
+
+base::Thread::LocalStorageKey WorkerThreadRuntimeCallStats::GetKey() {
+  DCHECK(FLAG_runtime_stats);
+  if (!tls_key_) tls_key_ = base::Thread::CreateThreadLocalKey();
+  return *tls_key_;
 }
 
 RuntimeCallStats* WorkerThreadRuntimeCallStats::NewTable() {

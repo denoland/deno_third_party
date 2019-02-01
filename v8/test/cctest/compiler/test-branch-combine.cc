@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "src/base/overflowing-math.h"
 #include "src/objects-inl.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/compiler/codegen-tester.h"
@@ -32,7 +33,7 @@ TEST(BranchCombineWord32EqualZero_1) {
   m.Return(m.Int32Constant(ne_constant));
 
   FOR_INT32_INPUTS(i) {
-    int32_t a = *i;
+    int32_t a = i;
     int32_t expect = a == 0 ? eq_constant : ne_constant;
     CHECK_EQ(expect, m.Call(a));
   }
@@ -59,7 +60,7 @@ TEST(BranchCombineWord32EqualZero_chain) {
     m.Return(m.Int32Constant(ne_constant));
 
     FOR_INT32_INPUTS(i) {
-      int32_t a = *i;
+      int32_t a = i;
       int32_t expect = (k & 1) == 1 ? (a == 0 ? eq_constant : ne_constant)
                                     : (a == 0 ? ne_constant : eq_constant);
       CHECK_EQ(expect, m.Call(a));
@@ -83,7 +84,7 @@ TEST(BranchCombineInt32LessThanZero_1) {
   m.Return(m.Int32Constant(ne_constant));
 
   FOR_INT32_INPUTS(i) {
-    int32_t a = *i;
+    int32_t a = i;
     int32_t expect = a < 0 ? eq_constant : ne_constant;
     CHECK_EQ(expect, m.Call(a));
   }
@@ -105,7 +106,7 @@ TEST(BranchCombineUint32LessThan100_1) {
   m.Return(m.Int32Constant(ne_constant));
 
   FOR_UINT32_INPUTS(i) {
-    uint32_t a = *i;
+    uint32_t a = i;
     int32_t expect = a < 100 ? eq_constant : ne_constant;
     CHECK_EQ(expect, m.Call(a));
   }
@@ -127,7 +128,7 @@ TEST(BranchCombineUint32LessThanOrEqual100_1) {
   m.Return(m.Int32Constant(ne_constant));
 
   FOR_UINT32_INPUTS(i) {
-    uint32_t a = *i;
+    uint32_t a = i;
     int32_t expect = a <= 100 ? eq_constant : ne_constant;
     CHECK_EQ(expect, m.Call(a));
   }
@@ -149,7 +150,7 @@ TEST(BranchCombineZeroLessThanInt32_1) {
   m.Return(m.Int32Constant(ne_constant));
 
   FOR_INT32_INPUTS(i) {
-    int32_t a = *i;
+    int32_t a = i;
     int32_t expect = 0 < a ? eq_constant : ne_constant;
     CHECK_EQ(expect, m.Call(a));
   }
@@ -171,7 +172,7 @@ TEST(BranchCombineInt32GreaterThanZero_1) {
   m.Return(m.Int32Constant(ne_constant));
 
   FOR_INT32_INPUTS(i) {
-    int32_t a = *i;
+    int32_t a = i;
     int32_t expect = a > 0 ? eq_constant : ne_constant;
     CHECK_EQ(expect, m.Call(a));
   }
@@ -196,8 +197,8 @@ TEST(BranchCombineWord32EqualP) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      int32_t a = *i;
-      int32_t b = *j;
+      int32_t a = i;
+      int32_t b = j;
       int32_t expect = a == b ? eq_constant : ne_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -212,7 +213,7 @@ TEST(BranchCombineWord32EqualI) {
   for (int left = 0; left < 2; left++) {
     FOR_INT32_INPUTS(i) {
       RawMachineAssemblerTester<int32_t> m(MachineType::Int32());
-      int32_t a = *i;
+      int32_t a = i;
 
       Node* p0 = m.Int32Constant(a);
       Node* p1 = m.Parameter(0);
@@ -226,7 +227,7 @@ TEST(BranchCombineWord32EqualI) {
       m.Return(m.Int32Constant(ne_constant));
 
       FOR_INT32_INPUTS(j) {
-        int32_t b = *j;
+        int32_t b = j;
         int32_t expect = a == b ? eq_constant : ne_constant;
         CHECK_EQ(expect, m.Call(b));
       }
@@ -255,8 +256,8 @@ TEST(BranchCombineInt32CmpP) {
 
     FOR_INT32_INPUTS(i) {
       FOR_INT32_INPUTS(j) {
-        int32_t a = *i;
-        int32_t b = *j;
+        int32_t a = i;
+        int32_t b = j;
         int32_t expect = 0;
         if (op == 0) expect = a < b ? eq_constant : ne_constant;
         if (op == 1) expect = a <= b ? eq_constant : ne_constant;
@@ -274,7 +275,7 @@ TEST(BranchCombineInt32CmpI) {
   for (int op = 0; op < 2; op++) {
     FOR_INT32_INPUTS(i) {
       RawMachineAssemblerTester<int32_t> m(MachineType::Int32());
-      int32_t a = *i;
+      int32_t a = i;
       Node* p0 = m.Int32Constant(a);
       Node* p1 = m.Parameter(0);
 
@@ -287,7 +288,7 @@ TEST(BranchCombineInt32CmpI) {
       m.Return(m.Int32Constant(ne_constant));
 
       FOR_INT32_INPUTS(j) {
-        int32_t b = *j;
+        int32_t b = j;
         int32_t expect = 0;
         if (op == 0) expect = a < b ? eq_constant : ne_constant;
         if (op == 1) expect = a <= b ? eq_constant : ne_constant;
@@ -499,9 +500,10 @@ TEST(BranchCombineInt32AddLessThanZero) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      int32_t a = *i;
-      int32_t b = *j;
-      int32_t expect = (a + b < 0) ? t_constant : f_constant;
+      int32_t a = i;
+      int32_t b = j;
+      int32_t expect =
+          (base::AddWithWraparound(a, b) < 0) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
   }
@@ -527,9 +529,10 @@ TEST(BranchCombineInt32AddGreaterThanOrEqualZero) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      int32_t a = *i;
-      int32_t b = *j;
-      int32_t expect = (a + b >= 0) ? t_constant : f_constant;
+      int32_t a = i;
+      int32_t b = j;
+      int32_t expect =
+          (base::AddWithWraparound(a, b) >= 0) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
   }
@@ -555,9 +558,10 @@ TEST(BranchCombineInt32ZeroGreaterThanAdd) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      int32_t a = *i;
-      int32_t b = *j;
-      int32_t expect = (0 > a + b) ? t_constant : f_constant;
+      int32_t a = i;
+      int32_t b = j;
+      int32_t expect =
+          (0 > base::AddWithWraparound(a, b)) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
   }
@@ -583,9 +587,10 @@ TEST(BranchCombineInt32ZeroLessThanOrEqualAdd) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      int32_t a = *i;
-      int32_t b = *j;
-      int32_t expect = (0 <= a + b) ? t_constant : f_constant;
+      int32_t a = i;
+      int32_t b = j;
+      int32_t expect =
+          (0 <= base::AddWithWraparound(a, b)) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
   }
@@ -609,10 +614,10 @@ TEST(BranchCombineUint32AddLessThanOrEqualZero) {
   m.Bind(&blockb);
   m.Return(m.Int32Constant(f_constant));
 
-  FOR_INT32_INPUTS(i) {
-    FOR_INT32_INPUTS(j) {
-      uint32_t a = *i;
-      uint32_t b = *j;
+  FOR_UINT32_INPUTS(i) {
+    FOR_UINT32_INPUTS(j) {
+      uint32_t a = i;
+      uint32_t b = j;
       int32_t expect = (a + b <= 0) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -637,10 +642,10 @@ TEST(BranchCombineUint32AddGreaterThanZero) {
   m.Bind(&blockb);
   m.Return(m.Int32Constant(f_constant));
 
-  FOR_INT32_INPUTS(i) {
-    FOR_INT32_INPUTS(j) {
-      uint32_t a = *i;
-      uint32_t b = *j;
+  FOR_UINT32_INPUTS(i) {
+    FOR_UINT32_INPUTS(j) {
+      uint32_t a = i;
+      uint32_t b = j;
       int32_t expect = (a + b > 0) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -665,10 +670,10 @@ TEST(BranchCombineUint32ZeroGreaterThanOrEqualAdd) {
   m.Bind(&blockb);
   m.Return(m.Int32Constant(f_constant));
 
-  FOR_INT32_INPUTS(i) {
-    FOR_INT32_INPUTS(j) {
-      uint32_t a = *i;
-      uint32_t b = *j;
+  FOR_UINT32_INPUTS(i) {
+    FOR_UINT32_INPUTS(j) {
+      uint32_t a = i;
+      uint32_t b = j;
       int32_t expect = (0 >= a + b) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -693,10 +698,10 @@ TEST(BranchCombineUint32ZeroLessThanAdd) {
   m.Bind(&blockb);
   m.Return(m.Int32Constant(f_constant));
 
-  FOR_INT32_INPUTS(i) {
-    FOR_INT32_INPUTS(j) {
-      uint32_t a = *i;
-      uint32_t b = *j;
+  FOR_UINT32_INPUTS(i) {
+    FOR_UINT32_INPUTS(j) {
+      uint32_t a = i;
+      uint32_t b = j;
       int32_t expect = (0 < a + b) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -723,8 +728,8 @@ TEST(BranchCombineWord32AndLessThanZero) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      int32_t a = *i;
-      int32_t b = *j;
+      int32_t a = i;
+      int32_t b = j;
       int32_t expect = ((a & b) < 0) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -751,8 +756,8 @@ TEST(BranchCombineWord32AndGreaterThanOrEqualZero) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      int32_t a = *i;
-      int32_t b = *j;
+      int32_t a = i;
+      int32_t b = j;
       int32_t expect = ((a & b) >= 0) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -779,8 +784,8 @@ TEST(BranchCombineInt32ZeroGreaterThanAnd) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      int32_t a = *i;
-      int32_t b = *j;
+      int32_t a = i;
+      int32_t b = j;
       int32_t expect = (0 > (a & b)) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -807,8 +812,8 @@ TEST(BranchCombineInt32ZeroLessThanOrEqualAnd) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      int32_t a = *i;
-      int32_t b = *j;
+      int32_t a = i;
+      int32_t b = j;
       int32_t expect = (0 <= (a & b)) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -835,8 +840,8 @@ TEST(BranchCombineUint32AndLessThanOrEqualZero) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      uint32_t a = *i;
-      uint32_t b = *j;
+      uint32_t a = i;
+      uint32_t b = j;
       int32_t expect = ((a & b) <= 0) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -863,8 +868,8 @@ TEST(BranchCombineUint32AndGreaterThanZero) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      uint32_t a = *i;
-      uint32_t b = *j;
+      uint32_t a = i;
+      uint32_t b = j;
       int32_t expect = ((a & b) > 0) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -891,8 +896,8 @@ TEST(BranchCombineUint32ZeroGreaterThanOrEqualAnd) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      uint32_t a = *i;
-      uint32_t b = *j;
+      uint32_t a = i;
+      uint32_t b = j;
       int32_t expect = (0 >= (a & b)) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }
@@ -919,8 +924,8 @@ TEST(BranchCombineUint32ZeroLessThanAnd) {
 
   FOR_INT32_INPUTS(i) {
     FOR_INT32_INPUTS(j) {
-      uint32_t a = *i;
-      uint32_t b = *j;
+      uint32_t a = i;
+      uint32_t b = j;
       int32_t expect = (0 < (a & b)) ? t_constant : f_constant;
       CHECK_EQ(expect, m.Call(a, b));
     }

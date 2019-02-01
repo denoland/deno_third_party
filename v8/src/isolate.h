@@ -74,6 +74,7 @@ class Counters;
 class Debug;
 class DeoptimizerData;
 class DescriptorLookupCache;
+class EmbeddedFileWriterInterface;
 class EternalHandles;
 class ExternalCallbackScope;
 class HandleScopeImplementer;
@@ -161,7 +162,7 @@ class WasmEngine;
   } while (false)
 
 /**
- * RETURN_RESULT_OR_FAILURE is used in functions with return type Object* (such
+ * RETURN_RESULT_OR_FAILURE is used in functions with return type Object (such
  * as "RUNTIME_FUNCTION(...) {...}" or "BUILTIN(...) {...}" ) to return either
  * the contents of a MaybeHandle<X>, or the "exception" sentinel value.
  * Example usage:
@@ -254,7 +255,7 @@ class WasmEngine;
  *
  * If inside a function with return type MaybeHandle<X>, use RETURN_ON_EXCEPTION
  * instead.
- * If inside a function with return type Object*, use
+ * If inside a function with return type Object, use
  * RETURN_FAILURE_ON_EXCEPTION instead.
  */
 #define RETURN_ON_EXCEPTION_VALUE(isolate, call, value)            \
@@ -268,7 +269,7 @@ class WasmEngine;
 /**
  * RETURN_FAILURE_ON_EXCEPTION conditionally returns the "exception" sentinel if
  * the given MaybeHandle is empty; so it can only be used in functions with
- * return type Object*, such as RUNTIME_FUNCTION(...) {...} or BUILTIN(...)
+ * return type Object, such as RUNTIME_FUNCTION(...) {...} or BUILTIN(...)
  * {...}. Example usage:
  *
  * RUNTIME_FUNCTION(Runtime_Func) {
@@ -307,7 +308,7 @@ class WasmEngine;
  *   ...
  * }
  *
- * If inside a function with return type Object*, use
+ * If inside a function with return type Object, use
  * RETURN_FAILURE_ON_EXCEPTION instead.
  * If inside a function with return type
  * Maybe<X> or Handle<X>, use RETURN_ON_EXCEPTION_VALUE instead.
@@ -380,10 +381,10 @@ class ThreadLocalTop {
   // be cleaner to make it an "Address raw_context_", and construct a Context
   // object in the getter. Same for {pending_handler_context_} below. In the
   // meantime, assert that the memory layout is the same.
-  STATIC_ASSERT(sizeof(Context) == kPointerSize);
+  STATIC_ASSERT(sizeof(Context) == kSystemPointerSize);
   Context context_;
   ThreadId thread_id_ = ThreadId::Invalid();
-  Object* pending_exception_ = nullptr;
+  Object pending_exception_;
 
   // Communication channel between Isolate::FindHandler and the CEntry.
   Context pending_handler_context_;
@@ -394,14 +395,13 @@ class ThreadLocalTop {
 
   // Communication channel between Isolate::Throw and message consumers.
   bool rethrowing_message_ = false;
-  Object* pending_message_obj_ = nullptr;
+  Object pending_message_obj_;
 
   // Use a separate value for scheduled exceptions to preserve the
   // invariants that hold about pending_exception.  We may want to
   // unify them later.
-  Object* scheduled_exception_ = nullptr;
+  Object scheduled_exception_;
   bool external_caught_exception_ = false;
-  SaveContext* save_context_ = nullptr;
 
   // Stack.
   // The frame pointer of the top c entry frame.
@@ -456,7 +456,7 @@ class ThreadLocalTop {
   V(int, suffix_table, (kBMMaxShift + 1))                                      \
   ISOLATE_INIT_DEBUG_ARRAY_LIST(V)
 
-typedef std::vector<HeapObject*> DebugObjectCache;
+typedef std::vector<HeapObject> DebugObjectCache;
 
 #define ISOLATE_INIT_LIST(V)                                                  \
   /* Assembler state. */                                                      \
@@ -473,7 +473,7 @@ typedef std::vector<HeapObject*> DebugObjectCache;
   /* State for Relocatable. */                                                \
   V(Relocatable*, relocatable_top, nullptr)                                   \
   V(DebugObjectCache*, string_stream_debug_object_cache, nullptr)             \
-  V(Object*, string_stream_current_security_token, nullptr)                   \
+  V(Object, string_stream_current_security_token, Object())                   \
   V(const intptr_t*, api_external_references, nullptr)                        \
   V(AddressToIndexHashMap*, external_reference_map, nullptr)                  \
   V(HeapObjectToIndexHashMap*, root_index_map, nullptr)                       \
@@ -613,7 +613,7 @@ class Isolate final : private HiddenFactory {
   // Get the isolate that the given HeapObject lives in, returning true on
   // success. If the object is not writable (i.e. lives in read-only space),
   // return false.
-  inline static bool FromWritableHeapObject(HeapObject* obj, Isolate** isolate);
+  inline static bool FromWritableHeapObject(HeapObject obj, Isolate** isolate);
 
   // Usually called by Init(), but can be called early e.g. to allow
   // testing components that require logging but not the whole
@@ -661,15 +661,6 @@ class Isolate final : private HiddenFactory {
   // If one does not yet exist, no-op.
   void DiscardPerThreadDataForThisThread();
 
-  // Returns the key used to store the pointer to the current isolate.
-  // Used internally for V8 threads that do not execute JavaScript but still
-  // are part of the domain of an isolate (like the context switcher).
-  static base::Thread::LocalStorageKey isolate_key() {
-    return isolate_key_;
-  }
-
-  static base::Thread::LocalStorageKey per_isolate_thread_data_key();
-
   // Mutex for serializing access to break control structures.
   base::RecursiveMutex* break_access() { return &break_access_; }
 
@@ -680,19 +671,17 @@ class Isolate final : private HiddenFactory {
   inline void set_context(Context context);
   Context* context_address() { return &thread_local_top_.context_; }
 
-  THREAD_LOCAL_TOP_ACCESSOR(SaveContext*, save_context)
-
   // Access to current thread id.
   THREAD_LOCAL_TOP_ACCESSOR(ThreadId, thread_id)
 
   // Interface to pending exception.
-  inline Object* pending_exception();
-  inline void set_pending_exception(Object* exception_obj);
+  inline Object pending_exception();
+  inline void set_pending_exception(Object exception_obj);
   inline void clear_pending_exception();
 
   bool AreWasmThreadsEnabled(Handle<Context> context);
 
-  THREAD_LOCAL_TOP_ADDRESS(Object*, pending_exception)
+  THREAD_LOCAL_TOP_ADDRESS(Object, pending_exception)
 
   inline bool has_pending_exception();
 
@@ -711,21 +700,21 @@ class Isolate final : private HiddenFactory {
     return &thread_local_top_.external_caught_exception_;
   }
 
-  THREAD_LOCAL_TOP_ADDRESS(Object*, scheduled_exception)
+  THREAD_LOCAL_TOP_ADDRESS(Object, scheduled_exception)
 
   inline void clear_pending_message();
   Address pending_message_obj_address() {
     return reinterpret_cast<Address>(&thread_local_top_.pending_message_obj_);
   }
 
-  inline Object* scheduled_exception();
+  inline Object scheduled_exception();
   inline bool has_scheduled_exception();
   inline void clear_scheduled_exception();
 
-  bool IsJavaScriptHandlerOnTop(Object* exception);
-  bool IsExternalHandlerOnTop(Object* exception);
+  bool IsJavaScriptHandlerOnTop(Object exception);
+  bool IsExternalHandlerOnTop(Object exception);
 
-  inline bool is_catchable_by_javascript(Object* exception);
+  inline bool is_catchable_by_javascript(Object exception);
 
   // JS execution stack (see frames.h).
   static Address c_entry_fp(ThreadLocalTop* thread) {
@@ -764,7 +753,7 @@ class Isolate final : private HiddenFactory {
   // exceptions.  If an exception was thrown and not handled by an external
   // handler the exception is scheduled to be rethrown when we return to running
   // JavaScript code.  If an exception is scheduled true is returned.
-  V8_EXPORT_PRIVATE bool OptionalRescheduleException(bool is_bottom_call);
+  V8_EXPORT_PRIVATE bool OptionalRescheduleException(bool clear_exception);
 
   // Push and pop a promise and the current try-catch handler.
   void PushPromise(Handle<JSObject> promise);
@@ -834,8 +823,8 @@ class Isolate final : private HiddenFactory {
 
   // Exception throwing support. The caller should use the result
   // of Throw() as its return value.
-  Object* Throw(Object* exception, MessageLocation* location = nullptr);
-  Object* ThrowIllegalOperation();
+  Object Throw(Object exception, MessageLocation* location = nullptr);
+  Object ThrowIllegalOperation();
 
   template <typename T>
   V8_WARN_UNUSED_RESULT MaybeHandle<T> Throw(
@@ -858,11 +847,11 @@ class Isolate final : private HiddenFactory {
 
   // Re-throw an exception.  This involves no error reporting since error
   // reporting was handled when the exception was thrown originally.
-  Object* ReThrow(Object* exception);
+  Object ReThrow(Object exception);
 
   // Find the correct handler for the current pending exception. This also
   // clears and returns the current pending exception.
-  Object* UnwindAndFindHandler();
+  Object UnwindAndFindHandler();
 
   // Tries to predict whether an exception will be caught. Note that this can
   // only produce an estimate, because it is undecidable whether a finally
@@ -877,7 +866,7 @@ class Isolate final : private HiddenFactory {
   };
   CatchType PredictExceptionCatcher();
 
-  V8_EXPORT_PRIVATE void ScheduleThrow(Object* exception);
+  V8_EXPORT_PRIVATE void ScheduleThrow(Object exception);
   // Re-set pending message, script and positions reported to the TryCatch
   // back to the TLS for re-use when rethrowing.
   void RestorePendingMessageFromTryCatch(v8::TryCatch* handler);
@@ -893,7 +882,7 @@ class Isolate final : private HiddenFactory {
   MessageLocation GetMessageLocation();
 
   // Promote a scheduled exception to pending. Asserts has_scheduled_exception.
-  Object* PromoteScheduledException();
+  Object PromoteScheduledException();
 
   // Attempts to compute the current source location, storing the
   // result in the target out parameter. The source location is attached to a
@@ -909,8 +898,8 @@ class Isolate final : private HiddenFactory {
                                         MessageLocation* location);
 
   // Out of resource exception helpers.
-  Object* StackOverflow();
-  Object* TerminateExecution();
+  Object StackOverflow();
+  Object TerminateExecution();
   void CancelTerminateExecution();
 
   void RequestInterrupt(InterruptCallback callback, void* data);
@@ -960,7 +949,7 @@ class Isolate final : private HiddenFactory {
 
 #define NATIVE_CONTEXT_FIELD_ACCESSOR(index, type, name) \
   inline Handle<type> name();                            \
-  inline bool is_##name(type##ArgType value);
+  inline bool is_##name(type value);
   NATIVE_CONTEXT_FIELDS(NATIVE_CONTEXT_FIELD_ACCESSOR)
 #undef NATIVE_CONTEXT_FIELD_ACCESSOR
 
@@ -1009,7 +998,7 @@ class Isolate final : private HiddenFactory {
                                sizeof(IsolateData));
   }
 
-  Object* root(RootIndex index) { return roots_table()[index]; }
+  Object root(RootIndex index) { return Object(roots_table()[index]); }
 
   Handle<Object> root_handle(RootIndex index) {
     return Handle<Object>(&roots_table()[index]);
@@ -1020,6 +1009,7 @@ class Isolate final : private HiddenFactory {
     return isolate_data()->external_reference_table();
   }
 
+  Address* builtin_entry_table() { return isolate_data_.builtin_entry_table(); }
   V8_INLINE Address* builtins_table() { return isolate_data_.builtins(); }
 
   StubCache* load_stub_cache() { return load_stub_cache_; }
@@ -1188,7 +1178,7 @@ class Isolate final : private HiddenFactory {
   // needed anymore. This keeps many feedback vectors alive, but code
   // coverage or type profile are used for debugging only and increase in
   // memory usage is expected.
-  void SetFeedbackVectorsForProfilingTools(Object* value);
+  void SetFeedbackVectorsForProfilingTools(Object value);
 
   void MaybeInitializeVectorListFromHeap();
 
@@ -1234,14 +1224,14 @@ class Isolate final : private HiddenFactory {
   bool IsNoElementsProtectorIntact(Context context);
   bool IsNoElementsProtectorIntact();
 
-  bool IsArrayOrObjectOrStringPrototype(Object* object);
+  bool IsArrayOrObjectOrStringPrototype(Object object);
 
   inline bool IsArraySpeciesLookupChainIntact();
   inline bool IsTypedArraySpeciesLookupChainIntact();
   inline bool IsRegExpSpeciesLookupChainIntact();
   inline bool IsPromiseSpeciesLookupChainIntact();
   bool IsIsConcatSpreadableLookupChainIntact();
-  bool IsIsConcatSpreadableLookupChainIntact(JSReceiver* receiver);
+  bool IsIsConcatSpreadableLookupChainIntact(JSReceiver receiver);
   inline bool IsStringLengthOverflowIntact();
   inline bool IsArrayIteratorLookupChainIntact();
 
@@ -1281,8 +1271,8 @@ class Isolate final : private HiddenFactory {
   // non-configurable and non-writable.
   inline bool IsStringIteratorLookupChainIntact();
 
-  // Make sure we do check for neutered array buffers.
-  inline bool IsArrayBufferNeuteringIntact();
+  // Make sure we do check for detached array buffers.
+  inline bool IsArrayBufferDetachingIntact();
 
   // Disable promise optimizations if promise (debug) hooks have ever been
   // active.
@@ -1325,7 +1315,7 @@ class Isolate final : private HiddenFactory {
   void InvalidateMapIteratorProtector();
   void InvalidateSetIteratorProtector();
   void InvalidateStringIteratorProtector();
-  void InvalidateArrayBufferNeuteringProtector();
+  void InvalidateArrayBufferDetachingProtector();
   V8_EXPORT_PRIVATE void InvalidatePromiseHookProtector();
   void InvalidatePromiseResolveProtector();
   void InvalidatePromiseThenProtector();
@@ -1402,17 +1392,11 @@ class Isolate final : private HiddenFactory {
   void RemoveBeforeCallEnteredCallback(BeforeCallEnteredCallback callback);
   inline void FireBeforeCallEnteredCallback();
 
-  void AddMicrotasksCompletedCallback(MicrotasksCompletedCallback callback);
-  void RemoveMicrotasksCompletedCallback(MicrotasksCompletedCallback callback);
-  inline void FireMicrotasksCompletedCallback();
-
   void SetPromiseRejectCallback(PromiseRejectCallback callback);
   void ReportPromiseReject(Handle<JSPromise> promise, Handle<Object> value,
                            v8::PromiseRejectEvent event);
 
-  void EnqueueMicrotask(Handle<Microtask> microtask);
-  void RunMicrotasks();
-  bool IsRunningMicrotasks() const { return is_running_microtasks_; }
+  void SetTerminationOnExternalTryCatch();
 
   Handle<Symbol> SymbolFor(RootIndex dictionary_index, Handle<String> name,
                            bool private_symbol);
@@ -1438,10 +1422,6 @@ class Isolate final : private HiddenFactory {
     return reinterpret_cast<Address>(&promise_hook_or_async_event_delegate_);
   }
 
-  Address default_microtask_queue_address() {
-    return reinterpret_cast<Address>(&default_microtask_queue_);
-  }
-
   Address promise_hook_or_debug_is_active_or_async_event_delegate_address() {
     return reinterpret_cast<Address>(
         &promise_hook_or_debug_is_active_or_async_event_delegate_);
@@ -1455,7 +1435,7 @@ class Isolate final : private HiddenFactory {
                               void* data);
   void RunAtomicsWaitCallback(v8::Isolate::AtomicsWaitEvent event,
                               Handle<JSArrayBuffer> array_buffer,
-                              size_t offset_in_bytes, int32_t value,
+                              size_t offset_in_bytes, int64_t value,
                               double timeout_in_ms,
                               AtomicsWaitWakeHandle* stop_handle);
 
@@ -1467,11 +1447,11 @@ class Isolate final : private HiddenFactory {
   void AddDetachedContext(Handle<Context> context);
   void CheckDetachedContextsAfterGC();
 
-  std::vector<Object*>* read_only_object_cache() {
+  std::vector<Object>* read_only_object_cache() {
     return &read_only_object_cache_;
   }
 
-  std::vector<Object*>* partial_snapshot_cache() {
+  std::vector<Object>* partial_snapshot_cache() {
     return &partial_snapshot_cache_;
   }
 
@@ -1487,8 +1467,14 @@ class Isolate final : private HiddenFactory {
     return builtins_constants_table_builder_;
   }
 
+  // Hashes bits of the Isolate that are relevant for embedded builtins. In
+  // particular, the embedded blob requires builtin Code object layout and the
+  // builtins constants table to remain unchanged from build-time.
+  size_t HashIsolateForEmbeddedBlob();
+
   static const uint8_t* CurrentEmbeddedBlob();
   static uint32_t CurrentEmbeddedBlobSize();
+  static bool CurrentEmbeddedBlobIsBinaryEmbedded();
 
   // These always return the same result as static methods above, but don't
   // access the global atomic variable (and thus *might be* slightly faster).
@@ -1529,7 +1515,7 @@ class Isolate final : private HiddenFactory {
     return compiler_dispatcher_;
   }
 
-  bool IsInAnyContext(Object* object, uint32_t index);
+  bool IsInAnyContext(Object object, uint32_t index);
 
   void SetHostImportModuleDynamicallyCallback(
       HostImportModuleDynamicallyCallback callback);
@@ -1540,6 +1526,19 @@ class Isolate final : private HiddenFactory {
       HostInitializeImportMetaObjectCallback callback);
   Handle<JSObject> RunHostInitializeImportMetaObjectCallback(
       Handle<Module> module);
+
+  void RegisterEmbeddedFileWriter(EmbeddedFileWriterInterface* writer) {
+    embedded_file_writer_ = writer;
+  }
+
+  int LookupOrAddExternallyCompiledFilename(const char* filename);
+  const char* GetExternallyCompiledFilename(int index) const;
+  int GetExternallyCompiledFilenameCount() const;
+  // PrepareBuiltinSourcePositionMap is necessary in order to preserve the
+  // builtin source positions before the corresponding code objects are
+  // replaced with trampolines. Those source positions are used to
+  // annotate the builtin blob with debugging information.
+  void PrepareBuiltinSourcePositionMap();
 
   void SetPrepareStackTraceCallback(PrepareStackTraceCallback callback);
   MaybeHandle<Object> RunPrepareStackTraceCallback(Handle<Context>,
@@ -1672,8 +1671,6 @@ class Isolate final : private HiddenFactory {
   // If there is no external try-catch or message was successfully propagated,
   // then return true.
   bool PropagatePendingExceptionToExternalTryCatch();
-
-  void SetTerminationOnExternalTryCatch();
 
   void RunPromiseHookForAsyncEventDelegate(PromiseHookType type,
                                            Handle<JSPromise> promise);
@@ -1855,14 +1852,10 @@ class Isolate final : private HiddenFactory {
   // Vector of callbacks when a Call completes.
   std::vector<CallCompletedCallback> call_completed_callbacks_;
 
-  // Vector of callbacks after microtasks were run.
-  std::vector<MicrotasksCompletedCallback> microtasks_completed_callbacks_;
-  bool is_running_microtasks_ = false;
-
   v8::Isolate::UseCounterCallback use_counter_callback_ = nullptr;
 
-  std::vector<Object*> read_only_object_cache_;
-  std::vector<Object*> partial_snapshot_cache_;
+  std::vector<Object> read_only_object_cache_;
+  std::vector<Object> partial_snapshot_cache_;
 
   // Used during builtins compilation to build the builtins constants table,
   // which is stored on the root list prior to serialization.
@@ -1907,6 +1900,8 @@ class Isolate final : private HiddenFactory {
 
   std::unique_ptr<TracingCpuProfilerImpl> tracing_cpu_profiler_;
 
+  EmbeddedFileWriterInterface* embedded_file_writer_ = nullptr;
+
   // The top entry of the v8::Context::BackupIncumbentScope stack.
   const v8::Context::BackupIncumbentScope* top_backup_incumbent_scope_ =
       nullptr;
@@ -1949,16 +1944,12 @@ class PromiseOnStack {
 };
 
 
-// If the GCC version is 4.1.x or 4.2.x an additional field is added to the
-// class as a work around for a bug in the generated code found with these
-// versions of GCC. See V8 issue 122 for details.
 class V8_EXPORT_PRIVATE SaveContext {
  public:
   explicit SaveContext(Isolate* isolate);
   ~SaveContext();
 
   Handle<Context> context() { return context_; }
-  SaveContext* prev() { return prev_; }
 
   // Returns true if this save context is below a given JavaScript frame.
   bool IsBelowFrame(StandardFrame* frame);
@@ -1966,7 +1957,6 @@ class V8_EXPORT_PRIVATE SaveContext {
  private:
   Isolate* const isolate_;
   Handle<Context> context_;
-  SaveContext* const prev_;
   Address c_entry_fp_;
 };
 

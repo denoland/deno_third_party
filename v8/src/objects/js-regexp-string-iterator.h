@@ -19,7 +19,7 @@ class JSRegExpStringIterator : public JSObject {
   DECL_ACCESSORS(iterating_regexp, Object)
 
   // [string]: The [[IteratedString]] internal property.
-  DECL_ACCESSORS2(iterating_string, String)
+  DECL_ACCESSORS(iterating_string, String)
 
   DECL_INT_ACCESSORS(flags)
 
@@ -52,8 +52,7 @@ class JSRegExpStringIterator : public JSObject {
   static const int kGlobalBit = 1;
   static const int kUnicodeBit = 2;
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSRegExpStringIterator);
+  OBJECT_CONSTRUCTORS(JSRegExpStringIterator, JSObject);
 };
 
 }  // namespace internal

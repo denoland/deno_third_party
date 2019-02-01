@@ -7,6 +7,9 @@
 #include "src/conversions.h"
 #include "src/counters.h"
 #include "src/objects-inl.h"
+#ifdef V8_INTL_SUPPORT
+#include "src/objects/intl-objects.h"
+#endif
 
 namespace v8 {
 namespace internal {
@@ -80,7 +83,7 @@ MaybeHandle<BigInt> ThisBigIntValue(Isolate* isolate, Handle<Object> value,
   if (value->IsJSValue()) {
     // 2a. Assert: value.[[BigIntData]] is a BigInt value.
     // 2b. Return value.[[BigIntData]].
-    Object* data = JSValue::cast(*value)->value();
+    Object data = JSValue::cast(*value)->value();
     if (data->IsBigInt()) return handle(BigInt::cast(data), isolate);
   }
   // 3. Throw a TypeError exception.
@@ -92,8 +95,8 @@ MaybeHandle<BigInt> ThisBigIntValue(Isolate* isolate, Handle<Object> value,
       BigInt);
 }
 
-Object* BigIntToStringImpl(Handle<Object> receiver, Handle<Object> radix,
-                           Isolate* isolate, const char* builtin_name) {
+Object BigIntToStringImpl(Handle<Object> receiver, Handle<Object> radix,
+                          Isolate* isolate, const char* builtin_name) {
   // 1. Let x be ? thisBigIntValue(this value).
   Handle<BigInt> x;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
@@ -123,6 +126,16 @@ Object* BigIntToStringImpl(Handle<Object> receiver, Handle<Object> radix,
 
 BUILTIN(BigIntPrototypeToLocaleString) {
   HandleScope scope(isolate);
+#ifdef V8_INTL_SUPPORT
+  if (FLAG_harmony_intl_bigint) {
+    RETURN_RESULT_OR_FAILURE(
+        isolate, Intl::NumberToLocaleString(isolate, args.receiver(),
+                                            args.atOrUndefined(isolate, 1),
+                                            args.atOrUndefined(isolate, 2)));
+  }
+  // Fallbacks to old toString implemention if flag is off or no
+  // V8_INTL_SUPPORT
+#endif  // V8_INTL_SUPPORT
   Handle<Object> radix = isolate->factory()->undefined_value();
   return BigIntToStringImpl(args.receiver(), radix, isolate,
                             "BigInt.prototype.toLocaleString");

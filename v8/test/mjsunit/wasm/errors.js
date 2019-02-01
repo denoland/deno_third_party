@@ -6,7 +6,6 @@
 
 'use strict';
 
-load("test/mjsunit/wasm/wasm-constants.js");
 load("test/mjsunit/wasm/wasm-module-builder.js");
 
 function module(bytes) {
@@ -72,9 +71,10 @@ function assertConversionError(bytes, imports, msg) {
   assertCompileError(
       builder().addFunction("f", kSig_i_v).end().toBuffer(),
       /function body must end with "end" opcode @/);
-  assertCompileError(builder().addFunction("f", kSig_i_v).addBody([
-    kExprReturn
-  ]).end().toBuffer(), /return found empty stack @/);
+  assertCompileError(
+      builder().addFunction('f', kSig_i_v).addBody([kExprReturn])
+          .end().toBuffer(),
+      /expected 1 elements on the stack for return, found 0 @/);
   assertCompileError(builder().addFunction("f", kSig_v_v).addBody([
     kExprGetLocal, 0
   ]).end().toBuffer(), /invalid local index: 0 @/);

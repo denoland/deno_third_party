@@ -69,6 +69,13 @@ class LocationReference {
     DCHECK(IsTemporary());
     return *temporary_;
   }
+
+  const VisitResult& GetVisitResult() const {
+    if (IsVariableAccess()) return variable();
+    DCHECK(IsTemporary());
+    return temporary();
+  }
+
   // For error reporting.
   const std::string& temporary_description() const {
     DCHECK(IsTemporary());
@@ -141,7 +148,7 @@ class Binding : public T {
   const std::string name_;
   base::Optional<Binding*> previous_binding_;
   SourcePosition declaration_position_ = CurrentSourcePosition::Get();
-  DISALLOW_COPY_AND_MOVE_AND_ASSIGN(Binding);
+  DISALLOW_COPY_AND_ASSIGN(Binding);
 };
 
 template <class T>
@@ -200,10 +207,13 @@ bool IsCompatibleSignature(const Signature& sig, const TypeVector& types,
 class ImplementationVisitor : public FileVisitor {
  public:
   void GenerateBuiltinDefinitions(std::string& file_name);
+  void GenerateClassDefinitions(std::string& file_name);
 
   VisitResult Visit(Expression* expr);
   const Type* Visit(Statement* stmt);
 
+  VisitResult TemporaryUninitializedStruct(const StructType* struct_type,
+                                           const std::string& reason);
   VisitResult Visit(StructExpression* decl);
 
   LocationReference GetLocationReference(Expression* location);
@@ -228,12 +238,21 @@ class ImplementationVisitor : public FileVisitor {
   void VisitAllDeclarables();
   void Visit(Declarable* delarable);
   void Visit(TypeAlias* decl);
+  VisitResult InlineMacro(Macro* macro,
+                          base::Optional<LocationReference> this_reference,
+                          const std::vector<VisitResult>& arguments,
+                          const std::vector<Block*> label_blocks);
+  void VisitMacroCommon(Macro* macro);
   void Visit(Macro* macro);
+  void Visit(Method* macro);
   void Visit(Builtin* builtin);
   void Visit(NamespaceConstant* decl);
 
   VisitResult Visit(CallExpression* expr, bool is_tail = false);
+  VisitResult Visit(CallMethodExpression* expr);
   VisitResult Visit(IntrinsicCallExpression* intrinsic);
+  VisitResult Visit(LoadObjectFieldExpression* intrinsic);
+  VisitResult Visit(StoreObjectFieldExpression* intrinsic);
   const Type* Visit(TailCallStatement* stmt);
 
   VisitResult Visit(ConditionalExpression* expr);
@@ -248,6 +267,7 @@ class ImplementationVisitor : public FileVisitor {
   VisitResult Visit(AssumeTypeImpossibleExpression* expr);
   VisitResult Visit(TryLabelExpression* expr);
   VisitResult Visit(StatementExpression* expr);
+  VisitResult Visit(NewExpression* expr);
 
   const Type* Visit(ReturnStatement* stmt);
   const Type* Visit(GotoStatement* stmt);
@@ -270,11 +290,18 @@ class ImplementationVisitor : public FileVisitor {
 
   void GenerateImplementation(const std::string& dir, Namespace* nspace);
 
+  struct ConstructorInfo {
+    int super_calls;
+  };
+
   DECLARE_CONTEXTUAL_VARIABLE(ValueBindingsManager,
                               BindingsManager<LocalValue>);
   DECLARE_CONTEXTUAL_VARIABLE(LabelBindingsManager,
                               BindingsManager<LocalLabel>);
   DECLARE_CONTEXTUAL_VARIABLE(CurrentCallable, Callable*);
+  DECLARE_CONTEXTUAL_VARIABLE(CurrentReturnValue, base::Optional<VisitResult>);
+  DECLARE_CONTEXTUAL_VARIABLE(CurrentConstructorInfo,
+                              base::Optional<ConstructorInfo>);
 
   // A BindingsManagersScope has to be active for local bindings to be created.
   // Shadowing an existing BindingsManagersScope by creating a new one hides all
@@ -369,8 +396,29 @@ class ImplementationVisitor : public FileVisitor {
   base::Optional<Binding<LocalLabel>*> TryLookupLabel(const std::string& name);
   Binding<LocalLabel>* LookupLabel(const std::string& name);
   Block* LookupSimpleLabel(const std::string& name);
-  Callable* LookupCall(const QualifiedName& name, const Arguments& arguments,
+  template <class Container>
+  Callable* LookupCallable(const QualifiedName& name,
+                           const Container& declaration_container,
+                           const TypeVector& types,
+                           const std::vector<Binding<LocalLabel>*>& labels,
+                           const TypeVector& specialization_types);
+
+  template <class Container>
+  Callable* LookupCallable(const QualifiedName& name,
+                           const Container& declaration_container,
+                           const Arguments& arguments,
+                           const TypeVector& specialization_types);
+
+  Method* LookupMethod(const std::string& name, LocationReference target,
+                       const Arguments& arguments,
                        const TypeVector& specialization_types);
+
+  Method* LookupConstructor(LocationReference target,
+                            const Arguments& arguments,
+                            const TypeVector& specialization_types) {
+    return LookupMethod(kConstructMethodName, target, arguments,
+                        specialization_types);
+  }
 
   const Type* GetCommonType(const Type* left, const Type* right);
 
@@ -379,6 +427,17 @@ class ImplementationVisitor : public FileVisitor {
   void GenerateAssignToLocation(const LocationReference& reference,
                                 const VisitResult& assignment_value);
 
+  void AddCallParameter(Callable* callable, VisitResult parameter,
+                        const Type* parameter_type,
+                        std::vector<VisitResult>* converted_arguments,
+                        StackRange* argument_range,
+                        std::vector<std::string>* constexpr_arguments);
+
+  VisitResult GenerateCall(Callable* callable,
+                           base::Optional<LocationReference> this_parameter,
+                           Arguments parameters,
+                           const TypeVector& specialization_types = {},
+                           bool tail_call = false);
   VisitResult GenerateCall(const QualifiedName& callable_name,
                            Arguments parameters,
                            const TypeVector& specialization_types = {},
@@ -419,30 +478,47 @@ class ImplementationVisitor : public FileVisitor {
   StackRange LowerParameter(const Type* type, const std::string& parameter_name,
                             Stack<std::string>* lowered_parameters);
 
+  void LowerLabelParameter(const Type* type, const std::string& parameter_name,
+                           std::vector<std::string>* lowered_parameters);
+
   std::string ExternalLabelName(const std::string& label_name);
   std::string ExternalLabelParameterName(const std::string& label_name,
                                          size_t i);
   std::string ExternalParameterName(const std::string& name);
 
-  std::ostream& source_out() { return CurrentNamespace()->source_stream(); }
-
-  std::ostream& header_out() { return CurrentNamespace()->header_stream(); }
-
+  std::ostream& source_out() {
+    Callable* callable = CurrentCallable::Get();
+    if (!callable || callable->ShouldGenerateExternalCode()) {
+      return CurrentNamespace()->source_stream();
+    } else {
+      return null_stream_;
+    }
+  }
+  std::ostream& header_out() {
+    Callable* callable = CurrentCallable::Get();
+    if (!callable || callable->ShouldGenerateExternalCode()) {
+      return CurrentNamespace()->header_stream();
+    } else {
+      return null_stream_;
+    }
+  }
   CfgAssembler& assembler() { return *assembler_; }
 
   void SetReturnValue(VisitResult return_value) {
-    DCHECK_IMPLIES(return_value_, *return_value_ == return_value);
-    return_value_ = std::move(return_value);
+    base::Optional<VisitResult>& current_return_value =
+        CurrentReturnValue::Get();
+    DCHECK_IMPLIES(current_return_value, *current_return_value == return_value);
+    current_return_value = std::move(return_value);
   }
 
   VisitResult GetAndClearReturnValue() {
-    VisitResult return_value = *return_value_;
-    return_value_ = base::nullopt;
+    VisitResult return_value = *CurrentReturnValue::Get();
+    CurrentReturnValue::Get() = base::nullopt;
     return return_value;
   }
 
   base::Optional<CfgAssembler> assembler_;
-  base::Optional<VisitResult> return_value_;
+  NullOStream null_stream_;
 };
 
 }  // namespace torque

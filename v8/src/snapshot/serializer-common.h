@@ -60,25 +60,23 @@ class ExternalReferenceEncoder {
 
 class HotObjectsList {
  public:
-  HotObjectsList() : index_(0) {
-    for (int i = 0; i < kSize; i++) circular_queue_[i] = nullptr;
-  }
+  HotObjectsList() : index_(0) {}
 
-  void Add(HeapObject* object) {
+  void Add(HeapObject object) {
     DCHECK(!AllowHeapAllocation::IsAllowed());
     circular_queue_[index_] = object;
     index_ = (index_ + 1) & kSizeMask;
   }
 
-  HeapObject* Get(int index) {
+  HeapObject Get(int index) {
     DCHECK(!AllowHeapAllocation::IsAllowed());
-    DCHECK_NOT_NULL(circular_queue_[index]);
+    DCHECK(!circular_queue_[index].is_null());
     return circular_queue_[index];
   }
 
   static const int kNotFound = -1;
 
-  int Find(HeapObject* object) {
+  int Find(HeapObject object) {
     DCHECK(!AllowHeapAllocation::IsAllowed());
     for (int i = 0; i < kSize; i++) {
       if (circular_queue_[i] == object) return i;
@@ -91,7 +89,7 @@ class HotObjectsList {
  private:
   static_assert(base::bits::IsPowerOfTwo(kSize), "kSize must be power of two");
   static const int kSizeMask = kSize - 1;
-  HeapObject* circular_queue_[kSize];
+  HeapObject circular_queue_[kSize];
   int index_;
 
   DISALLOW_COPY_AND_ASSIGN(HotObjectsList);
@@ -118,12 +116,12 @@ class SerializerDeserializer : public RootVisitor {
   static const int kNumberOfSpaces = LO_SPACE + 1;
 
  protected:
-  static bool CanBeDeferred(HeapObject* o);
+  static bool CanBeDeferred(HeapObject o);
 
   void RestoreExternalReferenceRedirectors(
-      const std::vector<AccessorInfo*>& accessor_infos);
+      const std::vector<AccessorInfo>& accessor_infos);
   void RestoreExternalReferenceRedirectors(
-      const std::vector<CallHandlerInfo*>& call_handler_infos);
+      const std::vector<CallHandlerInfo>& call_handler_infos);
 
 #define UNUSED_SERIALIZER_BYTE_CODES(V) \
   V(0x0e)                               \
@@ -322,12 +320,9 @@ class SerializedData {
   class ChunkSizeBits : public BitField<uint32_t, 0, 31> {};
   class IsLastChunkBits : public BitField<bool, 31, 1> {};
 
-  static uint32_t ComputeMagicNumber(ExternalReferenceTable* table) {
-    uint32_t external_refs = table->size();
-    return 0xC0DE0000 ^ external_refs;
-  }
-
-  static const uint32_t kMagicNumberOffset = 0;
+  static constexpr uint32_t kMagicNumberOffset = 0;
+  static constexpr uint32_t kMagicNumber =
+      0xC0DE0000 ^ ExternalReferenceTable::kSize;
 
  protected:
   void SetHeaderValue(uint32_t offset, uint32_t value) {
@@ -341,11 +336,7 @@ class SerializedData {
 
   void AllocateData(uint32_t size);
 
-  static uint32_t ComputeMagicNumber(Isolate* isolate);
-
-  void SetMagicNumber(Isolate* isolate) {
-    SetHeaderValue(kMagicNumberOffset, ComputeMagicNumber(isolate));
-  }
+  void SetMagicNumber() { SetHeaderValue(kMagicNumberOffset, kMagicNumber); }
 
   byte* data_;
   uint32_t size_;

@@ -5,7 +5,7 @@
 #ifndef V8_OBJECTS_DATA_HANDLER_H_
 #define V8_OBJECTS_DATA_HANDLER_H_
 
-#include "src/objects.h"
+#include "src/objects/struct.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -31,9 +31,9 @@ class DataHandler : public Struct {
 
   // [data1-3]: These are optional general-purpose fields whose content and
   // presence depends on the handler kind.
-  DECL_ACCESSORS2(data1, MaybeObject)
-  DECL_ACCESSORS2(data2, MaybeObject)
-  DECL_ACCESSORS2(data3, MaybeObject)
+  DECL_ACCESSORS(data1, MaybeObject)
+  DECL_ACCESSORS(data2, MaybeObject)
+  DECL_ACCESSORS(data3, MaybeObject)
 
 // Layout description.
 #define DATA_HANDLER_FIELDS(V)        \
@@ -55,6 +55,8 @@ class DataHandler : public Struct {
   DECL_VERIFIER(DataHandler)
 
   class BodyDescriptor;
+
+  OBJECT_CONSTRUCTORS(DataHandler, Struct)
 };
 
 }  // namespace internal

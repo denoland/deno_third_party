@@ -10,7 +10,7 @@ namespace v8 {
 namespace internal {
 
 namespace {
-AllocationSpace GetSpaceFromObject(Object* object) {
+AllocationSpace GetSpaceFromObject(Object object) {
   DCHECK(object->IsHeapObject());
   return MemoryChunk::FromHeapObject(HeapObject::cast(object))
       ->owner()
@@ -19,7 +19,7 @@ AllocationSpace GetSpaceFromObject(Object* object) {
 }  // namespace
 
 #define CHECK_IN_RO_SPACE(type, name, CamelName) \
-  HeapObject* name = roots.name();               \
+  HeapObject name = roots.name();                \
   CHECK_EQ(RO_SPACE, GetSpaceFromObject(name));
 
 // The following tests check that all the roots accessible via ReadOnlyRoots are
@@ -42,7 +42,7 @@ bool IsInitiallyMutable(Factory* factory, Address object_address) {
   V(builtins_constants_table)             \
   V(current_microtask)                    \
   V(detached_contexts)                    \
-  V(dirty_js_weak_factories)              \
+  V(dirty_js_finalization_groups)         \
   V(feedback_vectors_for_profiling_tools) \
   V(materialized_objects)                 \
   V(noscript_shared_function_infos)       \
@@ -65,12 +65,13 @@ bool IsInitiallyMutable(Factory* factory, Address object_address) {
 // The CHECK_EQ line is there just to ensure that the root is publicly
 // accessible from Heap, but ultimately the factory is used as it provides
 // handles that have the address in the root table.
-#define CHECK_NOT_IN_RO_SPACE(type, name, CamelName)                       \
-  Handle<Object> name = factory->name();                                   \
-  CHECK_EQ(*name, heap->name());                                           \
-  if (name->IsHeapObject() && IsInitiallyMutable(factory, name.address())) \
-    CHECK_NE(RO_SPACE,                                                     \
-             GetSpaceFromObject(reinterpret_cast<HeapObject*>(*name)));
+#define CHECK_NOT_IN_RO_SPACE(type, name, CamelName)                         \
+  Handle<Object> name = factory->name();                                     \
+  CHECK_EQ(*name, heap->name());                                             \
+  if (name->IsHeapObject() && IsInitiallyMutable(factory, name.address()) && \
+      !name->IsUndefined(CcTest::i_isolate())) {                             \
+    CHECK_NE(RO_SPACE, GetSpaceFromObject(HeapObject::cast(*name)));         \
+  }
 
 // The following tests check that all the roots accessible via public Heap
 // accessors are not in RO_SPACE with the exception of the objects listed in

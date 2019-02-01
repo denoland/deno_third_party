@@ -5,6 +5,8 @@
 #ifndef V8_TORQUE_UTILS_H_
 #define V8_TORQUE_UTILS_H_
 
+#include <ostream>
+#include <streambuf>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -53,6 +55,7 @@ template <class... Args>
   ReportErrorString(s.str());
 }
 
+std::string CapifyStringWithUnderscores(const std::string& camellified_string);
 std::string CamelifyString(const std::string& underscore_string);
 std::string DashifyString(const std::string& underscore_string);
 
@@ -167,6 +170,10 @@ class StackRange {
   BottomOffset end_;
 };
 
+inline std::ostream& operator<<(std::ostream& out, StackRange range) {
+  return out << "StackRange{" << range.begin() << ", " << range.end() << "}";
+}
+
 template <class T>
 class Stack {
  public:
@@ -261,6 +268,46 @@ class ToString {
 
  private:
   std::stringstream s_;
+};
+
+constexpr int kTaggedSize = sizeof(void*);
+
+static const char* const kConstructMethodName = "constructor";
+static const char* const kSuperMethodName = "super";
+static const char* const kConstructorStructSuperFieldName = "_super";
+static const char* const kClassConstructorThisStructPrefix = "_ThisStruct";
+
+// Erase elements of a container that has a constant-time erase function, like
+// std::set or std::list. Calling this on std::vector would have quadratic
+// complexity.
+template <class Container, class F>
+void EraseIf(Container* container, F f) {
+  for (auto it = container->begin(); it != container->end();) {
+    if (f(*it)) {
+      it = container->erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+class NullStreambuf : public std::streambuf {
+ public:
+  virtual int overflow(int c) {
+    setp(buffer_, buffer_ + sizeof(buffer_));
+    return (c == traits_type::eof()) ? '\0' : c;
+  }
+
+ private:
+  char buffer_[64];
+};
+
+class NullOStream : public std::ostream {
+ public:
+  NullOStream() : std::ostream(&buffer_) {}
+
+ private:
+  NullStreambuf buffer_;
 };
 
 }  // namespace torque

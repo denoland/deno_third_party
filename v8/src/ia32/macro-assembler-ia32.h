@@ -17,43 +17,6 @@
 namespace v8 {
 namespace internal {
 
-// Give alias names to registers for calling conventions.
-constexpr Register kReturnRegister0 = eax;
-constexpr Register kReturnRegister1 = edx;
-constexpr Register kReturnRegister2 = edi;
-constexpr Register kJSFunctionRegister = edi;
-constexpr Register kContextRegister = esi;
-constexpr Register kAllocateSizeRegister = edx;
-constexpr Register kInterpreterAccumulatorRegister = eax;
-constexpr Register kInterpreterBytecodeOffsetRegister = edx;
-constexpr Register kInterpreterBytecodeArrayRegister = edi;
-constexpr Register kInterpreterDispatchTableRegister = esi;
-
-constexpr Register kJavaScriptCallArgCountRegister = eax;
-constexpr Register kJavaScriptCallCodeStartRegister = ecx;
-constexpr Register kJavaScriptCallTargetRegister = kJSFunctionRegister;
-constexpr Register kJavaScriptCallNewTargetRegister = edx;
-
-// The ExtraArg1Register not part of the real JS calling convention and is
-// mostly there to simplify consistent interface descriptor definitions across
-// platforms. Note that on ia32 it aliases kJavaScriptCallCodeStartRegister.
-constexpr Register kJavaScriptCallExtraArg1Register = ecx;
-
-// The off-heap trampoline does not need a register on ia32 (it uses a
-// pc-relative call instead).
-constexpr Register kOffHeapTrampolineRegister = no_reg;
-
-constexpr Register kRuntimeCallFunctionRegister = edx;
-constexpr Register kRuntimeCallArgCountRegister = eax;
-constexpr Register kRuntimeCallArgvRegister = ecx;
-constexpr Register kWasmInstanceRegister = esi;
-constexpr Register kWasmCompileLazyFuncIndexRegister = edi;
-
-constexpr Register kRootRegister = ebx;
-
-// TODO(860429): Remove remaining poisoning infrastructure on ia32.
-constexpr Register kSpeculationPoisonRegister = no_reg;
-
 // Convenience for platform-independent signatures.  We do not normally
 // distinguish memory operands from other operands on ia32.
 typedef Operand MemOperand;
@@ -63,14 +26,9 @@ enum SmiCheck { INLINE_SMI_CHECK, OMIT_SMI_CHECK };
 
 class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
  public:
-  TurboAssembler(const AssemblerOptions& options, void* buffer, int buffer_size)
-      : TurboAssemblerBase(options, buffer, buffer_size) {}
-
-  TurboAssembler(Isolate* isolate, const AssemblerOptions& options,
-                 void* buffer, int buffer_size,
-                 CodeObjectRequired create_code_object)
-      : TurboAssemblerBase(isolate, options, buffer, buffer_size,
-                           create_code_object) {}
+  template <typename... Args>
+  explicit TurboAssembler(Args&&... args)
+      : TurboAssemblerBase(std::forward<Args>(args)...) {}
 
   void CheckPageFlag(Register object, Register scratch, int mask, Condition cc,
                      Label* condition_met,
@@ -131,20 +89,20 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void Call(Label* target) { call(target); }
   void Call(Handle<Code> code_object, RelocInfo::Mode rmode);
 
-  void Jump(Handle<Code> code_object, RelocInfo::Mode rmode);
+  void CallBuiltinPointer(Register builtin_pointer) override;
+
+  void LoadCodeObjectEntry(Register destination, Register code_object) override;
+  void CallCodeObject(Register code_object) override;
+  void JumpCodeObject(Register code_object) override;
 
   void RetpolineCall(Register reg);
   void RetpolineCall(Address destination, RelocInfo::Mode rmode);
 
+  void Jump(Handle<Code> code_object, RelocInfo::Mode rmode);
+
   void RetpolineJump(Register reg);
 
-  void CallForDeoptimization(Address target, int deopt_id,
-                             RelocInfo::Mode rmode) {
-    USE(deopt_id);
-    call(target, rmode);
-  }
-
-  inline bool AllowThisStubCall(CodeStub* stub);
+  void CallForDeoptimization(Address target, int deopt_id);
 
   // Call a runtime routine. This expects {centry} to contain a fitting CEntry
   // builtin for the target runtime function and uses an indirect call.
@@ -470,18 +428,11 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
 };
 
 // MacroAssembler implements a collection of frequently used macros.
-class MacroAssembler : public TurboAssembler {
+class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
  public:
-  MacroAssembler(const AssemblerOptions& options, void* buffer, int size)
-      : TurboAssembler(options, buffer, size) {}
-
-  MacroAssembler(Isolate* isolate, void* buffer, int size,
-                 CodeObjectRequired create_code_object)
-      : MacroAssembler(isolate, AssemblerOptions::Default(isolate), buffer,
-                       size, create_code_object) {}
-
-  MacroAssembler(Isolate* isolate, const AssemblerOptions& options,
-                 void* buffer, int size, CodeObjectRequired create_code_object);
+  template <typename... Args>
+  explicit MacroAssembler(Args&&... args)
+      : TurboAssembler(std::forward<Args>(args)...) {}
 
   // Load a register with a long value as efficiently as possible.
   void Set(Register dst, int32_t x) {
@@ -668,12 +619,6 @@ class MacroAssembler : public TurboAssembler {
   // ---------------------------------------------------------------------------
   // Runtime calls
 
-  // Call a code stub.  Generate the code if necessary.
-  void CallStub(CodeStub* stub);
-
-  // Tail call a code stub (jump).  Generate the code if necessary.
-  void TailCallStub(CodeStub* stub);
-
   // Call a runtime routine.
   void CallRuntime(const Runtime::Function* f, int num_arguments,
                    SaveFPRegsMode save_doubles = kDontSaveFPRegs);
@@ -738,11 +683,6 @@ class MacroAssembler : public TurboAssembler {
   void EnterExitFrameEpilogue(int argc, bool save_doubles);
 
   void LeaveExitFrameEpilogue();
-
-  // Helper for implementing JumpIfNotInNewSpace and JumpIfInNewSpace.
-  void InNewSpace(Register object, Register scratch, Condition cc,
-                  Label* condition_met,
-                  Label::Distance condition_met_distance = Label::kFar);
 
   // Compute memory operands for safepoint stack slots.
   static int SafepointRegisterStackIndex(int reg_code);

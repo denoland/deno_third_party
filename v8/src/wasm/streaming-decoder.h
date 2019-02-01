@@ -16,12 +16,8 @@
 
 namespace v8 {
 namespace internal {
-
-template <typename T>
-class Handle;
-class WasmModuleObject;
-
 namespace wasm {
+class NativeModule;
 
 // This class is an interface for the StreamingDecoder to start the processing
 // of the incoming module bytes.
@@ -55,7 +51,7 @@ class V8_EXPORT_PRIVATE StreamingProcessor {
   // empty array is passed.
   virtual void OnFinishedStream(OwnedVector<uint8_t> bytes) = 0;
   // Report an error detected in the StreamingDecoder.
-  virtual void OnError(VoidResult result) = 0;
+  virtual void OnError(const WasmError&) = 0;
   // Report the abortion of the stream.
   virtual void OnAbort() = 0;
 
@@ -84,15 +80,14 @@ class V8_EXPORT_PRIVATE StreamingDecoder {
 
   // Caching support.
   // Sets the callback that is called after the module is fully compiled.
-  using ModuleCompiledCallback = std::function<void(Handle<WasmModuleObject>)>;
+  using ModuleCompiledCallback =
+      std::function<void(const std::shared_ptr<NativeModule>&)>;
   void SetModuleCompiledCallback(ModuleCompiledCallback callback);
   // Passes previously compiled module bytes from the embedder's cache.
   bool SetCompiledModuleBytes(Vector<const uint8_t> compiled_module_bytes);
-  // The callback is stored on the StreamingDecoder so it can be called by the
-  // AsyncCompileJob.
-  ModuleCompiledCallback module_compiled_callback() const {
-    return module_compiled_callback_;
-  }
+
+  void NotifyNativeModuleCreated(
+      const std::shared_ptr<NativeModule>& native_module);
 
  private:
   // TODO(ahaas): Put the whole private state of the StreamingDecoder into the
@@ -207,14 +202,14 @@ class V8_EXPORT_PRIVATE StreamingDecoder {
                                  size_t length,
                                  Vector<const uint8_t> length_bytes);
 
-  std::unique_ptr<DecodingState> Error(VoidResult result) {
-    if (ok()) processor_->OnError(std::move(result));
+  std::unique_ptr<DecodingState> Error(const WasmError& error) {
+    if (ok()) processor_->OnError(error);
     Fail();
     return std::unique_ptr<DecodingState>(nullptr);
   }
 
   std::unique_ptr<DecodingState> Error(std::string message) {
-    return Error(VoidResult::Error(module_offset_ - 1, std::move(message)));
+    return Error(WasmError{module_offset_ - 1, std::move(message)});
   }
 
   void ProcessModuleHeader() {

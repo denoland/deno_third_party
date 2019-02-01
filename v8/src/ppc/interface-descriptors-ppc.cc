@@ -5,7 +5,8 @@
 #if V8_TARGET_ARCH_PPC
 
 #include "src/interface-descriptors.h"
-#include "src/macro-assembler.h"
+
+#include "src/frames.h"
 
 namespace v8 {
 namespace internal {
@@ -68,12 +69,6 @@ const Register TypeConversionDescriptor::ArgumentRegister() { return r3; }
 void TypeofDescriptor::InitializePlatformSpecific(
     CallInterfaceDescriptorData* data) {
   Register registers[] = {r6};
-  data->InitializePlatformSpecific(arraysize(registers), registers);
-}
-
-void CallFunctionDescriptor::InitializePlatformSpecific(
-    CallInterfaceDescriptorData* data) {
-  Register registers[] = {r4};
   data->InitializePlatformSpecific(arraysize(registers), registers);
 }
 
@@ -209,10 +204,9 @@ void ArgumentsAdaptorDescriptor::InitializePlatformSpecific(
 void ApiCallbackDescriptor::InitializePlatformSpecific(
     CallInterfaceDescriptorData* data) {
   Register registers[] = {
-      JavaScriptFrame::context_register(),  // callee context
-      r7,                                   // call_data
-      r5,                                   // holder
-      r4,                                   // api_function_address
+      JavaScriptFrame::context_register(),  // kTargetContext
+      r4,                                   // kApiFunctionAddress
+      r5,                                   // kArgc
   };
   data->InitializePlatformSpecific(arraysize(registers), registers);
 }
@@ -261,6 +255,12 @@ void FrameDropperTrampolineDescriptor::InitializePlatformSpecific(
   Register registers[] = {
       r4,  // loaded new FP
   };
+  data->InitializePlatformSpecific(arraysize(registers), registers);
+}
+
+void RunMicrotasksEntryDescriptor::InitializePlatformSpecific(
+    CallInterfaceDescriptorData* data) {
+  Register registers[] = {r3, r4};
   data->InitializePlatformSpecific(arraysize(registers), registers);
 }
 
