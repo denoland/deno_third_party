@@ -3,7 +3,7 @@ import mm from 'micromatch';
 import ensureArray from './utils/ensureArray';
 
 export default function createFilter ( include, exclude ) {
-	const getMatcher = id => ( isRegexp( id ) ? id : { test: mm.matcher( resolve( id ) ) } );
+	const getMatcher = id => ( isRegexp( id ) ? id : { test: mm.matcher( resolve( id ).split ( sep ).join( '/' ) ) } );
 	include = ensureArray( include ).map( getMatcher );
 	exclude = ensureArray( exclude ).map( getMatcher );
 

@@ -16,7 +16,11 @@ const extractors = {
 
 	ObjectPattern ( names, param ) {
 		param.properties.forEach( prop => {
-			extractors[ (prop.value || prop.key).type ]( names, prop.value || prop.key );
+			if ( prop.type === 'RestElement' ) {
+				extractors.RestElement( names, prop );
+			} else {
+				extractors[ (prop.value || prop.key).type ]( names, prop.value || prop.key );
+			}
 		});
 	},
 
