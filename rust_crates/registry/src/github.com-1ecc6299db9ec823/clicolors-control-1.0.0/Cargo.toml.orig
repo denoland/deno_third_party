@@ -1,0 +1,24 @@
+[package]
+name = "clicolors-control"
+description = "A common utility library to control CLI colorization"
+version = "1.0.0"
+authors = ["Armin Ronacher <armin.ronacher@active-4.com>"]
+keywords = ["cli", "clicolor", "clicolors", "colors"]
+license = "MIT"
+repository = "https://github.com/mitsuhiko/clicolors-control"
+documentation = "https://docs.rs/clicolors-control"
+readme = "README.md"
+
+[features]
+default = ["terminal_autoconfig"]
+terminal_autoconfig = []
+
+[dependencies]
+lazy_static = "1"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winbase","handleapi","consoleapi","processenv"] } 
+atty = "0.2.11"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
