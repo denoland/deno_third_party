@@ -2565,23 +2565,29 @@ Reduction JSCallReducer::ReduceArrayIndexOfIncludes(
     return NoChange();
   }
 
-  Handle<Map> map;
-  if (!NodeProperties::GetMapWitness(broker(), node).ToHandle(&map))
+  Node* receiver = NodeProperties::GetValueInput(node, 1);
+  Node* effect = NodeProperties::GetEffectInput(node);
+  Node* control = NodeProperties::GetControlInput(node);
+
+  ZoneHandleSet<Map> receiver_maps;
+  NodeProperties::InferReceiverMapsResult result =
+      NodeProperties::InferReceiverMaps(broker(), receiver, effect,
+                                        &receiver_maps);
+  if (result == NodeProperties::kNoReceiverMaps) return NoChange();
+
+  ElementsKind kind;
+  if (!CanInlineArrayIteratingBuiltin(broker(), receiver_maps, &kind)) {
     return NoChange();
+  }
 
-  MapRef receiver_map(broker(), map);
-  if (!receiver_map.supports_fast_array_iteration()) return NoChange();
-
-  ElementsKind const elements_kind = receiver_map.elements_kind();
-  if (IsHoleyElementsKind(elements_kind)) {
+  if (IsHoleyElementsKind(kind)) {
     dependencies()->DependOnProtector(
         PropertyCellRef(broker(), factory()->no_elements_protector()));
   }
 
-  Callable const callable =
-      search_variant == SearchVariant::kIndexOf
-          ? GetCallableForArrayIndexOf(elements_kind, isolate())
-          : GetCallableForArrayIncludes(elements_kind, isolate());
+  Callable const callable = search_variant == SearchVariant::kIndexOf
+                                ? GetCallableForArrayIndexOf(kind, isolate())
+                                : GetCallableForArrayIncludes(kind, isolate());
   CallDescriptor const* const desc = Linkage::GetStubCallDescriptor(
       graph()->zone(), callable.descriptor(),
       callable.descriptor().GetStackParameterCount(), CallDescriptor::kNoFlags,
@@ -2589,9 +2595,6 @@ Reduction JSCallReducer::ReduceArrayIndexOfIncludes(
   // The stub expects the following arguments: the receiver array, its elements,
   // the search_element, the array length, and the index to start searching
   // from.
-  Node* receiver = NodeProperties::GetValueInput(node, 1);
-  Node* effect = NodeProperties::GetEffectInput(node);
-  Node* control = NodeProperties::GetControlInput(node);
   Node* elements = effect = graph()->NewNode(
       simplified()->LoadField(AccessBuilder::ForJSObjectElements()), receiver,
       effect, control);
@@ -2599,8 +2602,8 @@ Reduction JSCallReducer::ReduceArrayIndexOfIncludes(
                              ? NodeProperties::GetValueInput(node, 2)
                              : jsgraph()->UndefinedConstant();
   Node* length = effect = graph()->NewNode(
-      simplified()->LoadField(AccessBuilder::ForJSArrayLength(elements_kind)),
-      receiver, effect, control);
+      simplified()->LoadField(AccessBuilder::ForJSArrayLength(kind)), receiver,
+      effect, control);
   Node* new_from_index = jsgraph()->ZeroConstant();
   if (node->op()->ValueInputCount() >= 4) {
     Node* from_index = NodeProperties::GetValueInput(node, 3);
@@ -2866,68 +2869,97 @@ Reduction JSCallReducer::ReduceCallApiFunction(
   DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
   CallParameters const& p = CallParametersOf(node->op());
   int const argc = static_cast<int>(p.arity()) - 2;
-  Node* target = NodeProperties::GetValueInput(node, 0);
-  Node* receiver =
-      (p.convert_mode() == ConvertReceiverMode::kNullOrUndefined)
-          ? jsgraph()->Constant(native_context().global_proxy_object())
-          : NodeProperties::GetValueInput(node, 1);
+  Node* global_proxy =
+      jsgraph()->Constant(native_context().global_proxy_object());
+  Node* receiver = (p.convert_mode() == ConvertReceiverMode::kNullOrUndefined)
+                       ? global_proxy
+                       : NodeProperties::GetValueInput(node, 1);
+  Node* holder;
   Node* effect = NodeProperties::GetEffectInput(node);
   Node* control = NodeProperties::GetControlInput(node);
 
+  // See if we can optimize this API call to {shared}.
   Handle<FunctionTemplateInfo> function_template_info(
       FunctionTemplateInfo::cast(shared.object()->function_data()), isolate());
+  CallOptimization call_optimization(isolate(), function_template_info);
+  if (!call_optimization.is_simple_api_call()) return NoChange();
 
-  // Infer the {receiver} maps, and check if we can inline the API function
-  // callback based on those.
+  // Try to infer the {receiver} maps from the graph.
   ZoneHandleSet<Map> receiver_maps;
   NodeProperties::InferReceiverMapsResult result =
       NodeProperties::InferReceiverMaps(broker(), receiver, effect,
                                         &receiver_maps);
-  if (result == NodeProperties::kNoReceiverMaps) return NoChange();
-  for (Handle<Map> map : receiver_maps) {
-    MapRef receiver_map(broker(), map);
-    if (!receiver_map.IsJSObjectMap() ||
-        (!function_template_info->accept_any_receiver() &&
-         receiver_map.is_access_check_needed())) {
-      return NoChange();
-    }
-    // In case of unreliable {receiver} information, the {receiver_maps}
-    // must all be stable in order to consume the information.
-    if (result == NodeProperties::kUnreliableReceiverMaps) {
-      if (!receiver_map.is_stable()) return NoChange();
-    }
-  }
-
-  // See if we can constant-fold the compatible receiver checks.
-  CallOptimization call_optimization(isolate(), function_template_info);
-  if (!call_optimization.is_simple_api_call()) return NoChange();
-  CallOptimization::HolderLookup lookup;
-  Handle<JSObject> api_holder =
-      call_optimization.LookupHolderOfExpectedType(receiver_maps[0], &lookup);
-  if (lookup == CallOptimization::kHolderNotFound) return NoChange();
-  for (size_t i = 1; i < receiver_maps.size(); ++i) {
-    CallOptimization::HolderLookup lookupi;
-    Handle<JSObject> holder = call_optimization.LookupHolderOfExpectedType(
-        receiver_maps[i], &lookupi);
-    if (lookup != lookupi) return NoChange();
-    if (!api_holder.is_identical_to(holder)) return NoChange();
-  }
-
-  // Install stability dependencies for unreliable {receiver_maps}.
-  if (result == NodeProperties::kUnreliableReceiverMaps) {
+  if (result != NodeProperties::kNoReceiverMaps) {
+    // Check that all {receiver_maps} are actually JSReceiver maps and
+    // that the {function_template_info} accepts them without access
+    // checks (even if "access check needed" is set for {receiver}).
+    //
+    // Note that we don't need to know the concrete {receiver} maps here,
+    // meaning it's fine if the {receiver_maps} are unreliable, and we also
+    // don't need to install any stability dependencies, since the only
+    // relevant information regarding the {receiver} is the Map::constructor
+    // field on the root map (which is different from the JavaScript exposed
+    // "constructor" property) and that field cannot change.
+    //
+    // So if we know that {receiver} had a certain constructor at some point
+    // in the past (i.e. it had a certain map), then this constructor is going
+    // to be the same later, since this information cannot change with map
+    // transitions.
+    //
+    // The same is true for the instance type, e.g. we still know that the
+    // instance type is JSObject even if that information is unreliable, and
+    // the "access check needed" bit, which also cannot change later.
     for (Handle<Map> map : receiver_maps) {
       MapRef receiver_map(broker(), map);
-      dependencies()->DependOnStableMap(receiver_map);
+      if (!receiver_map.IsJSReceiverMap() ||
+          (receiver_map.is_access_check_needed() &&
+           !function_template_info->accept_any_receiver())) {
+        return NoChange();
+      }
     }
+
+    // See if we can constant-fold the compatible receiver checks.
+    CallOptimization::HolderLookup lookup;
+    Handle<JSObject> api_holder =
+        call_optimization.LookupHolderOfExpectedType(receiver_maps[0], &lookup);
+    if (lookup == CallOptimization::kHolderNotFound) return NoChange();
+    for (size_t i = 1; i < receiver_maps.size(); ++i) {
+      CallOptimization::HolderLookup lookupi;
+      Handle<JSObject> holderi = call_optimization.LookupHolderOfExpectedType(
+          receiver_maps[i], &lookupi);
+      if (lookup != lookupi) return NoChange();
+      if (!api_holder.is_identical_to(holderi)) return NoChange();
+    }
+
+    // Determine the appropriate holder for the {lookup}.
+    holder = lookup == CallOptimization::kHolderFound
+                 ? jsgraph()->HeapConstant(api_holder)
+                 : receiver;
+  } else if (function_template_info->accept_any_receiver() &&
+             function_template_info->signature()->IsUndefined(isolate())) {
+    // We haven't found any {receiver_maps}, but we might still be able to
+    // optimize the API call depending on the {function_template_info}.
+    // If the API function accepts any kind of {receiver}, we only need to
+    // ensure that the {receiver} is actually a JSReceiver at this point,
+    // and also pass that as the {holder}. There are two independent bits
+    // here:
+    //
+    //  a. When the "accept any receiver" bit is set, it means we don't
+    //     need to perform access checks, even if the {receiver}'s map
+    //     has the "needs access check" bit set.
+    //  b. When the {function_template_info} has no signature, we don't
+    //     need to do the compatible receiver check, since all receivers
+    //     are considered compatible at that point, and the {receiver}
+    //     will be pass as the {holder}.
+    //
+    receiver = holder = effect =
+        graph()->NewNode(simplified()->ConvertReceiver(p.convert_mode()),
+                         receiver, global_proxy, effect, control);
+  } else {
+    // We cannot do a fast API call in this case.
+    return NoChange();
   }
 
-  // Load the {target}s context.
-  Node* context = effect = graph()->NewNode(
-      simplified()->LoadField(AccessBuilder::ForJSFunctionContext()), target,
-      effect, control);
-
-  // CallApiCallbackStub's register arguments: code, target, call data, holder,
-  // function address.
   // TODO(turbofan): Consider introducing a JSCallApiCallback operator for
   // this and lower it during JSGenericLowering, and unify this with the
   // JSNativeContextSpecialization::InlineApiCall method a bit.
@@ -2941,21 +2973,15 @@ Reduction JSCallReducer::ReduceCallApiFunction(
       cid.GetStackParameterCount() + argc + 1 /* implicit receiver */,
       CallDescriptor::kNeedsFrameState);
   ApiFunction api_function(v8::ToCData<Address>(call_handler_info->callback()));
-  Node* holder = lookup == CallOptimization::kHolderFound
-                     ? jsgraph()->HeapConstant(api_holder)
-                     : receiver;
   ExternalReference function_reference = ExternalReference::Create(
       &api_function, ExternalReference::DIRECT_API_CALL);
   node->InsertInput(graph()->zone(), 0,
                     jsgraph()->HeapConstant(call_api_callback.code()));
-  node->ReplaceInput(1, context);
-  node->InsertInput(graph()->zone(), 2,
-                    jsgraph()->ExternalConstant(function_reference));
-  node->InsertInput(graph()->zone(), 3, jsgraph()->Constant(argc));
-  node->InsertInput(graph()->zone(), 4, jsgraph()->Constant(data));
-  node->InsertInput(graph()->zone(), 5, holder);
-  node->ReplaceInput(6, receiver);
-  node->RemoveInput(7 + argc);           // Remove context input.
+  node->ReplaceInput(1, jsgraph()->ExternalConstant(function_reference));
+  node->InsertInput(graph()->zone(), 2, jsgraph()->Constant(argc));
+  node->InsertInput(graph()->zone(), 3, jsgraph()->Constant(data));
+  node->InsertInput(graph()->zone(), 4, holder);
+  node->ReplaceInput(5, receiver);       // Update receiver input.
   node->ReplaceInput(8 + argc, effect);  // Update effect input.
   NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
   return Changed(node);
@@ -3332,12 +3358,8 @@ Reduction JSCallReducer::ReduceJSCall(Node* node) {
   if (!p.feedback().IsValid()) return NoChange();
   FeedbackNexus nexus(p.feedback().vector(), p.feedback().slot());
   if (nexus.IsUninitialized()) {
-    if (flags() & kBailoutOnUninitialized) {
-      // Introduce a SOFT deopt if the call {node} wasn't executed so far.
-      return ReduceSoftDeoptimize(
-          node, DeoptimizeReason::kInsufficientTypeFeedbackForCall);
-    }
-    return NoChange();
+    return ReduceSoftDeoptimize(
+        node, DeoptimizeReason::kInsufficientTypeFeedbackForCall);
   }
 
   base::Optional<HeapObjectRef> feedback =
@@ -3752,13 +3774,8 @@ Reduction JSCallReducer::ReduceJSConstruct(Node* node) {
   if (p.feedback().IsValid()) {
     FeedbackNexus nexus(p.feedback().vector(), p.feedback().slot());
     if (nexus.IsUninitialized()) {
-      if (flags() & kBailoutOnUninitialized) {
-        // Introduce a SOFT deopt if the construct {node} wasn't executed so
-        // far.
-        return ReduceSoftDeoptimize(
-            node, DeoptimizeReason::kInsufficientTypeFeedbackForConstruct);
-      }
-      return NoChange();
+      return ReduceSoftDeoptimize(
+          node, DeoptimizeReason::kInsufficientTypeFeedbackForConstruct);
     }
 
     base::Optional<HeapObjectRef> feedback =
@@ -4304,18 +4321,21 @@ Reduction JSCallReducer::ReduceReturnReceiver(Node* node) {
 
 Reduction JSCallReducer::ReduceSoftDeoptimize(Node* node,
                                               DeoptimizeReason reason) {
-  Node* effect = NodeProperties::GetEffectInput(node);
-  Node* control = NodeProperties::GetControlInput(node);
-  Node* frame_state = NodeProperties::FindFrameStateBefore(node);
-  Node* deoptimize = graph()->NewNode(
-      common()->Deoptimize(DeoptimizeKind::kSoft, reason, VectorSlotPair()),
-      frame_state, effect, control);
-  // TODO(bmeurer): This should be on the AdvancedReducer somehow.
-  NodeProperties::MergeControlToEnd(graph(), common(), deoptimize);
-  Revisit(graph()->end());
-  node->TrimInputCount(0);
-  NodeProperties::ChangeOp(node, common()->Dead());
-  return Changed(node);
+  if (flags() & kBailoutOnUninitialized) {
+    Node* effect = NodeProperties::GetEffectInput(node);
+    Node* control = NodeProperties::GetControlInput(node);
+    Node* frame_state = NodeProperties::FindFrameStateBefore(node);
+    Node* deoptimize = graph()->NewNode(
+        common()->Deoptimize(DeoptimizeKind::kSoft, reason, VectorSlotPair()),
+        frame_state, effect, control);
+    // TODO(bmeurer): This should be on the AdvancedReducer somehow.
+    NodeProperties::MergeControlToEnd(graph(), common(), deoptimize);
+    Revisit(graph()->end());
+    node->TrimInputCount(0);
+    NodeProperties::ChangeOp(node, common()->Dead());
+    return Changed(node);
+  }
+  return NoChange();
 }
 
 // ES6 section 22.1.3.18 Array.prototype.push ( )

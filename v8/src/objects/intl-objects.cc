@@ -29,6 +29,7 @@
 #include "unicode/brkiter.h"
 #include "unicode/calendar.h"
 #include "unicode/coll.h"
+#include "unicode/datefmt.h"
 #include "unicode/decimfmt.h"
 #include "unicode/locid.h"
 #include "unicode/normalizer2.h"
@@ -798,7 +799,7 @@ Maybe<std::string> Intl::CanonicalizeLanguageTag(Isolate* isolate,
         Nothing<std::string>());
   }
 
-  return Intl::ToLanguageTag(icu_locale);
+  return maybe_to_language_tag;
 }
 
 Maybe<std::vector<std::string>> Intl::CanonicalizeLocaleList(
@@ -1857,6 +1858,18 @@ Intl::HourCycle Intl::ToHourCycle(const std::string& hc) {
   if (hc == "h23") return Intl::HourCycle::kH23;
   if (hc == "h24") return Intl::HourCycle::kH24;
   return Intl::HourCycle::kUndefined;
+}
+
+const std::set<std::string>& Intl::GetAvailableLocalesForLocale() {
+  static base::LazyInstance<Intl::AvailableLocales<icu::Locale>>::type
+      available_locales = LAZY_INSTANCE_INITIALIZER;
+  return available_locales.Pointer()->Get();
+}
+
+const std::set<std::string>& Intl::GetAvailableLocalesForDateFormat() {
+  static base::LazyInstance<Intl::AvailableLocales<icu::DateFormat>>::type
+      available_locales = LAZY_INSTANCE_INITIALIZER;
+  return available_locales.Pointer()->Get();
 }
 
 }  // namespace internal

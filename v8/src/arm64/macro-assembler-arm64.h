@@ -1176,7 +1176,23 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void ResetSpeculationPoisonRegister();
 
   // ---------------------------------------------------------------------------
-  // Pointer compresstion Support
+  // Pointer compression Support
+
+  // Loads a field containing a HeapObject and decompresses it if pointer
+  // compression is enabled.
+  void LoadTaggedPointerField(const Register& destination,
+                              const MemOperand& field_operand);
+
+  // Loads a field containing any tagged value and decompresses it if necessary.
+  void LoadAnyTaggedField(const Register& destination,
+                          const MemOperand& field_operand);
+
+  // Loads a field containing smi value and untags it.
+  void SmiUntagField(Register dst, const MemOperand& src);
+
+  // Compresses and stores tagged value to given on-heap location.
+  void StoreTaggedField(const Register& value,
+                        const MemOperand& dst_field_operand);
 
   void DecompressTaggedSigned(const Register& destination,
                               const MemOperand& field_operand);
@@ -1999,6 +2015,8 @@ class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
   // branch isntructions with a range of +-128MB. If that becomes too little
   // (!), the mechanism can be extended to generate special veneers for really
   // far targets.
+
+  DISALLOW_IMPLICIT_CONSTRUCTORS(MacroAssembler);
 };
 
 

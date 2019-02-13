@@ -6,6 +6,7 @@
 
 #include "src/api-arguments-inl.h"
 #include "src/elements-inl.h"
+#include "src/field-index-inl.h"
 #include "src/handles-inl.h"
 #include "src/heap/factory.h"
 #include "src/identity-map.h"
@@ -14,6 +15,7 @@
 #include "src/objects/api-callbacks.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/module-inl.h"
+#include "src/objects/ordered-hash-table-inl.h"
 #include "src/property-descriptor.h"
 #include "src/prototype.h"
 
@@ -489,7 +491,7 @@ void FilterForEnumerableProperties(Handle<JSReceiver> receiver,
 
     // args are invalid after args.Call(), create a new one in every iteration.
     PropertyCallbackArguments args(accumulator->isolate(), interceptor->data(),
-                                   *receiver, *object, kDontThrow);
+                                   *receiver, *object, Just(kDontThrow));
 
     Handle<Object> element = accessor->Get(result, i);
     Handle<Object> attributes;
@@ -521,7 +523,7 @@ Maybe<bool> CollectInterceptorKeysInternal(Handle<JSReceiver> receiver,
                                            IndexedOrNamed type) {
   Isolate* isolate = accumulator->isolate();
   PropertyCallbackArguments enum_args(isolate, interceptor->data(), *receiver,
-                                      *object, kDontThrow);
+                                      *object, Just(kDontThrow));
 
   Handle<JSObject> result;
   if (!interceptor->enumerator()->IsUndefined(isolate)) {

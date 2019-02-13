@@ -839,8 +839,6 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   TNode<Int32T> LoadAndUntagToWord32ObjectField(Node* object, int offset);
   // Load a SMI and untag it.
   TNode<IntPtrT> LoadAndUntagSmi(Node* base, int index);
-  // Load a SMI root, untag it, and convert to Word32.
-  TNode<Int32T> LoadAndUntagToWord32Root(RootIndex root_index);
 
   TNode<MaybeObject> LoadMaybeWeakObjectField(SloppyTNode<HeapObject> object,
                                               int offset) {
@@ -1938,7 +1936,10 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   TNode<Number> ChangeUintPtrToTagged(TNode<UintPtrT> value);
   TNode<Uint32T> ChangeNumberToUint32(TNode<Number> value);
   TNode<Float64T> ChangeNumberToFloat64(SloppyTNode<Number> value);
-  TNode<UintPtrT> ChangeNonnegativeNumberToUintPtr(TNode<Number> value);
+  TNode<UintPtrT> TryNumberToUintPtr(TNode<Number> value, Label* if_negative);
+  TNode<UintPtrT> ChangeNonnegativeNumberToUintPtr(TNode<Number> value) {
+    return TryNumberToUintPtr(value, nullptr);
+  }
 
   void TaggedToNumeric(Node* context, Node* value, Label* done,
                        Variable* var_numeric);
@@ -3417,9 +3418,10 @@ class CodeStubArguments {
   // further with passing all the JS arguments as is.
   void SetReceiver(TNode<Object> object) const;
 
-  TNode<RawPtr<Object>> AtIndexPtr(
-      Node* index, CodeStubAssembler::ParameterMode mode =
-                       CodeStubAssembler::INTPTR_PARAMETERS) const;
+  // Computes address of the index'th argument.
+  TNode<WordT> AtIndexPtr(Node* index,
+                          CodeStubAssembler::ParameterMode mode =
+                              CodeStubAssembler::INTPTR_PARAMETERS) const;
 
   // |index| is zero-based and does not include the receiver
   TNode<Object> AtIndex(Node* index,
@@ -3476,7 +3478,7 @@ class CodeStubArguments {
   CodeStubAssembler::ParameterMode argc_mode_;
   ReceiverMode receiver_mode_;
   Node* argc_;
-  TNode<RawPtr<Object>> arguments_;
+  TNode<WordT> arguments_;
   Node* fp_;
 };
 

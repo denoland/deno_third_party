@@ -421,7 +421,7 @@ namespace internal {
   F(StringLessThanOrEqual, 2, 1)          \
   F(StringMaxLength, 0, 1)                \
   F(StringReplaceOneCharWithString, 3, 1) \
-  F(StringStartsWith, 3, 1)               \
+  F(StringCompareSequence, 3, 1)          \
   F(StringSubstring, 3, 1)                \
   F(StringToArray, 2, 1)                  \
   F(StringTrim, 2, 1)
@@ -433,6 +433,7 @@ namespace internal {
   F(SymbolIsPrivate, 1, 1)
 
 #define FOR_EACH_INTRINSIC_TEST(F, I)         \
+  F(ClearMegamorphicStubCache, 0, 1)          \
   F(Abort, 1, 1)                              \
   F(AbortJS, 1, 1)                            \
   F(ClearFunctionFeedback, 1, 1)              \

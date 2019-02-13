@@ -4,6 +4,7 @@
 
 #include "src/feedback-vector.h"
 #include "src/feedback-vector-inl.h"
+#include "src/ic/handler-configuration-inl.h"
 #include "src/ic/ic-inl.h"
 #include "src/objects.h"
 #include "src/objects/data-handler-inl.h"
@@ -544,7 +545,7 @@ bool FeedbackNexus::ConfigureMegamorphic(IcCheckType property_type) {
   return changed;
 }
 
-Map FeedbackNexus::FindFirstMap() const {
+Map FeedbackNexus::GetFirstMap() const {
   MapHandles maps;
   ExtractMaps(&maps);
   if (maps.size() > 0) return *maps.at(0);
@@ -568,6 +569,13 @@ InlineCacheState FeedbackNexus::StateFromFeedback() const {
     case FeedbackSlotKind::kLoadGlobalNotInsideTypeof:
     case FeedbackSlotKind::kLoadGlobalInsideTypeof: {
       if (feedback->IsSmi()) return MONOMORPHIC;
+
+      if (feedback == MaybeObject::FromObject(
+                          *FeedbackVector::PremonomorphicSentinel(isolate))) {
+        DCHECK(kind() == FeedbackSlotKind::kStoreGlobalSloppy ||
+               kind() == FeedbackSlotKind::kStoreGlobalStrict);
+        return PREMONOMORPHIC;
+      }
 
       DCHECK(feedback->IsWeakOrCleared());
       MaybeObject extra = GetFeedbackExtra();
@@ -727,18 +735,21 @@ void FeedbackNexus::ConfigurePropertyCellMode(Handle<PropertyCell> cell) {
 }
 
 bool FeedbackNexus::ConfigureLexicalVarMode(int script_context_index,
-                                            int context_slot_index) {
+                                            int context_slot_index,
+                                            bool immutable) {
   DCHECK(IsGlobalICKind(kind()));
   DCHECK_LE(0, script_context_index);
   DCHECK_LE(0, context_slot_index);
   if (!ContextIndexBits::is_valid(script_context_index) ||
-      !SlotIndexBits::is_valid(context_slot_index)) {
+      !SlotIndexBits::is_valid(context_slot_index) ||
+      !ImmutabilityBit::is_valid(immutable)) {
     return false;
   }
   int config = ContextIndexBits::encode(script_context_index) |
-               SlotIndexBits::encode(context_slot_index);
+               SlotIndexBits::encode(context_slot_index) |
+               ImmutabilityBit::encode(immutable);
 
-  SetFeedback(Smi::FromInt(config));
+  SetFeedback(Smi::From31BitPattern(config));
   Isolate* isolate = GetIsolate();
   SetFeedbackExtra(*FeedbackVector::UninitializedSentinel(isolate),
                    SKIP_WRITE_BARRIER);
@@ -1050,7 +1061,7 @@ bool FeedbackNexus::FindHandlers(MaybeObjectHandles* code_list,
   return count == length;
 }
 
-Name FeedbackNexus::FindFirstName() const {
+Name FeedbackNexus::GetName() const {
   if (IsKeyedStoreICKind(kind()) || IsKeyedLoadICKind(kind())) {
     MaybeObject feedback = GetFeedback();
     if (IsPropertyNameFeedback(feedback)) {

@@ -244,10 +244,9 @@ DEFINE_IMPLICATION(harmony_private_methods, harmony_private_fields)
   V(harmony_await_optimization, "harmony await taking 1 tick")
 
 #ifdef V8_INTL_SUPPORT
-#define HARMONY_SHIPPING(V)                      \
-  HARMONY_SHIPPING_BASE(V)                       \
-  V(harmony_intl_list_format, "Intl.ListFormat") \
-  V(harmony_intl_relative_time_format, "Intl.RelativeTimeFormat")
+#define HARMONY_SHIPPING(V) \
+  HARMONY_SHIPPING_BASE(V)  \
+  V(harmony_intl_list_format, "Intl.ListFormat")
 #else
 #define HARMONY_SHIPPING(V) HARMONY_SHIPPING_BASE(V)
 #endif
@@ -901,6 +900,8 @@ DEFINE_BOOL(trace, false, "trace function calls")
 
 // codegen.cc
 DEFINE_BOOL(lazy, true, "use lazy compilation")
+DEFINE_BOOL(max_lazy, false, "ignore eager compilation hints")
+DEFINE_IMPLICATION(max_lazy, lazy)
 DEFINE_BOOL(trace_opt, false, "trace lazy optimization")
 DEFINE_BOOL(trace_opt_verbose, false, "extra verbose compilation tracing")
 DEFINE_IMPLICATION(trace_opt_verbose, trace_opt)
@@ -992,9 +993,9 @@ DEFINE_BOOL(trace_ic, false,
 DEFINE_IMPLICATION(trace_ic, log_code)
 DEFINE_INT(ic_stats, 0, "inline cache state transitions statistics")
 DEFINE_VALUE_IMPLICATION(trace_ic, ic_stats, 1)
-DEFINE_BOOL_READONLY(track_constant_fields, false,
+DEFINE_BOOL_READONLY(track_constant_fields, true,
                      "enable constant field tracking")
-DEFINE_BOOL_READONLY(modify_map_inplace, false, "enable in-place map updates")
+DEFINE_BOOL_READONLY(modify_map_inplace, true, "enable in-place map updates")
 DEFINE_BOOL_READONLY(fast_map_update, false,
                      "enable fast map update by caching the migration target")
 DEFINE_INT(max_polymorphic_map_count, 4,
@@ -1016,6 +1017,7 @@ DEFINE_IMPLICATION(trace_maps, log_code)
 
 // parser.cc
 DEFINE_BOOL(allow_natives_syntax, false, "allow natives syntax")
+DEFINE_BOOL(parse_only, false, "only parse the sources")
 
 // simulator-arm.cc, simulator-arm64.cc and simulator-mips.cc
 DEFINE_BOOL(trace_sim, false, "Trace simulator execution")
@@ -1072,6 +1074,9 @@ DEFINE_INT(fuzzer_random_seed, 0,
 DEFINE_BOOL(trace_rail, false, "trace RAIL mode")
 DEFINE_BOOL(print_all_exceptions, false,
             "print exception object and stack trace on each thrown exception")
+DEFINE_BOOL(
+    detailed_error_stack_trace, false,
+    "includes arguments for each function call in the error stack frames array")
 
 // runtime.cc
 DEFINE_BOOL(runtime_call_stats, false, "report runtime call counts and times")

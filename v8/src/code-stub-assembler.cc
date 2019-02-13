@@ -1402,23 +1402,6 @@ TNode<IntPtrT> CodeStubAssembler::LoadAndUntagSmi(Node* base, int index) {
   }
 }
 
-TNode<Int32T> CodeStubAssembler::LoadAndUntagToWord32Root(
-    RootIndex root_index) {
-  Node* isolate_root =
-      ExternalConstant(ExternalReference::isolate_root(isolate()));
-  int offset = IsolateData::root_slot_offset(root_index);
-  if (SmiValuesAre32Bits()) {
-#if V8_TARGET_LITTLE_ENDIAN
-    offset += 4;
-#endif
-    return UncheckedCast<Int32T>(
-        Load(MachineType::Int32(), isolate_root, IntPtrConstant(offset)));
-  } else {
-    return SmiToInt32(
-        Load(MachineType::AnyTagged(), isolate_root, IntPtrConstant(offset)));
-  }
-}
-
 void CodeStubAssembler::StoreAndTagSmi(Node* base, int offset, Node* value) {
   if (SmiValuesAre32Bits()) {
     int zero_offset = offset + 4;
@@ -1444,7 +1427,8 @@ TNode<Float64T> CodeStubAssembler::LoadHeapNumberValue(
 }
 
 TNode<Map> CodeStubAssembler::LoadMap(SloppyTNode<HeapObject> object) {
-  return UncheckedCast<Map>(LoadObjectField(object, HeapObject::kMapOffset));
+  return UncheckedCast<Map>(LoadObjectField(object, HeapObject::kMapOffset,
+                                            MachineType::TaggedPointer()));
 }
 
 TNode<Int32T> CodeStubAssembler::LoadInstanceType(
@@ -5700,20 +5684,28 @@ TNode<Float64T> CodeStubAssembler::ChangeNumberToFloat64(
   return result.value();
 }
 
-TNode<UintPtrT> CodeStubAssembler::ChangeNonnegativeNumberToUintPtr(
-    TNode<Number> value) {
+TNode<UintPtrT> CodeStubAssembler::TryNumberToUintPtr(TNode<Number> value,
+                                                      Label* if_negative) {
   TVARIABLE(UintPtrT, result);
   Label done(this, &result);
   Branch(TaggedIsSmi(value),
          [&] {
            TNode<Smi> value_smi = CAST(value);
-           CSA_SLOW_ASSERT(this, SmiLessThan(SmiConstant(-1), value_smi));
+           if (if_negative == nullptr) {
+             CSA_SLOW_ASSERT(this, SmiLessThan(SmiConstant(-1), value_smi));
+           } else {
+             GotoIfNot(TaggedIsPositiveSmi(value), if_negative);
+           }
            result = UncheckedCast<UintPtrT>(SmiToIntPtr(value_smi));
            Goto(&done);
          },
          [&] {
            TNode<HeapNumber> value_hn = CAST(value);
-           result = ChangeFloat64ToUintPtr(LoadHeapNumberValue(value_hn));
+           TNode<Float64T> value = LoadHeapNumberValue(value_hn);
+           if (if_negative != nullptr) {
+             GotoIf(Float64LessThan(value, Float64Constant(0.0)), if_negative);
+           }
+           result = ChangeFloat64ToUintPtr(value);
            Goto(&done);
          });
 
@@ -10877,7 +10869,7 @@ TNode<AllocationSite> CodeStubAssembler::CreateAllocationSiteInFeedbackVector(
   // an initial write barrier backed store makes this pointer strong until the
   // next GC, and allocation sites are designed to survive several GCs anyway.
   StoreObjectField(site, AllocationSite::kWeakNextOffset, next_site);
-  StoreNoWriteBarrier(MachineRepresentation::kTagged, site_list, site);
+  StoreFullTaggedNoWriteBarrier(site_list, site);
 
   StoreFeedbackVectorSlot(feedback_vector, slot, site, UPDATE_WRITE_BARRIER, 0,
                           SMI_PARAMETERS);
@@ -13180,36 +13172,34 @@ CodeStubArguments::CodeStubArguments(
       arguments_(),
       fp_(fp != nullptr ? fp : assembler_->LoadFramePointer()) {
   Node* offset = assembler_->ElementOffsetFromIndex(
-      argc_, PACKED_ELEMENTS, param_mode,
+      argc_, SYSTEM_POINTER_ELEMENTS, param_mode,
       (StandardFrameConstants::kFixedSlotCountAboveFp - 1) *
           kSystemPointerSize);
-  arguments_ = assembler_->UncheckedCast<RawPtr<Object>>(
-      assembler_->IntPtrAdd(fp_, offset));
+  arguments_ =
+      assembler_->UncheckedCast<WordT>(assembler_->IntPtrAdd(fp_, offset));
 }
 
 TNode<Object> CodeStubArguments::GetReceiver() const {
   DCHECK_EQ(receiver_mode_, ReceiverMode::kHasReceiver);
-  return assembler_->UncheckedCast<Object>(
-      assembler_->Load(MachineType::AnyTagged(), arguments_,
-                       assembler_->IntPtrConstant(kSystemPointerSize)));
+  return assembler_->UncheckedCast<Object>(assembler_->LoadFullTagged(
+      arguments_, assembler_->IntPtrConstant(kSystemPointerSize)));
 }
 
 void CodeStubArguments::SetReceiver(TNode<Object> object) const {
   DCHECK_EQ(receiver_mode_, ReceiverMode::kHasReceiver);
-  assembler_->StoreNoWriteBarrier(
-      MachineRepresentation::kTagged, arguments_,
-      assembler_->IntPtrConstant(kSystemPointerSize), object);
+  assembler_->StoreFullTaggedNoWriteBarrier(
+      arguments_, assembler_->IntPtrConstant(kSystemPointerSize), object);
 }
 
-TNode<RawPtr<Object>> CodeStubArguments::AtIndexPtr(
+TNode<WordT> CodeStubArguments::AtIndexPtr(
     Node* index, CodeStubAssembler::ParameterMode mode) const {
   typedef compiler::Node Node;
   Node* negated_index = assembler_->IntPtrOrSmiSub(
       assembler_->IntPtrOrSmiConstant(0, mode), index, mode);
-  Node* offset = assembler_->ElementOffsetFromIndex(negated_index,
-                                                    PACKED_ELEMENTS, mode, 0);
-  return assembler_->UncheckedCast<RawPtr<Object>>(assembler_->IntPtrAdd(
-      assembler_->UncheckedCast<IntPtrT>(arguments_), offset));
+  Node* offset = assembler_->ElementOffsetFromIndex(
+      negated_index, SYSTEM_POINTER_ELEMENTS, mode, 0);
+  return assembler_->IntPtrAdd(assembler_->UncheckedCast<IntPtrT>(arguments_),
+                               offset);
 }
 
 TNode<Object> CodeStubArguments::AtIndex(
@@ -13218,7 +13208,7 @@ TNode<Object> CodeStubArguments::AtIndex(
   CSA_ASSERT(assembler_,
              assembler_->UintPtrOrSmiLessThan(index, GetLength(mode), mode));
   return assembler_->UncheckedCast<Object>(
-      assembler_->Load(MachineType::AnyTagged(), AtIndexPtr(index, mode)));
+      assembler_->LoadFullTagged(AtIndexPtr(index, mode)));
 }
 
 TNode<Object> CodeStubArguments::AtIndex(int index) const {

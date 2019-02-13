@@ -30,7 +30,8 @@ void SealCurrentObjects(Heap* heap) {
 }
 
 int FixedArrayLenFromSize(int size) {
-  return (size - FixedArray::kHeaderSize) / kTaggedSize;
+  return Min((size - FixedArray::kHeaderSize) / kTaggedSize,
+             FixedArray::kMaxRegularLength);
 }
 
 std::vector<Handle<FixedArray>> FillOldSpacePageWithFixedArrays(Heap* heap,
@@ -105,9 +106,10 @@ std::vector<Handle<FixedArray>> CreatePadding(Heap* heap, int padding_size,
       }
     }
     handles.push_back(isolate->factory()->NewFixedArray(length, tenure));
-    CHECK((tenure == NOT_TENURED && Heap::InNewSpace(*handles.back())) ||
+    CHECK((tenure == NOT_TENURED &&
+           heap->new_space()->Contains(*handles.back())) ||
           (tenure == TENURED && heap->InOldSpace(*handles.back())));
-    free_memory -= allocate_memory;
+    free_memory -= handles.back()->Size();
   }
   return handles;
 }
@@ -152,6 +154,7 @@ void SimulateFullSpace(v8::internal::NewSpace* space,
 }
 
 void SimulateIncrementalMarking(i::Heap* heap, bool force_completion) {
+  const double kStepSizeInMs = 100;
   CHECK(FLAG_incremental_marking);
   i::IncrementalMarking* marking = heap->incremental_marking();
   i::MarkCompactCollector* collector = heap->mark_compact_collector();
@@ -170,8 +173,8 @@ void SimulateIncrementalMarking(i::Heap* heap, bool force_completion) {
   if (!force_completion) return;
 
   while (!marking->IsComplete()) {
-    marking->Step(i::MB, i::IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-                  i::StepOrigin::kV8);
+    marking->V8Step(kStepSizeInMs, i::IncrementalMarking::NO_GC_VIA_STACK_GUARD,
+                    i::StepOrigin::kV8);
     if (marking->IsReadyToOverApproximateWeakClosure()) {
       marking->FinalizeIncrementally();
     }

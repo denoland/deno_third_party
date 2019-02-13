@@ -15,6 +15,7 @@
 #include "src/conversions.h"
 #include "src/counters.h"
 #include "src/heap/mark-compact-inl.h"
+#include "src/ic/handler-configuration-inl.h"
 #include "src/interpreter/interpreter.h"
 #include "src/isolate-inl.h"
 #include "src/log.h"
@@ -41,6 +42,7 @@
 #include "src/objects/scope-info.h"
 #include "src/objects/stack-frame-info-inl.h"
 #include "src/objects/struct-inl.h"
+#include "src/transitions-inl.h"
 #include "src/unicode-cache.h"
 #include "src/unicode-inl.h"
 
@@ -1939,7 +1941,6 @@ Handle<DescriptorArray> Factory::NewDescriptorArray(int number_of_descriptors,
   // Zero-length case must be handled outside.
   DCHECK_LT(0, number_of_all_descriptors);
   int size = DescriptorArray::SizeFor(number_of_all_descriptors);
-  DCHECK_LT(size, kMaxRegularHeapObjectSize);
   AllocationSpace space = Heap::SelectSpace(pretenure);
   HeapObject obj = isolate()->heap()->AllocateRawWithRetryOrFail(size, space);
   obj->set_map_after_allocation(*descriptor_array_map(), SKIP_WRITE_BARRIER);
@@ -2867,11 +2868,11 @@ Handle<Code> Factory::NewOffHeapTrampolineFor(Handle<Code> code,
     result->initialize_flags(code->kind(), code->has_unwinding_info(),
                              code->is_turbofanned(), stack_slots,
                              set_is_off_heap_trampoline);
+    result->set_builtin_index(code->builtin_index());
     result->set_safepoint_table_offset(code->safepoint_table_offset());
     result->set_handler_table_offset(code->handler_table_offset());
     result->set_constant_pool_offset(code->constant_pool_offset());
     result->set_code_comments_offset(code->code_comments_offset());
-    result->set_builtin_index(code->builtin_index());
 
     // Replace the newly generated trampoline's RelocInfo ByteArray with the
     // canonical one stored in the roots to avoid duplicating it for every
@@ -3869,6 +3870,20 @@ Handle<BreakPoint> Factory::NewBreakPoint(int id, Handle<String> condition) {
   new_break_point->set_id(id);
   new_break_point->set_condition(*condition);
   return new_break_point;
+}
+
+Handle<StackTraceFrame> Factory::NewStackTraceFrame(
+    Handle<FrameArray> frame_array, int index) {
+  Handle<StackTraceFrame> frame = Handle<StackTraceFrame>::cast(
+      NewStruct(STACK_TRACE_FRAME_TYPE, NOT_TENURED));
+  frame->set_frame_array(*frame_array);
+  frame->set_frame_index(index);
+  frame->set_frame_info(*undefined_value());
+
+  int id = isolate()->last_stack_frame_info_id() + 1;
+  isolate()->set_last_stack_frame_info_id(id);
+  frame->set_id(id);
+  return frame;
 }
 
 Handle<StackFrameInfo> Factory::NewStackFrameInfo() {

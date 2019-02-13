@@ -1267,6 +1267,19 @@ class ThreadImpl {
     return activations_[id].fp;
   }
 
+  WasmInterpreter::Thread::ExceptionHandlingResult RaiseException(
+      Isolate* isolate, Handle<Object> exception) {
+    DCHECK_EQ(WasmInterpreter::TRAPPED, state_);
+    isolate->Throw(*exception);  // Will check that none is pending.
+    if (HandleException(isolate) == WasmInterpreter::Thread::UNWOUND) {
+      DCHECK_EQ(WasmInterpreter::STOPPED, state_);
+      return WasmInterpreter::Thread::UNWOUND;
+    }
+    state_ = WasmInterpreter::PAUSED;
+    return WasmInterpreter::Thread::HANDLED;
+  }
+
+ private:
   // Handle a thrown exception. Returns whether the exception was handled inside
   // the current activation. Unwinds the interpreted stack accordingly.
   WasmInterpreter::Thread::ExceptionHandlingResult HandleException(
@@ -1301,7 +1314,6 @@ class ThreadImpl {
     return WasmInterpreter::Thread::UNWOUND;
   }
 
- private:
   // Entries on the stack of functions being evaluated.
   struct Frame {
     InterpreterCode* code;
@@ -1400,13 +1412,12 @@ class ThreadImpl {
   }
 
   void ReloadFromFrameOnException(Decoder* decoder, InterpreterCode** code,
-                                  pc_t* pc, pc_t* limit, int* len) {
+                                  pc_t* pc, pc_t* limit) {
     Frame* top = &frames_.back();
     *code = top->code;
     *pc = top->pc;
     *limit = top->code->end - top->code->start;
     decoder->Reset(top->code->start, top->code->end);
-    *len = 0;  // The {pc} has already been set correctly.
   }
 
   int LookupTargetDelta(InterpreterCode* code, pc_t pc) {
@@ -2365,13 +2376,12 @@ class ThreadImpl {
 
 #ifdef DEBUG
       // Compute the stack effect of this opcode, and verify later that the
-      // stack was modified accordingly (unless an exception was thrown).
+      // stack was modified accordingly.
       std::pair<uint32_t, uint32_t> stack_effect =
           StackEffect(codemap_->module(), frames_.back().code->function->sig,
                       code->orig_start + pc, code->orig_end);
       sp_t expected_new_stack_height =
           StackHeight() - stack_effect.first + stack_effect.second;
-      bool exception_was_thrown = false;
 #endif
 
       switch (orig) {
@@ -2412,15 +2422,15 @@ class ThreadImpl {
           CommitPc(pc);  // Needed for local unwinding.
           const WasmException* exception = &module()->exceptions[imm.index];
           if (!DoThrowException(exception, imm.index)) return;
-          ReloadFromFrameOnException(&decoder, &code, &pc, &limit, &len);
-          break;
+          ReloadFromFrameOnException(&decoder, &code, &pc, &limit);
+          continue;  // Do not bump pc.
         }
         case kExprRethrow: {
           WasmValue ex = Pop();
           CommitPc(pc);  // Needed for local unwinding.
           if (!DoRethrowException(&ex)) return;
-          ReloadFromFrameOnException(&decoder, &code, &pc, &limit, &len);
-          break;
+          ReloadFromFrameOnException(&decoder, &code, &pc, &limit);
+          continue;  // Do not bump pc.
         }
         case kExprSelect: {
           WasmValue cond = Pop();
@@ -2469,7 +2479,7 @@ class ThreadImpl {
           size_t arity = code->function->sig->return_count();
           if (!DoReturn(&decoder, &code, &pc, &limit, arity)) return;
           PAUSE_IF_BREAK_FLAG(AfterReturn);
-          continue;
+          continue;  // Do not bump pc.
         }
         case kExprUnreachable: {
           return DoTrap(kTrapUnreachable, pc);
@@ -2551,9 +2561,8 @@ class ThreadImpl {
               case ExternalCallResult::EXTERNAL_UNWOUND:
                 return;
               case ExternalCallResult::EXTERNAL_CAUGHT:
-                ReloadFromFrameOnException(&decoder, &code, &pc, &limit, &len);
-                DCHECK(exception_was_thrown = true);
-                break;
+                ReloadFromFrameOnException(&decoder, &code, &pc, &limit);
+                continue;  // Do not bump pc.
             }
             if (result.type != ExternalCallResult::INTERNAL) break;
           }
@@ -2561,7 +2570,7 @@ class ThreadImpl {
           if (!DoCall(&decoder, target, &pc, &limit)) return;
           code = target;
           PAUSE_IF_BREAK_FLAG(AfterCall);
-          continue;  // don't bump pc
+          continue;  // Do not bump pc.
         } break;
         case kExprCallIndirect: {
           CallIndirectImmediate<Decoder::kNoValidate> imm(&decoder,
@@ -2579,7 +2588,7 @@ class ThreadImpl {
                 return;
               code = result.interpreter_code;
               PAUSE_IF_BREAK_FLAG(AfterCall);
-              continue;  // don't bump pc
+              continue;  // Do not bump pc.
             case ExternalCallResult::INVALID_FUNC:
               return DoTrap(kTrapFuncInvalid, pc);
             case ExternalCallResult::SIGNATURE_MISMATCH:
@@ -2591,9 +2600,8 @@ class ThreadImpl {
             case ExternalCallResult::EXTERNAL_UNWOUND:
               return;
             case ExternalCallResult::EXTERNAL_CAUGHT:
-              ReloadFromFrameOnException(&decoder, &code, &pc, &limit, &len);
-              DCHECK(exception_was_thrown = true);
-              break;
+              ReloadFromFrameOnException(&decoder, &code, &pc, &limit);
+              continue;  // Do not bump pc.
           }
         } break;
         case kExprGetGlobal: {
@@ -2841,7 +2849,7 @@ class ThreadImpl {
       }
 
 #ifdef DEBUG
-      if (!WasmOpcodes::IsControlOpcode(opcode) && !exception_was_thrown) {
+      if (!WasmOpcodes::IsControlOpcode(opcode)) {
         DCHECK_EQ(expected_new_stack_height, StackHeight());
       }
 #endif
@@ -3283,8 +3291,9 @@ WasmInterpreter::State WasmInterpreter::Thread::Run(int num_steps) {
 void WasmInterpreter::Thread::Pause() { return ToImpl(this)->Pause(); }
 void WasmInterpreter::Thread::Reset() { return ToImpl(this)->Reset(); }
 WasmInterpreter::Thread::ExceptionHandlingResult
-WasmInterpreter::Thread::HandleException(Isolate* isolate) {
-  return ToImpl(this)->HandleException(isolate);
+WasmInterpreter::Thread::RaiseException(Isolate* isolate,
+                                        Handle<Object> exception) {
+  return ToImpl(this)->RaiseException(isolate, exception);
 }
 pc_t WasmInterpreter::Thread::GetBreakpointPc() {
   return ToImpl(this)->GetBreakpointPc();

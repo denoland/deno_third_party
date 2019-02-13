@@ -251,11 +251,9 @@ class InternalEscapableScope : public v8::EscapableHandleScope {
 
 // TODO(jochen): This should be #ifdef DEBUG
 #ifdef V8_CHECK_MICROTASKS_SCOPES_CONSISTENCY
-void CheckMicrotasksScopesConsistency(i::Isolate* isolate) {
-  auto handle_scope_implementer = isolate->handle_scope_implementer();
-  auto* microtask_queue = isolate->default_microtask_queue();
-  if (handle_scope_implementer->microtasks_policy() ==
-      v8::MicrotasksPolicy::kScoped) {
+void CheckMicrotasksScopesConsistency(i::MicrotaskQueue* microtask_queue) {
+  if (microtask_queue &&
+      microtask_queue->microtasks_policy() == v8::MicrotasksPolicy::kScoped) {
     DCHECK(microtask_queue->GetMicrotasksScopeDepth() ||
            !microtask_queue->DebugMicrotasksScopeDepthIsZero());
   }
@@ -292,15 +290,19 @@ class CallDepthScope {
     if (do_callback) isolate_->FireBeforeCallEnteredCallback();
   }
   ~CallDepthScope() {
+    i::MicrotaskQueue* microtask_queue = isolate_->default_microtask_queue();
     if (!context_.IsEmpty()) {
       i::HandleScopeImplementer* impl = isolate_->handle_scope_implementer();
       isolate_->set_context(impl->RestoreContext());
+
+      i::Handle<i::Context> env = Utils::OpenHandle(*context_);
+      microtask_queue = env->native_context()->microtask_queue();
     }
     if (!escaped_) isolate_->handle_scope_implementer()->DecrementCallDepth();
-    if (do_callback) isolate_->FireCallCompletedCallback();
+    if (do_callback) isolate_->FireCallCompletedCallback(microtask_queue);
 // TODO(jochen): This should be #ifdef DEBUG
 #ifdef V8_CHECK_MICROTASKS_SCOPES_CONSISTENCY
-    if (do_callback) CheckMicrotasksScopesConsistency(isolate_);
+    if (do_callback) CheckMicrotasksScopesConsistency(microtask_queue);
 #endif
     isolate_->set_next_v8_call_is_safe_for_termination(safe_for_termination_);
   }
@@ -3660,6 +3662,11 @@ i::Isolate* i::IsolateFromNeverReadOnlySpaceObject(i::Address obj) {
       i::HeapObject::cast(i::Object(obj)));
 }
 
+bool i::ShouldThrowOnError(i::Isolate* isolate) {
+  return i::GetShouldThrow(isolate, Nothing<i::ShouldThrow>()) ==
+         i::ShouldThrow::kThrowOnError;
+}
+
 void i::Internals::CheckInitializedImpl(v8::Isolate* external_isolate) {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(external_isolate);
   Utils::ApiCheck(isolate != nullptr && !isolate->IsDead(),
@@ -4432,20 +4439,9 @@ MaybeLocal<Array> v8::Object::GetPropertyNames(
   RETURN_ESCAPED(Utils::ToLocal(result));
 }
 
-
-Local<Array> v8::Object::GetPropertyNames() {
-  auto context = ContextFromNeverReadOnlySpaceObject(Utils::OpenHandle(this));
-  RETURN_TO_LOCAL_UNCHECKED(GetPropertyNames(context), Array);
-}
-
 MaybeLocal<Array> v8::Object::GetOwnPropertyNames(Local<Context> context) {
   return GetOwnPropertyNames(
       context, static_cast<v8::PropertyFilter>(ONLY_ENUMERABLE | SKIP_SYMBOLS));
-}
-
-Local<Array> v8::Object::GetOwnPropertyNames() {
-  auto context = ContextFromNeverReadOnlySpaceObject(Utils::OpenHandle(this));
-  RETURN_TO_LOCAL_UNCHECKED(GetOwnPropertyNames(context), Array);
 }
 
 MaybeLocal<Array> v8::Object::GetOwnPropertyNames(
@@ -4709,12 +4705,6 @@ Maybe<bool> v8::Object::HasRealNamedProperty(Local<Context> context,
 }
 
 
-bool v8::Object::HasRealNamedProperty(Local<String> key) {
-  auto context = ContextFromNeverReadOnlySpaceObject(Utils::OpenHandle(this));
-  return HasRealNamedProperty(context, key).FromMaybe(false);
-}
-
-
 Maybe<bool> v8::Object::HasRealIndexedProperty(Local<Context> context,
                                                uint32_t index) {
   auto isolate = reinterpret_cast<i::Isolate*>(context->GetIsolate());
@@ -4728,13 +4718,6 @@ Maybe<bool> v8::Object::HasRealIndexedProperty(Local<Context> context,
   RETURN_ON_FAILED_EXECUTION_PRIMITIVE(bool);
   return result;
 }
-
-
-bool v8::Object::HasRealIndexedProperty(uint32_t index) {
-  auto context = ContextFromNeverReadOnlySpaceObject(Utils::OpenHandle(this));
-  return HasRealIndexedProperty(context, index).FromMaybe(false);
-}
-
 
 Maybe<bool> v8::Object::HasRealNamedCallbackProperty(Local<Context> context,
                                                      Local<Name> key) {
@@ -4750,13 +4733,6 @@ Maybe<bool> v8::Object::HasRealNamedCallbackProperty(Local<Context> context,
   RETURN_ON_FAILED_EXECUTION_PRIMITIVE(bool);
   return result;
 }
-
-
-bool v8::Object::HasRealNamedCallbackProperty(Local<String> key) {
-  auto context = ContextFromNeverReadOnlySpaceObject(Utils::OpenHandle(this));
-  return HasRealNamedCallbackProperty(context, key).FromMaybe(false);
-}
-
 
 bool v8::Object::HasNamedLookupInterceptor() {
   auto self = Utils::OpenHandle(this);
@@ -4869,7 +4845,8 @@ Local<v8::Object> v8::Object::Clone() {
 
 Local<v8::Context> v8::Object::CreationContext() {
   auto self = Utils::OpenHandle(this);
-  return Utils::ToLocal(self->GetCreationContext());
+  i::Handle<i::Context> context = self->GetCreationContext();
+  return Utils::ToLocal(context);
 }
 
 
@@ -4941,14 +4918,6 @@ MaybeLocal<Function> Function::New(Local<Context> context,
                           true, Local<Private>(), side_effect_type);
   if (behavior == ConstructorBehavior::kThrow) templ->RemovePrototype();
   return templ->GetFunction(context);
-}
-
-
-Local<Function> Function::New(Isolate* v8_isolate, FunctionCallback callback,
-                              Local<Value> data, int length) {
-  return Function::New(v8_isolate->GetCurrentContext(), callback, data, length,
-                       ConstructorBehavior::kAllow)
-      .FromMaybe(Local<Function>());
 }
 
 MaybeLocal<Object> Function::NewInstance(Local<Context> context, int argc,
@@ -5025,14 +4994,6 @@ MaybeLocal<v8::Value> Function::Call(Local<Context> context,
   RETURN_ON_FAILED_EXECUTION(Value);
   RETURN_ESCAPED(result);
 }
-
-
-Local<v8::Value> Function::Call(v8::Local<v8::Value> recv, int argc,
-                                v8::Local<v8::Value> argv[]) {
-  auto context = ContextFromNeverReadOnlySpaceObject(Utils::OpenHandle(this));
-  RETURN_TO_LOCAL_UNCHECKED(Call(context, recv, argc, argv), Value);
-}
-
 
 void Function::SetName(v8::Local<v8::String> name) {
   auto self = Utils::OpenHandle(this);
@@ -8359,17 +8320,16 @@ Isolate::AllowJavascriptExecutionScope::~AllowJavascriptExecutionScope() {
   delete reinterpret_cast<i::NoDumpOnJavascriptExecution*>(internal_dump_);
 }
 
-
 Isolate::SuppressMicrotaskExecutionScope::SuppressMicrotaskExecutionScope(
     Isolate* isolate)
-    : isolate_(reinterpret_cast<i::Isolate*>(isolate)) {
+    : isolate_(reinterpret_cast<i::Isolate*>(isolate)),
+      microtask_queue_(isolate_->default_microtask_queue()) {
   isolate_->handle_scope_implementer()->IncrementCallDepth();
-  isolate_->default_microtask_queue()->IncrementMicrotasksSuppressions();
+  microtask_queue_->IncrementMicrotasksSuppressions();
 }
 
-
 Isolate::SuppressMicrotaskExecutionScope::~SuppressMicrotaskExecutionScope() {
-  isolate_->default_microtask_queue()->DecrementMicrotasksSuppressions();
+  microtask_queue_->DecrementMicrotasksSuppressions();
   isolate_->handle_scope_implementer()->DecrementCallDepth();
 }
 
@@ -8586,14 +8546,14 @@ void Isolate::EnqueueMicrotask(MicrotaskCallback callback, void* data) {
 
 void Isolate::SetMicrotasksPolicy(MicrotasksPolicy policy) {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
-  isolate->handle_scope_implementer()->set_microtasks_policy(policy);
+  isolate->default_microtask_queue()->set_microtasks_policy(policy);
 }
 
 
 MicrotasksPolicy Isolate::GetMicrotasksPolicy() const {
   i::Isolate* isolate =
       reinterpret_cast<i::Isolate*>(const_cast<Isolate*>(this));
-  return isolate->handle_scope_implementer()->microtasks_policy();
+  return isolate->default_microtask_queue()->microtasks_policy();
 }
 
 
@@ -8784,9 +8744,6 @@ CALLBACK_SETTER(AllowWasmCodeGenerationCallback,
 CALLBACK_SETTER(WasmModuleCallback, ExtensionCallback, wasm_module_callback)
 CALLBACK_SETTER(WasmInstanceCallback, ExtensionCallback, wasm_instance_callback)
 
-CALLBACK_SETTER(WasmCompileStreamingCallback, ApiImplementationCallback,
-                wasm_compile_streaming_callback)
-
 CALLBACK_SETTER(WasmStreamingCallback, WasmStreamingCallback,
                 wasm_streaming_callback)
 
@@ -8896,14 +8853,14 @@ void Isolate::VisitHandlesForPartialDependence(
     PersistentHandleVisitor* visitor) {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
   i::DisallowHeapAllocation no_allocation;
-  isolate->global_handles()->IterateAllRootsInNewSpaceWithClassIds(visitor);
+  isolate->global_handles()->IterateAllYoungRootsWithClassIds(visitor);
 }
 
 
 void Isolate::VisitWeakHandles(PersistentHandleVisitor* visitor) {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
   i::DisallowHeapAllocation no_allocation;
-  isolate->global_handles()->IterateWeakRootsInNewSpaceWithClassIds(visitor);
+  isolate->global_handles()->IterateYoungWeakRootsWithClassIds(visitor);
 }
 
 void Isolate::SetAllowAtomicsWait(bool allow) {
@@ -8913,27 +8870,23 @@ void Isolate::SetAllowAtomicsWait(bool allow) {
 
 MicrotasksScope::MicrotasksScope(Isolate* isolate, MicrotasksScope::Type type)
     : isolate_(reinterpret_cast<i::Isolate*>(isolate)),
+      microtask_queue_(isolate_->default_microtask_queue()),
       run_(type == MicrotasksScope::kRunMicrotasks) {
-  auto* microtask_queue = isolate_->default_microtask_queue();
-  if (run_) microtask_queue->IncrementMicrotasksScopeDepth();
+  if (run_) microtask_queue_->IncrementMicrotasksScopeDepth();
 #ifdef DEBUG
-  if (!run_) microtask_queue->IncrementDebugMicrotasksScopeDepth();
+  if (!run_) microtask_queue_->IncrementDebugMicrotasksScopeDepth();
 #endif
 }
 
-
 MicrotasksScope::~MicrotasksScope() {
-  auto handle_scope_implementer = isolate_->handle_scope_implementer();
-  auto* microtask_queue = isolate_->default_microtask_queue();
   if (run_) {
-    microtask_queue->DecrementMicrotasksScopeDepth();
-    if (MicrotasksPolicy::kScoped ==
-        handle_scope_implementer->microtasks_policy()) {
+    microtask_queue_->DecrementMicrotasksScopeDepth();
+    if (MicrotasksPolicy::kScoped == microtask_queue_->microtasks_policy()) {
       PerformCheckpoint(reinterpret_cast<Isolate*>(isolate_));
     }
   }
 #ifdef DEBUG
-  if (!run_) microtask_queue->DecrementDebugMicrotasksScopeDepth();
+  if (!run_) microtask_queue_->DecrementDebugMicrotasksScopeDepth();
 #endif
 }
 
@@ -10035,13 +9988,13 @@ const CpuProfileNode* CpuProfile::GetTopDownRoot() const {
 
 const CpuProfileNode* CpuProfile::GetSample(int index) const {
   const i::CpuProfile* profile = reinterpret_cast<const i::CpuProfile*>(this);
-  return reinterpret_cast<const CpuProfileNode*>(profile->sample(index));
+  return reinterpret_cast<const CpuProfileNode*>(profile->sample(index).node);
 }
 
 
 int64_t CpuProfile::GetSampleTimestamp(int index) const {
   const i::CpuProfile* profile = reinterpret_cast<const i::CpuProfile*>(this);
-  return (profile->sample_timestamp(index) - base::TimeTicks())
+  return (profile->sample(index).timestamp - base::TimeTicks())
       .InMicroseconds();
 }
 

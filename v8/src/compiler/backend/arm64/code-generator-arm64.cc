@@ -693,12 +693,14 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
         // Check the function's context matches the context argument.
         UseScratchRegisterScope scope(tasm());
         Register temp = scope.AcquireX();
-        __ Ldr(temp, FieldMemOperand(func, JSFunction::kContextOffset));
+        __ LoadTaggedPointerField(
+            temp, FieldMemOperand(func, JSFunction::kContextOffset));
         __ cmp(cp, temp);
         __ Assert(eq, AbortReason::kWrongFunctionContext);
       }
       static_assert(kJavaScriptCallCodeStartRegister == x2, "ABI mismatch");
-      __ Ldr(x2, FieldMemOperand(func, JSFunction::kCodeOffset));
+      __ LoadTaggedPointerField(x2,
+                                FieldMemOperand(func, JSFunction::kCodeOffset));
       __ CallCodeObject(x2);
       RecordCallPosition(instr);
       frame_access_state()->ClearSPDelta();
@@ -918,10 +920,9 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kIeee754Float64Log10:
       ASSEMBLE_IEEE754_UNOP(log10);
       break;
-    case kIeee754Float64Pow: {
-      __ Call(BUILTIN_CODE(isolate(), MathPowInternal), RelocInfo::CODE_TARGET);
+    case kIeee754Float64Pow:
+      ASSEMBLE_IEEE754_BINOP(pow);
       break;
-    }
     case kIeee754Float64Sin:
       ASSEMBLE_IEEE754_UNOP(sin);
       break;
@@ -2397,8 +2398,8 @@ void CodeGenerator::AssembleConstructFrame() {
 
   // The frame has been previously padded in CodeGenerator::FinishFrame().
   DCHECK_EQ(frame()->GetTotalFrameSlotCount() % 2, 0);
-  int shrink_slots = frame()->GetTotalFrameSlotCount() -
-                     call_descriptor->CalculateFixedFrameSize();
+  int required_slots = frame()->GetTotalFrameSlotCount() -
+                       call_descriptor->CalculateFixedFrameSize();
 
   CPURegList saves = CPURegList(CPURegister::kRegister, kXRegSizeInBits,
                                 call_descriptor->CalleeSavedRegisters());
@@ -2429,11 +2430,11 @@ void CodeGenerator::AssembleConstructFrame() {
       // to allocate the remaining stack slots.
       if (FLAG_code_comments) __ RecordComment("-- OSR entrypoint --");
       osr_pc_offset_ = __ pc_offset();
-      shrink_slots -= osr_helper()->UnoptimizedFrameSlots();
+      required_slots -= osr_helper()->UnoptimizedFrameSlots();
       ResetSpeculationPoison();
     }
 
-    if (info()->IsWasm() && shrink_slots > 128) {
+    if (info()->IsWasm() && required_slots > 128) {
       // For WebAssembly functions with big frames we have to do the stack
       // overflow check before we construct the frame. Otherwise we may not
       // have enough space on the stack to call the runtime for the stack
@@ -2442,14 +2443,14 @@ void CodeGenerator::AssembleConstructFrame() {
       // If the frame is bigger than the stack, we throw the stack overflow
       // exception unconditionally. Thereby we can avoid the integer overflow
       // check in the condition code.
-      if (shrink_slots * kSystemPointerSize < FLAG_stack_size * 1024) {
+      if (required_slots * kSystemPointerSize < FLAG_stack_size * 1024) {
         UseScratchRegisterScope scope(tasm());
         Register scratch = scope.AcquireX();
         __ Ldr(scratch, FieldMemOperand(
                             kWasmInstanceRegister,
                             WasmInstanceObject::kRealStackLimitAddressOffset));
         __ Ldr(scratch, MemOperand(scratch));
-        __ Add(scratch, scratch, shrink_slots * kSystemPointerSize);
+        __ Add(scratch, scratch, required_slots * kSystemPointerSize);
         __ Cmp(sp, scratch);
         __ B(hs, &done);
       }
@@ -2465,8 +2466,9 @@ void CodeGenerator::AssembleConstructFrame() {
         __ Str(kWasmInstanceRegister,
                MemOperand(fp, WasmCompiledFrameConstants::kWasmInstanceOffset));
       }
-      __ Ldr(x2, FieldMemOperand(kWasmInstanceRegister,
-                                 WasmInstanceObject::kCEntryStubOffset));
+      __ LoadTaggedPointerField(
+          x2, FieldMemOperand(kWasmInstanceRegister,
+                              WasmInstanceObject::kCEntryStubOffset));
       __ Mov(cp, Smi::zero());
       __ CallRuntimeWithCEntry(Runtime::kThrowWasmStackOverflow, x2);
       // We come from WebAssembly, there are no references for the GC.
@@ -2480,9 +2482,9 @@ void CodeGenerator::AssembleConstructFrame() {
     }
 
     // Skip callee-saved slots, which are pushed below.
-    shrink_slots -= saves.Count();
-    shrink_slots -= saves_fp.Count();
-    shrink_slots -= returns;
+    required_slots -= saves.Count();
+    required_slots -= saves_fp.Count();
+    required_slots -= returns;
 
     // Build remainder of frame, including accounting for and filling-in
     // frame-specific header information, i.e. claiming the extra slot that
@@ -2491,16 +2493,17 @@ void CodeGenerator::AssembleConstructFrame() {
     switch (call_descriptor->kind()) {
       case CallDescriptor::kCallJSFunction:
         if (call_descriptor->PushArgumentCount()) {
-          __ Claim(shrink_slots + 1);  // Claim extra slot for argc.
+          __ Claim(required_slots + 1);  // Claim extra slot for argc.
           __ Str(kJavaScriptCallArgCountRegister,
                  MemOperand(fp, OptimizedBuiltinFrameConstants::kArgCOffset));
         } else {
-          __ Claim(shrink_slots);
+          __ Claim(required_slots);
         }
         break;
       case CallDescriptor::kCallCodeObject: {
         UseScratchRegisterScope temps(tasm());
-        __ Claim(shrink_slots + 1);  // Claim extra slot for frame type marker.
+        __ Claim(required_slots +
+                 1);  // Claim extra slot for frame type marker.
         Register scratch = temps.AcquireX();
         __ Mov(scratch,
                StackFrame::TypeToMarker(info()->GetOutputStackFrameType()));
@@ -2508,7 +2511,8 @@ void CodeGenerator::AssembleConstructFrame() {
       } break;
       case CallDescriptor::kCallWasmFunction: {
         UseScratchRegisterScope temps(tasm());
-        __ Claim(shrink_slots + 2);  // Claim extra slots for marker + instance.
+        __ Claim(required_slots +
+                 2);  // Claim extra slots for marker + instance.
         Register scratch = temps.AcquireX();
         __ Mov(scratch,
                StackFrame::TypeToMarker(info()->GetOutputStackFrameType()));
@@ -2522,7 +2526,8 @@ void CodeGenerator::AssembleConstructFrame() {
                FieldMemOperand(kWasmInstanceRegister, Tuple2::kValue2Offset));
         __ ldr(kWasmInstanceRegister,
                FieldMemOperand(kWasmInstanceRegister, Tuple2::kValue1Offset));
-        __ Claim(shrink_slots + 2);  // Claim extra slots for marker + instance.
+        __ Claim(required_slots +
+                 2);  // Claim extra slots for marker + instance.
         Register scratch = temps.AcquireX();
         __ Mov(scratch,
                StackFrame::TypeToMarker(info()->GetOutputStackFrameType()));
@@ -2531,7 +2536,7 @@ void CodeGenerator::AssembleConstructFrame() {
                MemOperand(fp, WasmCompiledFrameConstants::kWasmInstanceOffset));
       } break;
       case CallDescriptor::kCallAddress:
-        __ Claim(shrink_slots);
+        __ Claim(required_slots);
         break;
       default:
         UNREACHABLE();

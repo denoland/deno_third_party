@@ -12,6 +12,7 @@
 #include "src/disassembler.h"
 #include "src/elements.h"
 #include "src/field-type.h"
+#include "src/ic/handler-configuration-inl.h"
 #include "src/layout-descriptor.h"
 #include "src/objects-inl.h"
 #include "src/objects/arguments-inl.h"
@@ -59,7 +60,7 @@
 #include "src/objects/struct-inl.h"
 #include "src/ostreams.h"
 #include "src/regexp/jsregexp.h"
-#include "src/transitions.h"
+#include "src/transitions-inl.h"
 #include "src/wasm/wasm-objects-inl.h"
 
 namespace v8 {
@@ -666,6 +667,7 @@ void Map::MapVerify(Isolate* isolate) {
   CHECK_IMPLIES(IsJSObjectMap() && !CanHaveFastTransitionableElementsKind(),
                 IsDictionaryElementsKind(elements_kind()) ||
                     IsTerminalElementsKind(elements_kind()));
+  CHECK_IMPLIES(is_deprecated(), !is_stable());
   if (is_prototype_map()) {
     DCHECK(prototype_info() == Smi::kZero ||
            prototype_info()->IsPrototypeInfo());
@@ -2050,6 +2052,14 @@ void DebugInfo::DebugInfoVerify(Isolate* isolate) {
   VerifyPointer(isolate, script());
   VerifyPointer(isolate, original_bytecode_array());
   VerifyPointer(isolate, break_points());
+}
+
+void StackTraceFrame::StackTraceFrameVerify(Isolate* isolate) {
+  CHECK(IsStackTraceFrame());
+  VerifySmiField(kFrameIndexOffset);
+  VerifySmiField(kIdOffset);
+  VerifyPointer(isolate, frame_array());
+  VerifyPointer(isolate, frame_info());
 }
 
 void StackFrameInfo::StackFrameInfoVerify(Isolate* isolate) {

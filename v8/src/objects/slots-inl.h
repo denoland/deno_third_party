@@ -31,7 +31,7 @@ bool FullObjectSlot::contains_value(Address raw_value) const {
   return base::AsAtomicPointer::Relaxed_Load(location()) == raw_value;
 }
 
-Object FullObjectSlot::operator*() const { return Object(*location()); }
+const Object FullObjectSlot::operator*() const { return Object(*location()); }
 
 void FullObjectSlot::store(Object value) const { *location() = value->ptr(); }
 
@@ -61,7 +61,7 @@ Object FullObjectSlot::Release_CompareAndSwap(Object old, Object target) const {
 // FullMaybeObjectSlot implementation.
 //
 
-MaybeObject FullMaybeObjectSlot::operator*() const {
+const MaybeObject FullMaybeObjectSlot::operator*() const {
   return MaybeObject(*location());
 }
 
@@ -86,7 +86,7 @@ void FullMaybeObjectSlot::Release_CompareAndSwap(MaybeObject old,
 // FullHeapObjectSlot implementation.
 //
 
-HeapObjectReference FullHeapObjectSlot::operator*() const {
+const HeapObjectReference FullHeapObjectSlot::operator*() const {
   return HeapObjectReference(*location());
 }
 
@@ -111,7 +111,11 @@ void FullHeapObjectSlot::StoreHeapObject(HeapObject value) const {
 inline void MemsetTagged(ObjectSlot start, Object value, size_t counter) {
   // TODO(ishell): revisit this implementation, maybe use "rep stosl"
   STATIC_ASSERT(kTaggedSize == kSystemPointerSize);
-  MemsetPointer(start.location(), value.ptr(), counter);
+  Address raw_value = value.ptr();
+#ifdef V8_COMPRESS_POINTERS
+  raw_value = CompressTagged(raw_value);
+#endif
+  MemsetPointer(start.location(), raw_value, counter);
 }
 
 // Sets |counter| number of kSystemPointerSize-sized values starting at |start|

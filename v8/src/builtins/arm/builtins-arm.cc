@@ -2706,80 +2706,6 @@ void Builtins::Generate_DoubleToI(MacroAssembler* masm) {
   __ Ret();
 }
 
-void Builtins::Generate_MathPowInternal(MacroAssembler* masm) {
-  const LowDwVfpRegister double_base = d0;
-  const LowDwVfpRegister double_exponent = d1;
-  const LowDwVfpRegister double_result = d2;
-  const LowDwVfpRegister double_scratch = d3;
-  const SwVfpRegister single_scratch = s6;
-  // Avoid using Registers r0-r3 as they may be needed when calling to C if the
-  // ABI is softfloat.
-  const Register integer_exponent = r4;
-  const Register scratch = r5;
-
-  Label done, int_exponent;
-
-  // Detect integer exponents stored as double.
-  __ TryDoubleToInt32Exact(integer_exponent, double_exponent, double_scratch);
-  __ b(eq, &int_exponent);
-
-  __ push(lr);
-  {
-    AllowExternalCallThatCantCauseGC scope(masm);
-    __ PrepareCallCFunction(0, 2);
-    __ MovToFloatParameters(double_base, double_exponent);
-    __ CallCFunction(ExternalReference::power_double_double_function(), 0, 2);
-  }
-  __ pop(lr);
-  __ MovFromFloatResult(double_result);
-  __ b(&done);
-
-  // Calculate power with integer exponent.
-  __ bind(&int_exponent);
-
-  __ vmov(double_scratch, double_base);  // Back up base.
-  __ vmov(double_result, Double(1.0), scratch);
-
-  // Get absolute value of exponent.
-  __ cmp(integer_exponent, Operand::Zero());
-  __ mov(scratch, integer_exponent);
-  __ rsb(scratch, integer_exponent, Operand::Zero(), LeaveCC, mi);
-
-  Label while_true;
-  __ bind(&while_true);
-  __ mov(scratch, Operand(scratch, LSR, 1), SetCC);
-  __ vmul(double_result, double_result, double_scratch, cs);
-  __ vmul(double_scratch, double_scratch, double_scratch, ne);
-  __ b(ne, &while_true);
-
-  __ cmp(integer_exponent, Operand::Zero());
-  __ b(ge, &done);
-  __ vmov(double_scratch, Double(1.0), scratch);
-  __ vdiv(double_result, double_scratch, double_result);
-  // Test whether result is zero.  Bail out to check for subnormal result.
-  // Due to subnormals, x^-y == (1/x)^y does not hold in all cases.
-  __ VFPCompareAndSetFlags(double_result, 0.0);
-  __ b(ne, &done);
-  // double_exponent may not containe the exponent value if the input was a
-  // smi.  We set it with exponent value before bailing out.
-  __ vmov(single_scratch, integer_exponent);
-  __ vcvt_f64_s32(double_exponent, single_scratch);
-
-  // Returning or bailing out.
-  __ push(lr);
-  {
-    AllowExternalCallThatCantCauseGC scope(masm);
-    __ PrepareCallCFunction(0, 2);
-    __ MovToFloatParameters(double_base, double_exponent);
-    __ CallCFunction(ExternalReference::power_double_double_function(), 0, 2);
-  }
-  __ pop(lr);
-  __ MovFromFloatResult(double_result);
-
-  __ bind(&done);
-  __ Ret();
-}
-
 void Builtins::Generate_InternalArrayConstructorImpl(MacroAssembler* masm) {
   // ----------- S t a t e -------------
   //  -- r0 : argc
@@ -2952,32 +2878,24 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, Register function_address,
 
 void Builtins::Generate_CallApiCallback(MacroAssembler* masm) {
   // ----------- S t a t e -------------
-  //  -- cp                  : kTargetContext
-  //  -- r1                  : kApiFunctionAddress
-  //  -- r2                  : kArgc
-  //  --
+  //  -- cp                  : context
+  //  -- r1                  : api function address
+  //  -- r2                  : arguments count (not including the receiver)
+  //  -- r3                  : call data
+  //  -- r0                  : holder
   //  -- sp[0]               : last argument
   //  -- ...
   //  -- sp[(argc - 1) * 4]  : first argument
   //  -- sp[(argc + 0) * 4]  : receiver
-  //  -- sp[(argc + 1) * 4]  : kHolder
-  //  -- sp[(argc + 2) * 4]  : kCallData
   // -----------------------------------
 
   Register api_function_address = r1;
   Register argc = r2;
+  Register call_data = r3;
+  Register holder = r0;
   Register scratch = r4;
-  Register index = r5;  // For indexing MemOperands.
 
-  DCHECK(!AreAliased(api_function_address, argc, scratch, index));
-
-  // Stack offsets (without argc).
-  static constexpr int kReceiverOffset = 0;
-  static constexpr int kHolderOffset = kReceiverOffset + 1;
-  static constexpr int kCallDataOffset = kHolderOffset + 1;
-
-  // Extra stack arguments are: the receiver, kHolder, kCallData.
-  static constexpr int kExtraStackArgumentCount = 3;
+  DCHECK(!AreAliased(api_function_address, argc, call_data, holder, scratch));
 
   typedef FunctionCallbackArguments FCA;
 
@@ -3003,24 +2921,22 @@ void Builtins::Generate_CallApiCallback(MacroAssembler* masm) {
   __ sub(sp, sp, Operand(FCA::kArgsLength * kPointerSize));
 
   // kHolder.
-  __ add(index, argc, Operand(FCA::kArgsLength + kHolderOffset));
-  __ ldr(scratch, MemOperand(sp, index, LSL, kPointerSizeLog2));
-  __ str(scratch, MemOperand(sp, 0 * kPointerSize));
+  __ str(holder, MemOperand(sp, 0 * kPointerSize));
 
   // kIsolate.
   __ Move(scratch, ExternalReference::isolate_address(masm->isolate()));
   __ str(scratch, MemOperand(sp, 1 * kPointerSize));
 
-  // kReturnValueDefaultValue, kReturnValue, and kNewTarget.
+  // kReturnValueDefaultValue and kReturnValue.
   __ LoadRoot(scratch, RootIndex::kUndefinedValue);
   __ str(scratch, MemOperand(sp, 2 * kPointerSize));
   __ str(scratch, MemOperand(sp, 3 * kPointerSize));
-  __ str(scratch, MemOperand(sp, 5 * kPointerSize));
 
   // kData.
-  __ add(index, argc, Operand(FCA::kArgsLength + kCallDataOffset));
-  __ ldr(scratch, MemOperand(sp, index, LSL, kPointerSizeLog2));
-  __ str(scratch, MemOperand(sp, 4 * kPointerSize));
+  __ str(call_data, MemOperand(sp, 4 * kPointerSize));
+
+  // kNewTarget.
+  __ str(scratch, MemOperand(sp, 5 * kPointerSize));
 
   // Keep a pointer to kHolder (= implicit_args) in a scratch register.
   // We use it below to set up the FunctionCallbackInfo object.
@@ -3049,7 +2965,7 @@ void Builtins::Generate_CallApiCallback(MacroAssembler* masm) {
   // We also store the number of bytes to drop from the stack after returning
   // from the API function here.
   __ mov(scratch,
-         Operand((FCA::kArgsLength + kExtraStackArgumentCount) * kPointerSize));
+         Operand((FCA::kArgsLength + 1 /* receiver */) * kPointerSize));
   __ add(scratch, scratch, Operand(argc, LSL, kPointerSizeLog2));
   __ str(scratch, MemOperand(sp, 4 * kPointerSize));
 

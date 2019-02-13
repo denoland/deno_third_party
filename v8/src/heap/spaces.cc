@@ -3296,9 +3296,6 @@ void ReadOnlyPage::MakeHeaderRelocatable() {
 }
 
 void ReadOnlySpace::SetPermissionsForPages(PageAllocator::Permission access) {
-  const size_t page_size = MemoryAllocator::GetCommitPageSize();
-  const size_t area_start_offset =
-      RoundUp(MemoryChunkLayout::ObjectStartOffsetInDataPage(), page_size);
   MemoryAllocator* memory_allocator = heap()->memory_allocator();
   for (Page* p : *this) {
     ReadOnlyPage* page = static_cast<ReadOnlyPage*>(p);
@@ -3310,10 +3307,8 @@ void ReadOnlySpace::SetPermissionsForPages(PageAllocator::Permission access) {
     // page allocator manually.
     v8::PageAllocator* page_allocator =
         memory_allocator->page_allocator(page->executable());
-    // TODO(v8:7464): Map the whole space's memory read only (do not ignore the
-    // first page).
-    CHECK(SetPermissions(page_allocator, page->address() + area_start_offset,
-                         page->size() - area_start_offset, access));
+    CHECK(
+        SetPermissions(page_allocator, page->address(), page->size(), access));
   }
 }
 
@@ -3764,6 +3759,15 @@ AllocationResult NewLargeObjectSpace::AllocateRaw(int object_size) {
   page->SetYoungGenerationPageFlags(heap()->incremental_marking()->IsMarking());
   page->SetFlag(MemoryChunk::TO_PAGE);
   pending_object_.store(result->address(), std::memory_order_relaxed);
+#ifdef ENABLE_MINOR_MC
+  if (FLAG_minor_mc) {
+    page->AllocateYoungGenerationBitmap();
+    heap()
+        ->minor_mark_compact_collector()
+        ->non_atomic_marking_state()
+        ->ClearLiveness(page);
+  }
+#endif  // ENABLE_MINOR_MC
   page->InitializationMemoryFence();
   DCHECK(page->IsLargePage());
   DCHECK_EQ(page->owner()->identity(), NEW_LO_SPACE);
@@ -3780,18 +3784,28 @@ void NewLargeObjectSpace::Flip() {
   }
 }
 
-void NewLargeObjectSpace::FreeAllObjects() {
-  LargePage* current = first_page();
-  while (current) {
-    LargePage* next_current = current->next_page();
-    RemovePage(current, static_cast<size_t>(current->GetObject()->Size()));
-    heap()->memory_allocator()->Free<MemoryAllocator::kPreFreeAndQueue>(
-        current);
-    current = next_current;
+void NewLargeObjectSpace::FreeDeadObjects(
+    const std::function<bool(HeapObject)>& is_dead) {
+  bool is_marking = heap()->incremental_marking()->IsMarking();
+  size_t surviving_object_size = 0;
+  for (auto it = begin(); it != end();) {
+    LargePage* page = *it;
+    it++;
+    HeapObject object = page->GetObject();
+    size_t size = static_cast<size_t>(object->Size());
+    if (is_dead(object)) {
+      RemovePage(page, size);
+      heap()->memory_allocator()->Free<MemoryAllocator::kPreFreeAndQueue>(page);
+      if (FLAG_concurrent_marking && is_marking) {
+        heap()->concurrent_marking()->ClearMemoryChunkData(page);
+      }
+    } else {
+      surviving_object_size += size;
+    }
   }
   // Right-trimming does not update the objects_size_ counter. We are lazily
   // updating it after every GC.
-  objects_size_ = 0;
+  objects_size_ = surviving_object_size;
 }
 
 void NewLargeObjectSpace::SetCapacity(size_t capacity) {

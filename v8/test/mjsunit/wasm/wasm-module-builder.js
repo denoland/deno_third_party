@@ -8,15 +8,30 @@ let byte_view = new Uint8Array(__buffer);
 let f32_view = new Float32Array(__buffer);
 let f64_view = new Float64Array(__buffer);
 
-function bytes() {
-  var buffer = new ArrayBuffer(arguments.length);
-  var view = new Uint8Array(buffer);
-  for (var i = 0; i < arguments.length; i++) {
-    var val = arguments[i];
-    if ((typeof val) == "string") val = val.charCodeAt(0);
+// The bytes function receives one of
+//  - several arguments, each of which is either a number or a string of length
+//    1; if it's a string, the charcode of the contained character is used.
+//  - a single array argument containing the actual arguments
+//  - a single string; the returned buffer will contain the char codes of all
+//    contained characters.
+function bytes(...input) {
+  if (input.length == 1 && typeof input[0] == 'array') input = input[0];
+  if (input.length == 1 && typeof input[0] == 'string') {
+    let len = input[0].length;
+    let view = new Uint8Array(len);
+    for (let i = 0; i < len; i++) view[i] = input[0].charCodeAt(i);
+    return view.buffer;
+  }
+  let view = new Uint8Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    let val = input[i];
+    if (typeof val == 'string') {
+      assertEquals(1, val.length, 'string inputs must have length 1');
+      val = val.charCodeAt(0);
+    }
     view[i] = val | 0;
   }
-  return buffer;
+  return view.buffer;
 }
 
 // Header declaration constants
@@ -34,23 +49,10 @@ var kHeaderSize = 8;
 var kPageSize = 65536;
 var kSpecMaxPages = 65535;
 
-function bytesWithHeader() {
-  var buffer = new ArrayBuffer(kHeaderSize + arguments.length);
-  var view = new Uint8Array(buffer);
-  view[0] = kWasmH0;
-  view[1] = kWasmH1;
-  view[2] = kWasmH2;
-  view[3] = kWasmH3;
-  view[4] = kWasmV0;
-  view[5] = kWasmV1;
-  view[6] = kWasmV2;
-  view[7] = kWasmV3;
-  for (var i = 0; i < arguments.length; i++) {
-    var val = arguments[i];
-    if ((typeof val) == "string") val = val.charCodeAt(0);
-    view[kHeaderSize + i] = val | 0;
-  }
-  return buffer;
+function bytesWithHeader(...input) {
+  const header =
+      [kWasmH0, kWasmH1, kWasmH2, kWasmH3, kWasmV0, kWasmV1, kWasmV2, kWasmV3];
+  return bytes(header + input);
 }
 
 let kDeclNoLocals = 0;
@@ -209,6 +211,8 @@ let kExprSetLocal = 0x21;
 let kExprTeeLocal = 0x22;
 let kExprGetGlobal = 0x23;
 let kExprSetGlobal = 0x24;
+let kExprGetTable = 0x25;
+let kExprSetTable = 0x26;
 let kExprI32Const = 0x41;
 let kExprI64Const = 0x42;
 let kExprF32Const = 0x43;
@@ -467,6 +471,7 @@ let kTrapTypeError            = 8;
 let kTrapUnalignedAccess      = 9;
 let kTrapDataSegmentDropped   = 10;
 let kTrapElemSegmentDropped   = 11;
+let kTrapTableOutOfBounds     = 12;
 
 let kTrapMsgs = [
   "unreachable",
@@ -480,7 +485,8 @@ let kTrapMsgs = [
   "wasm function signature contains illegal type",
   "operation does not support unaligned accesses",
   "data segment has been dropped",
-  "element segment has been dropped"
+  "element segment has been dropped",
+  "table access out of bounds"
 ];
 
 function assertTraps(trap, code) {
@@ -654,21 +660,37 @@ class WasmGlobalBuilder {
   }
 }
 
+class WasmTableBuilder {
+  constructor(module, type, initial_size, max_size) {
+    this.module = module;
+    this.type = type;
+    this.initial_size = initial_size;
+    this.has_max = max_size != undefined;
+    this.max_size = max_size;
+  }
+
+  exportAs(name) {
+    this.module.exports.push({name: name, kind: kExternalTable,
+                              index: this.index});
+    return this;
+  }
+}
+
 class WasmModuleBuilder {
   constructor() {
     this.types = [];
     this.imports = [];
     this.exports = [];
     this.globals = [];
+    this.tables = [];
     this.exceptions = [];
     this.functions = [];
-    this.table_length_min = 0;
-    this.table_length_max = undefined;
     this.element_segments = [];
     this.data_segments = [];
     this.explicit = [];
     this.num_imported_funcs = 0;
     this.num_imported_globals = 0;
+    this.num_imported_tables = 0;
     this.num_imported_exceptions = 0;
     return this;
   }
@@ -721,6 +743,16 @@ class WasmModuleBuilder {
     return glob;
   }
 
+  addTable(type, initial_size, max_size = undefined) {
+    if (type != kWasmAnyRef && type != kWasmAnyFunc) {
+      throw new Error('Tables must be of type kWasmAnyRef or kWasmAnyFunc');
+    }
+    let table = new WasmTableBuilder(this, type, initial_size, max_size);
+    table.index = this.tables.length + this.num_imported_tables;
+    this.tables.push(table);
+    return table;
+  }
+
   addException(type) {
     let type_index = (typeof type) == "number" ? type : this.addType(type);
     let except_index = this.exceptions.length + this.num_imported_exceptions;
@@ -764,9 +796,13 @@ class WasmModuleBuilder {
   }
 
   addImportedTable(module, name, initial, maximum) {
+    if (this.tables.length != 0) {
+      throw new Error('Imported tables must be declared before local ones');
+    }
     let o = {module: module, name: name, kind: kExternalTable, initial: initial,
              maximum: maximum};
     this.imports.push(o);
+    return this.num_imported_tables++;
   }
 
   addImportedException(module, name, type) {
@@ -805,15 +841,19 @@ class WasmModuleBuilder {
   }
 
   addElementSegment(base, is_global, array, is_import = false) {
+    if (this.tables.length + this.num_imported_tables == 0) {
+      this.addTable(kWasmAnyFunc, 0);
+    }
     this.element_segments.push({base: base, is_global: is_global,
                                     array: array, is_active: true});
     if (!is_global) {
       var length = base + array.length;
-      if (length > this.table_length_min && !is_import) {
-        this.table_length_min = length;
+      if (!is_import && length > this.tables[0].initial_size) {
+        this.tables[0].initial_size = length;
       }
-      if (length > this.table_length_max && !is_import) {
-         this.table_length_max = length;
+      if (!is_import && this.tables[0].has_max &&
+          length > this.tables[0].max_size) {
+        this.tables[0].max_size = length;
       }
     }
     return this;
@@ -829,12 +869,17 @@ class WasmModuleBuilder {
       if (typeof n != 'number')
         throw new Error('invalid table (entries have to be numbers): ' + array);
     }
-    return this.addElementSegment(this.table_length_min, false, array);
+    if (this.tables.length == 0) {
+      this.addTable(kWasmAnyFunc, 0);
+    }
+    return this.addElementSegment(this.tables[0].initial_size, false, array);
   }
 
   setTableBounds(min, max = undefined) {
-    this.table_length_min = min;
-    this.table_length_max = max;
+    if (this.tables.length != 0) {
+      throw new Error("The table bounds of table '0' have already been set.");
+    }
+    this.addTable(kWasmAnyFunc, min, max);
     return this;
   }
 
@@ -921,16 +966,16 @@ class WasmModuleBuilder {
     }
 
     // Add table section
-    if (wasm.table_length_min > 0) {
-      if (debug) print("emitting table @ " + binary.length);
+    if (wasm.tables.length > 0) {
+      if (debug) print ("emitting tables @ " + binary.length);
       binary.emit_section(kTableSectionCode, section => {
-        section.emit_u8(1);  // one table entry
-        section.emit_u8(kWasmAnyFunctionTypeForm);
-        const max = wasm.table_length_max;
-        const has_max = max !== undefined;
-        section.emit_u8(has_max ? kHasMaximumFlag : 0);
-        section.emit_u32v(wasm.table_length_min);
-        if (has_max) section.emit_u32v(max);
+        section.emit_u32v(wasm.tables.length);
+        for (let table of wasm.tables) {
+          section.emit_u8(table.type);
+          section.emit_u8(table.has_max);
+          section.emit_u32v(table.initial_size);
+          if (table.has_max) section.emit_u32v(table.max_size);
+        }
       });
     }
 

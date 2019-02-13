@@ -8,6 +8,7 @@
 #include "src/objects/js-objects.h"
 
 #include "src/feedback-vector.h"
+#include "src/field-index-inl.h"
 #include "src/heap/heap-write-barrier.h"
 #include "src/keys.h"
 #include "src/lookup-inl.h"
@@ -463,7 +464,7 @@ ACCESSORS(JSBoundFunction, bound_arguments, FixedArray, kBoundArgumentsOffset)
 
 ACCESSORS(JSFunction, raw_feedback_cell, FeedbackCell, kFeedbackCellOffset)
 
-ACCESSORS(JSGlobalObject, native_context, Context, kNativeContextOffset)
+ACCESSORS(JSGlobalObject, native_context, NativeContext, kNativeContextOffset)
 ACCESSORS(JSGlobalObject, global_proxy, JSObject, kGlobalProxyOffset)
 
 ACCESSORS(JSGlobalProxy, native_context, Object, kNativeContextOffset)
@@ -603,7 +604,9 @@ bool JSFunction::has_context() const {
 
 JSGlobalProxy JSFunction::global_proxy() { return context()->global_proxy(); }
 
-Context JSFunction::native_context() { return context()->native_context(); }
+NativeContext JSFunction::native_context() {
+  return context()->native_context();
+}
 
 void JSFunction::set_context(Object value) {
   DCHECK(value->IsUndefined() || value->IsContext());

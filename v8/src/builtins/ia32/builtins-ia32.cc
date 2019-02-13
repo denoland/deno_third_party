@@ -2885,137 +2885,6 @@ void Builtins::Generate_DoubleToI(MacroAssembler* masm) {
   __ ret(0);
 }
 
-void Builtins::Generate_MathPowInternal(MacroAssembler* masm) {
-  const Register exponent = eax;
-  const Register scratch = ecx;
-  const XMMRegister double_result = xmm3;
-  const XMMRegister double_base = xmm2;
-  const XMMRegister double_exponent = xmm1;
-  const XMMRegister double_scratch = xmm4;
-
-  Label call_runtime, done, int_exponent;
-
-  // Save 1 in double_result - we need this several times later on.
-  __ mov(scratch, Immediate(1));
-  __ Cvtsi2sd(double_result, scratch);
-
-  Label fast_power, try_arithmetic_simplification;
-  __ DoubleToI(exponent, double_exponent, double_scratch,
-               &try_arithmetic_simplification, &try_arithmetic_simplification);
-  __ jmp(&int_exponent);
-
-  __ bind(&try_arithmetic_simplification);
-  // Skip to runtime if possibly NaN (indicated by the indefinite integer).
-  __ cvttsd2si(exponent, Operand(double_exponent));
-  __ cmp(exponent, Immediate(0x1));
-  __ j(overflow, &call_runtime);
-
-  // Using FPU instructions to calculate power.
-  Label fast_power_failed;
-  __ bind(&fast_power);
-  __ fnclex();  // Clear flags to catch exceptions later.
-  // Transfer (B)ase and (E)xponent onto the FPU register stack.
-  __ sub(esp, Immediate(kDoubleSize));
-  __ movsd(Operand(esp, 0), double_exponent);
-  __ fld_d(Operand(esp, 0));  // E
-  __ movsd(Operand(esp, 0), double_base);
-  __ fld_d(Operand(esp, 0));  // B, E
-
-  // Exponent is in st(1) and base is in st(0)
-  // B ^ E = (2^(E * log2(B)) - 1) + 1 = (2^X - 1) + 1 for X = E * log2(B)
-  // FYL2X calculates st(1) * log2(st(0))
-  __ fyl2x();    // X
-  __ fld(0);     // X, X
-  __ frndint();  // rnd(X), X
-  __ fsub(1);    // rnd(X), X-rnd(X)
-  __ fxch(1);    // X - rnd(X), rnd(X)
-  // F2XM1 calculates 2^st(0) - 1 for -1 < st(0) < 1
-  __ f2xm1();   // 2^(X-rnd(X)) - 1, rnd(X)
-  __ fld1();    // 1, 2^(X-rnd(X)) - 1, rnd(X)
-  __ faddp(1);  // 2^(X-rnd(X)), rnd(X)
-  // FSCALE calculates st(0) * 2^st(1)
-  __ fscale();  // 2^X, rnd(X)
-  __ fstp(1);   // 2^X
-  // Bail out to runtime in case of exceptions in the status word.
-  __ fnstsw_ax();
-  __ test_b(eax, Immediate(0x5F));  // We check for all but precision exception.
-  __ j(not_zero, &fast_power_failed, Label::kNear);
-  __ fstp_d(Operand(esp, 0));
-  __ movsd(double_result, Operand(esp, 0));
-  __ add(esp, Immediate(kDoubleSize));
-  __ jmp(&done);
-
-  __ bind(&fast_power_failed);
-  __ fninit();
-  __ add(esp, Immediate(kDoubleSize));
-  __ jmp(&call_runtime);
-
-  // Calculate power with integer exponent.
-  __ bind(&int_exponent);
-  const XMMRegister double_scratch2 = double_exponent;
-  __ mov(scratch, exponent);                 // Back up exponent.
-  __ movsd(double_scratch, double_base);     // Back up base.
-  __ movsd(double_scratch2, double_result);  // Load double_exponent with 1.
-
-  // Get absolute value of exponent.
-  Label no_neg, while_true, while_false;
-  __ test(scratch, scratch);
-  __ j(positive, &no_neg, Label::kNear);
-  __ neg(scratch);
-  __ bind(&no_neg);
-
-  __ j(zero, &while_false, Label::kNear);
-  __ shr(scratch, 1);
-  // Above condition means CF==0 && ZF==0.  This means that the
-  // bit that has been shifted out is 0 and the result is not 0.
-  __ j(above, &while_true, Label::kNear);
-  __ movsd(double_result, double_scratch);
-  __ j(zero, &while_false, Label::kNear);
-
-  __ bind(&while_true);
-  __ shr(scratch, 1);
-  __ mulsd(double_scratch, double_scratch);
-  __ j(above, &while_true, Label::kNear);
-  __ mulsd(double_result, double_scratch);
-  __ j(not_zero, &while_true);
-
-  __ bind(&while_false);
-  // scratch has the original value of the exponent - if the exponent is
-  // negative, return 1/result.
-  __ test(exponent, exponent);
-  __ j(positive, &done);
-  __ divsd(double_scratch2, double_result);
-  __ movsd(double_result, double_scratch2);
-  // Test whether result is zero.  Bail out to check for subnormal result.
-  // Due to subnormals, x^-y == (1/x)^y does not hold in all cases.
-  __ xorps(double_scratch2, double_scratch2);
-  __ ucomisd(double_scratch2, double_result);  // Result cannot be NaN.
-  // double_exponent aliased as double_scratch2 has already been overwritten
-  // and may not have contained the exponent value in the first place when the
-  // exponent is a smi.  We reset it with exponent value before bailing out.
-  __ j(not_equal, &done);
-  __ Cvtsi2sd(double_exponent, exponent);
-
-  // Returning or bailing out.
-  __ bind(&call_runtime);
-  {
-    AllowExternalCallThatCantCauseGC scope(masm);
-    __ PrepareCallCFunction(4, scratch);
-    __ movsd(Operand(esp, 0 * kDoubleSize), double_base);
-    __ movsd(Operand(esp, 1 * kDoubleSize), double_exponent);
-    __ CallCFunction(ExternalReference::power_double_double_function(), 4);
-  }
-  // Return value is in st(0) on ia32.
-  // Store it into the (fixed) result register.
-  __ sub(esp, Immediate(kDoubleSize));
-  __ fstp_d(Operand(esp, 0));
-  __ movsd(double_result, Operand(esp, 0));
-  __ add(esp, Immediate(kDoubleSize));
-
-  __ bind(&done);
-  __ ret(0);
-}
-
 void Builtins::Generate_InternalArrayConstructorImpl(MacroAssembler* masm) {
   // ----------- S t a t e -------------
   //  -- eax : argc
@@ -3239,32 +3108,28 @@ void CallApiFunctionAndReturn(MacroAssembler* masm, Register function_address,
 
 void Builtins::Generate_CallApiCallback(MacroAssembler* masm) {
   // ----------- S t a t e -------------
-  //  -- esi                 : kTargetContext
-  //  -- edx                 : kApiFunctionAddress
-  //  -- ecx                 : kArgc
-  //  --
+  //  -- esi                 : context
+  //  -- edx                 : api function address
+  //  -- ecx                 : arguments count (not including the receiver)
+  //  -- eax                 : call data
+  //  -- edi                 : holder
   //  -- esp[0]              : return address
   //  -- esp[4]              : last argument
   //  -- ...
   //  -- esp[argc * 4]       : first argument
   //  -- esp[(argc + 1) * 4] : receiver
-  //  -- esp[(argc + 2) * 4] : kHolder
-  //  -- esp[(argc + 3) * 4] : kCallData
   // -----------------------------------
 
   Register api_function_address = edx;
   Register argc = ecx;
+  XMMRegister call_data = xmm0;
+  Register holder = edi;
   Register scratch = eax;
 
-  DCHECK(!AreAliased(api_function_address, argc, scratch));
+  // Park call_data in xmm0.
+  __ movd(call_data, eax);
 
-  // Stack offsets (without argc).
-  static constexpr int kReceiverOffset = kPointerSize;
-  static constexpr int kHolderOffset = kReceiverOffset + kPointerSize;
-  static constexpr int kCallDataOffset = kHolderOffset + kPointerSize;
-
-  // Extra stack arguments are: the receiver, kHolder, kCallData.
-  static constexpr int kExtraStackArgumentCount = 3;
+  DCHECK(!AreAliased(api_function_address, argc, holder, scratch));
 
   typedef FunctionCallbackArguments FCA;
 
@@ -3298,25 +3163,23 @@ void Builtins::Generate_CallApiCallback(MacroAssembler* masm) {
   __ mov(Operand(esp, 0 * kPointerSize), scratch);
 
   // kHolder.
-  __ mov(scratch, Operand(esp, argc, times_pointer_size,
-                          FCA::kArgsLength * kPointerSize + kHolderOffset));
-  __ mov(Operand(esp, 1 * kPointerSize), scratch);
+  __ mov(Operand(esp, 1 * kPointerSize), holder);
 
   // kIsolate.
   __ Move(scratch,
           Immediate(ExternalReference::isolate_address(masm->isolate())));
   __ mov(Operand(esp, 2 * kPointerSize), scratch);
 
-  // kReturnValueDefaultValue, kReturnValue, and kNewTarget.
+  // kReturnValueDefaultValue and kReturnValue.
   __ LoadRoot(scratch, RootIndex::kUndefinedValue);
   __ mov(Operand(esp, 3 * kPointerSize), scratch);
   __ mov(Operand(esp, 4 * kPointerSize), scratch);
-  __ mov(Operand(esp, 6 * kPointerSize), scratch);
 
   // kData.
-  __ mov(scratch, Operand(esp, argc, times_pointer_size,
-                          FCA::kArgsLength * kPointerSize + kCallDataOffset));
-  __ mov(Operand(esp, 5 * kPointerSize), scratch);
+  __ movd(Operand(esp, 5 * kPointerSize), call_data);
+
+  // kNewTarget.
+  __ mov(Operand(esp, 6 * kPointerSize), scratch);
 
   // Keep a pointer to kHolder (= implicit_args) in a scratch register.
   // We use it below to set up the FunctionCallbackInfo object.
@@ -3350,7 +3213,7 @@ void Builtins::Generate_CallApiCallback(MacroAssembler* masm) {
   // from the API function here.
   __ lea(scratch,
          Operand(argc, times_pointer_size,
-                 (FCA::kArgsLength + kExtraStackArgumentCount) * kPointerSize));
+                 (FCA::kArgsLength + 1 /* receiver */) * kPointerSize));
   __ mov(ApiParameterOperand(kApiArgc + 3), scratch);
 
   // v8::InvocationCallback's argument.

@@ -22,7 +22,6 @@ namespace internal {
 
 class HeapObject;
 class Object;
-class UnalignedSlot;
 
 // Used for platforms with embedded constant pools to trigger deserialization
 // of objects found in code.
@@ -113,32 +112,45 @@ class Deserializer : public SerializerDeserializer {
 
   void Synchronize(VisitorSynchronization::SyncTag tag) override;
 
-  void UnalignedCopy(UnalignedSlot dest, MaybeObject value);
-  void UnalignedCopy(UnalignedSlot dest, Address value);
+  template <typename TSlot>
+  inline TSlot Write(TSlot dest, MaybeObject value);
+
+  template <typename TSlot>
+  inline TSlot WriteAddress(TSlot dest, Address value);
 
   // Fills in some heap data in an area from start to end (non-inclusive).  The
   // space id is used for the write barrier.  The object_address is the address
   // of the object we are writing into, or nullptr if we are not writing into an
   // object, i.e. if we are writing a series of tagged values that are not on
   // the heap. Return false if the object content has been deferred.
-  bool ReadData(UnalignedSlot start, UnalignedSlot end, int space,
-                Address object_address);
+  template <typename TSlot>
+  bool ReadData(TSlot start, TSlot end, int space, Address object_address);
 
   // A helper function for ReadData, templatized on the bytecode for efficiency.
   // Returns the new value of {current}.
-  template <int where, int how, int within, int space_number_if_any>
-  inline UnalignedSlot ReadDataCase(Isolate* isolate, UnalignedSlot current,
-                                    Address current_object_address, byte data,
-                                    bool write_barrier_needed);
+  template <typename TSlot, Bytecode bytecode, int space_number_if_any>
+  inline TSlot ReadDataCase(Isolate* isolate, TSlot current,
+                            Address current_object_address, byte data,
+                            bool write_barrier_needed);
 
   // A helper function for ReadData for reading external references.
-  // Returns the new value of {current}.
-  inline UnalignedSlot ReadExternalReferenceCase(
-      HowToCode how, UnalignedSlot current, Address current_object_address);
+  inline Address ReadExternalReferenceCase();
 
+  HeapObject ReadObject();
   HeapObject ReadObject(int space_number);
+  void ReadCodeObjectBody(int space_number, Address code_object_address);
 
-  UnalignedSlot ReadRepeatedObject(UnalignedSlot current, int repeat_count);
+ public:
+  void VisitCodeTarget(Code host, RelocInfo* rinfo);
+  void VisitEmbeddedPointer(Code host, RelocInfo* rinfo);
+  void VisitRuntimeEntry(Code host, RelocInfo* rinfo);
+  void VisitExternalReference(Code host, RelocInfo* rinfo);
+  void VisitInternalReference(Code host, RelocInfo* rinfo);
+  void VisitOffHeapTarget(Code host, RelocInfo* rinfo);
+
+ private:
+  template <typename TSlot>
+  TSlot ReadRepeatedObject(TSlot current, int repeat_count);
 
   // Special handling for serialized code like hooking up internalized strings.
   HeapObject PostProcessNewObject(HeapObject obj, int space);

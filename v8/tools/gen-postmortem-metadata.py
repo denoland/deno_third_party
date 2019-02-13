@@ -313,10 +313,12 @@ header = '''
 #include "src/frames-inl.h" /* for architecture-specific frame constants */
 #include "src/contexts.h"
 #include "src/objects.h"
+#include "src/objects/data-handler.h"
 #include "src/objects/js-promise.h"
 #include "src/objects/js-regexp-string-iterator.h"
 
-using namespace v8::internal;
+namespace v8 {
+namespace internal {
 
 extern "C" {
 
@@ -331,6 +333,9 @@ STACK_FRAME_TYPE_LIST(FRAME_CONST)
 ''' % sys.argv[0];
 
 footer = '''
+}
+
+}
 }
 '''
 

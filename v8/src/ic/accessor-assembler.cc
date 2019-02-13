@@ -240,8 +240,8 @@ void AccessorAssembler::HandleLoadAccessor(
     BIND(&load);
     Callable callable = CodeFactory::CallApiCallback(isolate());
     TNode<IntPtrT> argc = IntPtrConstant(0);
-    exit_point->Return(CallStub(callable, nullptr, context, callback, argc,
-                                data, api_holder.value(), p->receiver));
+    exit_point->Return(CallStub(callable, context, callback, argc, data,
+                                api_holder.value(), p->receiver));
   }
 
   BIND(&runtime);
@@ -1381,7 +1381,7 @@ void AccessorAssembler::HandleStoreICProtoHandler(
       BIND(&store);
       Callable callable = CodeFactory::CallApiCallback(isolate());
       TNode<IntPtrT> argc = IntPtrConstant(1);
-      Return(CallStub(callable, nullptr, context, callback, argc, data,
+      Return(CallStub(callable, context, callback, argc, data,
                       api_holder.value(), p->receiver, p->value));
     }
 
@@ -2895,14 +2895,18 @@ void AccessorAssembler::StoreIC(const StoreICParameters* p) {
 }
 
 void AccessorAssembler::StoreGlobalIC(const StoreICParameters* pp) {
-  Label if_lexical_var(this), if_property_cell(this);
+  Label if_lexical_var(this), if_heapobject(this);
   TNode<MaybeObject> maybe_weak_ref =
       LoadFeedbackVectorSlot(pp->vector, pp->slot, 0, SMI_PARAMETERS);
-  Branch(TaggedIsSmi(maybe_weak_ref), &if_lexical_var, &if_property_cell);
+  Branch(TaggedIsSmi(maybe_weak_ref), &if_lexical_var, &if_heapobject);
 
-  BIND(&if_property_cell);
+  BIND(&if_heapobject);
   {
     Label try_handler(this), miss(this, Label::kDeferred);
+    GotoIf(
+        WordEqual(maybe_weak_ref, LoadRoot(RootIndex::kpremonomorphic_symbol)),
+        &miss);
+
     CSA_ASSERT(this, IsWeakOrCleared(maybe_weak_ref));
     TNode<PropertyCell> property_cell =
         CAST(GetHeapObjectAssumeWeak(maybe_weak_ref, &try_handler));

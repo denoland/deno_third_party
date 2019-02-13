@@ -155,7 +155,9 @@ Heap::Heap()
 }
 
 size_t Heap::MaxReserved() {
+  const size_t kMaxNewLargeObjectSpaceSize = max_semi_space_size_;
   return static_cast<size_t>(2 * max_semi_space_size_ +
+                             kMaxNewLargeObjectSpaceSize +
                              max_old_generation_size_);
 }
 
@@ -268,7 +270,7 @@ bool Heap::HasBeenSetUp() {
 GarbageCollector Heap::SelectGarbageCollector(AllocationSpace space,
                                               const char** reason) {
   // Is global GC requested?
-  if (space != NEW_SPACE) {
+  if (space != NEW_SPACE && space != NEW_LO_SPACE) {
     isolate_->counters()->gc_compactor_caused_by_request()->Increment();
     *reason = "GC in old space requested";
     return MARK_COMPACTOR;
@@ -1251,7 +1253,7 @@ void Heap::ReportExternalMemoryPressure() {
     // Extend the gc callback flags with external memory flags.
     current_gc_callback_flags_ = static_cast<GCCallbackFlags>(
         current_gc_callback_flags_ | kGCCallbackFlagsForExternalMemory);
-    incremental_marking()->AdvanceIncrementalMarking(
+    incremental_marking()->AdvanceWithDeadline(
         deadline, IncrementalMarking::GC_VIA_STACK_GUARD, StepOrigin::kV8);
   }
 }
@@ -1687,7 +1689,7 @@ bool Heap::PerformGarbageCollection(
   EnsureFromSpaceIsCommitted();
 
   size_t start_young_generation_size =
-      Heap::new_space()->Size() + new_lo_space()->Size();
+      Heap::new_space()->Size() + new_lo_space()->SizeOfObjects();
 
   {
     Heap::SkipStoreBufferScope skip_store_buffer_scope(store_buffer_);
@@ -3129,14 +3131,11 @@ bool Heap::PerformIdleTimeAction(GCIdleTimeAction action,
       result = true;
       break;
     case DO_INCREMENTAL_STEP: {
-      const double remaining_idle_time_in_ms =
-          incremental_marking()->AdvanceIncrementalMarking(
-              deadline_in_ms, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-              StepOrigin::kTask);
-      if (remaining_idle_time_in_ms > 0.0) {
-        FinalizeIncrementalMarkingIfComplete(
-            GarbageCollectionReason::kFinalizeMarkingViaTask);
-      }
+      incremental_marking()->AdvanceWithDeadline(
+          deadline_in_ms, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
+          StepOrigin::kTask);
+      FinalizeIncrementalMarkingIfComplete(
+          GarbageCollectionReason::kFinalizeMarkingViaTask);
       result = incremental_marking()->IsStopped();
       break;
     }
@@ -3582,6 +3581,12 @@ void Heap::Verify() {
   VerifyPointersVisitor visitor(this);
   IterateRoots(&visitor, VISIT_ONLY_STRONG);
 
+  if (!isolate()->context().is_null() &&
+      !isolate()->normalized_map_cache()->IsUndefined(isolate())) {
+    NormalizedMapCache::cast(*isolate()->normalized_map_cache())
+        ->NormalizedMapCacheVerify(isolate());
+  }
+
   VerifySmisVisitor smis_visitor;
   IterateSmiRoots(&smis_visitor);
 
@@ -3905,10 +3910,10 @@ void Heap::IterateStrongRoots(RootVisitor* v, VisitMode mode) {
       break;
     case VISIT_ALL_IN_SCAVENGE:
     case VISIT_ALL_IN_MINOR_MC_MARK:
-      isolate_->global_handles()->IterateNewSpaceStrongAndDependentRoots(v);
+      isolate_->global_handles()->IterateYoungStrongAndDependentRoots(v);
       break;
     case VISIT_ALL_IN_MINOR_MC_UPDATE:
-      isolate_->global_handles()->IterateAllNewSpaceRoots(v);
+      isolate_->global_handles()->IterateAllYoungRoots(v);
       break;
     case VISIT_ALL_IN_SWEEP_NEWSPACE:
     case VISIT_ALL:
@@ -3921,7 +3926,7 @@ void Heap::IterateStrongRoots(RootVisitor* v, VisitMode mode) {
   // serializer. Values referenced by eternal handles need to be added manually.
   if (mode != VISIT_FOR_SERIALIZATION) {
     if (isMinorGC) {
-      isolate_->eternal_handles()->IterateNewSpaceRoots(v);
+      isolate_->eternal_handles()->IterateYoungRoots(v);
     } else {
       isolate_->eternal_handles()->IterateAllRoots(v);
     }

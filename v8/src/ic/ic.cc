@@ -277,7 +277,7 @@ bool IC::RecomputeHandlerForName(Handle<Object> name) {
   if (is_keyed()) {
     // Determine whether the failure is due to a name failure.
     if (!name->IsName()) return false;
-    Name stub_name = nexus()->FindFirstName();
+    Name stub_name = nexus()->GetName();
     if (*name != stub_name) return false;
   }
 
@@ -514,8 +514,9 @@ MaybeHandle<Object> LoadGlobalIC::Load(Handle<Name> name) {
 
       bool use_ic = (state() != NO_FEEDBACK) && FLAG_use_ic;
       if (use_ic) {
-        if (nexus()->ConfigureLexicalVarMode(lookup_result.context_index,
-                                             lookup_result.slot_index)) {
+        if (nexus()->ConfigureLexicalVarMode(
+                lookup_result.context_index, lookup_result.slot_index,
+                lookup_result.mode == VariableMode::kConst)) {
           TRACE_HANDLER_STATS(isolate(), LoadGlobalIC_LoadScriptContextField);
         } else {
           // Given combination of indices can't be encoded, so use slow stub.
@@ -546,7 +547,7 @@ bool IC::UpdatePolymorphicIC(Handle<Name> name,
                              const MaybeObjectHandle& handler) {
   DCHECK(IsHandler(*handler));
   if (is_keyed() && state() != RECOMPUTE_HANDLER) {
-    if (nexus()->FindFirstName() != *name) return false;
+    if (nexus()->GetName() != *name) return false;
   }
   Handle<Map> map = receiver_map();
   MapHandles maps;
@@ -595,7 +596,7 @@ bool IC::UpdatePolymorphicIC(Handle<Name> name,
   if (number_of_valid_maps == 1) {
     ConfigureVectorState(name, receiver_map(), handler);
   } else {
-    if (is_keyed() && nexus()->FindFirstName() != *name) return false;
+    if (is_keyed() && nexus()->GetName() != *name) return false;
     if (handler_to_overwrite >= 0) {
       handlers[handler_to_overwrite] = handler;
       if (!map.is_identical_to(maps.at(handler_to_overwrite))) {
@@ -1081,6 +1082,40 @@ void KeyedLoadIC::UpdateLoadElement(Handle<HeapObject> receiver,
   }
 }
 
+namespace {
+
+bool AllowConvertHoleElementToUndefined(Isolate* isolate,
+                                        Handle<Map> receiver_map) {
+  if (receiver_map->IsJSTypedArrayMap()) {
+    // For JSTypedArray we never lookup elements in the prototype chain.
+    return true;
+  }
+
+  // For other {receiver}s we need to check the "no elements" protector.
+  if (isolate->IsNoElementsProtectorIntact()) {
+    if (receiver_map->IsStringMap()) {
+      return true;
+    }
+    if (receiver_map->IsJSObjectMap()) {
+      // For other JSObjects (including JSArrays) we can only continue if
+      // the {receiver}s prototype is either the initial Object.prototype
+      // or the initial Array.prototype, which are both guarded by the
+      // "no elements" protector checked above.
+      Handle<Object> receiver_prototype(receiver_map->prototype(), isolate);
+
+      if (isolate->IsInAnyContext(*receiver_prototype,
+                                  Context::INITIAL_ARRAY_PROTOTYPE_INDEX) ||
+          isolate->IsInAnyContext(*receiver_prototype,
+                                  Context::INITIAL_OBJECT_PROTOTYPE_INDEX)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+}  // namespace
+
 Handle<Object> KeyedLoadIC::LoadElementHandler(Handle<Map> receiver_map,
                                                KeyedAccessLoadMode load_mode) {
   if (receiver_map->has_indexed_interceptor() &&
@@ -1118,11 +1153,9 @@ Handle<Object> KeyedLoadIC::LoadElementHandler(Handle<Map> receiver_map,
   }
   DCHECK(IsFastElementsKind(elements_kind) ||
          IsFixedTypedArrayElementsKind(elements_kind));
-  // TODO(jkummerow): Use IsHoleyOrDictionaryElementsKind(elements_kind).
   bool convert_hole_to_undefined =
-      is_js_array && elements_kind == HOLEY_ELEMENTS &&
-      *receiver_map ==
-          isolate()->raw_native_context()->GetInitialJSArrayMap(elements_kind);
+      IsHoleyElementsKind(elements_kind) &&
+      AllowConvertHoleElementToUndefined(isolate(), receiver_map);
   TRACE_HANDLER_STATS(isolate(), KeyedLoadIC_LoadElementDH);
   return LoadHandler::LoadElement(isolate(), elements_kind,
                                   convert_hole_to_undefined, is_js_array,
@@ -1198,31 +1231,11 @@ bool IsOutOfBoundsAccess(Handle<Object> receiver, uint32_t index) {
 KeyedAccessLoadMode GetLoadMode(Isolate* isolate, Handle<Object> receiver,
                                 uint32_t index) {
   if (IsOutOfBoundsAccess(receiver, index)) {
-    if (receiver->IsJSTypedArray()) {
-      // For JSTypedArray we never lookup elements in the prototype chain.
+    DCHECK(receiver->IsHeapObject());
+    Handle<Map> receiver_map(Handle<HeapObject>::cast(receiver)->map(),
+                             isolate);
+    if (AllowConvertHoleElementToUndefined(isolate, receiver_map)) {
       return LOAD_IGNORE_OUT_OF_BOUNDS;
-    }
-
-    // For other {receiver}s we need to check the "no elements" protector.
-    if (isolate->IsNoElementsProtectorIntact()) {
-      if (receiver->IsString()) {
-        // ToObject(receiver) will have the initial String.prototype.
-        return LOAD_IGNORE_OUT_OF_BOUNDS;
-      }
-      if (receiver->IsJSObject()) {
-        // For other JSObjects (including JSArrays) we can only continue if
-        // the {receiver}s prototype is either the initial Object.prototype
-        // or the initial Array.prototype, which are both guarded by the
-        // "no elements" protector checked above.
-        Handle<Object> receiver_prototype(
-            JSObject::cast(*receiver)->map()->prototype(), isolate);
-        if (isolate->IsInAnyContext(*receiver_prototype,
-                                    Context::INITIAL_ARRAY_PROTOTYPE_INDEX) ||
-            isolate->IsInAnyContext(*receiver_prototype,
-                                    Context::INITIAL_OBJECT_PROTOTYPE_INDEX)) {
-          return LOAD_IGNORE_OUT_OF_BOUNDS;
-        }
-      }
     }
   }
   return STANDARD_LOAD;
@@ -1376,8 +1389,9 @@ MaybeHandle<Object> StoreGlobalIC::Store(Handle<Name> name,
 
     bool use_ic = (state() != NO_FEEDBACK) && FLAG_use_ic;
     if (use_ic) {
-      if (nexus()->ConfigureLexicalVarMode(lookup_result.context_index,
-                                           lookup_result.slot_index)) {
+      if (nexus()->ConfigureLexicalVarMode(
+              lookup_result.context_index, lookup_result.slot_index,
+              lookup_result.mode == VariableMode::kConst)) {
         TRACE_HANDLER_STATS(isolate(), StoreGlobalIC_StoreScriptContextField);
       } else {
         // Given combination of indices can't be encoded, so use slow stub.
@@ -1471,6 +1485,24 @@ void StoreIC::UpdateCaches(LookupIterator* lookup, Handle<Object> value,
     }
     handler = ComputeHandler(lookup);
   } else {
+    if (state() == UNINITIALIZED && IsStoreGlobalIC() &&
+        lookup->state() == LookupIterator::INTERCEPTOR) {
+      InterceptorInfo info =
+          lookup->GetHolder<JSObject>()->GetNamedInterceptor();
+      if (!lookup->HolderIsReceiverOrHiddenPrototype() &&
+          !info->getter()->IsUndefined(isolate())) {
+        // Utilize premonomorphic state for global store ics that run into
+        // an interceptor because the property doesn't exist yet.
+        // After we actually set the property, we'll have more information.
+        // Premonomorphism gives us a chance to find more information the
+        // second time.
+        TRACE_HANDLER_STATS(isolate(), StoreGlobalIC_Premonomorphic);
+        ConfigureVectorState(receiver_map());
+        TraceIC("StoreGlobalIC", lookup->name());
+        return;
+      }
+    }
+
     set_slow_stub_reason("LookupForWrite said 'false'");
     // TODO(marja): change slow_stub to return MaybeObjectHandle.
     handler = MaybeObjectHandle(slow_stub());
@@ -2710,9 +2742,8 @@ RUNTIME_FUNCTION(Runtime_StoreCallbackProperty) {
 
   DCHECK(info->IsCompatibleReceiver(*receiver));
 
-  ShouldThrow should_throw = GetShouldThrow(isolate, Nothing<ShouldThrow>());
   PropertyCallbackArguments arguments(isolate, info->data(), *receiver, *holder,
-                                      should_throw);
+                                      Nothing<ShouldThrow>());
   arguments.CallAccessorSetter(info, name, value);
   RETURN_FAILURE_IF_SCHEDULED_EXCEPTION(isolate);
   return *value;
@@ -2728,7 +2759,7 @@ RUNTIME_FUNCTION(Runtime_LoadCallbackProperty) {
   DCHECK(info->IsCompatibleReceiver(*receiver));
 
   PropertyCallbackArguments custom_args(isolate, info->data(), *receiver,
-                                        *holder, kThrowOnError);
+                                        *holder, Just(kThrowOnError));
   Handle<Object> result = custom_args.CallAccessorGetter(info, name);
   RETURN_FAILURE_IF_SCHEDULED_EXCEPTION(isolate);
   if (result.is_null()) return ReadOnlyRoots(isolate).undefined_value();
@@ -2776,7 +2807,7 @@ RUNTIME_FUNCTION(Runtime_LoadPropertyWithInterceptor) {
 
   Handle<InterceptorInfo> interceptor(holder->GetNamedInterceptor(), isolate);
   PropertyCallbackArguments arguments(isolate, interceptor->data(), *receiver,
-                                      *holder, kDontThrow);
+                                      *holder, Just(kDontThrow));
   Handle<Object> result = arguments.CallNamedGetter(interceptor, name);
 
   RETURN_FAILURE_IF_SCHEDULED_EXCEPTION(isolate);
@@ -2838,7 +2869,7 @@ RUNTIME_FUNCTION(Runtime_StorePropertyWithInterceptor) {
 
   DCHECK(!interceptor->non_masking());
   PropertyCallbackArguments arguments(isolate, interceptor->data(), *receiver,
-                                      *receiver, kDontThrow);
+                                      *receiver, Just(kDontThrow));
 
   Handle<Object> result = arguments.CallNamedSetter(interceptor, name, value);
   RETURN_FAILURE_IF_SCHEDULED_EXCEPTION(isolate);
@@ -2870,7 +2901,7 @@ RUNTIME_FUNCTION(Runtime_LoadElementWithInterceptor) {
   Handle<InterceptorInfo> interceptor(receiver->GetIndexedInterceptor(),
                                       isolate);
   PropertyCallbackArguments arguments(isolate, interceptor->data(), *receiver,
-                                      *receiver, kDontThrow);
+                                      *receiver, Just(kDontThrow));
   Handle<Object> result = arguments.CallIndexedGetter(interceptor, index);
 
   RETURN_FAILURE_IF_SCHEDULED_EXCEPTION(isolate);

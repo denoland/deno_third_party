@@ -5,6 +5,7 @@
 #ifndef V8_HEAP_MARK_COMPACT_H_
 #define V8_HEAP_MARK_COMPACT_H_
 
+#include <atomic>
 #include <vector>
 
 #include "src/heap/concurrent-marking.h"
@@ -184,7 +185,9 @@ class LiveObjectRange {
       : chunk_(chunk),
         bitmap_(bitmap),
         start_(chunk_->area_start()),
-        end_(chunk->area_end()) {}
+        end_(chunk->area_end()) {
+    DCHECK(!chunk->IsLargePage());
+  }
 
   inline iterator begin();
   inline iterator end();
@@ -323,15 +326,18 @@ class MinorNonAtomicMarkingState final
   }
 
   void IncrementLiveBytes(MemoryChunk* chunk, intptr_t by) {
-    chunk->young_generation_live_byte_count_ += by;
+    chunk->young_generation_live_byte_count_.fetch_add(
+        by, std::memory_order_relaxed);
   }
 
   intptr_t live_bytes(MemoryChunk* chunk) const {
-    return chunk->young_generation_live_byte_count_;
+    return chunk->young_generation_live_byte_count_.load(
+        std::memory_order_relaxed);
   }
 
   void SetLiveBytes(MemoryChunk* chunk, intptr_t value) {
-    chunk->young_generation_live_byte_count_ = value;
+    chunk->young_generation_live_byte_count_.store(value,
+                                                   std::memory_order_relaxed);
   }
 };
 
@@ -346,7 +352,8 @@ class IncrementalMarkingState final
     return chunk->marking_bitmap_;
   }
 
-  // Concurrent marking uses local live bytes.
+  // Concurrent marking uses local live bytes so we may do these accesses
+  // non-atomically.
   void IncrementLiveBytes(MemoryChunk* chunk, intptr_t by) {
     chunk->live_byte_count_ += by;
   }
@@ -371,15 +378,8 @@ class MajorAtomicMarkingState final
   }
 
   void IncrementLiveBytes(MemoryChunk* chunk, intptr_t by) {
-    chunk->live_byte_count_ += by;
-  }
-
-  intptr_t live_bytes(MemoryChunk* chunk) const {
-    return chunk->live_byte_count_;
-  }
-
-  void SetLiveBytes(MemoryChunk* chunk, intptr_t value) {
-    chunk->live_byte_count_ = value;
+    std::atomic_fetch_add(
+        reinterpret_cast<std::atomic<intptr_t>*>(&chunk->live_byte_count_), by);
   }
 };
 
@@ -904,7 +904,6 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
   // used, so it is okay if this counter overflows and wraps around.
   unsigned epoch_ = 0;
 
-  friend class EphemeronHashTableMarkingTask;
   friend class FullEvacuator;
   friend class Heap;
   friend class RecordMigratedSlotVisitor;

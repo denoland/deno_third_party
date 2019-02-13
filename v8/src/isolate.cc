@@ -529,8 +529,6 @@ StackTraceFailureMessage::StackTraceFailureMessage(Isolate* isolate, void* ptr1,
   }
 }
 
-namespace {
-
 class FrameArrayBuilder {
  public:
   enum FrameFilterMode { ALL, CURRENT_SECURITY_CONTEXT };
@@ -573,8 +571,19 @@ class FrameArrayBuilder {
     // The stored bytecode offset is relative to a different base than what
     // is used in the source position table, hence the subtraction.
     offset -= BytecodeArray::kHeaderSize - kHeapObjectTag;
+
+    Handle<FixedArray> parameters = isolate_->factory()->empty_fixed_array();
+    if (V8_UNLIKELY(FLAG_detailed_error_stack_trace)) {
+      int param_count = function->shared()->internal_formal_parameter_count();
+      parameters = isolate_->factory()->NewFixedArray(param_count);
+      for (int i = 0; i < param_count; i++) {
+        parameters->set(i,
+                        generator_object->parameters_and_registers()->get(i));
+      }
+    }
+
     elements_ = FrameArray::AppendJSFrame(elements_, receiver, function, code,
-                                          offset, flags);
+                                          offset, flags, parameters);
   }
 
   void AppendPromiseAllFrame(Handle<Context> context, int offset) {
@@ -587,8 +596,12 @@ class FrameArrayBuilder {
 
     Handle<Object> receiver(native_context->promise_function(), isolate_);
     Handle<AbstractCode> code(AbstractCode::cast(function->code()), isolate_);
+
+    // TODO(mmarchini) save Promises list from Promise.all()
+    Handle<FixedArray> parameters = isolate_->factory()->empty_fixed_array();
+
     elements_ = FrameArray::AppendJSFrame(elements_, receiver, function, code,
-                                          offset, flags);
+                                          offset, flags, parameters);
   }
 
   void AppendJavaScriptFrame(
@@ -606,9 +619,13 @@ class FrameArrayBuilder {
     if (IsStrictFrame(function)) flags |= FrameArray::kIsStrict;
     if (is_constructor) flags |= FrameArray::kIsConstructor;
 
+    Handle<FixedArray> parameters = isolate_->factory()->empty_fixed_array();
+    if (V8_UNLIKELY(FLAG_detailed_error_stack_trace))
+      parameters = summary.parameters();
+
     elements_ = FrameArray::AppendJSFrame(
         elements_, TheHoleToUndefined(isolate_, summary.receiver()), function,
-        abstract_code, offset, flags);
+        abstract_code, offset, flags, parameters);
   }
 
   void AppendWasmCompiledFrame(
@@ -655,9 +672,18 @@ class FrameArrayBuilder {
     if (IsStrictFrame(function)) flags |= FrameArray::kIsStrict;
     if (exit_frame->IsConstructor()) flags |= FrameArray::kIsConstructor;
 
+    Handle<FixedArray> parameters = isolate_->factory()->empty_fixed_array();
+    if (V8_UNLIKELY(FLAG_detailed_error_stack_trace)) {
+      int param_count = exit_frame->ComputeParametersCount();
+      parameters = isolate_->factory()->NewFixedArray(param_count);
+      for (int i = 0; i < param_count; i++) {
+        parameters->set(i, exit_frame->GetParameter(i));
+      }
+    }
+
     elements_ = FrameArray::AppendJSFrame(elements_, receiver, function,
                                           Handle<AbstractCode>::cast(code),
-                                          offset, flags);
+                                          offset, flags, parameters);
   }
 
   bool full() { return elements_->FrameCount() >= limit_; }
@@ -857,8 +883,6 @@ void CaptureAsyncStackTrace(Isolate* isolate, Handle<JSPromise> promise,
     }
   }
 }
-
-}  // namespace
 
 Handle<Object> Isolate::CaptureSimpleStackTrace(Handle<JSReceiver> error_object,
                                                 FrameSkipMode mode,
@@ -1060,6 +1084,46 @@ Address Isolate::GetAbstractPC(int* line, int* column) {
   return frame->pc();
 }
 
+namespace {
+
+class StackFrameCacheHelper : public AllStatic {
+ public:
+  static MaybeHandle<StackFrameInfo> LookupCachedFrame(
+      Isolate* isolate, Handle<AbstractCode> code, int code_offset) {
+    if (FLAG_optimize_for_size) return MaybeHandle<StackFrameInfo>();
+
+    const auto maybe_cache = handle(code->stack_frame_cache(), isolate);
+    if (!maybe_cache->IsSimpleNumberDictionary())
+      return MaybeHandle<StackFrameInfo>();
+
+    const auto cache = Handle<SimpleNumberDictionary>::cast(maybe_cache);
+    const int entry = cache->FindEntry(isolate, code_offset);
+    if (entry != NumberDictionary::kNotFound) {
+      return handle(StackFrameInfo::cast(cache->ValueAt(entry)), isolate);
+    }
+    return MaybeHandle<StackFrameInfo>();
+  }
+
+  static void CacheFrameAndUpdateCache(Isolate* isolate,
+                                       Handle<AbstractCode> code,
+                                       int code_offset,
+                                       Handle<StackFrameInfo> frame) {
+    if (FLAG_optimize_for_size) return;
+
+    const auto maybe_cache = handle(code->stack_frame_cache(), isolate);
+    const auto cache = maybe_cache->IsSimpleNumberDictionary()
+                           ? Handle<SimpleNumberDictionary>::cast(maybe_cache)
+                           : SimpleNumberDictionary::New(isolate, 1);
+    Handle<SimpleNumberDictionary> new_cache =
+        SimpleNumberDictionary::Set(isolate, cache, code_offset, frame);
+    if (*new_cache != *cache || !maybe_cache->IsSimpleNumberDictionary()) {
+      AbstractCode::SetStackFrameCache(code, new_cache);
+    }
+  }
+};
+
+}  // anonymous namespace
+
 class CaptureStackTraceHelper {
  public:
   explicit CaptureStackTraceHelper(Isolate* isolate) : isolate_(isolate) {}
@@ -1072,26 +1136,11 @@ class CaptureStackTraceHelper {
 
   Handle<StackFrameInfo> NewStackFrameObject(
       const FrameSummary::JavaScriptFrameSummary& summ) {
-    int code_offset;
-    Handle<ByteArray> source_position_table;
-    Handle<Object> maybe_cache;
-    Handle<SimpleNumberDictionary> cache;
-    if (!FLAG_optimize_for_size) {
-      code_offset = summ.code_offset();
-      source_position_table =
-          handle(summ.abstract_code()->source_position_table(), isolate_);
-      maybe_cache = handle(summ.abstract_code()->stack_frame_cache(), isolate_);
-      if (maybe_cache->IsSimpleNumberDictionary()) {
-        cache = Handle<SimpleNumberDictionary>::cast(maybe_cache);
-      } else {
-        cache = SimpleNumberDictionary::New(isolate_, 1);
-      }
-      int entry = cache->FindEntry(isolate_, code_offset);
-      if (entry != NumberDictionary::kNotFound) {
-        Handle<StackFrameInfo> frame(
-            StackFrameInfo::cast(cache->ValueAt(entry)), isolate_);
-        return frame;
-      }
+    MaybeHandle<StackFrameInfo> maybe_frame =
+        StackFrameCacheHelper::LookupCachedFrame(isolate_, summ.abstract_code(),
+                                                 summ.code_offset());
+    if (!maybe_frame.is_null()) {
+      return maybe_frame.ToHandleChecked();
     }
 
     Handle<StackFrameInfo> frame = factory()->NewStackFrameInfo();
@@ -1112,14 +1161,10 @@ class CaptureStackTraceHelper {
     frame->set_function_name(*function_name);
     frame->set_is_constructor(summ.is_constructor());
     frame->set_is_wasm(false);
-    if (!FLAG_optimize_for_size) {
-      auto new_cache =
-          SimpleNumberDictionary::Set(isolate_, cache, code_offset, frame);
-      if (*new_cache != *cache || !maybe_cache->IsNumberDictionary()) {
-        AbstractCode::SetStackFrameCache(summ.abstract_code(), new_cache);
-      }
-    }
     frame->set_id(next_id());
+
+    StackFrameCacheHelper::CacheFrameAndUpdateCache(
+        isolate_, summ.abstract_code(), summ.code_offset(), frame);
     return frame;
   }
 
@@ -4089,17 +4134,16 @@ void Isolate::RemoveCallCompletedCallback(CallCompletedCallback callback) {
   call_completed_callbacks_.erase(pos);
 }
 
-void Isolate::FireCallCompletedCallback() {
+void Isolate::FireCallCompletedCallback(MicrotaskQueue* microtask_queue) {
   if (!handle_scope_implementer()->CallDepthIsZero()) return;
 
   bool run_microtasks =
-      default_microtask_queue()->size() &&
-      !default_microtask_queue()->HasMicrotasksSuppressions() &&
-      handle_scope_implementer()->microtasks_policy() ==
-          v8::MicrotasksPolicy::kAuto;
+      microtask_queue && microtask_queue->size() &&
+      !microtask_queue->HasMicrotasksSuppressions() &&
+      microtask_queue->microtasks_policy() == v8::MicrotasksPolicy::kAuto;
 
   if (run_microtasks) {
-    default_microtask_queue()->RunMicrotasks(this);
+    microtask_queue->RunMicrotasks(this);
   } else {
     // TODO(marja): (spec) The discussion about when to clear the KeepDuringJob
     // set is still open (whether to clear it after every microtask or once

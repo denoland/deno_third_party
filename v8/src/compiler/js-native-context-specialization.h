@@ -112,9 +112,14 @@ class V8_EXPORT_PRIVATE JSNativeContextSpecialization final
   Reduction ReduceGlobalAccess(Node* node, Node* receiver, Node* value,
                                Handle<Name> name, AccessMode access_mode,
                                Node* index = nullptr);
+  Reduction ReduceGlobalAccess(Node* node, Node* receiver, Node* value,
+                               Handle<Name> name, AccessMode access_mode,
+                               Node* index, Handle<PropertyCell> property_cell);
 
   Reduction ReduceSoftDeoptimize(Node* node, DeoptimizeReason reason);
   Reduction ReduceJSToString(Node* node);
+
+  Reduction ReduceJSLoadPropertyWithEnumeratedKey(Node* node);
 
   const StringConstantBase* CreateDelayedStringConstant(Node* node);
 
@@ -206,9 +211,6 @@ class V8_EXPORT_PRIVATE JSNativeContextSpecialization final
                            MapHandles* receiver_maps);
 
   // Try to infer maps for the given {receiver} at the current {effect}.
-  // If maps are returned then you can be sure that the {receiver} definitely
-  // has one of the returned maps at this point in the program (identified
-  // by {effect}).
   bool InferReceiverMaps(Node* receiver, Node* effect,
                          MapHandles* receiver_maps);
   // Try to infer a root map for the {receiver} independent of the current

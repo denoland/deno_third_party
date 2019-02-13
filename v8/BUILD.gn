@@ -882,6 +882,7 @@ torque_files = [
   "src/builtins/extras-utils.tq",
   "src/builtins/object-fromentries.tq",
   "src/builtins/iterator.tq",
+  "src/builtins/string-endswith.tq",
   "src/builtins/string-startswith.tq",
   "src/builtins/typed-array.tq",
   "src/builtins/typed-array-createtypedarray.tq",
@@ -1973,6 +1974,8 @@ v8_source_set("v8_base") {
     "src/flag-definitions.h",
     "src/flags.cc",
     "src/flags.h",
+    "src/flush-instruction-cache.cc",
+    "src/flush-instruction-cache.h",
     "src/frame-constants.h",
     "src/frames-inl.h",
     "src/frames.cc",
@@ -2179,6 +2182,8 @@ v8_source_set("v8_base") {
     "src/objects-printer.cc",
     "src/objects.cc",
     "src/objects.h",
+    "src/objects/allocation-site-inl.h",
+    "src/objects/allocation-site.h",
     "src/objects/api-callbacks-inl.h",
     "src/objects/api-callbacks.h",
     "src/objects/arguments-inl.h",
@@ -2189,9 +2194,11 @@ v8_source_set("v8_base") {
     "src/objects/cell-inl.h",
     "src/objects/cell.h",
     "src/objects/code-inl.h",
+    "src/objects/code.cc",
     "src/objects/code.h",
     "src/objects/compilation-cache-inl.h",
     "src/objects/compilation-cache.h",
+    "src/objects/data-handler.h",
     "src/objects/debug-objects-inl.h",
     "src/objects/debug-objects.cc",
     "src/objects/debug-objects.h",
@@ -2317,6 +2324,7 @@ v8_source_set("v8_base") {
     "src/objects/slots-inl.h",
     "src/objects/slots.h",
     "src/objects/stack-frame-info-inl.h",
+    "src/objects/stack-frame-info.cc",
     "src/objects/stack-frame-info.h",
     "src/objects/string-comparator.cc",
     "src/objects/string-comparator.h",
@@ -2959,6 +2967,7 @@ v8_source_set("v8_base") {
     ":v8_headers",
     ":v8_libbase",
     ":v8_libsampler",
+    ":v8_version",
     "src/inspector:inspector",
   ]
 
@@ -3151,6 +3160,10 @@ v8_component("v8_libbase") {
 
   public_configs = [ ":libbase_config" ]
 
+  deps = [
+    ":v8_headers",
+  ]
+
   public_deps = []
 
   data = []
@@ -3298,6 +3311,7 @@ v8_component("v8_libplatform") {
   public_configs = [ ":libplatform_config" ]
 
   deps = [
+    ":v8_headers",
     ":v8_libbase",
   ]
 }

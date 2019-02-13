@@ -33,9 +33,6 @@ enum class AccessMode { kLoad, kStore, kStoreInLiteral };
 
 std::ostream& operator<<(std::ostream&, AccessMode);
 
-// Mapping of transition source to transition target.
-typedef std::vector<std::pair<Handle<Map>, Handle<Map>>> MapTransitionList;
-
 // This class encapsulates all information required to access a certain element.
 class ElementAccessInfo final {
  public:
@@ -45,13 +42,17 @@ class ElementAccessInfo final {
 
   ElementsKind elements_kind() const { return elements_kind_; }
   MapHandles const& receiver_maps() const { return receiver_maps_; }
-  MapTransitionList& transitions() { return transitions_; }
-  MapTransitionList const& transitions() const { return transitions_; }
+  MapHandles const& transition_sources() const { return transition_sources_; }
+
+  void AddTransitionSource(Handle<Map> map) {
+    CHECK_EQ(receiver_maps_.size(), 1);
+    transition_sources_.push_back(map);
+  }
 
  private:
   ElementsKind elements_kind_;
   MapHandles receiver_maps_;
-  MapTransitionList transitions_;
+  MapHandles transition_sources_;
 };
 
 // This class encapsulates all information required to access a certain
@@ -144,31 +145,40 @@ class PropertyAccessInfo final {
 class AccessInfoFactory final {
  public:
   AccessInfoFactory(JSHeapBroker* broker, CompilationDependencies* dependencies,
-
                     Handle<Context> native_context, Zone* zone);
 
   bool ComputeElementAccessInfo(Handle<Map> map, AccessMode access_mode,
-                                ElementAccessInfo* access_info);
-  bool ComputeElementAccessInfos(MapHandles const& maps, AccessMode access_mode,
-                                 ZoneVector<ElementAccessInfo>* access_infos);
+                                ElementAccessInfo* access_info) const;
+  bool ComputeElementAccessInfos(
+      MapHandles const& maps, AccessMode access_mode,
+      ZoneVector<ElementAccessInfo>* access_infos) const;
+
   bool ComputePropertyAccessInfo(Handle<Map> map, Handle<Name> name,
                                  AccessMode access_mode,
-                                 PropertyAccessInfo* access_info);
+                                 PropertyAccessInfo* access_info) const;
   bool ComputePropertyAccessInfo(MapHandles const& maps, Handle<Name> name,
                                  AccessMode access_mode,
-                                 PropertyAccessInfo* access_info);
-  bool ComputePropertyAccessInfos(MapHandles const& maps, Handle<Name> name,
-                                  AccessMode access_mode,
-                                  ZoneVector<PropertyAccessInfo>* access_infos);
+                                 PropertyAccessInfo* access_info) const;
+  bool ComputePropertyAccessInfos(
+      MapHandles const& maps, Handle<Name> name, AccessMode access_mode,
+      ZoneVector<PropertyAccessInfo>* access_infos) const;
 
  private:
   bool ConsolidateElementLoad(MapHandles const& maps,
-                              ElementAccessInfo* access_info);
+                              ElementAccessInfo* access_info) const;
   bool LookupSpecialFieldAccessor(Handle<Map> map, Handle<Name> name,
-                                  PropertyAccessInfo* access_info);
+                                  PropertyAccessInfo* access_info) const;
   bool LookupTransition(Handle<Map> map, Handle<Name> name,
                         MaybeHandle<JSObject> holder,
-                        PropertyAccessInfo* access_info);
+                        PropertyAccessInfo* access_info) const;
+  bool ComputeDataFieldAccessInfo(Handle<Map> receiver_map, Handle<Map> map,
+                                  MaybeHandle<JSObject> holder, int number,
+                                  AccessMode access_mode,
+                                  PropertyAccessInfo* access_info) const;
+  bool ComputeAccessorDescriptorAccessInfo(
+      Handle<Map> receiver_map, Handle<Name> name, Handle<Map> map,
+      MaybeHandle<JSObject> holder, int number, AccessMode access_mode,
+      PropertyAccessInfo* access_info) const;
 
   CompilationDependencies* dependencies() const { return dependencies_; }
   JSHeapBroker* broker() const { return broker_; }
@@ -181,7 +191,7 @@ class AccessInfoFactory final {
   CompilationDependencies* const dependencies_;
   Handle<Context> const native_context_;
   Isolate* const isolate_;
-  TypeCache const* type_cache_;
+  TypeCache const* const type_cache_;
   Zone* const zone_;
 
   DISALLOW_COPY_AND_ASSIGN(AccessInfoFactory);

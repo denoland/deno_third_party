@@ -400,7 +400,7 @@ class ParserBase {
     }
 
     void set_next_function_is_likely_called() {
-      next_function_is_likely_called_ = true;
+      next_function_is_likely_called_ = !FLAG_max_lazy;
     }
 
     void RecordFunctionOrEvalCall() { contains_function_or_eval_ = true; }
@@ -2274,6 +2274,11 @@ ParserBase<Impl>::ParseObjectPropertyDefinition(ParsePropertyInfo* prop_info,
   Token::Value name_token = peek();
   Scanner::Location next_loc = scanner()->peek_location();
 
+  if (name_token == Token::PRIVATE_NAME) {
+    ReportUnexpectedToken(Next());
+    return impl()->NullLiteralProperty();
+  }
+
   ExpressionT name_expression = ParseProperty(prop_info);
   IdentifierT name = prop_info->name;
   ParseFunctionFlags function_flags = prop_info->function_flags;
@@ -2333,10 +2338,6 @@ ParserBase<Impl>::ParseObjectPropertyDefinition(ParsePropertyInfo* prop_info,
 
       DCHECK(!prop_info->is_computed_name);
 
-      if (name_token == Token::LET) {
-        expression_scope()->RecordLexicalDeclarationError(
-            scanner()->location(), MessageTemplate::kLetInLexicalBinding);
-      }
       if (name_token == Token::AWAIT) {
         DCHECK(!is_async_function());
         expression_scope()->RecordAsyncArrowParametersError(
@@ -3808,6 +3809,8 @@ void ParserBase<Impl>::ParseFunctionBody(
     StatementListT* body, IdentifierT function_name, int pos,
     const FormalParametersT& parameters, FunctionKind kind,
     FunctionLiteral::FunctionType function_type, FunctionBodyType body_type) {
+  FunctionBodyParsingScope body_parsing_scope(impl());
+
   if (IsResumableFunction(kind)) impl()->PrepareGeneratorVariables();
 
   DeclarationScope* function_scope = parameters.scope;

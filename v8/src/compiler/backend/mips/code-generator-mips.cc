@@ -970,10 +970,9 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kIeee754Float64Log2:
       ASSEMBLE_IEEE754_UNOP(log2);
       break;
-    case kIeee754Float64Pow: {
-      __ Call(BUILTIN_CODE(isolate(), MathPowInternal), RelocInfo::CODE_TARGET);
+    case kIeee754Float64Pow:
+      ASSEMBLE_IEEE754_BINOP(pow);
       break;
-    }
     case kIeee754Float64Sin:
       ASSEMBLE_IEEE754_UNOP(sin);
       break;
@@ -3402,8 +3401,8 @@ void CodeGenerator::AssembleConstructFrame() {
     }
   }
 
-  int shrink_slots = frame()->GetTotalFrameSlotCount() -
-                     call_descriptor->CalculateFixedFrameSize();
+  int required_slots = frame()->GetTotalFrameSlotCount() -
+                       call_descriptor->CalculateFixedFrameSize();
 
   if (info()->is_osr()) {
     // TurboFan OSR-compiled functions cannot be entered directly.
@@ -3415,7 +3414,7 @@ void CodeGenerator::AssembleConstructFrame() {
     // remaining stack slots.
     if (FLAG_code_comments) __ RecordComment("-- OSR entrypoint --");
     osr_pc_offset_ = __ pc_offset();
-    shrink_slots -= osr_helper()->UnoptimizedFrameSlots();
+    required_slots -= osr_helper()->UnoptimizedFrameSlots();
     ResetSpeculationPoison();
   }
 
@@ -3424,11 +3423,11 @@ void CodeGenerator::AssembleConstructFrame() {
   const int returns = frame()->GetReturnSlotCount();
 
   // Skip callee-saved and return slots, which are pushed below.
-  shrink_slots -= base::bits::CountPopulation(saves);
-  shrink_slots -= 2 * base::bits::CountPopulation(saves_fpu);
-  shrink_slots -= returns;
-  if (shrink_slots > 0) {
-    __ Subu(sp, sp, Operand(shrink_slots * kSystemPointerSize));
+  required_slots -= base::bits::CountPopulation(saves);
+  required_slots -= 2 * base::bits::CountPopulation(saves_fpu);
+  required_slots -= returns;
+  if (required_slots > 0) {
+    __ Subu(sp, sp, Operand(required_slots * kSystemPointerSize));
   }
 
   // Save callee-saved FPU registers.

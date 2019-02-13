@@ -466,7 +466,6 @@ typedef std::vector<HeapObject> DebugObjectCache;
   V(AllowWasmCodeGenerationCallback, allow_wasm_code_gen_callback, nullptr)   \
   V(ExtensionCallback, wasm_module_callback, &NoExtension)                    \
   V(ExtensionCallback, wasm_instance_callback, &NoExtension)                  \
-  V(ApiImplementationCallback, wasm_compile_streaming_callback, nullptr)      \
   V(WasmStreamingCallback, wasm_streaming_callback, nullptr)                  \
   V(WasmThreadsEnabledCallback, wasm_threads_enabled_callback, nullptr)       \
   /* State for Relocatable. */                                                \
@@ -1385,7 +1384,7 @@ class Isolate final : private HiddenFactory {
                                    size_t heap_limit);
   void AddCallCompletedCallback(CallCompletedCallback callback);
   void RemoveCallCompletedCallback(CallCompletedCallback callback);
-  void FireCallCompletedCallback();
+  void FireCallCompletedCallback(MicrotaskQueue* microtask_queue);
 
   void AddBeforeCallEnteredCallback(BeforeCallEnteredCallback callback);
   void RemoveBeforeCallEnteredCallback(BeforeCallEnteredCallback callback);

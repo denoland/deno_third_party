@@ -14,6 +14,9 @@
 #include "src/heap/scavenger-inl.h"
 #include "src/heap/sweeper.h"
 #include "src/objects-body-descriptors-inl.h"
+#include "src/objects/data-handler-inl.h"
+#include "src/objects/embedder-data-array-inl.h"
+#include "src/transitions-inl.h"
 #include "src/utils-inl.h"
 
 namespace v8 {
@@ -227,17 +230,16 @@ void ScavengerCollector::CollectGarbage() {
       // Scavenge weak global handles.
       TRACE_GC(heap_->tracer(),
                GCTracer::Scope::SCAVENGER_SCAVENGE_WEAK_GLOBAL_HANDLES_PROCESS);
-      isolate_->global_handles()->MarkNewSpaceWeakUnmodifiedObjectsPending(
+      isolate_->global_handles()->MarkYoungWeakUnmodifiedObjectsPending(
           &IsUnscavengedHeapObject);
-      isolate_->global_handles()
-          ->IterateNewSpaceWeakUnmodifiedRootsForFinalizers(
-              &root_scavenge_visitor);
+      isolate_->global_handles()->IterateYoungWeakUnmodifiedRootsForFinalizers(
+          &root_scavenge_visitor);
       scavengers[kMainThreadId]->Process();
 
       DCHECK(copied_list.IsEmpty());
       DCHECK(promotion_list.IsEmpty());
       isolate_->global_handles()
-          ->IterateNewSpaceWeakUnmodifiedRootsForPhantomHandles(
+          ->IterateYoungWeakUnmodifiedRootsForPhantomHandles(
               &root_scavenge_visitor, &IsUnscavengedHeapObject);
     }
 
@@ -289,7 +291,7 @@ void ScavengerCollector::CollectGarbage() {
   // Since we promote all surviving large objects immediatelly, all remaining
   // large objects must be dead.
   // TODO(hpayer): Don't free all as soon as we have an intermediate generation.
-  heap_->new_lo_space()->FreeAllObjects();
+  heap_->new_lo_space()->FreeDeadObjects([](HeapObject) { return true; });
 
   RememberedSet<OLD_TO_NEW>::IterateMemoryChunks(heap_, [](MemoryChunk* chunk) {
     if (chunk->SweepingDone()) {

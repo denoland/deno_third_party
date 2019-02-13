@@ -723,7 +723,7 @@ MaybeLocal<Value> WebAssemblyInstantiateImpl(Isolate* isolate,
 
   i::MaybeHandle<i::Object> instance_object;
   {
-    ScheduledErrorThrower thrower(i_isolate, "WebAssembly Instantiation");
+    ScheduledErrorThrower thrower(i_isolate, "WebAssembly.Instance()");
 
     // TODO(ahaas): These checks on the module should not be necessary here They
     // are just a workaround for https://crbug.com/837417.
@@ -862,7 +862,7 @@ void WebAssemblyInstantiate(const v8::FunctionCallbackInfo<v8::Value>& args) {
   i_isolate->CountUsage(
       v8::Isolate::UseCounterFeature::kWebAssemblyInstantiation);
 
-  ScheduledErrorThrower thrower(i_isolate, "WebAssembly Instantiation");
+  ScheduledErrorThrower thrower(i_isolate, "WebAssembly.instantiate()");
 
   HandleScope scope(isolate);
 
@@ -1328,7 +1328,7 @@ void WebAssemblyTableGrow(const v8::FunctionCallbackInfo<v8::Value>& args) {
     return;
   }
 
-  i::Handle<i::FixedArray> old_array(receiver->functions(), i_isolate);
+  i::Handle<i::FixedArray> old_array(receiver->elements(), i_isolate);
   uint32_t old_size = static_cast<uint32_t>(old_array->length());
 
   uint64_t max_size64 = receiver->maximum_length()->Number();
@@ -1356,7 +1356,7 @@ void WebAssemblyTableGrow(const v8::FunctionCallbackInfo<v8::Value>& args) {
     }
     i::Object null = i::ReadOnlyRoots(i_isolate).null_value();
     for (uint32_t i = old_size; i < new_size; ++i) new_array->set(i, null);
-    receiver->set_functions(*new_array);
+    receiver->set_elements(*new_array);
   }
 
   // TODO(gdeepti): use weak links for instances
@@ -1372,7 +1372,7 @@ void WebAssemblyTableGet(const v8::FunctionCallbackInfo<v8::Value>& args) {
   ScheduledErrorThrower thrower(i_isolate, "WebAssembly.Table.get()");
   Local<Context> context = isolate->GetCurrentContext();
   EXTRACT_THIS(receiver, WasmTableObject);
-  i::Handle<i::FixedArray> array(receiver->functions(), i_isolate);
+  i::Handle<i::FixedArray> array(receiver->elements(), i_isolate);
 
   uint32_t index;
   if (!EnforceUint32("Argument 0", args[0], context, &thrower, &index)) {
@@ -1412,7 +1412,7 @@ void WebAssemblyTableSet(const v8::FunctionCallbackInfo<v8::Value>& args) {
     return;
   }
 
-  if (index >= static_cast<uint64_t>(receiver->functions()->length())) {
+  if (index >= static_cast<uint64_t>(receiver->elements()->length())) {
     thrower.RangeError("index out of bounds");
     return;
   }

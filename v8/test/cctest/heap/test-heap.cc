@@ -46,6 +46,7 @@
 #include "src/ic/ic.h"
 #include "src/macro-assembler-inl.h"
 #include "src/objects-inl.h"
+#include "src/objects/frame-array-inl.h"
 #include "src/objects/heap-number-inl.h"
 #include "src/objects/js-array-inl.h"
 #include "src/objects/js-collection-inl.h"
@@ -188,7 +189,7 @@ HEAP_TEST(TestNewSpaceRefsInCopiedCode) {
   HandleScope sc(isolate);
 
   Handle<HeapNumber> value = factory->NewHeapNumber(1.000123);
-  CHECK(Heap::InNewSpace(*value));
+  CHECK(Heap::InYoungGeneration(*value));
 
   i::byte buffer[i::Assembler::kMinimalBufferSize];
   MacroAssembler masm(isolate, v8::internal::CodeObjectRequired::kYes,
@@ -690,7 +691,7 @@ TEST(WeakGlobalHandlesMark) {
   // Make sure the objects are promoted.
   CcTest::CollectGarbage(OLD_SPACE);
   CcTest::CollectGarbage(NEW_SPACE);
-  CHECK(!Heap::InNewSpace(*h1) && !Heap::InNewSpace(*h2));
+  CHECK(!Heap::InYoungGeneration(*h1) && !Heap::InYoungGeneration(*h2));
 
   std::pair<Handle<Object>*, int> handle_and_id(&h2, 1234);
   GlobalHandles::MakeWeak(
@@ -2269,11 +2270,12 @@ TEST(InstanceOfStubWriteBarrier) {
 
   IncrementalMarking::MarkingState* marking_state = marking->marking_state();
 
+  const double kStepSizeInMs = 100;
   while (!marking_state->IsBlack(f->code()) && !marking->IsStopped()) {
     // Discard any pending GC requests otherwise we will get GC when we enter
     // code below.
-    marking->Step(MB, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-                  StepOrigin::kV8);
+    marking->V8Step(kStepSizeInMs, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
+                    StepOrigin::kV8);
   }
 
   CHECK(marking->IsMarking());
@@ -2336,7 +2338,7 @@ HEAP_TEST(Regress845060) {
 
   // Preparation: create a string in new space.
   Local<Value> str = CompileRun("var str = (new Array(10000)).join('x'); str");
-  CHECK(Heap::InNewSpace(*v8::Utils::OpenHandle(*str)));
+  CHECK(Heap::InYoungGeneration(*v8::Utils::OpenHandle(*str)));
 
   // Idle incremental marking sets the "kReduceMemoryFootprint" flag, which
   // causes from_space to be unmapped after scavenging.
@@ -2347,7 +2349,7 @@ HEAP_TEST(Regress845060) {
   // promoted to old space. Unmapping of from_space causes accesses to any
   // stale raw pointers to crash.
   CompileRun("while (%InNewSpace(str)) { str.split(''); }");
-  CHECK(!Heap::InNewSpace(*v8::Utils::OpenHandle(*str)));
+  CHECK(!Heap::InYoungGeneration(*v8::Utils::OpenHandle(*str)));
 }
 
 TEST(IdleNotificationFinishMarking) {
@@ -2364,9 +2366,10 @@ TEST(IdleNotificationFinishMarking) {
 
   CHECK_EQ(CcTest::heap()->gc_count(), initial_gc_count);
 
+  const double kStepSizeInMs = 100;
   do {
-    marking->Step(1 * MB, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-                  StepOrigin::kV8);
+    marking->V8Step(kStepSizeInMs, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
+                    StepOrigin::kV8);
   } while (
       !CcTest::heap()->mark_compact_collector()->marking_worklist()->IsEmpty());
 
@@ -2415,7 +2418,7 @@ TEST(OptimizedAllocationAlwaysInNewSpace) {
   i::Handle<JSReceiver> o =
       v8::Utils::OpenHandle(*v8::Local<v8::Object>::Cast(res));
 
-  CHECK(Heap::InNewSpace(*o));
+  CHECK(Heap::InYoungGeneration(*o));
 }
 
 
@@ -2553,7 +2556,7 @@ TEST(OptimizedPretenuringNestedInObjectProperties) {
 
   // Nested literal sites are only pretenured if the top level
   // literal is pretenured
-  CHECK(Heap::InNewSpace(*o));
+  CHECK(Heap::InYoungGeneration(*o));
 }
 
 TEST(OptimizedPretenuringMixedInObjectProperties) {
@@ -2881,7 +2884,7 @@ TEST(OptimizedAllocationArrayLiterals) {
   i::Handle<JSObject> o = Handle<JSObject>::cast(
       v8::Utils::OpenHandle(*v8::Local<v8::Object>::Cast(res)));
 
-  CHECK(Heap::InNewSpace(o->elements()));
+  CHECK(Heap::InYoungGeneration(o->elements()));
 }
 
 static int CountMapTransitions(i::Isolate* isolate, Map map) {
@@ -2936,6 +2939,13 @@ TEST(Regress1465) {
   CHECK_EQ(1, transitions_after);
 }
 
+static i::Handle<JSObject> GetByName(const char* name) {
+  return i::Handle<JSObject>::cast(
+      v8::Utils::OpenHandle(*v8::Local<v8::Object>::Cast(
+          CcTest::global()
+              ->Get(CcTest::isolate()->GetCurrentContext(), v8_str(name))
+              .ToLocalChecked())));
+}
 
 #ifdef DEBUG
 static void AddTransitions(int transitions_count) {
@@ -2945,15 +2955,6 @@ static void AddTransitions(int transitions_count) {
     SNPrintF(buffer, "var o = new F; o.prop%d = %d;", i, i);
     CompileRun(buffer.start());
   }
-}
-
-
-static i::Handle<JSObject> GetByName(const char* name) {
-  return i::Handle<JSObject>::cast(
-      v8::Utils::OpenHandle(*v8::Local<v8::Object>::Cast(
-          CcTest::global()
-              ->Get(CcTest::isolate()->GetCurrentContext(), v8_str(name))
-              .ToLocalChecked())));
 }
 
 
@@ -3470,6 +3471,119 @@ UNINITIALIZED_TEST(ReleaseStackTraceData) {
   isolate->Dispose();
 }
 
+// TODO(mmarchini) also write tests for async/await and Promise.all
+void DetailedErrorStackTraceTest(const char* src,
+                                 std::function<void(Handle<FrameArray>)> test) {
+  FLAG_detailed_error_stack_trace = true;
+  CcTest::InitializeVM();
+  v8::HandleScope scope(CcTest::isolate());
+
+  v8::TryCatch try_catch(CcTest::isolate());
+  CompileRun(src);
+
+  CHECK(try_catch.HasCaught());
+  Handle<Object> exception = v8::Utils::OpenHandle(*try_catch.Exception());
+
+  Isolate* isolate = CcTest::i_isolate();
+  Handle<Name> key = isolate->factory()->stack_trace_symbol();
+
+  Handle<FrameArray> stack_trace(
+      FrameArray::cast(
+          Handle<JSArray>::cast(
+              Object::GetProperty(isolate, exception, key).ToHandleChecked())
+              ->elements()),
+      isolate);
+
+  test(stack_trace);
+}
+
+// * Test interpreted function error
+TEST(DetailedErrorStackTrace) {
+  static const char* source =
+      "function func1(arg1) {       "
+      "  let err = new Error();     "
+      "  throw err;                 "
+      "}                            "
+      "function func2(arg1, arg2) { "
+      "  func1(42);                 "
+      "}                            "
+      "class Foo {};                "
+      "function main(arg1, arg2) {  "
+      "  func2(arg1, false);        "
+      "}                            "
+      "var foo = new Foo();         "
+      "main(foo);                   ";
+
+  DetailedErrorStackTraceTest(source, [](Handle<FrameArray> stack_trace) {
+    FixedArray foo_parameters = stack_trace->Parameters(0);
+    CHECK_EQ(foo_parameters->length(), 1);
+    CHECK(foo_parameters->get(0)->IsSmi());
+    CHECK_EQ(Smi::ToInt(foo_parameters->get(0)), 42);
+
+    FixedArray bar_parameters = stack_trace->Parameters(1);
+    CHECK_EQ(bar_parameters->length(), 2);
+    CHECK(bar_parameters->get(0)->IsJSObject());
+    CHECK(bar_parameters->get(1)->IsBoolean());
+    Handle<Object> foo = Handle<Object>::cast(GetByName("foo"));
+    CHECK_EQ(bar_parameters->get(0), *foo);
+    CHECK(!bar_parameters->get(1)->BooleanValue(CcTest::i_isolate()));
+
+    FixedArray main_parameters = stack_trace->Parameters(2);
+    CHECK_EQ(main_parameters->length(), 2);
+    CHECK(main_parameters->get(0)->IsJSObject());
+    CHECK(main_parameters->get(1)->IsUndefined());
+    CHECK_EQ(main_parameters->get(0), *foo);
+  });
+}
+
+// * Test optimized function with inline frame error
+TEST(DetailedErrorStackTraceInline) {
+  FLAG_allow_natives_syntax = true;
+  static const char* source =
+      "function add(x) {                 "
+      " if (x == 42)                     "
+      "  throw new Error();              "
+      " return x + x;                    "
+      "}                                 "
+      "add(0);                           "
+      "add(1);                           "
+      "function foo(x) {                 "
+      " return add(x + 1)                "
+      "}                                 "
+      "foo(40);                          "
+      "%OptimizeFunctionOnNextCall(foo); "
+      "foo(41);                          ";
+
+  DetailedErrorStackTraceTest(source, [](Handle<FrameArray> stack_trace) {
+    FixedArray parameters_add = stack_trace->Parameters(0);
+    CHECK_EQ(parameters_add->length(), 1);
+    CHECK(parameters_add->get(0)->IsSmi());
+    CHECK_EQ(Smi::ToInt(parameters_add->get(0)), 42);
+
+    FixedArray parameters_foo = stack_trace->Parameters(1);
+    CHECK_EQ(parameters_foo->length(), 1);
+    CHECK(parameters_foo->get(0)->IsSmi());
+    CHECK_EQ(Smi::ToInt(parameters_foo->get(0)), 41);
+  });
+}
+
+// * Test builtin exit error
+TEST(DetailedErrorStackTraceBuiltinExit) {
+  static const char* source =
+      "function test(arg1) {           "
+      "  (new Number()).toFixed(arg1); "
+      "}                               "
+      "test(9999);                     ";
+
+  DetailedErrorStackTraceTest(source, [](Handle<FrameArray> stack_trace) {
+    FixedArray parameters = stack_trace->Parameters(0);
+
+    CHECK_EQ(parameters->length(), 2);
+    CHECK(parameters->get(0)->IsSmi());
+    CHECK_EQ(Smi::ToInt(parameters->get(0)), 9999);
+  });
+}
+
 TEST(Regress169928) {
   FLAG_allow_natives_syntax = true;
 #ifndef V8_LITE_MODE
@@ -3577,8 +3691,6 @@ TEST(LargeObjectSlotRecording) {
 
   // Start incremental marking to active write barrier.
   heap::SimulateIncrementalMarking(heap, false);
-  heap->incremental_marking()->AdvanceIncrementalMarking(
-      10000000, IncrementalMarking::NO_GC_VIA_STACK_GUARD, StepOrigin::kV8);
 
   // Create references from the large object to the object on the evacuation
   // candidate.
@@ -3587,6 +3699,8 @@ TEST(LargeObjectSlotRecording) {
     lo->set(i, *lit);
     CHECK(lo->get(i) == old_location);
   }
+
+  heap::SimulateIncrementalMarking(heap, true);
 
   // Move the evaucation candidate object.
   CcTest::CollectAllGarbage();
@@ -3641,9 +3755,7 @@ TEST(IncrementalMarkingStepMakesBigProgressWithLargeObjects) {
     CcTest::heap()->StartIncrementalMarking(
         i::Heap::kNoGCFlags, i::GarbageCollectionReason::kTesting);
   }
-  // This big step should be sufficient to mark the whole array.
-  marking->Step(100 * MB, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-                StepOrigin::kV8);
+  heap::SimulateIncrementalMarking(CcTest::heap());
   CHECK(marking->IsComplete() ||
         marking->IsReadyToOverApproximateWeakClosure());
 }
@@ -4051,10 +4163,10 @@ TEST(NewSpaceObjectsInOptimizedCode) {
                                            ->Get(context.local(), v8_str("foo"))
                                            .ToLocalChecked())));
 
-    CHECK(Heap::InNewSpace(*foo));
+    CHECK(Heap::InYoungGeneration(*foo));
     CcTest::CollectGarbage(NEW_SPACE);
     CcTest::CollectGarbage(NEW_SPACE);
-    CHECK(!Heap::InNewSpace(*foo));
+    CHECK(!Heap::InYoungGeneration(*foo));
 #ifdef VERIFY_HEAP
     CcTest::heap()->Verify();
 #endif
@@ -4717,8 +4829,8 @@ TEST(Regress507979) {
 
   Handle<FixedArray> o1 = isolate->factory()->NewFixedArray(kFixedArrayLen);
   Handle<FixedArray> o2 = isolate->factory()->NewFixedArray(kFixedArrayLen);
-  CHECK(Heap::InNewSpace(*o1));
-  CHECK(Heap::InNewSpace(*o2));
+  CHECK(Heap::InYoungGeneration(*o1));
+  CHECK(Heap::InYoungGeneration(*o2));
 
   HeapIterator it(isolate->heap(), i::HeapIterator::kFilterUnreachable);
 
@@ -4808,12 +4920,7 @@ TEST(Regress3631) {
   Handle<JSReceiver> obj =
       v8::Utils::OpenHandle(*v8::Local<v8::Object>::Cast(result));
   Handle<JSWeakCollection> weak_map(JSWeakCollection::cast(*obj), isolate);
-  HeapObject weak_map_table = HeapObject::cast(weak_map->table());
-  IncrementalMarking::MarkingState* marking_state = marking->marking_state();
-  while (!marking_state->IsBlack(weak_map_table) && !marking->IsStopped()) {
-    marking->Step(MB, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-                  StepOrigin::kV8);
-  }
+  SimulateIncrementalMarking(heap);
   // Stash the backing store in a handle.
   Handle<Object> save(weak_map->table(), isolate);
   // The following line will update the backing store.
@@ -4972,7 +5079,7 @@ void AllocateInSpace(Isolate* isolate, size_t bytes, AllocationSpace space) {
       static_cast<int>((bytes - FixedArray::kHeaderSize) / kTaggedSize);
   Handle<FixedArray> array = factory->NewFixedArray(
       elements, space == NEW_SPACE ? NOT_TENURED : TENURED);
-  CHECK((space == NEW_SPACE) == Heap::InNewSpace(*array));
+  CHECK((space == NEW_SPACE) == Heap::InYoungGeneration(*array));
   CHECK_EQ(bytes, static_cast<size_t>(array->Size()));
 }
 
@@ -5220,7 +5327,7 @@ HEAP_TEST(Regress587004) {
   Handle<FixedArray> array = factory->NewFixedArray(N, TENURED);
   CHECK(heap->old_space()->Contains(*array));
   Handle<Object> number = factory->NewHeapNumber(1.0);
-  CHECK(Heap::InNewSpace(*number));
+  CHECK(Heap::InYoungGeneration(*number));
   for (int i = 0; i < N; i++) {
     array->set(i, *number);
   }
@@ -5330,7 +5437,8 @@ TEST(Regress598319) {
   Heap* heap = CcTest::heap();
   Isolate* isolate = heap->isolate();
 
-  const int kNumberOfObjects = kMaxRegularHeapObjectSize / kTaggedSize;
+  // The size of the array should be larger than kProgressBarScanningChunk.
+  const int kNumberOfObjects = Max(FixedArray::kMaxRegularLength + 1, 128 * KB);
 
   struct Arr {
     Arr(Isolate* isolate, int number_of_objects) {
@@ -5390,9 +5498,11 @@ TEST(Regress598319) {
 
   // Now we search for a state where we are in incremental marking and have
   // only partially marked the large object.
+  const double kSmallStepSizeInMs = 0.1;
   while (!marking->IsComplete()) {
-    marking->Step(i::KB, i::IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-                  StepOrigin::kV8);
+    marking->V8Step(kSmallStepSizeInMs,
+                    i::IncrementalMarking::NO_GC_VIA_STACK_GUARD,
+                    StepOrigin::kV8);
     if (page->IsFlagSet(Page::HAS_PROGRESS_BAR) && page->progress_bar() > 0) {
       CHECK_NE(page->progress_bar(), arr.get()->Size());
       {
@@ -5408,9 +5518,11 @@ TEST(Regress598319) {
   }
 
   // Finish marking with bigger steps to speed up test.
+  const double kLargeStepSizeInMs = 1000;
   while (!marking->IsComplete()) {
-    marking->Step(10 * i::MB, i::IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-                  StepOrigin::kV8);
+    marking->V8Step(kLargeStepSizeInMs,
+                    i::IncrementalMarking::NO_GC_VIA_STACK_GUARD,
+                    StepOrigin::kV8);
     if (marking->IsReadyToOverApproximateWeakClosure()) {
       marking->FinalizeIncrementally();
     }
@@ -5490,9 +5602,10 @@ TEST(Regress615489) {
     v8::HandleScope inner(CcTest::isolate());
     isolate->factory()->NewFixedArray(500, TENURED)->Size();
   }
+  const double kStepSizeInMs = 100;
   while (!marking->IsComplete()) {
-    marking->Step(i::MB, i::IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-                  StepOrigin::kV8);
+    marking->V8Step(kStepSizeInMs, i::IncrementalMarking::NO_GC_VIA_STACK_GUARD,
+                    StepOrigin::kV8);
     if (marking->IsReadyToOverApproximateWeakClosure()) {
       marking->FinalizeIncrementally();
     }
@@ -5549,10 +5662,11 @@ TEST(Regress631969) {
   CcTest::CollectGarbage(NEW_SPACE);
 
   // Finish incremental marking.
+  const double kStepSizeInMs = 100;
   IncrementalMarking* marking = heap->incremental_marking();
   while (!marking->IsComplete()) {
-    marking->Step(MB, i::IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-                  StepOrigin::kV8);
+    marking->V8Step(kStepSizeInMs, i::IncrementalMarking::NO_GC_VIA_STACK_GUARD,
+                    StepOrigin::kV8);
     if (marking->IsReadyToOverApproximateWeakClosure()) {
       marking->FinalizeIncrementally();
     }
@@ -5968,7 +6082,7 @@ HEAP_TEST(Regress670675) {
     }
     if (marking->IsStopped()) break;
     double deadline = heap->MonotonicallyIncreasingTimeInMs() + 1;
-    marking->AdvanceIncrementalMarking(
+    marking->AdvanceWithDeadline(
         deadline, IncrementalMarking::GC_VIA_STACK_GUARD, StepOrigin::kV8);
   }
   DCHECK(marking->IsStopped());
@@ -6241,7 +6355,7 @@ HEAP_TEST(Regress779503) {
     // The byte array filled with kHeapObjectTag ensures that we cannot read
     // from the slot again and interpret it as heap value. Doing so will crash.
     Handle<ByteArray> byte_array = isolate->factory()->NewByteArray(kArraySize);
-    CHECK(Heap::InNewSpace(*byte_array));
+    CHECK(Heap::InYoungGeneration(*byte_array));
     for (int i = 0; i < kArraySize; i++) {
       byte_array->set(i, kHeapObjectTag);
     }
@@ -6251,7 +6365,7 @@ HEAP_TEST(Regress779503) {
       // The FixedArray in old space serves as space for slots.
       Handle<FixedArray> fixed_array =
           isolate->factory()->NewFixedArray(kArraySize, TENURED);
-      CHECK(!Heap::InNewSpace(*fixed_array));
+      CHECK(!Heap::InYoungGeneration(*fixed_array));
       for (int i = 0; i < kArraySize; i++) {
         fixed_array->set(i, *byte_array);
       }
@@ -6260,7 +6374,7 @@ HEAP_TEST(Regress779503) {
     // currently scavenging.
     heap->delay_sweeper_tasks_for_testing_ = true;
     CcTest::CollectGarbage(OLD_SPACE);
-    CHECK(Heap::InNewSpace(*byte_array));
+    CHECK(Heap::InYoungGeneration(*byte_array));
   }
   // Scavenging and sweeping the same page will crash as slots will be
   // overridden.
@@ -6274,6 +6388,7 @@ struct OutOfMemoryState {
   size_t old_generation_capacity_at_oom;
   size_t memory_allocator_size_at_oom;
   size_t new_space_capacity_at_oom;
+  size_t new_lo_space_size_at_oom;
   size_t current_heap_limit;
   size_t initial_heap_limit;
 };
@@ -6286,6 +6401,7 @@ size_t NearHeapLimitCallback(void* raw_state, size_t current_heap_limit,
   state->old_generation_capacity_at_oom = heap->OldGenerationCapacity();
   state->memory_allocator_size_at_oom = heap->memory_allocator()->Size();
   state->new_space_capacity_at_oom = heap->new_space()->Capacity();
+  state->new_lo_space_size_at_oom = heap->new_lo_space()->Size();
   state->current_heap_limit = current_heap_limit;
   state->initial_heap_limit = initial_heap_limit;
   return initial_heap_limit + 100 * MB;
@@ -6361,11 +6477,14 @@ UNINITIALIZED_TEST(OutOfMemoryLargeObjects) {
   }
   CHECK_LE(state.old_generation_capacity_at_oom, kOldGenerationLimit);
   CHECK_LE(kOldGenerationLimit, state.old_generation_capacity_at_oom +
+                                    state.new_space_capacity_at_oom +
+                                    state.new_lo_space_size_at_oom +
                                     FixedArray::SizeFor(kFixedArrayLength));
   CHECK_LE(
       state.memory_allocator_size_at_oom,
       MemoryAllocatorSizeFromHeapCapacity(state.old_generation_capacity_at_oom +
-                                          2 * state.new_space_capacity_at_oom));
+                                          2 * state.new_space_capacity_at_oom +
+                                          state.new_lo_space_size_at_oom));
   reinterpret_cast<v8::Isolate*>(isolate)->Dispose();
 }
 
@@ -6449,7 +6568,7 @@ TEST(Regress8617) {
   Handle<Object> foo =
       v8::Utils::OpenHandle(*CompileRun("function foo() { return 42; };"
                                         "foo;"));
-  if (heap->InNewSpace(*foo)) {
+  if (heap->InYoungGeneration(*foo)) {
     CcTest::CollectGarbage(NEW_SPACE);
     CcTest::CollectGarbage(NEW_SPACE);
   }

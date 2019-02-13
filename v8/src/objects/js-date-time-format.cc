@@ -54,7 +54,7 @@ class PatternItem {
   std::vector<const char*> allowed_values;
 };
 
-const std::vector<PatternItem> GetPatternItems() {
+static const std::vector<PatternItem> BuildPatternItems() {
   const std::vector<const char*> kLongShort = {"long", "short"};
   const std::vector<const char*> kNarrowLongShort = {"narrow", "long", "short"};
   const std::vector<const char*> k2DigitNumeric = {"2-digit", "numeric"};
@@ -107,6 +107,22 @@ const std::vector<PatternItem> GetPatternItems() {
   return kPatternItems;
 }
 
+class PatternItems {
+ public:
+  PatternItems() : data(BuildPatternItems()) {}
+  virtual ~PatternItems() {}
+  const std::vector<PatternItem>& Get() const { return data; }
+
+ private:
+  const std::vector<PatternItem> data;
+};
+
+static const std::vector<PatternItem>& GetPatternItems() {
+  static base::LazyInstance<PatternItems>::type items =
+      LAZY_INSTANCE_INITIALIZER;
+  return items.Pointer()->Get();
+}
+
 class PatternData {
  public:
   PatternData(const std::string property, std::vector<PatternMap> pairs,
@@ -154,23 +170,57 @@ const std::vector<PatternData> CreateData(const char* digit2,
 //                                  kk   24
 //   K      hour in am/pm (0~11)    K    0
 //                                  KK   00
-const std::vector<PatternData> GetPatternData(Intl::HourCycle hour_cycle) {
-  const std::vector<PatternData> data = CreateData("jj", "j");
-  const std::vector<PatternData> data_h11 = CreateData("KK", "K");
-  const std::vector<PatternData> data_h12 = CreateData("hh", "h");
-  const std::vector<PatternData> data_h23 = CreateData("HH", "H");
-  const std::vector<PatternData> data_h24 = CreateData("kk", "k");
+
+class Pattern {
+ public:
+  Pattern(const char* d1, const char* d2) : data(CreateData(d1, d2)) {}
+  virtual ~Pattern() {}
+  virtual const std::vector<PatternData>& Get() const { return data; }
+
+ private:
+  std::vector<PatternData> data;
+};
+
+#define DEFFINE_TRAIT(name, d1, d2)              \
+  struct name {                                  \
+    static void Construct(void* allocated_ptr) { \
+      new (allocated_ptr) Pattern(d1, d2);       \
+    }                                            \
+  };
+DEFFINE_TRAIT(H11Trait, "KK", "K")
+DEFFINE_TRAIT(H12Trait, "hh", "h")
+DEFFINE_TRAIT(H23Trait, "HH", "H")
+DEFFINE_TRAIT(H24Trait, "kk", "k")
+DEFFINE_TRAIT(HDefaultTrait, "jj", "j")
+#undef DEFFINE_TRAIT
+
+const std::vector<PatternData>& GetPatternData(Intl::HourCycle hour_cycle) {
   switch (hour_cycle) {
-    case Intl::HourCycle::kH11:
-      return data_h11;
-    case Intl::HourCycle::kH12:
-      return data_h12;
-    case Intl::HourCycle::kH23:
-      return data_h23;
-    case Intl::HourCycle::kH24:
-      return data_h24;
-    case Intl::HourCycle::kUndefined:
-      return data;
+    case Intl::HourCycle::kH11: {
+      static base::LazyInstance<Pattern, H11Trait>::type h11 =
+          LAZY_INSTANCE_INITIALIZER;
+      return h11.Pointer()->Get();
+    }
+    case Intl::HourCycle::kH12: {
+      static base::LazyInstance<Pattern, H12Trait>::type h12 =
+          LAZY_INSTANCE_INITIALIZER;
+      return h12.Pointer()->Get();
+    }
+    case Intl::HourCycle::kH23: {
+      static base::LazyInstance<Pattern, H23Trait>::type h23 =
+          LAZY_INSTANCE_INITIALIZER;
+      return h23.Pointer()->Get();
+    }
+    case Intl::HourCycle::kH24: {
+      static base::LazyInstance<Pattern, H24Trait>::type h24 =
+          LAZY_INSTANCE_INITIALIZER;
+      return h24.Pointer()->Get();
+    }
+    case Intl::HourCycle::kUndefined: {
+      static base::LazyInstance<Pattern, HDefaultTrait>::type hDefault =
+          LAZY_INSTANCE_INITIALIZER;
+      return hDefault.Pointer()->Get();
+    }
     default:
       UNREACHABLE();
   }
@@ -773,30 +823,57 @@ std::unique_ptr<icu::TimeZone> CreateTimeZone(Isolate* isolate,
   return tz;
 }
 
-std::unique_ptr<icu::Calendar> CreateCalendar(Isolate* isolate,
-                                              const icu::Locale& icu_locale,
-                                              const char* timezone) {
-  std::unique_ptr<icu::TimeZone> tz = CreateTimeZone(isolate, timezone);
-  if (tz.get() == nullptr) return std::unique_ptr<icu::Calendar>();
+class CalendarCache {
+ public:
+  icu::Calendar* CreateCalendar(const icu::Locale& locale, icu::TimeZone* tz) {
+    icu::UnicodeString tz_id;
+    tz->getID(tz_id);
+    std::string key;
+    tz_id.toUTF8String<std::string>(key);
+    key += ":";
+    key += locale.getName();
 
-  // Create a calendar using locale, and apply time zone to it.
-  UErrorCode status = U_ZERO_ERROR;
-  std::unique_ptr<icu::Calendar> calendar(
-      icu::Calendar::createInstance(tz.release(), icu_locale, status));
-  CHECK(U_SUCCESS(status));
-  CHECK_NOT_NULL(calendar.get());
-
-  if (calendar->getDynamicClassID() ==
-      icu::GregorianCalendar::getStaticClassID()) {
-    icu::GregorianCalendar* gc =
-        static_cast<icu::GregorianCalendar*>(calendar.get());
+    base::MutexGuard guard(&mutex_);
+    auto it = map_.find(key);
+    if (it != map_.end()) {
+      delete tz;
+      return it->second->clone();
+    }
+    // Create a calendar using locale, and apply time zone to it.
     UErrorCode status = U_ZERO_ERROR;
-    // The beginning of ECMAScript time, namely -(2**53)
-    const double start_of_time = -9007199254740992;
-    gc->setGregorianChange(start_of_time, status);
-    DCHECK(U_SUCCESS(status));
+    std::unique_ptr<icu::Calendar> calendar(
+        icu::Calendar::createInstance(tz, locale, status));
+    CHECK(U_SUCCESS(status));
+    CHECK_NOT_NULL(calendar.get());
+
+    if (calendar->getDynamicClassID() ==
+        icu::GregorianCalendar::getStaticClassID()) {
+      icu::GregorianCalendar* gc =
+          static_cast<icu::GregorianCalendar*>(calendar.get());
+      UErrorCode status = U_ZERO_ERROR;
+      // The beginning of ECMAScript time, namely -(2**53)
+      const double start_of_time = -9007199254740992;
+      gc->setGregorianChange(start_of_time, status);
+      DCHECK(U_SUCCESS(status));
+    }
+
+    if (map_.size() > 8) {  // Cache at most 8 calendars.
+      map_.clear();
+    }
+    map_[key].reset(calendar.release());
+    return map_[key]->clone();
   }
-  return calendar;
+
+ private:
+  std::map<std::string, std::unique_ptr<icu::Calendar>> map_;
+  base::Mutex mutex_;
+};
+
+icu::Calendar* CreateCalendar(Isolate* isolate, const icu::Locale& icu_locale,
+                              icu::TimeZone* tz) {
+  static base::LazyInstance<CalendarCache>::type calendar_cache =
+      LAZY_INSTANCE_INITIALIZER;
+  return calendar_cache.Pointer()->CreateCalendar(icu_locale, tz);
 }
 
 std::unique_ptr<icu::SimpleDateFormat> CreateICUDateFormat(
@@ -826,6 +903,43 @@ std::unique_ptr<icu::SimpleDateFormat> CreateICUDateFormat(
 
   CHECK_NOT_NULL(date_format.get());
   return date_format;
+}
+
+class DateFormatCache {
+ public:
+  icu::SimpleDateFormat* Create(const icu::Locale& icu_locale,
+                                const icu::UnicodeString& skeleton,
+                                icu::DateTimePatternGenerator& generator) {
+    std::string key;
+    skeleton.toUTF8String<std::string>(key);
+    key += ":";
+    key += icu_locale.getName();
+
+    base::MutexGuard guard(&mutex_);
+    auto it = map_.find(key);
+    if (it != map_.end()) {
+      return static_cast<icu::SimpleDateFormat*>(it->second->clone());
+    }
+
+    if (map_.size() > 8) {  // Cache at most 8 DateFormats.
+      map_.clear();
+    }
+    map_[key] = CreateICUDateFormat(icu_locale, skeleton, generator);
+    return static_cast<icu::SimpleDateFormat*>(map_[key]->clone());
+  }
+
+ private:
+  std::map<std::string, std::unique_ptr<icu::SimpleDateFormat>> map_;
+  base::Mutex mutex_;
+};
+
+std::unique_ptr<icu::SimpleDateFormat> CreateICUDateFormatFromCache(
+    const icu::Locale& icu_locale, const icu::UnicodeString& skeleton,
+    icu::DateTimePatternGenerator& generator) {
+  static base::LazyInstance<DateFormatCache>::type cache =
+      LAZY_INSTANCE_INITIALIZER;
+  return std::unique_ptr<icu::SimpleDateFormat>(
+      cache.Pointer()->Create(icu_locale, skeleton, generator));
 }
 
 Intl::HourCycle HourCycleFromPattern(const icu::UnicodeString pattern) {
@@ -949,9 +1063,31 @@ std::unique_ptr<icu::SimpleDateFormat> DateTimeStylePattern(
     return result;
   }
 
-  return CreateICUDateFormat(icu_locale, ReplaceSkeleton(skeleton, hc),
-                             generator);
+  return CreateICUDateFormatFromCache(icu_locale, ReplaceSkeleton(skeleton, hc),
+                                      generator);
 }
+
+class DateTimePatternGeneratorCache {
+ public:
+  // Return a clone copy that the caller have to free.
+  icu::DateTimePatternGenerator* CreateGenerator(const icu::Locale& locale) {
+    std::string key(locale.getBaseName());
+    base::MutexGuard guard(&mutex_);
+    auto it = map_.find(key);
+    if (it != map_.end()) {
+      return it->second->clone();
+    }
+    UErrorCode status = U_ZERO_ERROR;
+    map_[key].reset(icu::DateTimePatternGenerator::createInstance(
+        icu::Locale(key.c_str()), status));
+    CHECK(U_SUCCESS(status));
+    return map_[key]->clone();
+  }
+
+ private:
+  std::map<std::string, std::unique_ptr<icu::DateTimePatternGenerator>> map_;
+  base::Mutex mutex_;
+};
 
 }  // namespace
 
@@ -1030,8 +1166,17 @@ MaybeHandle<JSDateTimeFormat> JSDateTimeFormat::Initialize(
                             "Intl.DateTimeFormat", &timezone);
   MAYBE_RETURN(maybe_timezone, Handle<JSDateTimeFormat>());
 
+  std::unique_ptr<icu::TimeZone> tz = CreateTimeZone(isolate, timezone.get());
+  if (tz.get() == nullptr) {
+    THROW_NEW_ERROR(isolate,
+                    NewRangeError(MessageTemplate::kInvalidTimeZone,
+                                  isolate->factory()->NewStringFromAsciiChecked(
+                                      timezone.get())),
+                    JSDateTimeFormat);
+  }
+
   std::unique_ptr<icu::Calendar> calendar(
-      CreateCalendar(isolate, icu_locale, timezone.get()));
+      CreateCalendar(isolate, icu_locale, tz.release()));
 
   // 18.b If the result of IsValidTimeZoneName(timeZone) is false, then
   // i. Throw a RangeError exception.
@@ -1043,14 +1188,14 @@ MaybeHandle<JSDateTimeFormat> JSDateTimeFormat::Initialize(
                     JSDateTimeFormat);
   }
 
-  icu::Locale no_extension_locale(icu_locale.getBaseName());
-  UErrorCode status = U_ZERO_ERROR;
+  static base::LazyInstance<DateTimePatternGeneratorCache>::type
+      generator_cache = LAZY_INSTANCE_INITIALIZER;
+
   std::unique_ptr<icu::DateTimePatternGenerator> generator(
-      icu::DateTimePatternGenerator::createInstance(no_extension_locale,
-                                                    status));
-  CHECK(U_SUCCESS(status));
+      generator_cache.Pointer()->CreateGenerator(icu_locale));
 
   // 15.Let hcDefault be dataLocaleData.[[hourCycle]].
+  UErrorCode status = U_ZERO_ERROR;
   icu::UnicodeString hour_pattern = generator->getBestPattern("jjmm", status);
   CHECK(U_SUCCESS(status));
   Intl::HourCycle hc_default = HourCycleFromPattern(hour_pattern);
@@ -1189,12 +1334,12 @@ MaybeHandle<JSDateTimeFormat> JSDateTimeFormat::Initialize(
 
     icu::UnicodeString skeleton_ustr(skeleton.c_str());
     icu_date_format =
-        CreateICUDateFormat(icu_locale, skeleton_ustr, *generator);
+        CreateICUDateFormatFromCache(icu_locale, skeleton_ustr, *generator);
     if (icu_date_format.get() == nullptr) {
       // Remove extensions and try again.
       icu_locale = icu::Locale(icu_locale.getBaseName());
       icu_date_format =
-          CreateICUDateFormat(icu_locale, skeleton_ustr, *generator);
+          CreateICUDateFormatFromCache(icu_locale, skeleton_ustr, *generator);
       if (icu_date_format.get() == nullptr) {
         FATAL("Failed to create ICU date format, are ICU data files missing?");
       }
@@ -1362,11 +1507,8 @@ MaybeHandle<Object> JSDateTimeFormat::FormatToParts(
   return result;
 }
 
-std::set<std::string> JSDateTimeFormat::GetAvailableLocales() {
-  int32_t num_locales = 0;
-  const icu::Locale* icu_available_locales =
-      icu::DateFormat::getAvailableLocales(num_locales);
-  return Intl::BuildLocaleSet(icu_available_locales, num_locales);
+const std::set<std::string>& JSDateTimeFormat::GetAvailableLocales() {
+  return Intl::GetAvailableLocalesForDateFormat();
 }
 
 Handle<String> JSDateTimeFormat::HourCycleAsString() const {
