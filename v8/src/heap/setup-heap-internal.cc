@@ -9,7 +9,7 @@
 #include "src/contexts.h"
 #include "src/heap-symbols.h"
 #include "src/heap/factory.h"
-#include "src/heap/heap.h"
+#include "src/heap/heap-inl.h"
 #include "src/ic/handler-configuration.h"
 #include "src/interpreter/interpreter.h"
 #include "src/isolate.h"
@@ -151,6 +151,7 @@ AllocationResult Heap::AllocatePartialMap(InstanceType instance_type,
                    Map::OwnsDescriptorsBit::encode(true) |
                    Map::ConstructionCounterBits::encode(Map::kNoSlackTracking);
   map->set_bit_field3(bit_field3);
+  map->clear_padding();
   map->set_elements_kind(TERMINAL_FAST_ELEMENTS_KIND);
   return map;
 }
@@ -196,9 +197,7 @@ AllocationResult Heap::AllocateEmptyFixedTypedArray(
   FixedTypedArrayBase elements = FixedTypedArrayBase::cast(object);
   elements->set_base_pointer(elements, SKIP_WRITE_BARRIER);
   elements->set_external_pointer(
-      reinterpret_cast<void*>(
-          ExternalReference::fixed_typed_array_base_data_offset().address()),
-      SKIP_WRITE_BARRIER);
+      FixedTypedArrayBase::ExternalPointerPtrForOnHeapArray());
   elements->set_length(0);
   return elements;
 }

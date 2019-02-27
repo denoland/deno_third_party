@@ -87,6 +87,7 @@ namespace torque {
   AST_STATEMENT_NODE_KIND_LIST(V)       \
   AST_DECLARATION_NODE_KIND_LIST(V)     \
   AST_CALLABLE_NODE_KIND_LIST(V)        \
+  V(Identifier)                         \
   V(LabelBlock)
 
 struct AstNode {
@@ -194,21 +195,29 @@ class Ast {
 
 static const char* const kThisParameterName = "this";
 
+// A Identifier is a string with a SourcePosition attached.
+struct Identifier : AstNode {
+  DEFINE_AST_NODE_LEAF_BOILERPLATE(Identifier)
+  Identifier(SourcePosition pos, std::string identifier)
+      : AstNode(kKind, pos), value(std::move(identifier)) {}
+  std::string value;
+};
+
 struct IdentifierExpression : LocationExpression {
   DEFINE_AST_NODE_LEAF_BOILERPLATE(IdentifierExpression)
   IdentifierExpression(SourcePosition pos,
                        std::vector<std::string> namespace_qualification,
-                       std::string name, std::vector<TypeExpression*> args = {})
+                       Identifier* name, std::vector<TypeExpression*> args = {})
       : LocationExpression(kKind, pos),
         namespace_qualification(std::move(namespace_qualification)),
-        name(std::move(name)),
+        name(name),
         generic_arguments(std::move(args)) {}
-  IdentifierExpression(SourcePosition pos, std::string name,
+  IdentifierExpression(SourcePosition pos, Identifier* name,
                        std::vector<TypeExpression*> args = {})
-      : IdentifierExpression(pos, {}, std::move(name), std::move(args)) {}
-  bool IsThis() const { return name == kThisParameterName; }
+      : IdentifierExpression(pos, {}, name, std::move(args)) {}
+  bool IsThis() const { return name->value == kThisParameterName; }
   std::vector<std::string> namespace_qualification;
-  std::string name;
+  Identifier* name;
   std::vector<TypeExpression*> generic_arguments;
 };
 
@@ -410,7 +419,7 @@ struct NewExpression : Expression {
 };
 
 struct ParameterList {
-  std::vector<std::string> names;
+  std::vector<Identifier*> names;
   std::vector<TypeExpression*> types;
   size_t implicit_count;
   bool has_varargs;
@@ -532,16 +541,16 @@ struct TailCallStatement : Statement {
 struct VarDeclarationStatement : Statement {
   DEFINE_AST_NODE_LEAF_BOILERPLATE(VarDeclarationStatement)
   VarDeclarationStatement(
-      SourcePosition pos, bool const_qualified, std::string name,
+      SourcePosition pos, bool const_qualified, Identifier* name,
       base::Optional<TypeExpression*> type,
       base::Optional<Expression*> initializer = base::nullopt)
       : Statement(kKind, pos),
         const_qualified(const_qualified),
-        name(std::move(name)),
+        name(name),
         type(type),
         initializer(initializer) {}
   bool const_qualified;
-  std::string name;
+  Identifier* name;
   base::Optional<TypeExpression*> type;
   base::Optional<Expression*> initializer;
 };
@@ -684,7 +693,7 @@ struct TypeAliasDeclaration : Declaration {
 };
 
 struct NameAndTypeExpression {
-  std::string name;
+  Identifier* name;
   TypeExpression* type;
 };
 
@@ -694,6 +703,7 @@ struct StructFieldExpression {
 
 struct ClassFieldExpression {
   NameAndTypeExpression name_and_type;
+  base::Optional<std::string> index;
   bool weak;
 };
 

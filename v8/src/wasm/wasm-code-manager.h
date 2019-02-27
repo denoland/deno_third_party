@@ -134,8 +134,6 @@ class V8_EXPORT_PRIVATE WasmCode final {
     return protected_instructions_.as_vector();
   }
 
-  const char* GetRuntimeStubName() const;
-
   void Validate() const;
   void Print(const char* name = nullptr) const;
   void MaybePrint(const char* name = nullptr) const;
@@ -258,10 +256,9 @@ class V8_EXPORT_PRIVATE NativeModule final {
   // jump table will be populated with that copy.
   void SetLazyBuiltin(Handle<Code> code);
 
-  // Initializes all runtime stubs by copying them over from the JS-allocated
-  // heap into this native module. It must be called exactly once per native
-  // module before adding other WasmCode so that runtime stub ids can be
-  // resolved during relocation.
+  // Initializes all runtime stubs by setting up entry addresses in the runtime
+  // stub table. It must be called exactly once per native module before adding
+  // other WasmCode so that runtime stub ids can be resolved during relocation.
   void SetRuntimeStubs(Isolate* isolate);
 
   // Makes the code available to the system (by entering it into the code table
@@ -286,11 +283,11 @@ class V8_EXPORT_PRIVATE NativeModule final {
 
   bool has_code(uint32_t index) const { return code(index) != nullptr; }
 
-  WasmCode* runtime_stub(WasmCode::RuntimeStubId index) const {
+  Address runtime_stub_entry(WasmCode::RuntimeStubId index) const {
     DCHECK_LT(index, WasmCode::kRuntimeStubCount);
-    WasmCode* code = runtime_stub_table_[index];
-    DCHECK_NOT_NULL(code);
-    return code;
+    Address entry_address = runtime_stub_entries_[index];
+    DCHECK_NE(kNullAddress, entry_address);
+    return entry_address;
   }
 
   Address jump_table_start() const {
@@ -364,6 +361,8 @@ class V8_EXPORT_PRIVATE NativeModule final {
 
   const WasmFeatures& enabled_features() const { return enabled_features_; }
 
+  const char* GetRuntimeStubName(Address runtime_stub_entry) const;
+
  private:
   friend class WasmCode;
   friend class WasmCodeManager;
@@ -395,7 +394,7 @@ class V8_EXPORT_PRIVATE NativeModule final {
                          OwnedVector<const byte> source_position_table,
                          WasmCode::Kind, WasmCode::Tier);
 
-  WasmCode* CreateEmptyJumpTable(uint32_t num_wasm_functions);
+  WasmCode* CreateEmptyJumpTable(uint32_t jump_table_size);
 
   // Hold the {allocation_mutex_} when calling this method.
   void InstallCode(WasmCode* code);
@@ -441,7 +440,11 @@ class V8_EXPORT_PRIVATE NativeModule final {
   // {WireBytesStorage}, held by background compile tasks.
   std::shared_ptr<OwnedVector<const uint8_t>> wire_bytes_;
 
-  WasmCode* runtime_stub_table_[WasmCode::kRuntimeStubCount] = {nullptr};
+  // Contains entry points for runtime stub calls via {WASM_STUB_CALL}.
+  Address runtime_stub_entries_[WasmCode::kRuntimeStubCount] = {kNullAddress};
+
+  // Jump table used for runtime stubs (i.e. trampolines to embedded builtins).
+  WasmCode* runtime_stub_table_ = nullptr;
 
   // Jump table used to easily redirect wasm function calls.
   WasmCode* jump_table_ = nullptr;
@@ -460,9 +463,14 @@ class V8_EXPORT_PRIVATE NativeModule final {
   //////////////////////////////////////////////////////////////////////////////
   // Protected by {allocation_mutex_}:
 
-  // Holds all allocated code objects, is maintained to be in ascending order
-  // according to the codes instruction start address to allow lookups.
-  std::vector<std::unique_ptr<WasmCode>> owned_code_;
+  // Holds all allocated code objects. Mutable because it might get sorted in
+  // {Lookup()}.
+  mutable std::vector<std::unique_ptr<WasmCode>> owned_code_;
+
+  // Keep track of the portion of {owned_code_} that is sorted.
+  // Entries [0, owned_code_sorted_portion_) are known to be sorted.
+  // Mutable because it might get modified in {Lookup()}.
+  mutable size_t owned_code_sorted_portion_ = 0;
 
   std::unique_ptr<WasmCode* []> code_table_;
 

@@ -2008,10 +2008,6 @@ class V8_EXPORT JSON {
 /**
  * Value serialization compatible with the HTML structured clone algorithm.
  * The format is backward-compatible (i.e. safe to store to disk).
- *
- * WARNING: This API is under development, and changes (including incompatible
- * changes to the API or wire format) may occur without notice until this
- * warning is removed.
  */
 class V8_EXPORT ValueSerializer {
  public:
@@ -2132,10 +2128,6 @@ class V8_EXPORT ValueSerializer {
 /**
  * Deserializes values from data written with ValueSerializer, or a compatible
  * implementation.
- *
- * WARNING: This API is under development, and changes (including incompatible
- * changes to the API or wire format) may occur without notice until this
- * warning is removed.
  */
 class V8_EXPORT ValueDeserializer {
  public:
@@ -5297,6 +5289,21 @@ class V8_EXPORT Date : public Object {
   V8_INLINE static Date* Cast(Value* obj);
 
   /**
+   * Time zone redetection indicator for
+   * DateTimeConfigurationChangeNotification.
+   *
+   * kSkip indicates V8 that the notification should not trigger redetecting
+   * host time zone. kRedetect indicates V8 that host time zone should be
+   * redetected, and used to set the default time zone.
+   *
+   * The host time zone detection may require file system access or similar
+   * operations unlikely to be available inside a sandbox. If v8 is run inside a
+   * sandbox, the host time zone has to be detected outside the sandbox before
+   * calling DateTimeConfigurationChangeNotification function.
+   */
+  enum class TimeZoneDetection { kSkip, kRedetect };
+
+  /**
    * Notification that the embedder has changed the time zone,
    * daylight savings time, or other date / time configuration
    * parameters.  V8 keeps a cache of various values used for
@@ -5308,7 +5315,9 @@ class V8_EXPORT Date : public Object {
    * This API should not be called more than needed as it will
    * negatively impact the performance of date operations.
    */
-  static void DateTimeConfigurationChangeNotification(Isolate* isolate);
+  static void DateTimeConfigurationChangeNotification(
+      Isolate* isolate,
+      TimeZoneDetection time_zone_detection = TimeZoneDetection::kSkip);
 
  private:
   static void CheckCast(Value* obj);
@@ -7046,7 +7055,7 @@ struct JitCodeEvent {
  * See documentation https://developers.google.com/web/tools/chrome-devtools/
  * profile/evaluate-performance/rail
  */
-enum RAILMode {
+enum RAILMode : unsigned {
   // Response performance mode: In this mode very low virtual machine latency
   // is provided. V8 will try to avoid JavaScript execution interruptions.
   // Throughput may be throttled.
@@ -7544,6 +7553,7 @@ class V8_EXPORT Isolate {
     kRegExpMatchIsTrueishOnNonJSRegExp = 72,
     kRegExpMatchIsFalseishOnJSRegExp = 73,
     kDateGetTimezoneOffset = 74,
+    kStringNormalize = 75,
 
     // If you add new values here, you'll also need to update Chromium's:
     // web_feature.mojom, UseCounterCallback.cpp, and enums.xml. V8 changes to
@@ -7808,6 +7818,9 @@ class V8_EXPORT Isolate {
    * Tells the VM whether the embedder is idle or not.
    */
   void SetIdle(bool is_idle);
+
+  /** Returns the ArrayBuffer::Allocator used in this isolate. */
+  ArrayBuffer::Allocator* GetArrayBufferAllocator();
 
   /** Returns true if this isolate has a current context. */
   bool InContext();

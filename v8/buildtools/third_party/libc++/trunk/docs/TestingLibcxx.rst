@@ -138,8 +138,7 @@ configuration. Passing the option on the command line will override the default.
   Specify the directory of the libc++ library to use at runtime. This directory
   is not added to the linkers search path. This can be used to compile tests
   against one version of libc++ and run them using another. The default value
-  for this option is `cxx_library_root`. This option cannot be used
-  when use_system_cxx_lib is provided.
+  for this option is `cxx_library_root`.
 
 .. option:: use_system_cxx_lib=<bool>
 
@@ -183,6 +182,14 @@ configuration. Passing the option on the command line will override the default.
   Enable the use of colorized compile diagnostics. If the color_diagnostics
   option is specified or the environment variable LIBCXX_COLOR_DIAGNOSTICS is
   present then color diagnostics will be enabled.
+
+.. option:: llvm_unwinder
+
+  Enable the use of LLVM unwinder instead of libgcc.
+
+.. option:: builtins_library
+
+  Path to the builtins library to use instead of libgcc.
 
 
 Environment Variables

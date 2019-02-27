@@ -65,7 +65,7 @@ class ScavengingTask final : public ItemParallelJob::Task {
                    static_cast<void*>(this), scavenging_time,
                    scavenger_->bytes_copied(), scavenger_->bytes_promoted());
     }
-  };
+  }
 
  private:
   Heap* const heap_;
@@ -75,9 +75,9 @@ class ScavengingTask final : public ItemParallelJob::Task {
 
 class IterateAndScavengePromotedObjectsVisitor final : public ObjectVisitor {
  public:
-  IterateAndScavengePromotedObjectsVisitor(Heap* heap, Scavenger* scavenger,
+  IterateAndScavengePromotedObjectsVisitor(Scavenger* scavenger,
                                            bool record_slots)
-      : heap_(heap), scavenger_(scavenger), record_slots_(record_slots) {}
+      : scavenger_(scavenger), record_slots_(record_slots) {}
 
   V8_INLINE void VisitPointers(HeapObject host, ObjectSlot start,
                                ObjectSlot end) final {
@@ -137,12 +137,14 @@ class IterateAndScavengePromotedObjectsVisitor final : public ObjectVisitor {
           HeapObject::cast(target)));
     } else if (record_slots_ && MarkCompactCollector::IsOnEvacuationCandidate(
                                     HeapObject::cast(target))) {
-      heap_->mark_compact_collector()->RecordSlot(host, ObjectSlot(slot),
-                                                  target);
+      // We cannot call MarkCompactCollector::RecordSlot because that checks
+      // that the host page is not in young generation, which does not hold
+      // for pending large pages.
+      RememberedSet<OLD_TO_OLD>::Insert(MemoryChunk::FromHeapObject(host),
+                                        slot.address());
     }
   }
 
-  Heap* const heap_;
   Scavenger* const scavenger_;
   const bool record_slots_;
 };
@@ -222,7 +224,7 @@ void ScavengerCollector::CollectGarbage() {
     {
       // Parallel phase scavenging all copied and promoted objects.
       TRACE_GC(heap_->tracer(), GCTracer::Scope::SCAVENGER_SCAVENGE_PARALLEL);
-      job.Run(isolate_->async_counters());
+      job.Run();
       DCHECK(copied_list.IsEmpty());
       DCHECK(promotion_list.IsEmpty());
     }
@@ -369,7 +371,7 @@ void Scavenger::IterateAndScavengePromotedObject(HeapObject target, Map map,
   const bool record_slots =
       is_compacting_ &&
       heap()->incremental_marking()->atomic_marking_state()->IsBlack(target);
-  IterateAndScavengePromotedObjectsVisitor visitor(heap(), this, record_slots);
+  IterateAndScavengePromotedObjectsVisitor visitor(this, record_slots);
   target->IterateBodyFast(map, size, &visitor);
 }
 

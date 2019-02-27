@@ -5,6 +5,7 @@
 #include "src/snapshot/deserializer.h"
 
 #include "src/assembler-inl.h"
+#include "src/heap/heap-inl.h"
 #include "src/heap/heap-write-barrier-inl.h"
 #include "src/interpreter/interpreter.h"
 #include "src/isolate.h"
@@ -19,6 +20,7 @@
 #include "src/objects/slots.h"
 #include "src/objects/smi.h"
 #include "src/objects/string.h"
+#include "src/roots.h"
 #include "src/snapshot/natives.h"
 #include "src/snapshot/snapshot.h"
 
@@ -60,7 +62,8 @@ void Deserializer::Initialize(Isolate* isolate) {
 
 void Deserializer::Rehash() {
   DCHECK(can_rehash() || deserializing_user_code());
-  for (HeapObject item : to_rehash_) item->RehashBasedOnMap(isolate());
+  for (HeapObject item : to_rehash_)
+    item->RehashBasedOnMap(ReadOnlyRoots(isolate()));
 }
 
 Deserializer::~Deserializer() {
@@ -104,9 +107,10 @@ void Deserializer::DeserializeDeferredObjects() {
         DCHECK_LE(space, kNumberOfSpaces);
         DCHECK_EQ(code - space, kNewObject);
         HeapObject object = GetBackReferencedObject(space);
-        int size = source_.GetInt() << kPointerSizeLog2;
+        int size = source_.GetInt() << kTaggedSizeLog2;
         Address obj_address = object->address();
-        MaybeObjectSlot start(obj_address + kPointerSize);
+        // Object's map is already initialized, now read the rest.
+        MaybeObjectSlot start(obj_address + kTaggedSize);
         MaybeObjectSlot end(obj_address + size);
         bool filled = ReadData(start, end, space, obj_address);
         CHECK(filled);

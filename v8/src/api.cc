@@ -45,6 +45,7 @@
 #include "src/gdb-jit.h"
 #include "src/global-handles.h"
 #include "src/globals.h"
+#include "src/heap/heap-inl.h"
 #include "src/icu_util.h"
 #include "src/isolate-inl.h"
 #include "src/json-parser.h"
@@ -55,6 +56,7 @@
 #include "src/objects/api-callbacks.h"
 #include "src/objects/embedder-data-array-inl.h"
 #include "src/objects/embedder-data-slot-inl.h"
+#include "src/objects/frame-array-inl.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/heap-object.h"
 #include "src/objects/js-array-inl.h"
@@ -314,7 +316,7 @@ class CallDepthScope {
     handle_scope_implementer->DecrementCallDepth();
     bool clear_exception =
         handle_scope_implementer->CallDepthIsZero() &&
-        isolate_->thread_local_top()->try_catch_handler() == nullptr;
+        isolate_->thread_local_top()->try_catch_handler_ == nullptr;
     isolate_->OptionalRescheduleException(clear_exception);
   }
 
@@ -2948,8 +2950,8 @@ Local<StackFrame> StackTrace::GetFrame(Isolate* v8_isolate,
   ENTER_V8_NO_SCRIPT_NO_EXCEPTION(isolate);
   EscapableHandleScope scope(v8_isolate);
   auto obj = handle(Utils::OpenHandle(this)->get(index), isolate);
-  auto info = i::Handle<i::StackFrameInfo>::cast(obj);
-  return scope.Escape(Utils::StackFrameToLocal(info));
+  auto frame = i::Handle<i::StackTraceFrame>::cast(obj);
+  return scope.Escape(Utils::StackFrameToLocal(frame));
 }
 
 int StackTrace::GetFrameCount() const {
@@ -2972,29 +2974,26 @@ Local<StackTrace> StackTrace::CurrentStackTrace(
 // --- S t a c k F r a m e ---
 
 int StackFrame::GetLineNumber() const {
-  int v = Utils::OpenHandle(this)->line_number();
-  return v ? v : Message::kNoLineNumberInfo;
+  return i::StackTraceFrame::GetLineNumber(Utils::OpenHandle(this));
 }
 
 
 int StackFrame::GetColumn() const {
-  int v = Utils::OpenHandle(this)->column_number();
-  return v ? v : Message::kNoLineNumberInfo;
+  return i::StackTraceFrame::GetColumnNumber(Utils::OpenHandle(this));
 }
 
 
 int StackFrame::GetScriptId() const {
-  int v = Utils::OpenHandle(this)->script_id();
-  return v ? v : Message::kNoScriptIdInfo;
+  return i::StackTraceFrame::GetScriptId(Utils::OpenHandle(this));
 }
 
 Local<String> StackFrame::GetScriptName() const {
   i::Isolate* isolate = Utils::OpenHandle(this)->GetIsolate();
   EscapableHandleScope scope(reinterpret_cast<Isolate*>(isolate));
-  i::Handle<i::StackFrameInfo> self = Utils::OpenHandle(this);
-  i::Handle<i::Object> obj(self->script_name(), isolate);
-  return obj->IsString()
-             ? scope.Escape(Local<String>::Cast(Utils::ToLocal(obj)))
+  i::Handle<i::Object> name =
+      i::StackTraceFrame::GetFileName(Utils::OpenHandle(this));
+  return name->IsString()
+             ? scope.Escape(Local<String>::Cast(Utils::ToLocal(name)))
              : Local<String>();
 }
 
@@ -3002,10 +3001,10 @@ Local<String> StackFrame::GetScriptName() const {
 Local<String> StackFrame::GetScriptNameOrSourceURL() const {
   i::Isolate* isolate = Utils::OpenHandle(this)->GetIsolate();
   EscapableHandleScope scope(reinterpret_cast<Isolate*>(isolate));
-  i::Handle<i::StackFrameInfo> self = Utils::OpenHandle(this);
-  i::Handle<i::Object> obj(self->script_name_or_source_url(), isolate);
-  return obj->IsString()
-             ? scope.Escape(Local<String>::Cast(Utils::ToLocal(obj)))
+  i::Handle<i::Object> name =
+      i::StackTraceFrame::GetScriptNameOrSourceUrl(Utils::OpenHandle(this));
+  return name->IsString()
+             ? scope.Escape(Local<String>::Cast(Utils::ToLocal(name)))
              : Local<String>();
 }
 
@@ -3013,21 +3012,24 @@ Local<String> StackFrame::GetScriptNameOrSourceURL() const {
 Local<String> StackFrame::GetFunctionName() const {
   i::Isolate* isolate = Utils::OpenHandle(this)->GetIsolate();
   EscapableHandleScope scope(reinterpret_cast<Isolate*>(isolate));
-  i::Handle<i::StackFrameInfo> self = Utils::OpenHandle(this);
-  i::Handle<i::Object> obj(self->function_name(), isolate);
-  return obj->IsString()
-             ? scope.Escape(Local<String>::Cast(Utils::ToLocal(obj)))
+  i::Handle<i::Object> name =
+      i::StackTraceFrame::GetFunctionName(Utils::OpenHandle(this));
+  return name->IsString()
+             ? scope.Escape(Local<String>::Cast(Utils::ToLocal(name)))
              : Local<String>();
 }
 
-bool StackFrame::IsEval() const { return Utils::OpenHandle(this)->is_eval(); }
-
-bool StackFrame::IsConstructor() const {
-  return Utils::OpenHandle(this)->is_constructor();
+bool StackFrame::IsEval() const {
+  return i::StackTraceFrame::IsEval(Utils::OpenHandle(this));
 }
 
-bool StackFrame::IsWasm() const { return Utils::OpenHandle(this)->is_wasm(); }
+bool StackFrame::IsConstructor() const {
+  return i::StackTraceFrame::IsConstructor(Utils::OpenHandle(this));
+}
 
+bool StackFrame::IsWasm() const {
+  return i::StackTraceFrame::IsWasm(Utils::OpenHandle(this));
+}
 
 // --- J S O N ---
 
@@ -5595,7 +5597,7 @@ Local<Value> Symbol::Name() const {
   i::Handle<i::Symbol> sym = Utils::OpenHandle(this);
 
   i::Isolate* isolate;
-  if (!i::Isolate::FromWritableHeapObject(*sym, &isolate)) {
+  if (!i::GetIsolateFromWritableObject(*sym, &isolate)) {
     // If the Symbol is in RO_SPACE, then its name must be too. Since RO_SPACE
     // objects are immovable we can use the Handle(Address*) constructor with
     // the address of the name field in the Symbol object without needing an
@@ -6495,10 +6497,10 @@ bool v8::String::MakeExternal(v8::String::ExternalStringResource* resource) {
     return false;
   }
 
-  // It is safe to call FromWritable because SupportsExternalization already
-  // checked that the object is writable.
+  // It is safe to call GetIsolateFromWritableHeapObject because
+  // SupportsExternalization already checked that the object is writable.
   i::Isolate* isolate;
-  i::Isolate::FromWritableHeapObject(obj, &isolate);
+  i::GetIsolateFromWritableObject(obj, &isolate);
   ENTER_V8_NO_SCRIPT_NO_EXCEPTION(isolate);
 
   CHECK(resource && resource->data());
@@ -6524,17 +6526,16 @@ bool v8::String::MakeExternal(
     return false;
   }
 
-  // It is safe to call FromWritable because SupportsExternalization already
-  // checked that the object is writable.
+  // It is safe to call GetIsolateFromWritableHeapObject because
+  // SupportsExternalization already checked that the object is writable.
   i::Isolate* isolate;
-  i::Isolate::FromWritableHeapObject(obj, &isolate);
+  i::GetIsolateFromWritableObject(obj, &isolate);
   ENTER_V8_NO_SCRIPT_NO_EXCEPTION(isolate);
 
   CHECK(resource && resource->data());
 
   bool result = obj->MakeExternal(resource);
-  DCHECK(result);
-  DCHECK(obj->IsExternalString());
+  DCHECK_IMPLIES(result, obj->IsExternalString());
   return result;
 }
 
@@ -6761,12 +6762,23 @@ double v8::Date::ValueOf() const {
   return jsdate->value()->Number();
 }
 
+// Assert that the static TimeZoneDetection cast in
+// DateTimeConfigurationChangeNotification is valid.
+#define TIME_ZONE_DETECTION_ASSERT_EQ(value)                  \
+  STATIC_ASSERT(                                              \
+      static_cast<int>(v8::Date::TimeZoneDetection::value) == \
+      static_cast<int>(base::TimezoneCache::TimeZoneDetection::value))
+TIME_ZONE_DETECTION_ASSERT_EQ(kSkip);
+TIME_ZONE_DETECTION_ASSERT_EQ(kRedetect);
+#undef TIME_ZONE_DETECTION_ASSERT_EQ
 
-void v8::Date::DateTimeConfigurationChangeNotification(Isolate* isolate) {
+void v8::Date::DateTimeConfigurationChangeNotification(
+    Isolate* isolate, TimeZoneDetection time_zone_detection) {
   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
   LOG_API(i_isolate, Date, DateTimeConfigurationChangeNotification);
   ENTER_V8_NO_SCRIPT_NO_EXCEPTION(i_isolate);
-  i_isolate->date_cache()->ResetDateCache();
+  i_isolate->date_cache()->ResetDateCache(
+      static_cast<base::TimezoneCache::TimeZoneDetection>(time_zone_detection));
 #ifdef V8_INTL_SUPPORT
   i_isolate->clear_cached_icu_object(
       i::Isolate::ICUObjectCacheType::kDefaultSimpleDateFormat);
@@ -6776,7 +6788,6 @@ void v8::Date::DateTimeConfigurationChangeNotification(Isolate* isolate) {
       i::Isolate::ICUObjectCacheType::kDefaultSimpleDateFormatForDate);
 #endif  // V8_INTL_SUPPORT
 }
-
 
 MaybeLocal<v8::RegExp> v8::RegExp::New(Local<Context> context,
                                        Local<String> pattern, Flags flags) {
@@ -7967,6 +7978,11 @@ void Isolate::SetIdle(bool is_idle) {
   isolate->SetIdle(is_idle);
 }
 
+ArrayBuffer::Allocator* Isolate::GetArrayBufferAllocator() {
+  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
+  return isolate->array_buffer_allocator();
+}
+
 bool Isolate::InContext() {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
   return !isolate->context().is_null();
@@ -8527,11 +8543,18 @@ void Isolate::RunMicrotasks() {
   isolate->default_microtask_queue()->RunMicrotasks(isolate);
 }
 
-void Isolate::EnqueueMicrotask(Local<Function> function) {
+void Isolate::EnqueueMicrotask(Local<Function> v8_function) {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
-  i::Handle<i::CallableTask> microtask = isolate->factory()->NewCallableTask(
-      Utils::OpenHandle(*function), isolate->native_context());
-  isolate->default_microtask_queue()->EnqueueMicrotask(*microtask);
+  i::Handle<i::JSReceiver> function = Utils::OpenHandle(*v8_function);
+
+  i::Handle<i::NativeContext> handler_context;
+  if (!i::JSReceiver::GetContextForMicrotask(function).ToHandle(
+          &handler_context))
+    handler_context = isolate->native_context();
+
+  i::Handle<i::CallableTask> microtask =
+      isolate->factory()->NewCallableTask(function, handler_context);
+  handler_context->microtask_queue()->EnqueueMicrotask(*microtask);
 }
 
 void Isolate::EnqueueMicrotask(MicrotaskCallback callback, void* data) {
@@ -9609,8 +9632,11 @@ debug::Location debug::GeneratorObject::SuspendedLocation() {
   CHECK(obj->is_suspended());
   i::Object maybe_script = obj->function()->shared()->script();
   if (!maybe_script->IsScript()) return debug::Location();
-  i::Handle<i::Script> script(i::Script::cast(maybe_script), obj->GetIsolate());
+  i::Isolate* isolate = obj->GetIsolate();
+  i::Handle<i::Script> script(i::Script::cast(maybe_script), isolate);
   i::Script::PositionInfo info;
+  i::SharedFunctionInfo::EnsureSourcePositionsAvailable(
+      isolate, i::handle(obj->function()->shared(), isolate));
   i::Script::GetPositionInfo(script, obj->source_position(), &info,
                              i::Script::WITH_OFFSET);
   return debug::Location(info.line, info.column);
@@ -9785,7 +9811,7 @@ debug::Coverage debug::Coverage::CollectBestEffort(Isolate* isolate) {
       i::Coverage::CollectBestEffort(reinterpret_cast<i::Isolate*>(isolate)));
 }
 
-void debug::Coverage::SelectMode(Isolate* isolate, debug::Coverage::Mode mode) {
+void debug::Coverage::SelectMode(Isolate* isolate, debug::CoverageMode mode) {
   i::Coverage::SelectMode(reinterpret_cast<i::Isolate*>(isolate), mode);
 }
 
@@ -9825,7 +9851,7 @@ debug::TypeProfile debug::TypeProfile::Collect(Isolate* isolate) {
 }
 
 void debug::TypeProfile::SelectMode(Isolate* isolate,
-                                    debug::TypeProfile::Mode mode) {
+                                    debug::TypeProfileMode mode) {
   i::TypeProfile::SelectMode(reinterpret_cast<i::Isolate*>(isolate), mode);
 }
 

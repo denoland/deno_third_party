@@ -114,11 +114,6 @@ class Space;
 
 // Some assertion macros used in the debugging mode.
 
-#define DCHECK_PAGE_ALIGNED(address) DCHECK_EQ(0, (address)&kPageAlignmentMask)
-
-#define DCHECK_OBJECT_ALIGNED(address) \
-  DCHECK_EQ(0, (address)&kObjectAlignmentMask)
-
 #define DCHECK_OBJECT_SIZE(size) \
   DCHECK((0 < size) && (size <= kMaxRegularHeapObjectSize))
 
@@ -370,6 +365,8 @@ class MemoryChunk {
       kReservationOffset + 3 * kSystemPointerSize;
   static const intptr_t kHeaderSentinelOffset =
       kHeapOffset + kSystemPointerSize;
+  static const intptr_t kOwnerOffset =
+      kHeaderSentinelOffset + kSystemPointerSize;
 
   static const size_t kHeaderSize =
       kSizeOffset               // NOLINT
@@ -433,7 +430,7 @@ class MemoryChunk {
     if (mark == kNullAddress) return;
     // Need to subtract one from the mark because when a chunk is full the
     // top points to the next address after the chunk, which effectively belongs
-    // to another chunk. See the comment to Page::FromTopOrLimit.
+    // to another chunk. See the comment to Page::FromAllocationAreaAddress.
     MemoryChunk* chunk = MemoryChunk::FromAddress(mark - 1);
     intptr_t new_mark = static_cast<intptr_t>(mark - chunk->address());
     intptr_t old_mark = 0;
@@ -693,6 +690,16 @@ class MemoryChunk {
 
   VirtualMemory* reserved_memory() { return &reservation_; }
 
+  template <AccessMode mode>
+  ConcurrentBitmap<mode>* marking_bitmap() const {
+    return reinterpret_cast<ConcurrentBitmap<mode>*>(marking_bitmap_);
+  }
+
+  template <AccessMode mode>
+  ConcurrentBitmap<mode>* young_generation_bitmap() const {
+    return reinterpret_cast<ConcurrentBitmap<mode>*>(young_generation_bitmap_);
+  }
+
   size_t size_;
   uintptr_t flags_;
 
@@ -709,12 +716,12 @@ class MemoryChunk {
   // guaranteed to not contain such a pointer.
   Address header_sentinel_;
 
+  // The space owning this memory chunk.
+  std::atomic<Space*> owner_;
+
   // Start and end of allocatable memory on this chunk.
   Address area_start_;
   Address area_end_;
-
-  // The space owning this memory chunk.
-  std::atomic<Space*> owner_;
 
   // Used by the incremental marker to keep track of the scanning progress in
   // large objects that have a progress bar and are scanned in increments.
@@ -798,7 +805,7 @@ static_assert(sizeof(std::atomic<intptr_t>) == kSystemPointerSize,
 //
 // The only way to get a page pointer is by calling factory methods:
 //   Page* p = Page::FromAddress(addr); or
-//   Page* p = Page::FromTopOrLimit(top);
+//   Page* p = Page::FromAllocationAreaAddress(address);
 class Page : public MemoryChunk {
  public:
   static const intptr_t kCopyAllFlags = ~0;
@@ -981,7 +988,10 @@ class Space : public Malloced {
     external_backing_store_bytes_[ExternalBackingStoreType::kArrayBuffer] = 0;
     external_backing_store_bytes_[ExternalBackingStoreType::kExternalString] =
         0;
+    CheckOffsetsAreConsistent();
   }
+
+  void CheckOffsetsAreConsistent() const;
 
   static inline void MoveExternalBackingStoreBytes(
       ExternalBackingStoreType type, Space* from, Space* to, size_t amount);
@@ -1092,6 +1102,8 @@ class Space : public Malloced {
   std::atomic<size_t>* external_backing_store_bytes_;
 
  private:
+  static const intptr_t kIdOffset = 9 * kSystemPointerSize;
+
   bool allocation_observers_paused_;
   Heap* heap_;
   AllocationSpace id_;
@@ -1238,7 +1250,7 @@ class V8_EXPORT_PRIVATE MemoryAllocator {
 
     V8_EXPORT_PRIVATE void FreeQueuedChunks();
     void CancelAndWaitForPendingTasks();
-    void PrepareForMarkCompact();
+    void PrepareForGC();
     void EnsureUnmappingCompleted();
     V8_EXPORT_PRIVATE void TearDown();
     size_t NumberOfCommittedChunks();

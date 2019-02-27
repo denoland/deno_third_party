@@ -14,6 +14,7 @@
 #include "src/parsing/parser.h"
 #include "src/parsing/preparse-data-impl.h"
 #include "src/parsing/preparser.h"
+#include "src/zone/zone-list-inl.h"  // crbug.com/v8/8816
 
 namespace v8 {
 namespace internal {
@@ -456,7 +457,7 @@ class BuilderProducedPreparseData final : public ProducedPreparseData {
 
   ZonePreparseData* Serialize(Zone* zone) final {
     return builder_->Serialize(zone);
-  };
+  }
 
  private:
   PreparseDataBuilder* builder_;
@@ -475,7 +476,7 @@ class OnHeapProducedPreparseData final : public ProducedPreparseData {
   ZonePreparseData* Serialize(Zone* zone) final {
     // Not required.
     UNREACHABLE();
-  };
+  }
 
  private:
   Handle<PreparseData> data_;
@@ -489,7 +490,7 @@ class ZoneProducedPreparseData final : public ProducedPreparseData {
     return data_->Serialize(isolate);
   }
 
-  ZonePreparseData* Serialize(Zone* zone) final { return data_; };
+  ZonePreparseData* Serialize(Zone* zone) final { return data_; }
 
  private:
   ZonePreparseData* data_;

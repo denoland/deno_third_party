@@ -19,6 +19,7 @@ namespace internal {
 enum InstanceType : uint16_t;
 class JSGlobalObject;
 class JSGlobalProxy;
+class NativeContext;
 
 // JSReceiver includes types on which properties can be defined, i.e.,
 // JSObject and JSProxy.
@@ -79,6 +80,8 @@ class JSReceiver : public HeapObject {
 
   static MaybeHandle<NativeContext> GetFunctionRealm(
       Handle<JSReceiver> receiver);
+  V8_EXPORT_PRIVATE static MaybeHandle<NativeContext> GetContextForMicrotask(
+      Handle<JSReceiver> receiver);
 
   // Get the first non-hidden prototype.
   static inline MaybeHandle<Object> GetPrototype(Isolate* isolate,
@@ -97,7 +100,8 @@ class JSReceiver : public HeapObject {
       bool use_set = true);
 
   // Implementation of [[HasProperty]], ECMA-262 5th edition, section 8.12.6.
-  V8_WARN_UNUSED_RESULT static Maybe<bool> HasProperty(LookupIterator* it);
+  V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT static Maybe<bool> HasProperty(
+      LookupIterator* it);
   V8_WARN_UNUSED_RESULT static inline Maybe<bool> HasProperty(
       Handle<JSReceiver> object, Handle<Name> name);
   V8_WARN_UNUSED_RESULT static inline Maybe<bool> HasElement(
@@ -334,6 +338,8 @@ class JSObject : public JSReceiver {
   inline bool HasSloppyArgumentsElements();
   inline bool HasStringWrapperElements();
   inline bool HasDictionaryElements();
+  // Returns true if an object has elements of PACKED_ELEMENTS
+  inline bool HasPackedElements();
 
   inline bool HasFixedTypedArrayElements();
 
@@ -1416,7 +1422,7 @@ class JSMessageObject : public JSObject {
                               kSize>
       BodyDescriptor;
 
-  OBJECT_CONSTRUCTORS(JSMessageObject, JSObject)
+  OBJECT_CONSTRUCTORS(JSMessageObject, JSObject);
 };
 
 // The [Async-from-Sync Iterator] object

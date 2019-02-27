@@ -1,9 +1,8 @@
 #===----------------------------------------------------------------------===//
 #
-#                     The LLVM Compiler Infrastructure
-#
-# This file is dual licensed under the MIT and the University of Illinois Open
-# Source Licenses. See LICENSE.TXT for details.
+# Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #
 #===----------------------------------------------------------------------===//
 
@@ -144,12 +143,12 @@ class DarwinLocalTI(DefaultTargetInfo):
     def configure_env(self, env):
         library_paths = []
         # Configure the library path for libc++
-        if self.full_config.use_system_cxx_lib:
+        if self.full_config.cxx_runtime_root:
+            library_paths += [self.full_config.cxx_runtime_root]
+        elif self.full_config.use_system_cxx_lib:
             if (os.path.isdir(str(self.full_config.use_system_cxx_lib))):
                 library_paths += [self.full_config.use_system_cxx_lib]
-            pass
-        elif self.full_config.cxx_runtime_root:
-            library_paths += [self.full_config.cxx_runtime_root]
+
         # Configure the abi library path
         if self.full_config.abi_library_root:
             library_paths += [self.full_config.abi_library_root]
@@ -180,6 +179,18 @@ class FreeBSDLocalTI(DefaultTargetInfo):
 
     def add_cxx_link_flags(self, flags):
         flags += ['-lc', '-lm', '-lpthread', '-lgcc_s', '-lcxxrt']
+
+
+class NetBSDLocalTI(DefaultTargetInfo):
+    def __init__(self, full_config):
+        super(NetBSDLocalTI, self).__init__(full_config)
+
+    def add_locale_features(self, features):
+        add_common_locales(features, self.full_config.lit_config)
+
+    def add_cxx_link_flags(self, flags):
+        flags += ['-lc', '-lm', '-lpthread', '-lgcc_s', '-lc++abi',
+                  '-lunwind']
 
 
 class LinuxLocalTI(DefaultTargetInfo):
@@ -240,8 +251,10 @@ class LinuxLocalTI(DefaultTargetInfo):
             flags += ['-lunwind', '-ldl']
         else:
             flags += ['-lgcc_s']
-        compiler_rt = self.full_config.get_lit_bool('compiler_rt', False)
-        if not compiler_rt:
+        builtins_lib = self.full_config.get_lit_conf('builtins_library')
+        if builtins_lib:
+            flags += [builtins_lib]
+        else:
             flags += ['-lgcc']
         use_libatomic = self.full_config.get_lit_bool('use_libatomic', False)
         if use_libatomic:
@@ -280,6 +293,7 @@ def make_target_info(full_config):
     target_system = platform.system()
     if target_system == 'Darwin':  return DarwinLocalTI(full_config)
     if target_system == 'FreeBSD': return FreeBSDLocalTI(full_config)
+    if target_system == 'NetBSD':  return NetBSDLocalTI(full_config)
     if target_system == 'Linux':   return LinuxLocalTI(full_config)
     if target_system == 'Windows': return WindowsLocalTI(full_config)
     return DefaultTargetInfo(full_config)

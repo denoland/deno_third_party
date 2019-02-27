@@ -13,7 +13,10 @@
 #include "src/debug/debug.h"
 #include "src/deoptimizer.h"
 #include "src/elements.h"
+#include "src/hash-seed-inl.h"
 #include "src/heap/heap.h"
+// For IncrementalMarking::RecordWriteFromCode. TODO(jkummerow): Drop.
+#include "src/heap/heap-inl.h"
 #include "src/ic/stub-cache.h"
 #include "src/interpreter/interpreter.h"
 #include "src/isolate.h"
@@ -230,7 +233,7 @@ struct IsValidExternalReferenceType<Result (Class::*)(Args...)> {
   }
 
 FUNCTION_REFERENCE(incremental_marking_record_write_function,
-                   IncrementalMarking::RecordWriteFromCode);
+                   IncrementalMarking::RecordWriteFromCode)
 
 ExternalReference ExternalReference::store_buffer_overflow_function() {
   return ExternalReference(
@@ -650,7 +653,7 @@ FUNCTION_REFERENCE(jsreceiver_create_identity_hash,
 
 static uint32_t ComputeSeededIntegerHash(Isolate* isolate, uint32_t key) {
   DisallowHeapAllocation no_gc;
-  return ComputeSeededHash(key, isolate->heap()->HashSeed());
+  return ComputeSeededHash(key, HashSeed(isolate));
 }
 
 FUNCTION_REFERENCE(compute_integer_hash, ComputeSeededIntegerHash)
@@ -698,11 +701,6 @@ template ExternalReference
 ExternalReference::search_string_raw<const uc16, const uint8_t>();
 template ExternalReference
 ExternalReference::search_string_raw<const uc16, const uc16>();
-
-ExternalReference ExternalReference::page_flags(Page* page) {
-  return ExternalReference(reinterpret_cast<Address>(page) +
-                           MemoryChunk::kFlagsOffset);
-}
 
 ExternalReference ExternalReference::FromRawAddress(Address address) {
   return ExternalReference(address);
@@ -790,11 +788,6 @@ ExternalReference ExternalReference::fast_c_call_caller_pc_address(
     Isolate* isolate) {
   return ExternalReference(
       isolate->isolate_data()->fast_c_call_caller_pc_address());
-}
-
-ExternalReference ExternalReference::fixed_typed_array_base_data_offset() {
-  return ExternalReference(reinterpret_cast<void*>(
-      FixedTypedArrayBase::kDataOffset - kHeapObjectTag));
 }
 
 FUNCTION_REFERENCE(call_enqueue_microtask_function,
@@ -913,7 +906,7 @@ static int EnterMicrotaskContextWrapper(HandleScopeImplementer* hsi,
   return 0;
 }
 
-FUNCTION_REFERENCE(call_enter_context_function, EnterMicrotaskContextWrapper);
+FUNCTION_REFERENCE(call_enter_context_function, EnterMicrotaskContextWrapper)
 
 bool operator==(ExternalReference lhs, ExternalReference rhs) {
   return lhs.address() == rhs.address();

@@ -8,7 +8,9 @@
 #include "src/objects/hash-table.h"
 
 #include "src/heap/heap.h"
+#include "src/objects-inl.h"
 #include "src/objects/fixed-array-inl.h"
+#include "src/objects/heap-object-inl.h"
 #include "src/roots-inl.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -169,7 +171,8 @@ uint32_t ObjectHashTableShape::Hash(Isolate* isolate, Handle<Object> key) {
   return Smi::ToInt(key->GetHash());
 }
 
-uint32_t ObjectHashTableShape::HashForObject(Isolate* isolate, Object other) {
+uint32_t ObjectHashTableShape::HashForObject(ReadOnlyRoots roots,
+                                             Object other) {
   return Smi::ToInt(other->GetHash());
 }
 

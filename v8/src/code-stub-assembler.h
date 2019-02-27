@@ -1013,13 +1013,34 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   TNode<Object> LoadFixedArrayElement(
       TNode<FixedArray> object, Node* index, int additional_offset = 0,
       ParameterMode parameter_mode = INTPTR_PARAMETERS,
-      LoadSensitivity needs_poisoning = LoadSensitivity::kSafe);
+      LoadSensitivity needs_poisoning = LoadSensitivity::kSafe,
+      CheckBounds check_bounds = CheckBounds::kAlways);
 
-  TNode<Object> LoadFixedArrayElement(TNode<FixedArray> object,
-                                      TNode<IntPtrT> index,
-                                      LoadSensitivity needs_poisoning) {
+  // This doesn't emit a bounds-check. As part of the security-performance
+  // tradeoff, only use it if it is performance critical.
+  TNode<Object> UnsafeLoadFixedArrayElement(
+      TNode<FixedArray> object, Node* index, int additional_offset = 0,
+      ParameterMode parameter_mode = INTPTR_PARAMETERS,
+      LoadSensitivity needs_poisoning = LoadSensitivity::kSafe) {
+    return LoadFixedArrayElement(object, index, additional_offset,
+                                 parameter_mode, needs_poisoning,
+                                 CheckBounds::kDebugOnly);
+  }
+
+  TNode<Object> LoadFixedArrayElement(
+      TNode<FixedArray> object, TNode<IntPtrT> index,
+      LoadSensitivity needs_poisoning,
+      CheckBounds check_bounds = CheckBounds::kAlways) {
     return LoadFixedArrayElement(object, index, 0, INTPTR_PARAMETERS,
-                                 needs_poisoning);
+                                 needs_poisoning, check_bounds);
+  }
+  // This doesn't emit a bounds-check. As part of the security-performance
+  // tradeoff, only use it if it is performance critical.
+  TNode<Object> UnsafeLoadFixedArrayElement(TNode<FixedArray> object,
+                                            TNode<IntPtrT> index,
+                                            LoadSensitivity needs_poisoning) {
+    return LoadFixedArrayElement(object, index, needs_poisoning,
+                                 CheckBounds::kDebugOnly);
   }
 
   TNode<Object> LoadFixedArrayElement(
@@ -1035,6 +1056,15 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
     return LoadFixedArrayElement(object, IntPtrConstant(index),
                                  additional_offset, INTPTR_PARAMETERS,
                                  needs_poisoning);
+  }
+  // This doesn't emit a bounds-check. As part of the security-performance
+  // tradeoff, only use it if it is performance critical.
+  TNode<Object> UnsafeLoadFixedArrayElement(
+      TNode<FixedArray> object, int index, int additional_offset = 0,
+      LoadSensitivity needs_poisoning = LoadSensitivity::kSafe) {
+    return LoadFixedArrayElement(object, IntPtrConstant(index),
+                                 additional_offset, INTPTR_PARAMETERS,
+                                 needs_poisoning, CheckBounds::kDebugOnly);
   }
   TNode<Object> LoadFixedArrayElement(TNode<FixedArray> object,
                                       TNode<Smi> index) {
@@ -1233,14 +1263,33 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   // Store an array element to a FixedArray.
   void StoreFixedArrayElement(
       TNode<FixedArray> object, int index, SloppyTNode<Object> value,
-      WriteBarrierMode barrier_mode = UPDATE_WRITE_BARRIER) {
+      WriteBarrierMode barrier_mode = UPDATE_WRITE_BARRIER,
+      CheckBounds check_bounds = CheckBounds::kAlways) {
     return StoreFixedArrayElement(object, IntPtrConstant(index), value,
-                                  barrier_mode);
+                                  barrier_mode, 0, INTPTR_PARAMETERS,
+                                  check_bounds);
+  }
+  // This doesn't emit a bounds-check. As part of the security-performance
+  // tradeoff, only use it if it is performance critical.
+  void UnsafeStoreFixedArrayElement(
+      TNode<FixedArray> object, int index, SloppyTNode<Object> value,
+      WriteBarrierMode barrier_mode = UPDATE_WRITE_BARRIER) {
+    return StoreFixedArrayElement(object, index, value, barrier_mode,
+                                  CheckBounds::kDebugOnly);
   }
   void StoreFixedArrayElement(TNode<FixedArray> object, int index,
-                              TNode<Smi> value) {
+                              TNode<Smi> value,
+                              CheckBounds check_bounds = CheckBounds::kAlways) {
     return StoreFixedArrayElement(object, IntPtrConstant(index), value,
-                                  SKIP_WRITE_BARRIER);
+                                  SKIP_WRITE_BARRIER, 0, INTPTR_PARAMETERS,
+                                  check_bounds);
+  }
+  // This doesn't emit a bounds-check. As part of the security-performance
+  // tradeoff, only use it if it is performance critical.
+  void UnsafeStoreFixedArrayElement(TNode<FixedArray> object, int index,
+                                    TNode<Smi> value) {
+    return StoreFixedArrayElement(object, index, value,
+                                  CheckBounds::kDebugOnly);
   }
 
   void StoreJSArrayLength(TNode<JSArray> array, TNode<Smi> length);
@@ -1256,10 +1305,25 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
       TNode<FixedArray> array, Node* index, SloppyTNode<Object> value,
       WriteBarrierMode barrier_mode = UPDATE_WRITE_BARRIER,
       int additional_offset = 0,
-      ParameterMode parameter_mode = INTPTR_PARAMETERS) {
-    FixedArrayBoundsCheck(array, index, additional_offset, parameter_mode);
+      ParameterMode parameter_mode = INTPTR_PARAMETERS,
+      CheckBounds check_bounds = CheckBounds::kAlways) {
+    if (NeedsBoundsCheck(check_bounds)) {
+      FixedArrayBoundsCheck(array, index, additional_offset, parameter_mode);
+    }
     StoreFixedArrayOrPropertyArrayElement(array, index, value, barrier_mode,
                                           additional_offset, parameter_mode);
+  }
+
+  // This doesn't emit a bounds-check. As part of the security-performance
+  // tradeoff, only use it if it is performance critical.
+  void UnsafeStoreFixedArrayElement(
+      TNode<FixedArray> array, Node* index, SloppyTNode<Object> value,
+      WriteBarrierMode barrier_mode = UPDATE_WRITE_BARRIER,
+      int additional_offset = 0,
+      ParameterMode parameter_mode = INTPTR_PARAMETERS) {
+    return StoreFixedArrayElement(array, index, value, barrier_mode,
+                                  additional_offset, parameter_mode,
+                                  CheckBounds::kDebugOnly);
   }
 
   void StorePropertyArrayElement(
@@ -1289,7 +1353,16 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
 
   void StoreFixedDoubleArrayElement(
       TNode<FixedDoubleArray> object, Node* index, TNode<Float64T> value,
-      ParameterMode parameter_mode = INTPTR_PARAMETERS);
+      ParameterMode parameter_mode = INTPTR_PARAMETERS,
+      CheckBounds check_bounds = CheckBounds::kAlways);
+  // This doesn't emit a bounds-check. As part of the security-performance
+  // tradeoff, only use it if it is performance critical.
+  void UnsafeStoreFixedDoubleArrayElement(
+      TNode<FixedDoubleArray> object, Node* index, TNode<Float64T> value,
+      ParameterMode parameter_mode = INTPTR_PARAMETERS) {
+    return StoreFixedDoubleArrayElement(object, index, value, parameter_mode,
+                                        CheckBounds::kDebugOnly);
+  }
 
   void StoreFixedDoubleArrayElementSmi(TNode<FixedDoubleArray> object,
                                        TNode<Smi> index,
@@ -1702,12 +1775,12 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
     return UncheckedCast<FixedDoubleArray>(base);
   }
 
-  TNode<FixedArray> HeapObjectToSloppyArgumentsElements(TNode<HeapObject> base,
-                                                        Label* cast_fail) {
+  TNode<SloppyArgumentsElements> HeapObjectToSloppyArgumentsElements(
+      TNode<HeapObject> base, Label* cast_fail) {
     GotoIf(WordNotEqual(LoadMap(base),
                         LoadRoot(RootIndex::kSloppyArgumentsElementsMap)),
            cast_fail);
-    return UncheckedCast<FixedArray>(base);
+    return UncheckedCast<SloppyArgumentsElements>(base);
   }
 
   TNode<Int32T> ConvertElementsKindToInt(TNode<Int32T> elements_kind) {
@@ -2132,6 +2205,15 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   TNode<BoolT> IsRegExpSpeciesProtectorCellInvalid();
   TNode<BoolT> IsPromiseSpeciesProtectorCellInvalid();
 
+  TNode<BoolT> IsMockArrayBufferAllocatorFlag() {
+    TNode<Word32T> flag_value = UncheckedCast<Word32T>(Load(
+        MachineType::Uint8(),
+        ExternalConstant(
+            ExternalReference::address_of_mock_arraybuffer_allocator_flag())));
+    return Word32NotEqual(Word32And(flag_value, Int32Constant(0xFF)),
+                          Int32Constant(0));
+  }
+
   // True iff |object| is a Smi or a HeapNumber.
   TNode<BoolT> IsNumber(SloppyTNode<Object> object);
   // True iff |object| is a Smi or a HeapNumber or a BigInt.
@@ -2549,7 +2631,8 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
 
   template <class Dictionary>
   TNode<Smi> GetCapacity(TNode<Dictionary> dictionary) {
-    return CAST(LoadFixedArrayElement(dictionary, Dictionary::kCapacityIndex));
+    return CAST(
+        UnsafeLoadFixedArrayElement(dictionary, Dictionary::kCapacityIndex));
   }
 
   template <class Dictionary>
@@ -2788,11 +2871,6 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   // Update the type feedback vector.
   void UpdateFeedback(Node* feedback, Node* feedback_vector, Node* slot_id);
 
-  // Returns the stricter of the Context::ScopeInfo::LanguageMode and
-  // the language mode on the SFI.
-  Node* GetLanguageMode(TNode<SharedFunctionInfo> sfi, Node* context);
-  Node* GetLanguageMode(TNode<JSFunction> closure, Node* context);
-  Node* GetLanguageMode(TNode<FeedbackVector> vector, Node* context);
 
   // Report that there was a feedback update, performing any tasks that should
   // be done after a feedback update.
@@ -3531,7 +3609,7 @@ class ToDirectStringAssembler : public CodeStubAssembler {
   const Flags flags_;
 };
 
-DEFINE_OPERATORS_FOR_FLAGS(CodeStubAssembler::AllocationFlags);
+DEFINE_OPERATORS_FOR_FLAGS(CodeStubAssembler::AllocationFlags)
 
 }  // namespace internal
 }  // namespace v8

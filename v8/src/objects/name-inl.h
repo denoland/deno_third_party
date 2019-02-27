@@ -7,8 +7,7 @@
 
 #include "src/objects/name.h"
 
-#include "src/heap/heap-inl.h"
-#include "src/heap/heap-write-barrier.h"
+#include "src/heap/heap-write-barrier-inl.h"
 #include "src/objects/map-inl.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -52,11 +51,11 @@ bool Name::IsUniqueName() const {
 }
 
 uint32_t Name::hash_field() {
-  return READ_UINT32_FIELD(this, kHashFieldOffset);
+  return READ_UINT32_FIELD(*this, kHashFieldOffset);
 }
 
 void Name::set_hash_field(uint32_t value) {
-  WRITE_UINT32_FIELD(this, kHashFieldOffset, value);
+  WRITE_UINT32_FIELD(*this, kHashFieldOffset, value);
 }
 
 bool Name::Equals(Name other) {
@@ -89,10 +88,7 @@ uint32_t Name::Hash() {
   uint32_t field = hash_field();
   if (IsHashFieldComputed(field)) return field >> kHashShift;
   // Slow case: compute hash code and set it. Has to be a string.
-  // Also the string must be writable, because read-only strings will have their
-  // hash values precomputed.
-  return String::cast(*this)->ComputeAndSetHash(
-      Heap::FromWritableHeapObject(*this)->isolate());
+  return String::cast(*this)->ComputeAndSetHash();
 }
 
 bool Name::IsInterestingSymbol() const {

@@ -7,10 +7,11 @@
 #include "src/char-predicates.h"
 #include "src/conversions.h"
 #include "src/handles-inl.h"
-#include "src/handles.h"
+#include "src/heap/heap-inl.h"  // For LooksValid implementation.
 #include "src/objects/map.h"
 #include "src/objects/oddball.h"
 #include "src/objects/string-comparator.h"
+#include "src/objects/string-inl.h"
 #include "src/ostreams.h"
 #include "src/string-builder-inl.h"
 #include "src/string-hasher.h"
@@ -39,7 +40,7 @@ Handle<String> String::SlowFlatten(Isolate* isolate, Handle<ConsString> cons,
 
   DCHECK(AllowHeapAllocation::IsAllowed());
   int length = cons->length();
-  PretenureFlag tenure = Heap::InYoungGeneration(*cons) ? pretenure : TENURED;
+  PretenureFlag tenure = ObjectInYoungGeneration(*cons) ? pretenure : TENURED;
   Handle<SeqString> result;
   if (cons->IsOneByteRepresentation()) {
     Handle<SeqOneByteString> flat = isolate->factory()
@@ -84,7 +85,7 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
   Isolate* isolate;
   // Read-only strings cannot be made external, since that would mutate the
   // string.
-  if (!Isolate::FromWritableHeapObject(*this, &isolate)) return false;
+  if (!GetIsolateFromWritableObject(*this, &isolate)) return false;
   Heap* heap = isolate->heap();
   bool is_one_byte = this->IsOneByteRepresentation();
   bool is_internalized = this->IsInternalizedString();
@@ -170,7 +171,7 @@ bool String::MakeExternal(v8::String::ExternalOneByteStringResource* resource) {
   Isolate* isolate;
   // Read-only strings cannot be made external, since that would mutate the
   // string.
-  if (!Isolate::FromWritableHeapObject(*this, &isolate)) return false;
+  if (!GetIsolateFromWritableObject(*this, &isolate)) return false;
   Heap* heap = isolate->heap();
   bool is_internalized = this->IsInternalizedString();
   bool has_pointers = StringShape(*this).IsIndirect();
@@ -223,7 +224,7 @@ bool String::SupportsExternalization() {
 
   Isolate* isolate;
   // RO_SPACE strings cannot be externalized.
-  if (!Isolate::FromWritableHeapObject(*this, &isolate)) {
+  if (!GetIsolateFromWritableObject(*this, &isolate)) {
     return false;
   }
 
@@ -231,6 +232,13 @@ bool String::SupportsExternalization() {
   if (StringShape(*this).IsExternal()) {
     return false;
   }
+
+#ifdef V8_COMPRESS_POINTERS
+  // Small strings may not be in-place externalizable.
+  if (this->Size() < ExternalString::kUncachedSize) return false;
+#else
+  DCHECK_LE(ExternalString::kUncachedSize, this->Size());
+#endif
 
   return !isolate->heap()->IsInGCPostProcessing();
 }
@@ -1237,14 +1245,14 @@ bool String::IsTwoByteEqualTo(Vector<const uc16> str) {
   return CompareChars(content.ToUC16Vector().start(), str.start(), slen) == 0;
 }
 
-uint32_t String::ComputeAndSetHash(Isolate* isolate) {
+uint32_t String::ComputeAndSetHash() {
   DisallowHeapAllocation no_gc;
   // Should only be called if hash code has not yet been computed.
   DCHECK(!HasHashCode());
 
   // Store the hash code in the object.
   uint32_t field =
-      IteratingStringHasher::Hash(*this, isolate->heap()->HashSeed());
+      IteratingStringHasher::Hash(*this, HashSeed(GetReadOnlyRoots()));
   set_hash_field(field);
 
   // Check the hash code is there.
@@ -1301,8 +1309,8 @@ Handle<String> SeqString::Truncate(Handle<SeqString> string, int new_length) {
   int delta = old_size - new_size;
 
   Address start_of_string = string->address();
-  DCHECK_OBJECT_ALIGNED(start_of_string);
-  DCHECK_OBJECT_ALIGNED(start_of_string + new_size);
+  DCHECK(IsAligned(start_of_string, kObjectAlignment));
+  DCHECK(IsAligned(start_of_string + new_size, kObjectAlignment));
 
   Heap* heap = Heap::FromWritableHeapObject(*string);
   // Sizes are pointer size aligned, so that we can use filler objects

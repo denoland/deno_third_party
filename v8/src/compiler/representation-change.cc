@@ -467,9 +467,13 @@ Node* RepresentationChanger::GetTaggedRepresentationFor(
   } else if (IsWord(output_rep)) {
     if (output_type.Is(Type::Signed31())) {
       op = simplified()->ChangeInt31ToTaggedSigned();
-    } else if (output_type.Is(Type::Signed32())) {
+    } else if (output_type.Is(Type::Signed32()) ||
+               (output_type.Is(Type::Signed32OrMinusZero()) &&
+                truncation.IdentifiesZeroAndMinusZero())) {
       op = simplified()->ChangeInt32ToTagged();
     } else if (output_type.Is(Type::Unsigned32()) ||
+               (output_type.Is(Type::Unsigned32OrMinusZero()) &&
+                truncation.IdentifiesZeroAndMinusZero()) ||
                truncation.IsUsedAsWord32()) {
       // Either the output is uint32 or the uses only care about the
       // low 32 bits (so we can pick uint32 safely).
@@ -520,7 +524,9 @@ Node* RepresentationChanger::GetTaggedRepresentationFor(
                    Type::Unsigned32())) {  // float64 -> uint32 -> tagged
       node = InsertChangeFloat64ToUint32(node);
       op = simplified()->ChangeUint32ToTagged();
-    } else if (output_type.Is(Type::Number())) {
+    } else if (output_type.Is(Type::Number()) ||
+               (output_type.Is(Type::NumberOrOddball()) &&
+                truncation.IsUsedAsFloat64())) {
       op = simplified()->ChangeFloat64ToTagged(
           output_type.Maybe(Type::MinusZero())
               ? CheckForMinusZeroMode::kCheckForMinusZero

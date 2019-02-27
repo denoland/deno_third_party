@@ -560,9 +560,6 @@ class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
   void Sbfx(Register dst, Register src, int lsb, int width,
             Condition cond = al);
 
-  void Load(Register dst, const MemOperand& src, Representation r);
-  void Store(Register src, const MemOperand& dst, Representation r);
-
   // ---------------------------------------------------------------------------
   // GC Support
 
@@ -684,6 +681,11 @@ class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
     CompareRoot(with, index);
     b(ne, if_not_equal);
   }
+
+  // Checks if value is in range [lower_limit, higher_limit] using a single
+  // comparison.
+  void JumpIfIsInRange(Register value, unsigned lower_limit,
+                       unsigned higher_limit, Label* on_in_range);
 
   // Try to convert a double to a signed 32-bit integer.
   // Z flag set to one and result assigned if the conversion is exact.

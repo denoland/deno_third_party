@@ -23,6 +23,7 @@
 #include "src/frames-inl.h"
 #include "src/global-handles.h"
 #include "src/globals.h"
+#include "src/heap/heap-inl.h"  // For NextDebuggingId.
 #include "src/interpreter/bytecode-array-accessor.h"
 #include "src/interpreter/bytecode-array-iterator.h"
 #include "src/interpreter/interpreter.h"
@@ -1336,10 +1337,10 @@ bool Debug::GetPossibleBreakpoints(Handle<Script> script, int start_position,
 
     bool was_compiled = false;
     for (const auto& candidate : candidates) {
-      // Code that cannot be compiled lazily are internal and not debuggable.
-      DCHECK(candidate->allows_lazy_compilation());
       IsCompiledScope is_compiled_scope(candidate->is_compiled_scope());
       if (!is_compiled_scope.is_compiled()) {
+        // Code that cannot be compiled lazily are internal and not debuggable.
+        DCHECK(candidate->allows_lazy_compilation());
         if (!Compiler::Compile(candidate, Compiler::CLEAR_EXCEPTION,
                                &is_compiled_scope)) {
           return false;
@@ -1502,6 +1503,8 @@ void Debug::CreateBreakInfo(Handle<SharedFunctionInfo> shared) {
   if (CanBreakAtEntry(shared)) flags |= DebugInfo::kCanBreakAtEntry;
   debug_info->set_flags(flags);
   debug_info->set_break_points(*break_points);
+
+  SharedFunctionInfo::EnsureSourcePositionsAvailable(isolate_, shared);
 }
 
 Handle<DebugInfo> Debug::GetOrCreateDebugInfo(

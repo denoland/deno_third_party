@@ -37,6 +37,7 @@
 #include "src/assembler-inl.h"
 #include "src/deoptimizer.h"
 #include "src/disassembler.h"
+#include "src/heap/heap-inl.h"  // For MemoryAllocator. TODO(jkummerow): Drop.
 #include "src/isolate.h"
 #include "src/ostreams.h"
 #include "src/snapshot/embedded-data.h"
@@ -67,7 +68,7 @@ AssemblerOptions AssemblerOptions::Default(
   const bool serializer =
       isolate->serializer_enabled() || explicitly_support_serialization;
   const bool generating_embedded_builtin =
-      isolate->ShouldLoadConstantsFromRootList();
+      isolate->IsGeneratingEmbeddedBuiltins();
   options.record_reloc_info_for_serialization = serializer;
   options.enable_root_array_delta_access =
       !serializer && !generating_embedded_builtin;

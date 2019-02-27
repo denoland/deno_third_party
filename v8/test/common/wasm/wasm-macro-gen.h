@@ -387,6 +387,11 @@ inline WasmOpcode LoadStoreOpcodeOf(MachineType type, bool store) {
 #define WASM_CALL_FUNCTION(index, ...) \
   __VA_ARGS__, kExprCallFunction, static_cast<byte>(index)
 
+#define WASM_RETURN_CALL_FUNCTION0(index) \
+  kExprReturnCall, static_cast<byte>(index)
+#define WASM_RETURN_CALL_FUNCTION(index, ...) \
+  __VA_ARGS__, kExprReturnCall, static_cast<byte>(index)
+
 #define TABLE_ZERO 0
 
 // TODO(titzer): change usages of these macros to put func last.
@@ -404,6 +409,12 @@ inline WasmOpcode LoadStoreOpcodeOf(MachineType type, bool store) {
   a, b, c, d, e, func, kExprCallIndirect, static_cast<byte>(index), TABLE_ZERO
 #define WASM_CALL_INDIRECTN(arity, index, func, ...) \
   __VA_ARGS__, func, kExprCallIndirect, static_cast<byte>(index), TABLE_ZERO
+
+#define WASM_RETURN_CALL_INDIRECT0(index, func) \
+  func, kExprReturnCallIndirect, static_cast<byte>(index), TABLE_ZERO
+#define WASM_RETURN_CALL_INDIRECT(index, func, ...)                     \
+  __VA_ARGS__, func, kExprReturnCallIndirect, static_cast<byte>(index), \
+      TABLE_ZERO
 
 #define WASM_NOT(x) x, kExprI32Eqz
 #define WASM_SEQ(...) __VA_ARGS__
@@ -659,6 +670,8 @@ inline WasmOpcode LoadStoreOpcodeOf(MachineType type, bool store) {
 #define WASM_ATOMICS_STORE_OP(op, x, y, representation) \
   x, y, WASM_ATOMICS_OP(op),                            \
       static_cast<byte>(ElementSizeLog2Of(representation)), ZERO_OFFSET
+#define WASM_ATOMICS_WAIT(op, index, value, timeout, offset) \
+  index, value, timeout, WASM_ATOMICS_OP(op), ZERO_ALIGNMENT, offset
 
 //------------------------------------------------------------------------------
 // Sign Externsion Operations.

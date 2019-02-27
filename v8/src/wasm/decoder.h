@@ -11,7 +11,9 @@
 #include "src/base/compiler-specific.h"
 #include "src/flags.h"
 #include "src/signature.h"
+#include "src/utils.h"
 #include "src/v8memory.h"
+#include "src/vector.h"
 #include "src/wasm/wasm-result.h"
 #include "src/zone/zone-containers.h"
 

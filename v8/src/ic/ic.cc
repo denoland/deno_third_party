@@ -88,7 +88,7 @@ const char* GetModifier(KeyedAccessStoreMode mode) {
 void IC::TraceIC(const char* type, Handle<Object> name) {
   if (FLAG_ic_stats) {
     if (AddressIsDeoptimizedCode()) return;
-    State new_state = nexus()->StateFromFeedback();
+    State new_state = nexus()->ic_state();
     TraceIC(type, name, state(), new_state);
   }
 }
@@ -200,7 +200,7 @@ IC::IC(Isolate* isolate, Handle<FeedbackVector> vector, FeedbackSlot slot,
   }
   pc_address_ = StackFrame::ResolveReturnAddressLocation(pc_address);
   DCHECK_IMPLIES(!vector.is_null(), kind_ == nexus_.kind());
-  state_ = (vector.is_null()) ? NO_FEEDBACK : nexus_.StateFromFeedback();
+  state_ = (vector.is_null()) ? NO_FEEDBACK : nexus_.ic_state();
   old_state_ = state_;
 }
 
@@ -1154,7 +1154,8 @@ Handle<Object> KeyedLoadIC::LoadElementHandler(Handle<Map> receiver_map,
   DCHECK(IsFastElementsKind(elements_kind) ||
          IsFixedTypedArrayElementsKind(elements_kind));
   bool convert_hole_to_undefined =
-      IsHoleyElementsKind(elements_kind) &&
+      (elements_kind == HOLEY_SMI_ELEMENTS ||
+       elements_kind == HOLEY_ELEMENTS) &&
       AllowConvertHoleElementToUndefined(isolate(), receiver_map);
   TRACE_HANDLER_STATS(isolate(), KeyedLoadIC_LoadElementDH);
   return LoadHandler::LoadElement(isolate(), elements_kind,
@@ -2350,46 +2351,27 @@ RUNTIME_FUNCTION(Runtime_StoreIC_Miss) {
   // Runtime functions don't follow the IC's calling convention.
   Handle<Object> value = args.at(0);
   Handle<Smi> slot = args.at<Smi>(1);
-  Handle<FeedbackVector> vector = args.at<FeedbackVector>(2);
+  Handle<HeapObject> maybe_vector = args.at<HeapObject>(2);
   Handle<Object> receiver = args.at(3);
   Handle<Name> key = args.at<Name>(4);
 
   FeedbackSlot vector_slot = FeedbackVector::ToSlot(slot->value());
-  FeedbackSlotKind kind = vector->GetKind(vector_slot);
-  if (IsStoreICKind(kind) || IsStoreOwnICKind(kind)) {
-    StoreIC ic(isolate, vector, vector_slot, kind);
-    ic.UpdateState(receiver, key);
-    RETURN_RESULT_OR_FAILURE(isolate, ic.Store(receiver, key, value));
-  } else if (IsStoreGlobalICKind(kind)) {
-    DCHECK_EQ(isolate->native_context()->global_proxy(), *receiver);
-    receiver = isolate->global_object();
-    StoreGlobalIC ic(isolate, vector, vector_slot, kind);
-    ic.UpdateState(receiver, key);
-    RETURN_RESULT_OR_FAILURE(isolate, ic.Store(key, value));
-  } else {
-    DCHECK(IsKeyedStoreICKind(kind));
-    KeyedStoreIC ic(isolate, vector, vector_slot, kind);
-    ic.UpdateState(receiver, key);
-    RETURN_RESULT_OR_FAILURE(isolate, ic.Store(receiver, key, value));
-  }
-}
 
-RUNTIME_FUNCTION(Runtime_StoreICNoFeedback_Miss) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(4, args.length());
-  Handle<Object> value = args.at(0);
-  Handle<Object> receiver = args.at(1);
-  Handle<Name> key = args.at<Name>(2);
-  CONVERT_INT32_ARG_CHECKED(is_own_property_value, 3);
-  NamedPropertyType property_type =
-      static_cast<NamedPropertyType>(is_own_property_value);
-
-  // TODO(mythria): Replace StoreNamedStrict/Sloppy with StoreNamed.
+  // When there is no feedback vector it is OK to use the StoreNamedStrict as
+  // the feedback slot kind. We only need if it is StoreOwnICKind when
+  // installing the handler for storing const properties. This will happen only
+  // when feedback vector is available.
   FeedbackSlotKind kind = FeedbackSlotKind::kStoreNamedStrict;
-  if (property_type == NamedPropertyType::kOwn) {
-    kind = FeedbackSlotKind::kStoreOwnNamed;
+  Handle<FeedbackVector> vector = Handle<FeedbackVector>();
+  if (!maybe_vector->IsUndefined()) {
+    DCHECK(maybe_vector->IsFeedbackVector());
+    vector = Handle<FeedbackVector>::cast(maybe_vector);
+    kind = vector->GetKind(vector_slot);
   }
-  StoreIC ic(isolate, Handle<FeedbackVector>(), FeedbackSlot(), kind);
+
+  DCHECK(IsStoreICKind(kind) || IsStoreOwnICKind(kind));
+  StoreIC ic(isolate, vector, vector_slot, kind);
+  ic.UpdateState(receiver, key);
   RETURN_RESULT_OR_FAILURE(isolate, ic.Store(receiver, key, value));
 }
 
@@ -2482,12 +2464,24 @@ RUNTIME_FUNCTION(Runtime_KeyedStoreIC_Miss) {
   // Runtime functions don't follow the IC's calling convention.
   Handle<Object> value = args.at(0);
   Handle<Smi> slot = args.at<Smi>(1);
-  Handle<FeedbackVector> vector = args.at<FeedbackVector>(2);
+  Handle<HeapObject> maybe_vector = args.at<HeapObject>(2);
   Handle<Object> receiver = args.at(3);
   Handle<Object> key = args.at(4);
-
   FeedbackSlot vector_slot = FeedbackVector::ToSlot(slot->value());
-  FeedbackSlotKind kind = vector->GetKind(vector_slot);
+
+  // When the feedback vector is not valid the slot can only be of type
+  // StoreKeyed. Storing in array literals falls back to
+  // StoreInArrayLiterIC_Miss. This function is also used from store handlers
+  // installed in feedback vectors. In such cases, we need to get the kind from
+  // feedback vector slot since the handlers are used for both for StoreKeyed
+  // and StoreInArrayLiteral kinds.
+  FeedbackSlotKind kind = FeedbackSlotKind::kStoreKeyedStrict;
+  Handle<FeedbackVector> vector = Handle<FeedbackVector>();
+  if (!maybe_vector->IsUndefined()) {
+    DCHECK(maybe_vector->IsFeedbackVector());
+    vector = Handle<FeedbackVector>::cast(maybe_vector);
+    kind = vector->GetKind(vector_slot);
+  }
 
   // The elements store stubs miss into this function, but they are shared by
   // different ICs.
@@ -2504,20 +2498,6 @@ RUNTIME_FUNCTION(Runtime_KeyedStoreIC_Miss) {
     ic.Store(Handle<JSArray>::cast(receiver), key, value);
     return *value;
   }
-}
-
-RUNTIME_FUNCTION(Runtime_KeyedStoreICNoFeedback_Miss) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(3, args.length());
-  // Runtime functions don't follow the IC's calling convention.
-  Handle<Object> value = args.at(0);
-  Handle<Object> receiver = args.at(1);
-  Handle<Object> key = args.at(2);
-
-  // TODO(mythria): Replace StoreKeyedStrict/Sloppy with StoreKeyed.
-  KeyedStoreIC ic(isolate, Handle<FeedbackVector>(), FeedbackSlot(),
-                  FeedbackSlotKind::kStoreKeyedStrict);
-  RETURN_RESULT_OR_FAILURE(isolate, ic.Store(receiver, key, value));
 }
 
 RUNTIME_FUNCTION(Runtime_StoreInArrayLiteralIC_Miss) {

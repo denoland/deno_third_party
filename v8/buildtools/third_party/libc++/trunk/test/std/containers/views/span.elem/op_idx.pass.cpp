@@ -1,10 +1,9 @@
 // -*- C++ -*-
 //===------------------------------ span ---------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is dual licensed under the MIT and the University of Illinois Open
-// Source Licenses. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===---------------------------------------------------------------------===//
 // UNSUPPORTED: c++98, c++03, c++11, c++14, c++17
@@ -52,7 +51,7 @@ struct A{};
 constexpr int iArr1[] = { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9};
           int iArr2[] = {10, 11, 12, 13, 14, 15, 16, 17, 18, 19};
 
-int main ()
+int main(int, char**)
 {
     static_assert(testConstexprSpan(std::span<const int>(iArr1, 1), 0), "");
 
@@ -116,4 +115,6 @@ int main ()
     std::string s;
     testRuntimeSpan(std::span<std::string>   (&s, 1), 0);
     testRuntimeSpan(std::span<std::string, 1>(&s, 1), 0);
+
+  return 0;
 }

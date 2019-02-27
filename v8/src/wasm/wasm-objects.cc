@@ -16,6 +16,7 @@
 #include "src/objects/shared-function-info.h"
 #include "src/objects/struct-inl.h"
 #include "src/trap-handler/trap-handler.h"
+#include "src/vector.h"
 #include "src/wasm/jump-table-assembler.h"
 #include "src/wasm/module-compiler.h"
 #include "src/wasm/module-decoder.h"
@@ -1010,6 +1011,28 @@ Handle<WasmMemoryObject> WasmMemoryObject::New(
   memory_obj->set_maximum_pages(maximum);
 
   return memory_obj;
+}
+
+MaybeHandle<WasmMemoryObject> WasmMemoryObject::New(Isolate* isolate,
+                                                    uint32_t initial,
+                                                    uint32_t maximum,
+                                                    bool is_shared_memory) {
+  Handle<JSArrayBuffer> buffer;
+  size_t size = static_cast<size_t>(i::wasm::kWasmPageSize) *
+                static_cast<size_t>(initial);
+  if (is_shared_memory) {
+    size_t max_size = static_cast<size_t>(i::wasm::kWasmPageSize) *
+                      static_cast<size_t>(maximum);
+    if (!i::wasm::NewSharedArrayBuffer(isolate, size, max_size)
+             .ToHandle(&buffer)) {
+      return {};
+    }
+  } else {
+    if (!i::wasm::NewArrayBuffer(isolate, size).ToHandle(&buffer)) {
+      return {};
+    }
+  }
+  return New(isolate, buffer, maximum);
 }
 
 bool WasmMemoryObject::has_full_guard_region(Isolate* isolate) {

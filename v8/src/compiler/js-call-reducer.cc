@@ -1089,9 +1089,9 @@ Reduction JSCallReducer::ReduceArrayForEach(
       simplified()->LoadField(AccessBuilder::ForJSArrayLength(kind)), receiver,
       effect, control);
 
-  std::vector<Node*> checkpoint_params(
-      {receiver, fncallback, this_arg, k, original_length});
-  const int stack_parameters = static_cast<int>(checkpoint_params.size());
+  Node* checkpoint_params[] = {receiver, fncallback, this_arg, k,
+                               original_length};
+  const int stack_parameters = arraysize(checkpoint_params);
 
   // Check whether the given callback function is callable. Note that this has
   // to happen outside the loop to make sure we also throw on empty arrays.
@@ -1287,13 +1287,12 @@ Reduction JSCallReducer::ReduceArrayReduce(
     Builtins::Name builtin_lazy =
         left ? Builtins::kArrayReduceLoopLazyDeoptContinuation
              : Builtins::kArrayReduceRightLoopLazyDeoptContinuation;
-    const std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, k, original_length,
-         jsgraph()->UndefinedConstant()});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback, k, original_length,
+                                 jsgraph()->UndefinedConstant()};
+    const int stack_parameters = arraysize(checkpoint_params);
     check_frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, builtin_lazy, node->InputAt(0), context,
-        checkpoint_params.data(), stack_parameters - 1, outer_frame_state,
+        &checkpoint_params[0], stack_parameters - 1, outer_frame_state,
         ContinuationFrameStateMode::LAZY);
   }
   Node* check_fail = nullptr;
@@ -1315,13 +1314,12 @@ Reduction JSCallReducer::ReduceArrayReduce(
     Builtins::Name builtin_eager =
         left ? Builtins::kArrayReducePreLoopEagerDeoptContinuation
              : Builtins::kArrayReduceRightPreLoopEagerDeoptContinuation;
-    const std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, original_length});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback, original_length};
+    const int stack_parameters = arraysize(checkpoint_params);
     Node* find_first_element_frame_state =
         CreateJavaScriptBuiltinContinuationFrameState(
             jsgraph(), shared, builtin_eager, node->InputAt(0), context,
-            checkpoint_params.data(), stack_parameters, outer_frame_state,
+            &checkpoint_params[0], stack_parameters, outer_frame_state,
             ContinuationFrameStateMode::EAGER);
 
     Node* vloop = k = WireInLoopStart(k, &control, &effect);
@@ -1385,12 +1383,12 @@ Reduction JSCallReducer::ReduceArrayReduce(
     Builtins::Name builtin_eager =
         left ? Builtins::kArrayReduceLoopEagerDeoptContinuation
              : Builtins::kArrayReduceRightLoopEagerDeoptContinuation;
-    const std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, k, original_length, curloop});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback, k, original_length,
+                                 curloop};
+    const int stack_parameters = arraysize(checkpoint_params);
     Node* frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, builtin_eager, node->InputAt(0), context,
-        checkpoint_params.data(), stack_parameters, outer_frame_state,
+        &checkpoint_params[0], stack_parameters, outer_frame_state,
         ContinuationFrameStateMode::EAGER);
     effect =
         graph()->NewNode(common()->Checkpoint(), frame_state, effect, control);
@@ -1431,12 +1429,12 @@ Reduction JSCallReducer::ReduceArrayReduce(
     Builtins::Name builtin_lazy =
         left ? Builtins::kArrayReduceLoopLazyDeoptContinuation
              : Builtins::kArrayReduceRightLoopLazyDeoptContinuation;
-    const std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, next_k, original_length, curloop});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback, next_k, original_length,
+                                 curloop};
+    const int stack_parameters = arraysize(checkpoint_params);
     Node* frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, builtin_lazy, node->InputAt(0), context,
-        checkpoint_params.data(), stack_parameters - 1, outer_frame_state,
+        &checkpoint_params[0], stack_parameters - 1, outer_frame_state,
         ContinuationFrameStateMode::LAZY);
 
     next_cur = control = effect =
@@ -1557,9 +1555,9 @@ Reduction JSCallReducer::ReduceArrayMap(Node* node,
       array_constructor, array_constructor, original_length, context,
       outer_frame_state, effect, control);
 
-  std::vector<Node*> checkpoint_params(
-      {receiver, fncallback, this_arg, a, k, original_length});
-  const int stack_parameters = static_cast<int>(checkpoint_params.size());
+  Node* checkpoint_params[] = {receiver, fncallback, this_arg,
+                               a,        k,          original_length};
+  const int stack_parameters = arraysize(checkpoint_params);
 
   // Check whether the given callback function is callable. Note that this has
   // to happen outside the loop to make sure we also throw on empty arrays.
@@ -1781,9 +1779,9 @@ Reduction JSCallReducer::ReduceArrayFilter(
     // checkpoint_params yet, but that's okay because it'll never be called.
     // Therefore, "to" is mentioned twice, once standing in for the k_value
     // value.
-    std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, this_arg, a, k, original_length, to, to});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback,      this_arg, a,
+                                 k,        original_length, to,       to};
+    const int stack_parameters = arraysize(checkpoint_params);
 
     Node* check_frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, Builtins::kArrayFilterLoopLazyDeoptContinuation,
@@ -1809,9 +1807,9 @@ Reduction JSCallReducer::ReduceArrayFilter(
   control = if_true;
 
   {
-    std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, this_arg, a, k, original_length, to});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback,      this_arg, a,
+                                 k,        original_length, to};
+    const int stack_parameters = arraysize(checkpoint_params);
 
     Node* frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, Builtins::kArrayFilterLoopEagerDeoptContinuation,
@@ -1866,9 +1864,9 @@ Reduction JSCallReducer::ReduceArrayFilter(
   {
     // This frame state is dealt with by hand in
     // Builtins::kArrayFilterLoopLazyDeoptContinuation.
-    std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, this_arg, a, k, original_length, element, to});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback,      this_arg, a,
+                                 k,        original_length, element,  to};
+    const int stack_parameters = arraysize(checkpoint_params);
 
     Node* frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, Builtins::kArrayFilterLoopLazyDeoptContinuation,
@@ -1895,10 +1893,10 @@ Reduction JSCallReducer::ReduceArrayFilter(
   // point in this case. This is safe, because re-evaluating a [ToBoolean]
   // coercion is safe.
   {
-    std::vector<Node*> checkpoint_params({receiver, fncallback, this_arg, a, k,
-                                          original_length, element, to,
-                                          callback_value});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback, this_arg,
+                                 a,        k,          original_length,
+                                 element,  to,         callback_value};
+    const int stack_parameters = arraysize(checkpoint_params);
     Node* frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, Builtins::kArrayFilterLoopLazyDeoptContinuation,
         node->InputAt(0), context, &checkpoint_params[0], stack_parameters,
@@ -2016,9 +2014,9 @@ Reduction JSCallReducer::ReduceArrayFind(Node* node, ArrayFindVariant variant,
       simplified()->LoadField(AccessBuilder::ForJSArrayLength(kind)), receiver,
       effect, control);
 
-  std::vector<Node*> checkpoint_params(
-      {receiver, fncallback, this_arg, k, original_length});
-  const int stack_parameters = static_cast<int>(checkpoint_params.size());
+  Node* checkpoint_params[] = {receiver, fncallback, this_arg, k,
+                               original_length};
+  const int stack_parameters = arraysize(checkpoint_params);
 
   // Check whether the given callback function is callable. Note that this has
   // to happen outside the loop to make sure we also throw on empty arrays.
@@ -2091,11 +2089,10 @@ Reduction JSCallReducer::ReduceArrayFind(Node* node, ArrayFindVariant variant,
   // Call the callback.
   Node* callback_value = nullptr;
   {
-    std::vector<Node*> call_checkpoint_params({receiver, fncallback, this_arg,
-                                               next_k, original_length,
-                                               if_found_return_value});
-    const int call_stack_parameters =
-        static_cast<int>(call_checkpoint_params.size());
+    Node* call_checkpoint_params[] = {receiver,        fncallback,
+                                      this_arg,        next_k,
+                                      original_length, if_found_return_value};
+    const int call_stack_parameters = arraysize(call_checkpoint_params);
 
     Node* frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, after_callback_lazy_continuation_builtin,
@@ -2351,9 +2348,9 @@ Reduction JSCallReducer::ReduceArrayEvery(Node* node,
     // This frame state doesn't ever call the deopt continuation, it's only
     // necessary to specifiy a continuation in order to handle the exceptional
     // case.
-    std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, this_arg, k, original_length});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback, this_arg, k,
+                                 original_length};
+    const int stack_parameters = arraysize(checkpoint_params);
 
     Node* check_frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, Builtins::kArrayEveryLoopLazyDeoptContinuation,
@@ -2377,9 +2374,9 @@ Reduction JSCallReducer::ReduceArrayEvery(Node* node,
   control = if_true;
 
   {
-    std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, this_arg, k, original_length});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback, this_arg, k,
+                                 original_length};
+    const int stack_parameters = arraysize(checkpoint_params);
 
     Node* frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, Builtins::kArrayEveryLoopEagerDeoptContinuation,
@@ -2433,9 +2430,9 @@ Reduction JSCallReducer::ReduceArrayEvery(Node* node,
   {
     // This frame state is dealt with by hand in
     // Builtins::kArrayEveryLoopLazyDeoptContinuation.
-    std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, this_arg, k, original_length});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback, this_arg, k,
+                                 original_length};
+    const int stack_parameters = arraysize(checkpoint_params);
 
     Node* frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, Builtins::kArrayEveryLoopLazyDeoptContinuation,
@@ -2701,9 +2698,9 @@ Reduction JSCallReducer::ReduceArraySome(Node* node,
     // This frame state doesn't ever call the deopt continuation, it's only
     // necessary to specifiy a continuation in order to handle the exceptional
     // case.
-    std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, this_arg, k, original_length});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback, this_arg, k,
+                                 original_length};
+    const int stack_parameters = arraysize(checkpoint_params);
 
     Node* check_frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, Builtins::kArraySomeLoopLazyDeoptContinuation,
@@ -2732,9 +2729,9 @@ Reduction JSCallReducer::ReduceArraySome(Node* node,
   control = if_true;
 
   {
-    std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, this_arg, k, original_length});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback, this_arg, k,
+                                 original_length};
+    const int stack_parameters = arraysize(checkpoint_params);
 
     Node* frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, Builtins::kArraySomeLoopEagerDeoptContinuation,
@@ -2788,9 +2785,9 @@ Reduction JSCallReducer::ReduceArraySome(Node* node,
   {
     // This frame state is dealt with by hand in
     // Builtins::kArrayEveryLoopLazyDeoptContinuation.
-    std::vector<Node*> checkpoint_params(
-        {receiver, fncallback, this_arg, k, original_length});
-    const int stack_parameters = static_cast<int>(checkpoint_params.size());
+    Node* checkpoint_params[] = {receiver, fncallback, this_arg, k,
+                                 original_length};
+    const int stack_parameters = arraysize(checkpoint_params);
 
     Node* frame_state = CreateJavaScriptBuiltinContinuationFrameState(
         jsgraph(), shared, Builtins::kArraySomeLoopLazyDeoptContinuation,
@@ -2956,8 +2953,27 @@ Reduction JSCallReducer::ReduceCallApiFunction(
         graph()->NewNode(simplified()->ConvertReceiver(p.convert_mode()),
                          receiver, global_proxy, effect, control);
   } else {
-    // We cannot do a fast API call in this case.
-    return NoChange();
+    // We don't have enough information to eliminate the access check
+    // and/or the compatible receiver check, so use the generic builtin
+    // that does those checks dynamically. This is still significantly
+    // faster than the generic call sequence.
+    Builtins::Name builtin_name =
+        !function_template_info->accept_any_receiver()
+            ? (function_template_info->signature()->IsUndefined(isolate())
+                   ? Builtins::kCallFunctionTemplate_CheckAccess
+                   : Builtins::
+                         kCallFunctionTemplate_CheckAccessAndCompatibleReceiver)
+            : Builtins::kCallFunctionTemplate_CheckCompatibleReceiver;
+    Callable callable = Builtins::CallableFor(isolate(), builtin_name);
+    auto call_descriptor = Linkage::GetStubCallDescriptor(
+        graph()->zone(), callable.descriptor(),
+        argc + 1 /* implicit receiver */, CallDescriptor::kNeedsFrameState);
+    node->InsertInput(graph()->zone(), 0,
+                      jsgraph()->HeapConstant(callable.code()));
+    node->ReplaceInput(1, jsgraph()->HeapConstant(function_template_info));
+    node->InsertInput(graph()->zone(), 2, jsgraph()->Constant(argc));
+    NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
+    return Changed(node);
   }
 
   // TODO(turbofan): Consider introducing a JSCallApiCallback operator for
@@ -2969,8 +2985,7 @@ Reduction JSCallReducer::ReduceCallApiFunction(
   Callable call_api_callback = CodeFactory::CallApiCallback(isolate());
   CallInterfaceDescriptor cid = call_api_callback.descriptor();
   auto call_descriptor = Linkage::GetStubCallDescriptor(
-      graph()->zone(), cid,
-      cid.GetStackParameterCount() + argc + 1 /* implicit receiver */,
+      graph()->zone(), cid, argc + 1 /* implicit receiver */,
       CallDescriptor::kNeedsFrameState);
   ApiFunction api_function(v8::ToCData<Address>(call_handler_info->callback()));
   ExternalReference function_reference = ExternalReference::Create(
@@ -7037,8 +7052,8 @@ Reduction JSCallReducer::ReduceRegExpPrototypeTest(Node* node) {
 
   // Compute property access info for "exec" on {resolution}.
   PropertyAccessInfo ai_exec;
-  AccessInfoFactory access_info_factory(
-      broker(), dependencies(), native_context().object(), graph()->zone());
+  AccessInfoFactory access_info_factory(broker(), dependencies(),
+                                        graph()->zone());
   if (!access_info_factory.ComputePropertyAccessInfo(
           MapHandles(regexp_maps.begin(), regexp_maps.end()),
           factory()->exec_string(), AccessMode::kLoad, &ai_exec)) {

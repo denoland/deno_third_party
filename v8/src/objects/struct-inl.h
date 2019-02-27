@@ -8,6 +8,7 @@
 #include "src/objects/struct.h"
 
 #include "src/heap/heap-write-barrier-inl.h"
+#include "src/objects-inl.h"
 #include "src/objects/oddball.h"
 #include "src/roots-inl.h"
 
@@ -35,8 +36,8 @@ CAST_ACCESSOR(ClassPositions)
 
 void Struct::InitializeBody(int object_size) {
   Object value = GetReadOnlyRoots().undefined_value();
-  for (int offset = kHeaderSize; offset < object_size; offset += kPointerSize) {
-    WRITE_FIELD(this, offset, value);
+  for (int offset = kHeaderSize; offset < object_size; offset += kTaggedSize) {
+    WRITE_FIELD(*this, offset, value);
   }
 }
 

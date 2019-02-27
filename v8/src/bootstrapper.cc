@@ -18,7 +18,7 @@
 #include "src/extensions/statistics-extension.h"
 #include "src/extensions/trigger-failure-extension.h"
 #include "src/function-kind.h"
-#include "src/heap/heap.h"
+#include "src/heap/heap-inl.h"
 #include "src/isolate-inl.h"
 #include "src/math-random.h"
 #include "src/objects/api-callbacks.h"
@@ -353,6 +353,8 @@ void Bootstrapper::DetachGlobal(Handle<Context> env) {
   if (FLAG_track_detached_contexts) {
     isolate_->AddDetachedContext(env);
   }
+
+  env->native_context()->set_microtask_queue(nullptr);
 }
 
 namespace {
@@ -2159,6 +2161,11 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
                                  Builtins::kSymbolPrototypeValueOf, 0, true,
                                  BuiltinFunctionId::kSymbolPrototypeValueOf);
 
+    // Install the Symbol.prototype.description getter.
+    SimpleInstallGetter(isolate_, prototype,
+                        factory->InternalizeUtf8String("description"),
+                        Builtins::kSymbolPrototypeDescriptionGetter, true);
+
     // Install the @@toPrimitive function.
     InstallFunctionAtSymbol(
         isolate_, prototype, factory->to_primitive_symbol(),
@@ -2604,19 +2611,9 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
                                          writable, Representation::Tagged());
     initial_map->AppendDescriptor(isolate(), &d);
 
-    {  // Internal: RegExpInternalMatch
-      Handle<JSFunction> function =
-          SimpleCreateFunction(isolate_, isolate_->factory()->empty_string(),
-                               Builtins::kRegExpInternalMatch, 2, true);
-      native_context()->set(Context::REGEXP_INTERNAL_MATCH, *function);
-    }
-
-    // Create the last match info. One for external use, and one for internal
-    // use when we don't want to modify the externally visible match info.
+    // Create the last match info.
     Handle<RegExpMatchInfo> last_match_info = factory->NewRegExpMatchInfo();
     native_context()->set_regexp_last_match_info(*last_match_info);
-    Handle<RegExpMatchInfo> internal_match_info = factory->NewRegExpMatchInfo();
-    native_context()->set_regexp_internal_match_info(*internal_match_info);
 
     // Force the RegExp constructor to fast properties, so that we can use the
     // fast paths for various things like
@@ -3034,6 +3031,33 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
       SimpleInstallFunction(isolate(), prototype, "formatToParts",
                             Builtins::kRelativeTimeFormatPrototypeFormatToParts,
                             2, false);
+    }
+
+    {  // -- L i s t F o r m a t
+      Handle<JSFunction> list_format_fun = InstallFunction(
+          isolate(), intl, "ListFormat", JS_INTL_LIST_FORMAT_TYPE,
+          JSListFormat::kSize, 0, factory->the_hole_value(),
+          Builtins::kListFormatConstructor);
+      list_format_fun->shared()->set_length(0);
+      list_format_fun->shared()->DontAdaptArguments();
+
+      SimpleInstallFunction(isolate(), list_format_fun, "supportedLocalesOf",
+                            Builtins::kListFormatSupportedLocalesOf, 1, false);
+
+      // Setup %ListFormatPrototype%.
+      Handle<JSObject> prototype(
+          JSObject::cast(list_format_fun->instance_prototype()), isolate());
+
+      InstallToStringTag(isolate(), prototype, "Intl.ListFormat");
+
+      SimpleInstallFunction(isolate(), prototype, "resolvedOptions",
+                            Builtins::kListFormatPrototypeResolvedOptions, 0,
+                            false);
+      SimpleInstallFunction(isolate(), prototype, "format",
+                            Builtins::kListFormatPrototypeFormat, 1, false);
+      SimpleInstallFunction(isolate(), prototype, "formatToParts",
+                            Builtins::kListFormatPrototypeFormatToParts, 1,
+                            false);
     }
   }
 #endif  // V8_INTL_SUPPORT
@@ -4248,18 +4272,6 @@ void Genesis::InitializeGlobal_harmony_sharedarraybuffer() {
   InstallToStringTag(isolate_, isolate()->atomics_object(), "Atomics");
 }
 
-void Genesis::InitializeGlobal_harmony_symbol_description() {
-  if (!FLAG_harmony_symbol_description) return;
-
-  // Symbol.prototype.description
-  Handle<JSFunction> symbol_fun(native_context()->symbol_function(), isolate());
-  Handle<JSObject> symbol_prototype(
-      JSObject::cast(symbol_fun->instance_prototype()), isolate());
-  SimpleInstallGetter(isolate(), symbol_prototype,
-                      factory()->InternalizeUtf8String("description"),
-                      Builtins::kSymbolPrototypeDescriptionGetter, true);
-}
-
 void Genesis::InitializeGlobal_harmony_string_matchall() {
   if (!FLAG_harmony_string_matchall) return;
 
@@ -4425,40 +4437,6 @@ void Genesis::InitializeGlobal_harmony_weak_refs() {
 }
 
 #ifdef V8_INTL_SUPPORT
-void Genesis::InitializeGlobal_harmony_intl_list_format() {
-  if (!FLAG_harmony_intl_list_format) return;
-  Handle<JSObject> intl = Handle<JSObject>::cast(
-      JSReceiver::GetProperty(
-          isolate(),
-          Handle<JSReceiver>(native_context()->global_object(), isolate()),
-          factory()->InternalizeUtf8String("Intl"))
-          .ToHandleChecked());
-
-  Handle<JSFunction> list_format_fun =
-      InstallFunction(isolate(), intl, "ListFormat", JS_INTL_LIST_FORMAT_TYPE,
-                      JSListFormat::kSize, 0, factory()->the_hole_value(),
-                      Builtins::kListFormatConstructor);
-  list_format_fun->shared()->set_length(0);
-  list_format_fun->shared()->DontAdaptArguments();
-
-  SimpleInstallFunction(isolate(), list_format_fun, "supportedLocalesOf",
-                        Builtins::kListFormatSupportedLocalesOf, 1, false);
-
-  // Setup %ListFormatPrototype%.
-  Handle<JSObject> prototype(
-      JSObject::cast(list_format_fun->instance_prototype()), isolate());
-
-  InstallToStringTag(isolate(), prototype, "Intl.ListFormat");
-
-  SimpleInstallFunction(isolate(), prototype, "resolvedOptions",
-                        Builtins::kListFormatPrototypeResolvedOptions, 0,
-                        false);
-  SimpleInstallFunction(isolate(), prototype, "format",
-                        Builtins::kListFormatPrototypeFormat, 1, false);
-  SimpleInstallFunction(isolate(), prototype, "formatToParts",
-                        Builtins::kListFormatPrototypeFormatToParts, 1, false);
-}
-
 void Genesis::InitializeGlobal_harmony_locale() {
   if (!FLAG_harmony_locale) return;
 
@@ -4727,8 +4705,7 @@ bool Genesis::InstallNatives() {
 
   // Set up the extras utils object as a shared container between native
   // scripts and extras. (Extras consume things added there by native scripts.)
-  Handle<JSObject> extras_utils =
-      factory()->NewJSObject(isolate()->object_function());
+  Handle<JSObject> extras_utils = factory()->NewJSObjectWithNullProto();
   native_context()->set_extras_utils_object(*extras_utils);
 
   InstallInternalPackedArray(extras_utils, "InternalPackedArray");
@@ -5106,8 +5083,7 @@ bool Genesis::InstallNatives() {
 bool Genesis::InstallExtraNatives() {
   HandleScope scope(isolate());
 
-  Handle<JSObject> extras_binding =
-      factory()->NewJSObject(isolate()->object_function());
+  Handle<JSObject> extras_binding = factory()->NewJSObjectWithNullProto();
 
   // binding.isTraceCategoryEnabled(category)
   SimpleInstallFunction(isolate(), extras_binding, "isTraceCategoryEnabled",

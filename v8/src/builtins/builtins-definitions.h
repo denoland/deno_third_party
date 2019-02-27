@@ -61,6 +61,12 @@ namespace internal {
   TFC(CallWithArrayLike, CallWithArrayLike, 1)                                 \
   ASM(CallForwardVarargs, CallForwardVarargs)                                  \
   ASM(CallFunctionForwardVarargs, CallForwardVarargs)                          \
+  /* Call an API callback via a {FunctionTemplateInfo}, doing appropriate */   \
+  /* access and compatible receiver checks. */                                 \
+  TFC(CallFunctionTemplate_CheckAccess, CallFunctionTemplate, 1)               \
+  TFC(CallFunctionTemplate_CheckCompatibleReceiver, CallFunctionTemplate, 1)   \
+  TFC(CallFunctionTemplate_CheckAccessAndCompatibleReceiver,                   \
+      CallFunctionTemplate, 1)                                                 \
                                                                                \
   /* Construct */                                                              \
   /* ES6 section 9.2.2 [[Construct]] ( argumentsList, newTarget) */            \
@@ -211,7 +217,7 @@ namespace internal {
   /* Handlers */                                                               \
   TFH(KeyedLoadIC_PolymorphicName, LoadWithVector)                             \
   TFH(KeyedLoadIC_Slow, LoadWithVector)                                        \
-  TFH(KeyedStoreIC_Megamorphic, StoreWithVector)                               \
+  TFH(KeyedStoreIC_Megamorphic, Store)                                         \
   TFH(KeyedStoreIC_Slow, StoreWithVector)                                      \
   TFH(LoadGlobalIC_Slow, LoadWithVector)                                       \
   TFH(LoadIC_FunctionPrototype, LoadWithVector)                                \
@@ -344,42 +350,6 @@ namespace internal {
   TFS(CloneFastJSArray, kSource)                                               \
   TFS(CloneFastJSArrayFillingHoles, kSource)                                   \
   TFS(ExtractFastJSArray, kSource, kBegin, kCount)                             \
-  /* ES6 #sec-array.prototype.every */                                         \
-  TFS(ArrayEveryLoopContinuation, kReceiver, kCallbackFn, kThisArg, kArray,    \
-      kObject, kInitialK, kLength, kTo)                                        \
-  TFJ(ArrayEveryLoopEagerDeoptContinuation, 4, kReceiver, kCallbackFn,         \
-      kThisArg, kInitialK, kLength)                                            \
-  TFJ(ArrayEveryLoopLazyDeoptContinuation, 5, kReceiver, kCallbackFn,          \
-      kThisArg, kInitialK, kLength, kResult)                                   \
-  TFJ(ArrayEvery, SharedFunctionInfo::kDontAdaptArgumentsSentinel)             \
-  /* ES6 #sec-array.prototype.some */                                          \
-  TFS(ArraySomeLoopContinuation, kReceiver, kCallbackFn, kThisArg, kArray,     \
-      kObject, kInitialK, kLength, kTo)                                        \
-  TFJ(ArraySomeLoopEagerDeoptContinuation, 4, kReceiver, kCallbackFn,          \
-      kThisArg, kInitialK, kLength)                                            \
-  TFJ(ArraySomeLoopLazyDeoptContinuation, 5, kReceiver, kCallbackFn, kThisArg, \
-      kInitialK, kLength, kResult)                                             \
-  TFJ(ArraySome, SharedFunctionInfo::kDontAdaptArgumentsSentinel)              \
-  /* ES6 #sec-array.prototype.reduce */                                        \
-  TFS(ArrayReduceLoopContinuation, kReceiver, kCallbackFn, kThisArg,           \
-      kAccumulator, kObject, kInitialK, kLength, kTo)                          \
-  TFJ(ArrayReducePreLoopEagerDeoptContinuation, 2, kReceiver, kCallbackFn,     \
-      kLength)                                                                 \
-  TFJ(ArrayReduceLoopEagerDeoptContinuation, 4, kReceiver, kCallbackFn,        \
-      kInitialK, kLength, kAccumulator)                                        \
-  TFJ(ArrayReduceLoopLazyDeoptContinuation, 4, kReceiver, kCallbackFn,         \
-      kInitialK, kLength, kResult)                                             \
-  TFJ(ArrayReduce, SharedFunctionInfo::kDontAdaptArgumentsSentinel)            \
-  /* ES6 #sec-array.prototype.reduceRight */                                   \
-  TFS(ArrayReduceRightLoopContinuation, kReceiver, kCallbackFn, kThisArg,      \
-      kAccumulator, kObject, kInitialK, kLength, kTo)                          \
-  TFJ(ArrayReduceRightPreLoopEagerDeoptContinuation, 2, kReceiver,             \
-      kCallbackFn, kLength)                                                    \
-  TFJ(ArrayReduceRightLoopEagerDeoptContinuation, 4, kReceiver, kCallbackFn,   \
-      kInitialK, kLength, kAccumulator)                                        \
-  TFJ(ArrayReduceRightLoopLazyDeoptContinuation, 4, kReceiver, kCallbackFn,    \
-      kInitialK, kLength, kResult)                                             \
-  TFJ(ArrayReduceRight, SharedFunctionInfo::kDontAdaptArgumentsSentinel)       \
   /* ES6 #sec-array.prototype.entries */                                       \
   TFJ(ArrayPrototypeEntries, 0, kReceiver)                                     \
   /* ES6 #sec-array.prototype.find */                                          \
@@ -918,7 +888,7 @@ namespace internal {
   TFJ(ProxyRevoke, 0, kReceiver)                                               \
   TFS(ProxyGetProperty, kProxy, kName, kReceiverValue, kOnNonExistent)         \
   TFS(ProxyHasProperty, kProxy, kName)                                         \
-  TFS(ProxySetProperty, kProxy, kName, kValue, kReceiverValue, kLanguageMode)  \
+  TFS(ProxySetProperty, kProxy, kName, kValue, kReceiverValue)                 \
                                                                                \
   /* Reflect */                                                                \
   ASM(ReflectApply, Dummy)                                                     \
@@ -947,7 +917,6 @@ namespace internal {
   CPP(RegExpCapture9Getter)                                                    \
   /* ES #sec-regexp-pattern-flags */                                           \
   TFJ(RegExpConstructor, 2, kReceiver, kPattern, kFlags)                       \
-  TFJ(RegExpInternalMatch, 2, kReceiver, kRegExp, kString)                     \
   CPP(RegExpInputGetter)                                                       \
   CPP(RegExpInputSetter)                                                       \
   CPP(RegExpLastMatchGetter)                                                   \
@@ -1227,6 +1196,7 @@ namespace internal {
   TFC(WasmMemoryGrow, WasmMemoryGrow, 1)                                       \
   TFC(WasmRecordWrite, RecordWrite, 1)                                         \
   TFC(WasmStackGuard, NoContext, 1)                                            \
+  TFC(WasmStackOverflow, NoContext, 1)                                         \
   TFC(WasmToNumber, TypeConversion, 1)                                         \
   TFC(WasmThrow, WasmThrow, 1)                                                 \
   TFS(ThrowWasmTrapUnreachable)                                                \
@@ -1533,6 +1503,7 @@ namespace internal {
   V(WasmMemoryGrow)                      \
   V(WasmRecordWrite)                     \
   V(WasmStackGuard)                      \
+  V(WasmStackOverflow)                   \
   V(WasmToNumber)                        \
   V(WasmThrow)                           \
   V(DoubleToI)                           \

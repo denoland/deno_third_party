@@ -12,9 +12,11 @@
 #include "src/disassembler.h"
 #include "src/elements.h"
 #include "src/field-type.h"
+#include "src/heap/heap-write-barrier-inl.h"
 #include "src/ic/handler-configuration-inl.h"
 #include "src/layout-descriptor.h"
 #include "src/objects-inl.h"
+#include "src/objects/allocation-site-inl.h"
 #include "src/objects/arguments-inl.h"
 #include "src/objects/bigint.h"
 #include "src/objects/cell-inl.h"
@@ -508,8 +510,8 @@ template <class Traits>
 void FixedTypedArray<Traits>::FixedTypedArrayVerify(Isolate* isolate) {
   CHECK(IsHeapObject() && map()->instance_type() == Traits::kInstanceType);
   if (base_pointer()->ptr() == ptr()) {
-    CHECK(reinterpret_cast<Address>(external_pointer()) ==
-          ExternalReference::fixed_typed_array_base_data_offset().address());
+    CHECK_EQ(reinterpret_cast<Address>(external_pointer()),
+             FixedTypedArrayBase::kDataOffset - kHeapObjectTag);
   } else {
     CHECK_EQ(base_pointer(), Smi::kZero);
   }
@@ -592,6 +594,9 @@ void JSObject::JSObjectVerify(Isolate* isolate) {
           DCHECK(r.IsDouble());
           continue;
         }
+        if (COMPRESS_POINTERS_BOOL && index.is_inobject()) {
+          VerifyObjectField(isolate, index.offset());
+        }
         Object value = RawFastPropertyAt(index);
         if (r.IsDouble()) DCHECK(value->IsMutableHeapNumber());
         if (value->IsUninitialized(isolate)) continue;
@@ -635,12 +640,12 @@ void JSObject::JSObjectVerify(Isolate* isolate) {
 
 void Map::MapVerify(Isolate* isolate) {
   Heap* heap = isolate->heap();
-  CHECK(!Heap::InYoungGeneration(*this));
+  CHECK(!ObjectInYoungGeneration(*this));
   CHECK(FIRST_TYPE <= instance_type() && instance_type() <= LAST_TYPE);
   CHECK(instance_size() == kVariableSizeSentinel ||
         (kTaggedSize <= instance_size() &&
          static_cast<size_t>(instance_size()) < heap->Capacity()));
-  CHECK(GetBackPointer()->IsUndefined(heap->isolate()) ||
+  CHECK(GetBackPointer()->IsUndefined(isolate) ||
         !Map::cast(GetBackPointer())->is_stable());
   HeapObject::VerifyHeapPointer(isolate, prototype());
   HeapObject::VerifyHeapPointer(isolate, instance_descriptors());
@@ -991,7 +996,7 @@ void String::StringVerify(Isolate* isolate) {
   CHECK(length() >= 0 && length() <= Smi::kMaxValue);
   CHECK_IMPLIES(length() == 0, *this == ReadOnlyRoots(isolate).empty_string());
   if (IsInternalizedString()) {
-    CHECK(!Heap::InYoungGeneration(*this));
+    CHECK(!ObjectInYoungGeneration(*this));
   }
   if (IsConsString()) {
     ConsString::cast(*this)->ConsStringVerify(isolate);
@@ -1098,7 +1103,7 @@ void SharedFunctionInfo::SharedFunctionInfoVerify(Isolate* isolate) {
   }
 
   int expected_map_index = Context::FunctionMapIndex(
-      language_mode(), kind(), true, HasSharedName(), needs_home_object());
+      language_mode(), kind(), HasSharedName(), needs_home_object());
   CHECK_EQ(expected_map_index, function_map_index());
 
   if (scope_info()->length() > 0) {
@@ -1119,6 +1124,11 @@ void SharedFunctionInfo::SharedFunctionInfoVerify(Isolate* isolate) {
       CHECK(!construct_as_builtin());
     }
   }
+
+  // At this point we only support skipping arguments adaptor frames
+  // for strict mode functions (see https://crbug.com/v8/8895).
+  CHECK_IMPLIES(is_safe_to_skip_arguments_adaptor(),
+                language_mode() == LanguageMode::kStrict);
 }
 
 void JSGlobalProxy::JSGlobalProxyVerify(Isolate* isolate) {

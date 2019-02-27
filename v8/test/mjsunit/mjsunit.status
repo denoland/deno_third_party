@@ -306,12 +306,10 @@
   # BUG(v8:4237)
   'regress/regress-3976': [SKIP],
 
-  # BUG(v8:8799): Bytecode flushing breaks tagged template literals
-  'es6/templates': [SKIP],
-
   # BUG(v8:8801): Bytecode flushing interacts poorly with assertOptimized
   'regress/regress-7254': [SKIP],
   'array-push5': [SKIP],
+  'compiler/deopt-array-push': [SKIP],
 
   # Slow tests.
   'array-constructor': [PASS, SLOW],
@@ -352,18 +350,13 @@
   'regress/regress-trap-allocation-memento': [SKIP],
   'regress/regress-4121': [SKIP],
 
-  # Slow tests without feedback vectors
-  # TODO(mythria): Investigate why they are slow and either fix if
-  # possible are update the reason why they are slow.
-  'spread-large-string': [SKIP],
-  'spread-large-array': [SKIP],
-
   # TODO(v8:7777): Re-enable once wasm is supported in jitless mode.
   'regress/regress-5888': [SKIP],
   'regress/regress-5911': [SKIP],
   'regress/regress-813440': [SKIP],
   'regress/regress-crbug-746835': [SKIP],
   'regress/regress-crbug-772056': [SKIP],
+  'regress/regress-crbug-816961': [SKIP],
   'regress/wasm/*': [SKIP],
   'tools/compiler-trace-flags': [SKIP],
   'wasm/*': [SKIP],
@@ -381,6 +374,7 @@
   'regress/regress-6700': [SKIP],
   'regress/regress-6838-2': [SKIP],
   'regress/regress-6838-3': [SKIP],
+  'regress/regress-crbug-934138': [SKIP],
 
   # Timeouts in lite / jitless mode.
   'asm/embenchen/*': [SKIP],
@@ -395,6 +389,12 @@
   'regress/regress-crbug-759327': [SKIP],
   'regress/regress-crbug-898974': [SKIP],
 }],  # 'lite_mode or variant == jitless'
+
+##############################################################################
+['lite_mode', {
+  # TODO(v8:8510): Tests that currently fail with lazy source positions.
+  'stack-traces-overflow': [SKIP],
+}], # lite_mode
 
 ##############################################################################
 ['variant == jitless', {
@@ -519,6 +519,7 @@
   'regress/regress-7254': [SKIP],
   'regress/regress-7510': [SKIP],
   'regress/regress-794825': [SKIP],
+  'regress/regress-8913': [SKIP],
   'regress/regress-crbug-554831': [SKIP],
   'regress/regress-crbug-587068': [SKIP],
   'regress/regress-crbug-594183': [SKIP],
@@ -880,7 +881,6 @@
   # OOM:
   'regress/regress-748069': [FAIL],
   'regress/regress-752764': [FAIL],
-  'regress/regress-779407': [FAIL],
   # Flaky OOM:
   'regress/regress-852258': [SKIP],
 }],  # 'system == android'
@@ -1157,5 +1157,10 @@
   # Unwinding info writer is only supported on x64, arm, and arm64 Linux
   'regress/regress-913844': [SKIP],
 }],
+
+##############################################################################
+['variant == jitless and not embedded_builtins', {
+  '*': [SKIP],
+}], # variant == jitless and not embedded_builtins
 
 ]

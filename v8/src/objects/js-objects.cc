@@ -13,6 +13,7 @@
 #include "src/elements.h"
 #include "src/field-type.h"
 #include "src/handles-inl.h"
+#include "src/heap/heap-inl.h"
 #include "src/ic/ic.h"
 #include "src/isolate.h"
 #include "src/layout-descriptor.h"
@@ -519,6 +520,27 @@ MaybeHandle<NativeContext> JSReceiver::GetFunctionRealm(
   }
 
   return JSObject::GetFunctionRealm(Handle<JSObject>::cast(receiver));
+}
+
+// static
+MaybeHandle<NativeContext> JSReceiver::GetContextForMicrotask(
+    Handle<JSReceiver> receiver) {
+  Isolate* isolate = receiver->GetIsolate();
+  while (receiver->IsJSBoundFunction() || receiver->IsJSProxy()) {
+    if (receiver->IsJSBoundFunction()) {
+      receiver = handle(
+          Handle<JSBoundFunction>::cast(receiver)->bound_target_function(),
+          isolate);
+    } else {
+      DCHECK(receiver->IsJSProxy());
+      Handle<Object> target(Handle<JSProxy>::cast(receiver)->target(), isolate);
+      if (!target->IsJSReceiver()) return MaybeHandle<NativeContext>();
+      receiver = Handle<JSReceiver>::cast(target);
+    }
+  }
+
+  if (!receiver->IsJSFunction()) return MaybeHandle<NativeContext>();
+  return handle(Handle<JSFunction>::cast(receiver)->native_context(), isolate);
 }
 
 Maybe<PropertyAttributes> JSReceiver::GetPropertyAttributes(
@@ -2039,9 +2061,8 @@ void JSObject::EnsureWritableFastElements(Handle<JSObject> object) {
   DCHECK(object->HasSmiOrObjectElements() ||
          object->HasFastStringWrapperElements());
   FixedArray raw_elems = FixedArray::cast(object->elements());
-  Heap* heap = object->GetHeap();
-  if (raw_elems->map() != ReadOnlyRoots(heap).fixed_cow_array_map()) return;
-  Isolate* isolate = heap->isolate();
+  Isolate* isolate = object->GetIsolate();
+  if (raw_elems->map() != ReadOnlyRoots(isolate).fixed_cow_array_map()) return;
   Handle<FixedArray> elems(raw_elems, isolate);
   Handle<FixedArray> writable_elems = isolate->factory()->CopyFixedArrayWithMap(
       elems, isolate->factory()->fixed_array_map());
@@ -5446,6 +5467,15 @@ int JSFunction::CalculateExpectedNofProperties(Isolate* isolate,
       break;
     }
   }
+  // Inobject slack tracking will reclaim redundant inobject space
+  // later, so we can afford to adjust the estimate generously,
+  // meaning we over-allocate by at least 8 slots in the beginning.
+  if (expected_nof_properties > 0) {
+    expected_nof_properties += 8;
+    if (expected_nof_properties > JSObject::kMaxInObjectProperties) {
+      expected_nof_properties = JSObject::kMaxInObjectProperties;
+    }
+  }
   return expected_nof_properties;
 }
 
@@ -5566,7 +5596,7 @@ double JSDate::CurrentTimeValue(Isolate* isolate) {
   // the number in a Date object representing a particular instant in
   // time is milliseconds. Therefore, we floor the result of getting
   // the OS time.
-  return Floor(V8::GetCurrentPlatform()->CurrentClockTimeMillis());
+  return std::floor(V8::GetCurrentPlatform()->CurrentClockTimeMillis());
 }
 
 // static

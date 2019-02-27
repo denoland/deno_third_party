@@ -82,7 +82,7 @@ target(_libcxx_target_type, "libc++") {
     "//build/config/compiler:rtti",
     "//build/config/sanitizers:sanitizer_options_link_helper",
   ]
-  if (libcxx_is_shared) {
+  if (libcxx_is_shared && !is_win) {
     configs -= [ "//build/config/gcc:symbol_visibility_hidden" ]
     configs += [ "//build/config/gcc:symbol_visibility_default" ]
   }
@@ -123,7 +123,7 @@ target(_libcxx_target_type, "libc++") {
       ]
     }
   }
-  if (is_asan || is_tsan || is_msan) {
+  if (!is_mac && (is_asan || is_tsan || is_msan)) {
     # In {a,t,m}san configurations, operator new and operator delete will be
     # provided by the sanitizer runtime library.  Since libc++ defines these
     # symbols with weak linkage, and the *san runtime uses strong linkage, it

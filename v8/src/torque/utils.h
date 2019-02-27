@@ -18,8 +18,6 @@ namespace v8 {
 namespace internal {
 namespace torque {
 
-typedef std::vector<std::string> NameVector;
-
 std::string StringLiteralUnquote(const std::string& s);
 std::string StringLiteralQuote(const std::string& s);
 
@@ -269,8 +267,6 @@ class ToString {
  private:
   std::stringstream s_;
 };
-
-constexpr int kTaggedSize = sizeof(void*);
 
 static const char* const kBaseNamespaceName = "base";
 static const char* const kTestNamespaceName = "test";

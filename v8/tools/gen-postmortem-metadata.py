@@ -46,6 +46,9 @@
 # the generated libv8 binary.
 #
 
+# for py2/py3 compatibility
+from __future__ import print_function
+
 import re
 import sys
 
@@ -82,7 +85,6 @@ consts_misc = [
     { 'name': 'SmiTagMask',             'value': 'kSmiTagMask' },
     { 'name': 'SmiValueShift',          'value': 'kSmiTagSize' },
     { 'name': 'SmiShiftSize',           'value': 'kSmiShiftSize' },
-    { 'name': 'PointerSizeLog2',        'value': 'kPointerSizeLog2' },
 
     { 'name': 'OddballFalse',           'value': 'Oddball::kFalse' },
     { 'name': 'OddballTrue',            'value': 'Oddball::kTrue' },
@@ -124,26 +126,14 @@ consts_misc = [
         'value': 'PropertyDetails::RepresentationField::kMask' },
     { 'name': 'prop_representation_shift',
         'value': 'PropertyDetails::RepresentationField::kShift' },
-    { 'name': 'prop_representation_integer8',
-        'value': 'Representation::Kind::kInteger8' },
-    { 'name': 'prop_representation_uinteger8',
-        'value': 'Representation::Kind::kUInteger8' },
-    { 'name': 'prop_representation_integer16',
-        'value': 'Representation::Kind::kInteger16' },
-    { 'name': 'prop_representation_uinteger16',
-        'value': 'Representation::Kind::kUInteger16' },
     { 'name': 'prop_representation_smi',
         'value': 'Representation::Kind::kSmi' },
-    { 'name': 'prop_representation_integer32',
-        'value': 'Representation::Kind::kInteger32' },
     { 'name': 'prop_representation_double',
         'value': 'Representation::Kind::kDouble' },
     { 'name': 'prop_representation_heapobject',
         'value': 'Representation::Kind::kHeapObject' },
     { 'name': 'prop_representation_tagged',
         'value': 'Representation::Kind::kTagged' },
-    { 'name': 'prop_representation_external',
-        'value': 'Representation::Kind::kExternal' },
 
     { 'name': 'prop_desc_key',
         'value': 'DescriptorArray::kEntryKeyIndex' },
@@ -629,7 +619,7 @@ def emit_set(out, consts):
 # Emit the whole output file.
 #
 def emit_config():
-        out = file(sys.argv[1], 'w');
+        out = open(sys.argv[1], 'w');
 
         out.write(header);
 

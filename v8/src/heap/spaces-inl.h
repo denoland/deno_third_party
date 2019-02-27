@@ -5,11 +5,13 @@
 #ifndef V8_HEAP_SPACES_INL_H_
 #define V8_HEAP_SPACES_INL_H_
 
+#include "src/heap/spaces.h"
+
 #include "src/base/atomic-utils.h"
 #include "src/base/bounded-page-allocator.h"
 #include "src/base/v8-fallthrough.h"
+#include "src/heap/heap-inl.h"
 #include "src/heap/incremental-marking.h"
-#include "src/heap/spaces.h"
 #include "src/msan.h"
 #include "src/objects/code-inl.h"
 
@@ -426,10 +428,9 @@ AllocationResult PagedSpace::AllocateRaw(int size_in_bytes,
 
   DCHECK_IMPLIES(!SupportsInlineAllocation(), bytes_since_last == 0);
 #ifdef V8_HOST_ARCH_32_BIT
-  AllocationResult result =
-      alignment == kDoubleAligned
-          ? AllocateRawAligned(size_in_bytes, kDoubleAligned)
-          : AllocateRawUnaligned(size_in_bytes);
+  AllocationResult result = alignment != kWordAligned
+                                ? AllocateRawAligned(size_in_bytes, alignment)
+                                : AllocateRawUnaligned(size_in_bytes);
 #else
   AllocationResult result = AllocateRawUnaligned(size_in_bytes);
 #endif
@@ -512,8 +513,8 @@ AllocationResult NewSpace::AllocateRaw(int size_in_bytes,
     top_on_previous_step_ = top();
   }
 #ifdef V8_HOST_ARCH_32_BIT
-  return alignment == kDoubleAligned
-             ? AllocateRawAligned(size_in_bytes, kDoubleAligned)
+  return alignment != kWordAligned
+             ? AllocateRawAligned(size_in_bytes, alignment)
              : AllocateRawUnaligned(size_in_bytes);
 #else
   return AllocateRawUnaligned(size_in_bytes);

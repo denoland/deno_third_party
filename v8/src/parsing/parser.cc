@@ -27,6 +27,7 @@
 #include "src/runtime/runtime.h"
 #include "src/string-stream.h"
 #include "src/tracing/trace-event.h"
+#include "src/zone/zone-list-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -536,8 +537,8 @@ FunctionLiteral* Parser::DoParseProgram(Isolate* isolate, ParseInfo* info) {
 
   ParsingModeScope mode(this, allow_lazy_ ? PARSE_LAZILY : PARSE_EAGERLY);
   ResetFunctionLiteralId();
-  DCHECK(info->function_literal_id() == FunctionLiteral::kIdTypeTopLevel ||
-         info->function_literal_id() == FunctionLiteral::kIdTypeInvalid);
+  DCHECK(info->function_literal_id() == kFunctionLiteralIdTopLevel ||
+         info->function_literal_id() == kFunctionLiteralIdInvalid);
 
   FunctionLiteral* result = nullptr;
   {
@@ -1446,7 +1447,7 @@ Statement* Parser::DeclareFunction(const AstRawString* variable_name,
   bool was_added;
   Declare(declaration, variable_name, kind, mode, kCreatedInitialized, scope(),
           &was_added, beg_pos);
-  if (source_range_map_ != nullptr) {
+  if (info()->coverage_enabled()) {
     // Force the function to be allocated when collecting source coverage, so
     // that even dead functions get source coverage data.
     declaration->var()->set_is_used();
@@ -1935,7 +1936,7 @@ Statement* Parser::DesugarLexicalBindingsInForStatement(
   //  }
 
   DCHECK_GT(for_info.bound_names.length(), 0);
-  ZonePtrList<Variable> temps(for_info.bound_names.length(), zone());
+  ScopedPtrList<Variable> temps(pointer_buffer());
 
   Block* outer_block =
       factory()->NewBlock(for_info.bound_names.length() + 4, false);
@@ -1956,7 +1957,7 @@ Statement* Parser::DesugarLexicalBindingsInForStatement(
     Statement* assignment_statement =
         factory()->NewExpressionStatement(assignment, kNoSourcePosition);
     outer_block->statements()->Add(assignment_statement, zone());
-    temps.Add(temp, zone());
+    temps.Add(temp);
   }
 
   Variable* first = nullptr;
@@ -1994,14 +1995,14 @@ Statement* Parser::DesugarLexicalBindingsInForStatement(
 
     Block* ignore_completion_block =
         factory()->NewBlock(for_info.bound_names.length() + 3, true);
-    ZonePtrList<Variable> inner_vars(for_info.bound_names.length(), zone());
+    ScopedPtrList<Variable> inner_vars(pointer_buffer());
     // For each let variable x:
     //    make statement: let/const x = temp_x.
     for (int i = 0; i < for_info.bound_names.length(); i++) {
       VariableProxy* proxy = DeclareBoundVariable(
           for_info.bound_names[i], for_info.parsing_result.descriptor.mode,
           kNoSourcePosition);
-      inner_vars.Add(proxy->var(), zone());
+      inner_vars.Add(proxy->var());
       VariableProxy* temp_proxy = factory()->NewVariableProxy(temps.at(i));
       Assignment* assignment = factory()->NewAssignment(
           Token::INIT, proxy, temp_proxy, kNoSourcePosition);

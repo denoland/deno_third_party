@@ -49,7 +49,6 @@ FEATURE_FLAGS = {
   'String.prototype.matchAll': '--harmony-string-matchall',
   'Symbol.matchAll': '--harmony-string-matchall',
   'numeric-separator-literal': '--harmony-numeric-separator',
-  'Intl.ListFormat': '--harmony-intl-list-format',
   'Intl.Locale': '--harmony-locale',
   'Intl.Segmenter': '--harmony-intl-segmenter',
   'Symbol.prototype.description': '--harmony-symbol-description',
@@ -57,6 +56,7 @@ FEATURE_FLAGS = {
   'well-formed-json-stringify': '--harmony-json-stringify',
   'export-star-as-namespace-from-module': '--harmony-namespace-exports',
   'Object.fromEntries': '--harmony-object-from-entries',
+  'hashbang': '--harmony-hashbang',
 }
 
 SKIPPED_FEATURES = set(['class-methods-private',
