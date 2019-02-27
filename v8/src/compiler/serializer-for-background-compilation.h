@@ -8,6 +8,7 @@
 #include "src/base/optional.h"
 #include "src/handles.h"
 #include "src/maybe-handles.h"
+#include "src/utils.h"
 #include "src/zone/zone-containers.h"
 
 namespace v8 {
@@ -57,7 +58,6 @@ namespace compiler {
   V(LdaGlobalInsideTypeof)          \
   V(LdaImmutableContextSlot)        \
   V(LdaImmutableCurrentContextSlot) \
-  V(LdaKeyedProperty)               \
   V(LdaNamedProperty)               \
   V(LdaNamedPropertyNoFeedback)
 
@@ -122,6 +122,7 @@ namespace compiler {
   V(ExtraWide)                     \
   V(Illegal)                       \
   V(LdaConstant)                   \
+  V(LdaKeyedProperty)              \
   V(LdaNull)                       \
   V(Ldar)                          \
   V(LdaSmi)                        \
@@ -130,6 +131,8 @@ namespace compiler {
   V(Mov)                           \
   V(Return)                        \
   V(StackCheck)                    \
+  V(StaInArrayLiteral)             \
+  V(StaKeyedProperty)              \
   V(Star)                          \
   V(Wide)                          \
   CLEAR_ENVIRONMENT_LIST(V)        \
@@ -152,8 +155,10 @@ struct FunctionBlueprint {
   Handle<FeedbackVector> feedback_vector;
 
   bool operator<(const FunctionBlueprint& other) const {
-    // A feedback vector is never used for more than one SFI, so it could
+    // A feedback vector is never used for more than one SFI, so it can
     // be used for strict ordering of blueprints.
+    DCHECK_IMPLIES(feedback_vector.equals(other.feedback_vector),
+                   shared.equals(other.shared));
     return HandleComparator<FeedbackVector>()(feedback_vector,
                                               other.feedback_vector);
   }
@@ -238,6 +243,9 @@ class SerializerForBackgroundCompilation {
   Hints RunChildSerializer(CompilationSubject function,
                            base::Optional<Hints> new_target,
                            const HintsVector& arguments, bool with_spread);
+
+  void ProcessFeedbackForKeyedPropertyAccess(
+      interpreter::BytecodeArrayIterator* iterator);
 
   JSHeapBroker* broker() const { return broker_; }
   Zone* zone() const { return zone_; }

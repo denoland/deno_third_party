@@ -146,8 +146,14 @@ class JSWeakRef : public JSObject {
 
   DECL_ACCESSORS(target, HeapObject)
 
-  static const int kTargetOffset = JSObject::kHeaderSize;
-  static const int kSize = kTargetOffset + kPointerSize;
+// Layout description.
+#define JS_WEAK_REF_FIELDS(V)   \
+  V(kTargetOffset, kTaggedSize) \
+  /* Header size. */            \
+  V(kSize, 0)
+
+  DEFINE_FIELD_OFFSET_CONSTANTS(JSObject::kHeaderSize, JS_WEAK_REF_FIELDS)
+#undef JS_WEAK_REF_FIELDS
 
   class BodyDescriptor;
 
@@ -172,7 +178,7 @@ class FinalizationGroupCleanupJobTask : public Microtask {
                                 FINALIZATION_GROUP_CLEANUP_JOB_TASK_FIELDS)
 #undef FINALIZATION_GROUP_CLEANUP_JOB_TASK_FIELDS
 
-  OBJECT_CONSTRUCTORS(FinalizationGroupCleanupJobTask, Microtask)
+  OBJECT_CONSTRUCTORS(FinalizationGroupCleanupJobTask, Microtask);
 };
 
 class JSFinalizationGroupCleanupIterator : public JSObject {

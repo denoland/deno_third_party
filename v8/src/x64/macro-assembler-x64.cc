@@ -15,6 +15,7 @@
 #include "src/external-reference-table.h"
 #include "src/frames-inl.h"
 #include "src/globals.h"
+#include "src/heap/heap-inl.h"  // For MemoryChunk.
 #include "src/macro-assembler.h"
 #include "src/objects-inl.h"
 #include "src/objects/smi.h"
@@ -49,9 +50,9 @@ Operand StackArgumentsAccessor::GetArgumentOperand(int index) {
                            kSystemPointerSize);
   } else {
     // argument[0] is at base_reg_ + displacement_to_last_argument +
-    // argument_count_reg_ * times_pointer_size + (receiver - 1) *
+    // argument_count_reg_ * times_system_pointer_size + (receiver - 1) *
     // kSystemPointerSize.
-    return Operand(base_reg_, argument_count_reg_, times_pointer_size,
+    return Operand(base_reg_, argument_count_reg_, times_system_pointer_size,
                    displacement_to_last_argument +
                        (receiver - 1 - index) * kSystemPointerSize);
   }
@@ -217,33 +218,29 @@ void TurboAssembler::CompareRoot(Operand with, RootIndex index) {
 }
 
 void TurboAssembler::LoadTaggedPointerField(Register destination,
-                                            Operand field_operand,
-                                            Register scratch_for_debug) {
+                                            Operand field_operand) {
 #ifdef V8_COMPRESS_POINTERS
-  DecompressTaggedPointer(destination, field_operand, scratch_for_debug);
+  DecompressTaggedPointer(destination, field_operand);
 #else
-  movq(destination, field_operand);
+  mov_tagged(destination, field_operand);
 #endif
 }
 
 void TurboAssembler::LoadAnyTaggedField(Register destination,
-                                        Operand field_operand, Register scratch,
-                                        Register scratch_for_debug) {
+                                        Operand field_operand,
+                                        Register scratch) {
 #ifdef V8_COMPRESS_POINTERS
-  DecompressAnyTagged(destination, field_operand, scratch, scratch_for_debug);
+  DecompressAnyTagged(destination, field_operand, scratch);
 #else
-  movq(destination, field_operand);
+  mov_tagged(destination, field_operand);
 #endif
 }
 
 void TurboAssembler::PushTaggedPointerField(Operand field_operand,
-                                            Register scratch,
-                                            Register scratch_for_debug) {
+                                            Register scratch) {
 #ifdef V8_COMPRESS_POINTERS
-  DCHECK(!AreAliased(scratch, scratch_for_debug));
   DCHECK(!field_operand.AddressUsesRegister(scratch));
-  DCHECK(!field_operand.AddressUsesRegister(scratch_for_debug));
-  DecompressTaggedPointer(scratch, field_operand, scratch_for_debug);
+  DecompressTaggedPointer(scratch, field_operand);
   Push(scratch);
 #else
   Push(field_operand);
@@ -251,14 +248,12 @@ void TurboAssembler::PushTaggedPointerField(Operand field_operand,
 }
 
 void TurboAssembler::PushTaggedAnyField(Operand field_operand,
-                                        Register scratch1, Register scratch2,
-                                        Register scratch_for_debug) {
+                                        Register scratch1, Register scratch2) {
 #ifdef V8_COMPRESS_POINTERS
-  DCHECK(!AreAliased(scratch1, scratch2, scratch_for_debug));
+  DCHECK(!AreAliased(scratch1, scratch2));
   DCHECK(!field_operand.AddressUsesRegister(scratch1));
   DCHECK(!field_operand.AddressUsesRegister(scratch2));
-  DCHECK(!field_operand.AddressUsesRegister(scratch_for_debug));
-  DecompressAnyTagged(scratch1, field_operand, scratch2, scratch_for_debug);
+  DecompressAnyTagged(scratch1, field_operand, scratch2);
   Push(scratch1);
 #else
   Push(field_operand);
@@ -271,71 +266,49 @@ void TurboAssembler::SmiUntagField(Register dst, Operand src) {
 
 void TurboAssembler::StoreTaggedField(Operand dst_field_operand,
                                       Immediate value) {
+#ifdef V8_COMPRESS_POINTERS
+  RecordComment("[ StoreTagged");
+  movl(dst_field_operand, value);
+  movl(Operand(dst_field_operand, 4), Immediate(0));
+  RecordComment("]");
+#else
   movq(dst_field_operand, value);
+#endif
 }
 
 void TurboAssembler::StoreTaggedField(Operand dst_field_operand,
                                       Register value) {
+#ifdef V8_COMPRESS_POINTERS
+  RecordComment("[ StoreTagged");
+  movl(dst_field_operand, value);
+  movl(Operand(dst_field_operand, 4), Immediate(0));
+  RecordComment("]");
+#else
   movq(dst_field_operand, value);
+#endif
 }
 
 void TurboAssembler::DecompressTaggedSigned(Register destination,
-                                            Operand field_operand,
-                                            Register scratch_for_debug) {
-  DCHECK(!AreAliased(destination, scratch_for_debug));
+                                            Operand field_operand) {
   RecordComment("[ DecompressTaggedSigned");
-  if (DEBUG_BOOL && scratch_for_debug.is_valid()) {
-    Register expected_value = scratch_for_debug;
-    movq(expected_value, field_operand);
-    movsxlq(destination, expected_value);
-    Label check_passed;
-    cmpq(destination, expected_value);
-    j(equal, &check_passed);
-    RecordComment("DecompressTaggedSigned failed");
-    int3();
-    bind(&check_passed);
-  } else {
-    movsxlq(destination, field_operand);
-  }
+  movsxlq(destination, field_operand);
   RecordComment("]");
 }
 
 void TurboAssembler::DecompressTaggedPointer(Register destination,
-                                             Operand field_operand,
-                                             Register scratch_for_debug) {
-  DCHECK(!AreAliased(destination, scratch_for_debug));
+                                             Operand field_operand) {
   RecordComment("[ DecompressTaggedPointer");
-  if (DEBUG_BOOL && scratch_for_debug.is_valid()) {
-    Register expected_value = scratch_for_debug;
-    movq(expected_value, field_operand);
-    movsxlq(destination, expected_value);
-    addq(destination, kRootRegister);
-    Label check_passed;
-    cmpq(destination, expected_value);
-    j(equal, &check_passed);
-    RecordComment("DecompressTaggedPointer failed");
-    int3();
-    bind(&check_passed);
-  } else {
-    movsxlq(destination, field_operand);
-    addq(destination, kRootRegister);
-  }
+  movsxlq(destination, field_operand);
+  addq(destination, kRootRegister);
   RecordComment("]");
 }
 
 void TurboAssembler::DecompressAnyTagged(Register destination,
                                          Operand field_operand,
-                                         Register scratch,
-                                         Register scratch_for_debug) {
-  DCHECK(!AreAliased(destination, scratch, scratch_for_debug));
+                                         Register scratch) {
+  DCHECK(!AreAliased(destination, scratch));
   RecordComment("[ DecompressAnyTagged");
-  Register expected_value = scratch_for_debug;
-  if (DEBUG_BOOL && expected_value.is_valid()) {
-    movq(expected_value, field_operand);
-    movsxlq(destination, expected_value);
-  } else {
-    movsxlq(destination, field_operand);
-  }
+  movsxlq(destination, field_operand);
   // Branchlessly compute |masked_root|:
   // masked_root = HAS_SMI_TAG(destination) ? 0 : kRootRegister;
   STATIC_ASSERT((kSmiTagSize == 1) && (kSmiTag < 32));
@@ -347,14 +320,6 @@ void TurboAssembler::DecompressAnyTagged(Register destination,
   // Now this add operation will either leave the value unchanged if it is a smi
   // or add the isolate root if it is a heap object.
   addq(destination, masked_root);
-  if (DEBUG_BOOL && expected_value.is_valid()) {
-    Label check_passed;
-    cmpq(destination, expected_value);
-    j(equal, &check_passed);
-    RecordComment("Decompression failed: Tagged");
-    int3();
-    bind(&check_passed);
-  }
   RecordComment("]");
 }
 
@@ -1078,41 +1043,6 @@ void TurboAssembler::Cvttss2uiq(Register dst, XMMRegister src, Label* success) {
   ConvertFloatToUint64<XMMRegister, false>(this, dst, src, success);
 }
 
-void MacroAssembler::Load(Register dst, Operand src, Representation r) {
-  DCHECK(!r.IsDouble());
-  if (r.IsInteger8()) {
-    movsxbq(dst, src);
-  } else if (r.IsUInteger8()) {
-    movzxbl(dst, src);
-  } else if (r.IsInteger16()) {
-    movsxwq(dst, src);
-  } else if (r.IsUInteger16()) {
-    movzxwl(dst, src);
-  } else if (r.IsInteger32()) {
-    movl(dst, src);
-  } else {
-    movq(dst, src);
-  }
-}
-
-void MacroAssembler::Store(Operand dst, Register src, Representation r) {
-  DCHECK(!r.IsDouble());
-  if (r.IsInteger8() || r.IsUInteger8()) {
-    movb(dst, src);
-  } else if (r.IsInteger16() || r.IsUInteger16()) {
-    movw(dst, src);
-  } else if (r.IsInteger32()) {
-    movl(dst, src);
-  } else {
-    if (r.IsHeapObject()) {
-      AssertNotSmi(src);
-    } else if (r.IsSmi()) {
-      AssertSmi(src);
-    }
-    movq(dst, src);
-  }
-}
-
 void TurboAssembler::Set(Register dst, int64_t x) {
   if (x == 0) {
     xorl(dst, dst);
@@ -1460,6 +1390,18 @@ void MacroAssembler::Cmp(Operand dst, Handle<Object> source) {
   }
 }
 
+void MacroAssembler::JumpIfIsInRange(Register value, unsigned lower_limit,
+                                     unsigned higher_limit, Label* on_in_range,
+                                     Label::Distance near_jump) {
+  if (lower_limit != 0) {
+    leal(kScratchRegister, Operand(value, 0u - lower_limit));
+    cmpl(kScratchRegister, Immediate(higher_limit - lower_limit));
+  } else {
+    cmpl(value, Immediate(higher_limit));
+  }
+  j(below_equal, on_in_range, near_jump);
+}
+
 void TurboAssembler::Push(Handle<HeapObject> source) {
   Move(kScratchRegister, source);
   Push(kScratchRegister);
@@ -1663,8 +1605,9 @@ void TurboAssembler::LoadCodeObjectEntry(Register destination,
     // table.
     bind(&if_code_is_builtin);
     movl(destination, FieldOperand(code_object, Code::kBuiltinIndexOffset));
-    movq(destination, Operand(kRootRegister, destination, times_pointer_size,
-                              IsolateData::builtin_entry_table_offset()));
+    movq(destination,
+         Operand(kRootRegister, destination, times_system_pointer_size,
+                 IsolateData::builtin_entry_table_offset()));
 
     bind(&out);
   } else {
@@ -2215,11 +2158,12 @@ void TurboAssembler::PrepareForTailCall(const ParameterCount& callee_args_count,
   Register new_sp_reg = scratch0;
   if (callee_args_count.is_reg()) {
     subq(caller_args_count_reg, callee_args_count.reg());
-    leaq(new_sp_reg, Operand(rbp, caller_args_count_reg, times_pointer_size,
-                             StandardFrameConstants::kCallerPCOffset));
+    leaq(new_sp_reg,
+         Operand(rbp, caller_args_count_reg, times_system_pointer_size,
+                 StandardFrameConstants::kCallerPCOffset));
   } else {
     leaq(new_sp_reg,
-         Operand(rbp, caller_args_count_reg, times_pointer_size,
+         Operand(rbp, caller_args_count_reg, times_system_pointer_size,
                  StandardFrameConstants::kCallerPCOffset -
                      callee_args_count.immediate() * kSystemPointerSize));
   }
@@ -2255,8 +2199,8 @@ void TurboAssembler::PrepareForTailCall(const ParameterCount& callee_args_count,
   jmp(&entry, Label::kNear);
   bind(&loop);
   decq(count_reg);
-  movq(tmp_reg, Operand(rsp, count_reg, times_pointer_size, 0));
-  movq(Operand(new_sp_reg, count_reg, times_pointer_size, 0), tmp_reg);
+  movq(tmp_reg, Operand(rsp, count_reg, times_system_pointer_size, 0));
+  movq(Operand(new_sp_reg, count_reg, times_system_pointer_size, 0), tmp_reg);
   bind(&entry);
   cmpq(count_reg, Immediate(0));
   j(not_equal, &loop, Label::kNear);
@@ -2540,7 +2484,7 @@ void MacroAssembler::EnterExitFrame(int arg_stack_space, bool save_doubles,
   // Set up argv in callee-saved register r15. It is reused in LeaveExitFrame,
   // so it must be retained across the C-call.
   int offset = StandardFrameConstants::kCallerSPOffset - kSystemPointerSize;
-  leaq(r15, Operand(rbp, r14, times_pointer_size, offset));
+  leaq(r15, Operand(rbp, r14, times_system_pointer_size, offset));
 
   EnterExitFrameEpilogue(arg_stack_space, save_doubles);
 }

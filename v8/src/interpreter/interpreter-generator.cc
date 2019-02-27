@@ -176,20 +176,10 @@ class InterpreterLoadGlobalAssembler : public InterpreterAssembler {
       return CAST(name);
     };
 
-    Label miss(this, Label::kDeferred);
     ParameterMode slot_mode = CodeStubAssembler::INTPTR_PARAMETERS;
-    GotoIf(IsUndefined(maybe_feedback_vector), &miss);
-    accessor_asm.LoadGlobalIC(CAST(maybe_feedback_vector), feedback_slot,
+    accessor_asm.LoadGlobalIC(maybe_feedback_vector, feedback_slot,
                               lazy_context, lazy_name, typeof_mode, &exit_point,
                               slot_mode);
-
-    BIND(&miss);
-    {
-      exit_point.ReturnCallRuntime(
-          Runtime::kLoadGlobalIC_Miss, lazy_context(), lazy_name(),
-          ParameterToTagged(feedback_slot, slot_mode), maybe_feedback_vector,
-          SmiConstant(typeof_mode));
-    }
   }
 };
 
@@ -568,22 +558,9 @@ IGNITION_HANDLER(LdaKeyedProperty, InterpreterAssembler) {
   Node* feedback_vector = LoadFeedbackVectorUnchecked();
   Node* context = GetContext();
 
-  Label no_feedback(this, Label::kDeferred), end(this);
   VARIABLE(var_result, MachineRepresentation::kTagged);
-  GotoIf(IsUndefined(feedback_vector), &no_feedback);
   var_result.Bind(CallBuiltin(Builtins::kKeyedLoadIC, context, object, name,
                               smi_slot, feedback_vector));
-  Goto(&end);
-
-  BIND(&no_feedback);
-  {
-    Comment("KeyedLoadIC_no_feedback");
-    var_result.Bind(CallRuntime(Runtime::kKeyedLoadIC_Miss, context, object,
-                                name, smi_slot, feedback_vector));
-    Goto(&end);
-  }
-
-  BIND(&end);
   SetAccumulator(var_result.value());
   Dispatch();
 }
@@ -606,19 +583,8 @@ class InterpreterStoreNamedPropertyAssembler : public InterpreterAssembler {
     Node* context = GetContext();
 
     VARIABLE(var_result, MachineRepresentation::kTagged);
-    Label no_feedback(this, Label::kDeferred), end(this);
-    GotoIf(IsUndefined(maybe_vector), &no_feedback);
     var_result.Bind(CallStub(ic.descriptor(), code_target, context, object,
                              name, value, smi_slot, maybe_vector));
-    Goto(&end);
-
-    Bind(&no_feedback);
-    var_result.Bind(CallRuntime(Runtime::kStoreICNoFeedback_Miss, context,
-                                value, object, name,
-                                SmiConstant(property_type)));
-    Goto(&end);
-
-    Bind(&end);
     // To avoid special logic in the deoptimizer to re-materialize the value in
     // the accumulator, we overwrite the accumulator after the IC call. It
     // doesn't really matter what we write to the accumulator here, since we
@@ -679,20 +645,9 @@ IGNITION_HANDLER(StaKeyedProperty, InterpreterAssembler) {
   Node* maybe_vector = LoadFeedbackVectorUnchecked();
   Node* context = GetContext();
 
-  Label no_feedback(this, Label::kDeferred), end(this);
   VARIABLE(var_result, MachineRepresentation::kTagged);
-  GotoIf(IsUndefined(maybe_vector), &no_feedback);
-
   var_result.Bind(CallBuiltin(Builtins::kKeyedStoreIC, context, object, name,
                               value, smi_slot, maybe_vector));
-  Goto(&end);
-
-  Bind(&no_feedback);
-  var_result.Bind(CallRuntime(Runtime::kKeyedStoreICNoFeedback_Miss, context,
-                              value, object, name));
-  Goto(&end);
-
-  Bind(&end);
   // To avoid special logic in the deoptimizer to re-materialize the value in
   // the accumulator, we overwrite the accumulator after the IC call. It
   // doesn't really matter what we write to the accumulator here, since we
@@ -716,19 +671,8 @@ IGNITION_HANDLER(StaInArrayLiteral, InterpreterAssembler) {
   Node* context = GetContext();
 
   VARIABLE(var_result, MachineRepresentation::kTagged);
-  Label no_feedback(this, Label::kDeferred), end(this);
-  GotoIf(IsUndefined(feedback_vector), &no_feedback);
-
   var_result.Bind(CallBuiltin(Builtins::kStoreInArrayLiteralIC, context, array,
                               index, value, smi_slot, feedback_vector));
-  Goto(&end);
-
-  BIND(&no_feedback);
-  var_result.Bind(CallRuntime(Runtime::kStoreInArrayLiteralIC_Miss, context,
-                              value, smi_slot, feedback_vector, array, index));
-  Goto(&end);
-
-  BIND(&end);
   // To avoid special logic in the deoptimizer to re-materialize the value in
   // the accumulator, we overwrite the accumulator after the IC call. It
   // doesn't really matter what we write to the accumulator here, since we
@@ -2454,22 +2398,10 @@ IGNITION_HANDLER(CreateRegExpLiteral, InterpreterAssembler) {
   Node* context = GetContext();
 
   VARIABLE(result, MachineRepresentation::kTagged);
-  Label no_feedback(this, Label::kDeferred), end(this);
-  GotoIf(IsUndefined(feedback_vector), &no_feedback);
 
   ConstructorBuiltinsAssembler constructor_assembler(state());
   result.Bind(constructor_assembler.EmitCreateRegExpLiteral(
       feedback_vector, slot_id, pattern, flags, context));
-  Goto(&end);
-
-  BIND(&no_feedback);
-  {
-    result.Bind(CallRuntime(Runtime::kCreateRegExpLiteral, context,
-                            feedback_vector, SmiTag(slot_id), pattern, flags));
-    Goto(&end);
-  }
-
-  BIND(&end);
   SetAccumulator(result.value());
   Dispatch();
 }
@@ -2635,18 +2567,8 @@ IGNITION_HANDLER(CloneObject, InterpreterAssembler) {
   Node* context = GetContext();
 
   Variable var_result(this, MachineRepresentation::kTagged);
-  Label no_feedback(this), end(this);
-  GotoIf(IsUndefined(maybe_feedback_vector), &no_feedback);
   var_result.Bind(CallBuiltin(Builtins::kCloneObjectIC, context, source,
                               smi_flags, smi_slot, maybe_feedback_vector));
-  Goto(&end);
-
-  BIND(&no_feedback);
-  var_result.Bind(CallRuntime(Runtime::kCloneObjectIC_Miss, context, source,
-                              smi_flags, smi_slot, maybe_feedback_vector));
-  Goto(&end);
-
-  BIND(&end);
   SetAccumulator(var_result.value());
   Dispatch();
 }
@@ -2674,9 +2596,13 @@ IGNITION_HANDLER(GetTemplateObject, InterpreterAssembler) {
   BIND(&call_runtime);
   {
     Node* description = LoadConstantPoolEntryAtOperandIndex(0);
+    Node* slot_smi = SmiTag(slot);
+    Node* closure = LoadRegister(Register::function_closure());
+    Node* shared_info =
+        LoadObjectField(closure, JSFunction::kSharedFunctionInfoOffset);
     Node* context = GetContext();
-    Node* result =
-        CallRuntime(Runtime::kCreateTemplateObject, context, description);
+    Node* result = CallRuntime(Runtime::kGetTemplateObject, context,
+                               description, shared_info, slot_smi);
 
     Label end(this);
     GotoIf(IsUndefined(feedback_vector), &end);
@@ -3028,7 +2954,7 @@ IGNITION_HANDLER(Debugger, InterpreterAssembler) {
     SetAccumulator(return_value);                                          \
     DispatchToBytecode(original_bytecode, BytecodeOffset());               \
   }
-DEBUG_BREAK_BYTECODE_LIST(DEBUG_BREAK);
+DEBUG_BREAK_BYTECODE_LIST(DEBUG_BREAK)
 #undef DEBUG_BREAK
 
 // IncBlockCounter <slot>

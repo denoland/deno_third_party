@@ -131,7 +131,7 @@ bool JSObject::PrototypeHasNoElements(Isolate* isolate, JSObject object) {
 ACCESSORS(JSReceiver, raw_properties_or_hash, Object, kPropertiesOrHashOffset)
 
 FixedArrayBase JSObject::elements() const {
-  Object array = READ_FIELD(this, kElementsOffset);
+  Object array = READ_FIELD(*this, kElementsOffset);
   return FixedArrayBase::cast(array);
 }
 
@@ -332,7 +332,7 @@ bool JSObject::IsUnboxedDoubleField(FieldIndex index) {
 Object JSObject::RawFastPropertyAt(FieldIndex index) {
   DCHECK(!IsUnboxedDoubleField(index));
   if (index.is_inobject()) {
-    return READ_FIELD(this, index.offset());
+    return READ_FIELD(*this, index.offset());
   } else {
     return property_array()->get(index.outobject_array_index());
   }
@@ -340,12 +340,12 @@ Object JSObject::RawFastPropertyAt(FieldIndex index) {
 
 double JSObject::RawFastDoublePropertyAt(FieldIndex index) {
   DCHECK(IsUnboxedDoubleField(index));
-  return READ_DOUBLE_FIELD(this, index.offset());
+  return READ_DOUBLE_FIELD(*this, index.offset());
 }
 
 uint64_t JSObject::RawFastDoublePropertyAsBitsAt(FieldIndex index) {
   DCHECK(IsUnboxedDoubleField(index));
-  return READ_UINT64_FIELD(this, index.offset());
+  return READ_UINT64_FIELD(*this, index.offset());
 }
 
 void JSObject::RawFastPropertyAtPut(FieldIndex index, Object value) {
@@ -433,9 +433,9 @@ Object JSObject::InObjectPropertyAtPut(int index, Object value,
 void JSObject::InitializeBody(Map map, int start_offset,
                               Object pre_allocated_value, Object filler_value) {
   DCHECK_IMPLIES(filler_value->IsHeapObject(),
-                 !Heap::InYoungGeneration(filler_value));
+                 !ObjectInYoungGeneration(filler_value));
   DCHECK_IMPLIES(pre_allocated_value->IsHeapObject(),
-                 !Heap::InYoungGeneration(pre_allocated_value));
+                 !ObjectInYoungGeneration(pre_allocated_value));
   int size = map->instance_size();
   int offset = start_offset;
   if (filler_value != pre_allocated_value) {
@@ -454,7 +454,7 @@ void JSObject::InitializeBody(Map map, int start_offset,
 }
 
 Object JSBoundFunction::raw_bound_target_function() const {
-  return READ_FIELD(this, kBoundTargetFunctionOffset);
+  return READ_FIELD(*this, kBoundTargetFunctionOffset);
 }
 
 ACCESSORS(JSBoundFunction, bound_target_function, JSReceiver,
@@ -548,13 +548,13 @@ Code JSFunction::code() const {
 }
 
 void JSFunction::set_code(Code value) {
-  DCHECK(!Heap::InYoungGeneration(value));
+  DCHECK(!ObjectInYoungGeneration(value));
   RELAXED_WRITE_FIELD(*this, kCodeOffset, value);
   MarkingBarrier(*this, RawField(kCodeOffset), value);
 }
 
 void JSFunction::set_code_no_write_barrier(Code value) {
-  DCHECK(!Heap::InYoungGeneration(value));
+  DCHECK(!ObjectInYoungGeneration(value));
   RELAXED_WRITE_FIELD(*this, kCodeOffset, value);
 }
 
@@ -716,11 +716,11 @@ ACCESSORS(JSDate, min, Object, kMinOffset)
 ACCESSORS(JSDate, sec, Object, kSecOffset)
 
 MessageTemplate JSMessageObject::type() const {
-  Object value = READ_FIELD(this, kTypeOffset);
+  Object value = READ_FIELD(*this, kTypeOffset);
   return MessageTemplateFromInt(Smi::ToInt(value));
 }
 void JSMessageObject::set_type(MessageTemplate value) {
-  WRITE_FIELD(this, kTypeOffset, Smi::FromInt(static_cast<int>(value)));
+  WRITE_FIELD(*this, kTypeOffset, Smi::FromInt(static_cast<int>(value)));
 }
 ACCESSORS(JSMessageObject, argument, Object, kArgumentsOffset)
 ACCESSORS(JSMessageObject, script, Script, kScriptOffset)
@@ -733,7 +733,7 @@ ElementsKind JSObject::GetElementsKind() const {
   ElementsKind kind = map()->elements_kind();
 #if VERIFY_HEAP && DEBUG
   FixedArrayBase fixed_array =
-      FixedArrayBase::unchecked_cast(READ_FIELD(this, kElementsOffset));
+      FixedArrayBase::unchecked_cast(READ_FIELD(*this, kElementsOffset));
 
   // If a GC was caused while constructing this object, the elements
   // pointer may point to a one pointer filler map.
@@ -786,6 +786,10 @@ bool JSObject::HasFastPackedElements() {
 
 bool JSObject::HasDictionaryElements() {
   return GetElementsKind() == DICTIONARY_ELEMENTS;
+}
+
+bool JSObject::HasPackedElements() {
+  return GetElementsKind() == PACKED_ELEMENTS;
 }
 
 bool JSObject::HasFastArgumentsElements() {
@@ -851,13 +855,13 @@ NumberDictionary JSObject::element_dictionary() {
 
 void JSReceiver::initialize_properties() {
   ReadOnlyRoots roots = GetReadOnlyRoots();
-  DCHECK(!Heap::InYoungGeneration(roots.empty_fixed_array()));
-  DCHECK(!Heap::InYoungGeneration(roots.empty_property_dictionary()));
+  DCHECK(!ObjectInYoungGeneration(roots.empty_fixed_array()));
+  DCHECK(!ObjectInYoungGeneration(roots.empty_property_dictionary()));
   if (map()->is_dictionary_map()) {
-    WRITE_FIELD(this, kPropertiesOrHashOffset,
+    WRITE_FIELD(*this, kPropertiesOrHashOffset,
                 roots.empty_property_dictionary());
   } else {
-    WRITE_FIELD(this, kPropertiesOrHashOffset, roots.empty_fixed_array());
+    WRITE_FIELD(*this, kPropertiesOrHashOffset, roots.empty_fixed_array());
   }
 }
 
@@ -996,7 +1000,7 @@ static inline bool ShouldConvertToSlowElements(JSObject object,
   // TODO(ulan): Check if it works with young large objects.
   if (*new_capacity <= JSObject::kMaxUncheckedOldFastElementsLength ||
       (*new_capacity <= JSObject::kMaxUncheckedFastElementsLength &&
-       Heap::InYoungGeneration(object))) {
+       ObjectInYoungGeneration(object))) {
     return false;
   }
   // If the fast-case backing storage takes up much more memory than a

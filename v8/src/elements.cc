@@ -8,6 +8,7 @@
 #include "src/conversions.h"
 #include "src/frames.h"
 #include "src/heap/factory.h"
+#include "src/heap/heap-inl.h"  // For MaxNumberToStringCacheSize.
 #include "src/heap/heap-write-barrier-inl.h"
 #include "src/isolate-inl.h"
 #include "src/keys.h"
@@ -1378,7 +1379,7 @@ class ElementsAccessorBase : public InternalElementsAccessor {
                                              Handle<JSObject> object,
                                              uint32_t length) final {
     return Subclass::CreateListFromArrayLikeImpl(isolate, object, length);
-  };
+  }
 
   static Handle<FixedArray> CreateListFromArrayLikeImpl(Isolate* isolate,
                                                         Handle<JSObject> object,
@@ -2012,7 +2013,7 @@ class FastElementsAccessor : public ElementsAccessorBase<Subclass, KindTraits> {
     const int kMinLengthForSparsenessCheck = 64;
     if (backing_store->length() < kMinLengthForSparsenessCheck) return;
     // TODO(ulan): Check if it works with young large objects.
-    if (Heap::InYoungGeneration(*backing_store)) return;
+    if (ObjectInYoungGeneration(*backing_store)) return;
     uint32_t length = 0;
     if (obj->IsJSArray()) {
       JSArray::cast(*obj)->length()->ToArrayLength(&length);

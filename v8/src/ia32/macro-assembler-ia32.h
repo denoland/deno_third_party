@@ -460,6 +460,13 @@ class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
     j(not_equal, if_not_equal, if_not_equal_distance);
   }
 
+  // Checks if value is in range [lower_limit, higher_limit] using a single
+  // comparison.
+  void JumpIfIsInRange(Register value, unsigned lower_limit,
+                       unsigned higher_limit, Register scratch,
+                       Label* on_in_range,
+                       Label::Distance near_jump = Label::kFar);
+
   // ---------------------------------------------------------------------------
   // GC Support
   // Notify the garbage collector that we wrote a pointer into an object.
@@ -708,18 +715,12 @@ inline Operand FieldOperand(Register object, Register index, ScaleFactor scale,
   return Operand(object, index, scale, offset - kHeapObjectTag);
 }
 
-inline Operand FixedArrayElementOperand(Register array, Register index_as_smi,
-                                        int additional_offset = 0) {
-  int offset = FixedArray::kHeaderSize + additional_offset * kPointerSize;
-  return FieldOperand(array, index_as_smi, times_half_pointer_size, offset);
-}
-
 inline Operand ContextOperand(Register context, int index) {
   return Operand(context, Context::SlotOffset(index));
 }
 
 inline Operand ContextOperand(Register context, Register index) {
-  return Operand(context, index, times_pointer_size, Context::SlotOffset(0));
+  return Operand(context, index, times_tagged_size, Context::SlotOffset(0));
 }
 
 inline Operand NativeContextOperand() {

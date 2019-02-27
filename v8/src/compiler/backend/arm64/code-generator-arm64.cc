@@ -565,7 +565,8 @@ void CodeGenerator::BailoutIfDeoptimized() {
   UseScratchRegisterScope temps(tasm());
   Register scratch = temps.AcquireX();
   int offset = Code::kCodeDataContainerOffset - Code::kHeaderSize;
-  __ Ldr(scratch, MemOperand(kJavaScriptCallCodeStartRegister, offset));
+  __ LoadTaggedPointerField(
+      scratch, MemOperand(kJavaScriptCallCodeStartRegister, offset));
   __ Ldr(scratch,
          FieldMemOperand(scratch, CodeDataContainer::kKindSpecificFlagsOffset));
   Label not_deoptimized;
@@ -858,7 +859,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       auto ool = new (zone()) OutOfLineRecordWrite(
           this, object, index, value, scratch0, scratch1, mode,
           DetermineStubCallMode(), &unwinding_info_writer_);
-      __ Str(value, MemOperand(object, index));
+      __ StoreTaggedField(value, MemOperand(object, index));
       __ CheckPageFlagSet(object, scratch0,
                           MemoryChunk::kPointersFromHereAreInterestingMask,
                           ool->entry());
@@ -1588,6 +1589,9 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       break;
     case kArm64StrQ:
       __ Str(i.InputSimd128Register(0), i.MemoryOperand(1));
+      break;
+    case kArm64StrCompressTagged:
+      __ StoreTaggedField(i.InputOrZeroRegister64(0), i.MemoryOperand(1));
       break;
     case kArm64DsbIsb:
       __ Dsb(FullSystem, BarrierAll);
@@ -2466,11 +2470,8 @@ void CodeGenerator::AssembleConstructFrame() {
         __ Str(kWasmInstanceRegister,
                MemOperand(fp, WasmCompiledFrameConstants::kWasmInstanceOffset));
       }
-      __ LoadTaggedPointerField(
-          x2, FieldMemOperand(kWasmInstanceRegister,
-                              WasmInstanceObject::kCEntryStubOffset));
-      __ Mov(cp, Smi::zero());
-      __ CallRuntimeWithCEntry(Runtime::kThrowWasmStackOverflow, x2);
+
+      __ Call(wasm::WasmCode::kWasmStackOverflow, RelocInfo::WASM_STUB_CALL);
       // We come from WebAssembly, there are no references for the GC.
       ReferenceMap* reference_map = new (zone()) ReferenceMap(zone());
       RecordSafepoint(reference_map, Safepoint::kSimple,
@@ -2522,10 +2523,12 @@ void CodeGenerator::AssembleConstructFrame() {
       } break;
       case CallDescriptor::kCallWasmImportWrapper: {
         UseScratchRegisterScope temps(tasm());
-        __ ldr(kJSFunctionRegister,
-               FieldMemOperand(kWasmInstanceRegister, Tuple2::kValue2Offset));
-        __ ldr(kWasmInstanceRegister,
-               FieldMemOperand(kWasmInstanceRegister, Tuple2::kValue1Offset));
+        __ LoadTaggedPointerField(
+            kJSFunctionRegister,
+            FieldMemOperand(kWasmInstanceRegister, Tuple2::kValue2Offset));
+        __ LoadTaggedPointerField(
+            kWasmInstanceRegister,
+            FieldMemOperand(kWasmInstanceRegister, Tuple2::kValue1Offset));
         __ Claim(required_slots +
                  2);  // Claim extra slots for marker + instance.
         Register scratch = temps.AcquireX();

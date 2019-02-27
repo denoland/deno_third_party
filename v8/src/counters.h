@@ -880,6 +880,7 @@ class RuntimeCallTimer final {
   V(CompileBackgroundRewriteReturnResult)      \
   V(CompileBackgroundScopeAnalysis)            \
   V(CompileBackgroundScript)                   \
+  V(CompileCollectSourcePositions)             \
   V(CompileDeserialize)                        \
   V(CompileEnqueueOnDispatcher)                \
   V(CompileEval)                               \
@@ -1246,6 +1247,8 @@ class RuntimeCallTimerScope {
   HT(gc_low_memory_notification, V8.GCLowMemoryNotification, 10000,            \
      MILLISECOND)                                                              \
   /* Compilation times. */                                                     \
+  HT(collect_source_positions, V8.CollectSourcePositions, 1000000,             \
+     MICROSECOND)                                                              \
   HT(compile, V8.CompileMicroSeconds, 1000000, MICROSECOND)                    \
   HT(compile_eval, V8.CompileEvalMicroSeconds, 1000000, MICROSECOND)           \
   /* Serialization as part of compilation (code caching) */                    \
@@ -1325,9 +1328,7 @@ class RuntimeCallTimerScope {
   HT(compile_script_on_background,                                             \
      V8.CompileScriptMicroSeconds.BackgroundThread, 1000000, MICROSECOND)      \
   HT(compile_function_on_background,                                           \
-     V8.CompileFunctionMicroSeconds.BackgroundThread, 1000000, MICROSECOND)    \
-  HT(gc_parallel_task_latency, V8.GC.ParallelTaskLatencyMicroSeconds, 1000000, \
-     MICROSECOND)
+     V8.CompileFunctionMicroSeconds.BackgroundThread, 1000000, MICROSECOND)
 
 #define AGGREGATABLE_HISTOGRAM_TIMER_LIST(AHT) \
   AHT(compile_lazy, V8.CompileLazyMicroSeconds)

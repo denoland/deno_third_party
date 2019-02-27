@@ -300,8 +300,8 @@ class MarkCompactCollectorBase {
 class MinorMarkingState final
     : public MarkingStateBase<MinorMarkingState, AccessMode::ATOMIC> {
  public:
-  Bitmap* bitmap(const MemoryChunk* chunk) const {
-    return chunk->young_generation_bitmap_;
+  ConcurrentBitmap<AccessMode::ATOMIC>* bitmap(const MemoryChunk* chunk) const {
+    return chunk->young_generation_bitmap<AccessMode::ATOMIC>();
   }
 
   void IncrementLiveBytes(MemoryChunk* chunk, intptr_t by) {
@@ -321,8 +321,9 @@ class MinorNonAtomicMarkingState final
     : public MarkingStateBase<MinorNonAtomicMarkingState,
                               AccessMode::NON_ATOMIC> {
  public:
-  Bitmap* bitmap(const MemoryChunk* chunk) const {
-    return chunk->young_generation_bitmap_;
+  ConcurrentBitmap<AccessMode::NON_ATOMIC>* bitmap(
+      const MemoryChunk* chunk) const {
+    return chunk->young_generation_bitmap<AccessMode::NON_ATOMIC>();
   }
 
   void IncrementLiveBytes(MemoryChunk* chunk, intptr_t by) {
@@ -345,11 +346,11 @@ class MinorNonAtomicMarkingState final
 class IncrementalMarkingState final
     : public MarkingStateBase<IncrementalMarkingState, AccessMode::ATOMIC> {
  public:
-  Bitmap* bitmap(const MemoryChunk* chunk) const {
+  ConcurrentBitmap<AccessMode::ATOMIC>* bitmap(const MemoryChunk* chunk) const {
     DCHECK_EQ(reinterpret_cast<intptr_t>(&chunk->marking_bitmap_) -
                   reinterpret_cast<intptr_t>(chunk),
               MemoryChunk::kMarkBitmapOffset);
-    return chunk->marking_bitmap_;
+    return chunk->marking_bitmap<AccessMode::ATOMIC>();
   }
 
   // Concurrent marking uses local live bytes so we may do these accesses
@@ -370,11 +371,11 @@ class IncrementalMarkingState final
 class MajorAtomicMarkingState final
     : public MarkingStateBase<MajorAtomicMarkingState, AccessMode::ATOMIC> {
  public:
-  Bitmap* bitmap(const MemoryChunk* chunk) const {
+  ConcurrentBitmap<AccessMode::ATOMIC>* bitmap(const MemoryChunk* chunk) const {
     DCHECK_EQ(reinterpret_cast<intptr_t>(&chunk->marking_bitmap_) -
                   reinterpret_cast<intptr_t>(chunk),
               MemoryChunk::kMarkBitmapOffset);
-    return chunk->marking_bitmap_;
+    return chunk->marking_bitmap<AccessMode::ATOMIC>();
   }
 
   void IncrementLiveBytes(MemoryChunk* chunk, intptr_t by) {
@@ -387,11 +388,12 @@ class MajorNonAtomicMarkingState final
     : public MarkingStateBase<MajorNonAtomicMarkingState,
                               AccessMode::NON_ATOMIC> {
  public:
-  Bitmap* bitmap(const MemoryChunk* chunk) const {
+  ConcurrentBitmap<AccessMode::NON_ATOMIC>* bitmap(
+      const MemoryChunk* chunk) const {
     DCHECK_EQ(reinterpret_cast<intptr_t>(&chunk->marking_bitmap_) -
                   reinterpret_cast<intptr_t>(chunk),
               MemoryChunk::kMarkBitmapOffset);
-    return chunk->marking_bitmap_;
+    return chunk->marking_bitmap<AccessMode::NON_ATOMIC>();
   }
 
   void IncrementLiveBytes(MemoryChunk* chunk, intptr_t by) {
@@ -526,6 +528,12 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
       shared_.Update(callback);
       on_hold_.Update(callback);
       embedder_.Update(callback);
+    }
+
+    void ShareWorkIfGlobalPoolIsEmpty() {
+      if (!shared_.IsLocalEmpty(kMainThread) && shared_.IsGlobalPoolEmpty()) {
+        shared_.FlushToGlobal(kMainThread);
+      }
     }
 
     ConcurrentMarkingWorklist* shared() { return &shared_; }
@@ -701,10 +709,13 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
 
   unsigned epoch() const { return epoch_; }
 
- private:
   explicit MarkCompactCollector(Heap* heap);
   ~MarkCompactCollector() override;
 
+  // Used by wrapper tracing.
+  V8_INLINE void MarkExternallyReferencedObject(HeapObject obj);
+
+ private:
   void ComputeEvacuationHeuristics(size_t area_size,
                                    int* target_fragmentation_percent,
                                    size_t* max_evacuated_bytes);
@@ -723,9 +734,6 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
   // Marks the object black and adds it to the marking work list.
   // This is for non-incremental marking only.
   V8_INLINE void MarkRootObject(Root root, HeapObject obj);
-
-  // Used by wrapper tracing.
-  V8_INLINE void MarkExternallyReferencedObject(HeapObject obj);
 
   // Mark the heap roots and all objects reachable from them.
   void MarkRoots(RootVisitor* root_visitor,
@@ -905,7 +913,6 @@ class MarkCompactCollector final : public MarkCompactCollectorBase {
   unsigned epoch_ = 0;
 
   friend class FullEvacuator;
-  friend class Heap;
   friend class RecordMigratedSlotVisitor;
 };
 

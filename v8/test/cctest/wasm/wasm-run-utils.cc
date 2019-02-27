@@ -6,6 +6,7 @@
 
 #include "src/assembler-inl.h"
 #include "src/code-tracer.h"
+#include "src/heap/heap-inl.h"
 #include "src/wasm/graph-builder-interface.h"
 #include "src/wasm/wasm-import-wrapper-cache-inl.h"
 #include "src/wasm/wasm-memory.h"
@@ -57,7 +58,7 @@ TestingModuleBuilder::TestingModuleBuilder(
   }
 }
 
-byte* TestingModuleBuilder::AddMemory(uint32_t size) {
+byte* TestingModuleBuilder::AddMemory(uint32_t size, SharedFlag shared) {
   CHECK(!test_module_->has_memory);
   CHECK_NULL(mem_start_);
   CHECK_EQ(0, mem_size_);
@@ -65,9 +66,16 @@ byte* TestingModuleBuilder::AddMemory(uint32_t size) {
   DCHECK_IMPLIES(test_module_->origin == kWasmOrigin,
                  size % kWasmPageSize == 0);
   test_module_->has_memory = true;
+  uint32_t max_size =
+      (test_module_->maximum_pages != 0) ? test_module_->maximum_pages : size;
   uint32_t alloc_size = RoundUp(size, kWasmPageSize);
   Handle<JSArrayBuffer> new_buffer;
-  CHECK(NewArrayBuffer(isolate_, alloc_size).ToHandle(&new_buffer));
+  if (shared == SharedFlag::kShared) {
+    CHECK(NewSharedArrayBuffer(isolate_, alloc_size, max_size)
+              .ToHandle(&new_buffer));
+  } else {
+    CHECK(NewArrayBuffer(isolate_, alloc_size).ToHandle(&new_buffer));
+  }
   CHECK(!new_buffer.is_null());
   mem_start_ = reinterpret_cast<byte*>(new_buffer->backing_store());
   mem_size_ = size;
@@ -75,9 +83,8 @@ byte* TestingModuleBuilder::AddMemory(uint32_t size) {
   memset(mem_start_, 0, size);
 
   // Create the WasmMemoryObject.
-  Handle<WasmMemoryObject> memory_object = WasmMemoryObject::New(
-      isolate_, new_buffer,
-      (test_module_->maximum_pages != 0) ? test_module_->maximum_pages : -1);
+  Handle<WasmMemoryObject> memory_object =
+      WasmMemoryObject::New(isolate_, new_buffer, max_size);
   instance_object_->set_memory_object(*memory_object);
   WasmMemoryObject::AddInstance(isolate_, memory_object, instance_object_);
   // TODO(wasm): Delete the following two lines when test-run-wasm will use a

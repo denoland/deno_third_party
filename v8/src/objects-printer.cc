@@ -10,6 +10,8 @@
 #include "src/bootstrapper.h"
 #include "src/disasm.h"
 #include "src/disassembler.h"
+#include "src/heap/heap-inl.h"                // For InOldSpace.
+#include "src/heap/heap-write-barrier-inl.h"  // For GetIsolateFromWritableObj.
 #include "src/interpreter/bytecodes.h"
 #include "src/objects-inl.h"
 #include "src/objects/arguments-inl.h"
@@ -96,8 +98,9 @@ void HeapObject::PrintHeader(std::ostream& os, const char* id) {  // NOLINT
     os << map()->instance_type();
   }
   os << "]";
-  MemoryChunk* chunk = MemoryChunk::FromAddress(ptr());
-  if (chunk->owner()->identity() == OLD_SPACE) os << " in OldSpace";
+  if (GetHeapFromWritableObject(*this)->InOldSpace(*this)) {
+    os << " in OldSpace";
+  }
   if (!IsMap()) os << "\n - map: " << Brief(map());
 }
 
@@ -782,16 +785,25 @@ void JSGeneratorObject::JSGeneratorObjectPrint(std::ostream& os) {  // NOLINT
     SharedFunctionInfo fun_info = function()->shared();
     if (fun_info->HasSourceCode()) {
       Script script = Script::cast(fun_info->script());
-      int lin = script->GetLineNumber(source_position()) + 1;
-      int col = script->GetColumnNumber(source_position()) + 1;
       String script_name = script->name()->IsString()
                                ? String::cast(script->name())
                                : GetReadOnlyRoots().empty_string();
-      os << "\n - source position: " << source_position();
-      os << " (";
-      script_name->PrintUC16(os);
-      os << ", lin " << lin;
-      os << ", col " << col;
+
+      os << "\n - source position: ";
+      // Can't collect source positions here if not available as that would
+      // allocate memory.
+      if (fun_info->HasBytecodeArray() &&
+          fun_info->GetBytecodeArray()->HasSourcePositionTable()) {
+        os << source_position();
+        os << " (";
+        script_name->PrintUC16(os);
+        int lin = script->GetLineNumber(source_position()) + 1;
+        int col = script->GetColumnNumber(source_position()) + 1;
+        os << ", lin " << lin;
+        os << ", col " << col;
+      } else {
+        os << "unavailable";
+      }
       os << ")";
     }
   }
@@ -946,7 +958,7 @@ void PrintContextWithHeader(std::ostream& os, Context context,
   context->PrintHeader(os, type);
   os << "\n - length: " << context->length();
   os << "\n - scope_info: " << Brief(context->scope_info());
-  os << "\n - previous: " << Brief(context->previous());
+  os << "\n - previous: " << Brief(context->unchecked_previous());
   os << "\n - extension: " << Brief(context->extension());
   os << "\n - native_context: " << Brief(context->native_context());
   PrintFixedArrayElements(os, context);
@@ -1131,7 +1143,7 @@ void FeedbackNexus::Print(std::ostream& os) {  // NOLINT
     case FeedbackSlotKind::kStoreKeyedStrict:
     case FeedbackSlotKind::kStoreInArrayLiteral:
     case FeedbackSlotKind::kCloneObject: {
-      os << InlineCacheState2String(StateFromFeedback());
+      os << InlineCacheState2String(ic_state());
       break;
     }
     case FeedbackSlotKind::kBinaryOp: {
@@ -1407,6 +1419,9 @@ void JSFunction::JSFunctionPrint(std::ostream& os) {  // NOLINT
 
   os << "\n - formal_parameter_count: "
      << shared()->internal_formal_parameter_count();
+  if (shared()->is_safe_to_skip_arguments_adaptor()) {
+    os << "\n - safe_to_skip_arguments_adaptor";
+  }
   os << "\n - kind: " << shared()->kind();
   os << "\n - context: " << Brief(context());
   os << "\n - code: " << Brief(code());
@@ -1463,6 +1478,9 @@ void SharedFunctionInfo::SharedFunctionInfoPrint(std::ostream& os) {  // NOLINT
   }
   os << "\n - function_map_index: " << function_map_index();
   os << "\n - formal_parameter_count: " << internal_formal_parameter_count();
+  if (is_safe_to_skip_arguments_adaptor()) {
+    os << "\n - safe_to_skip_arguments_adaptor";
+  }
   os << "\n - expected_nof_properties: " << expected_nof_properties();
   os << "\n - language_mode: " << language_mode();
   os << "\n - data: " << Brief(function_data());
@@ -2437,7 +2455,7 @@ void Map::MapPrint(std::ostream& os) {  // NOLINT
   Isolate* isolate;
   // Read-only maps can't have transitions, which is fortunate because we need
   // the isolate to iterate over the transitions.
-  if (Isolate::FromWritableHeapObject(*this, &isolate)) {
+  if (GetIsolateFromWritableObject(*this, &isolate)) {
     DisallowHeapAllocation no_gc;
     TransitionsAccessor transitions(isolate, *this, &no_gc);
     int nof_transitions = transitions.NumberOfTransitions();

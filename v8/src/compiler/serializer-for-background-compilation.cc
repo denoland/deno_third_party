@@ -407,7 +407,7 @@ void SerializerForBackgroundCompilation::VisitCallUndefinedReceiver0(
     BytecodeArrayIterator* iterator) {
   const Hints& callee =
       environment()->register_hints(iterator->GetRegisterOperand(0));
-  FeedbackSlot slot = FeedbackVector::ToSlot(iterator->GetIndexOperand(1));
+  FeedbackSlot slot = iterator->GetSlotOperand(1);
 
   Hints receiver(zone());
   receiver.AddConstant(broker()->isolate()->factory()->undefined_value());
@@ -422,7 +422,7 @@ void SerializerForBackgroundCompilation::VisitCallUndefinedReceiver1(
       environment()->register_hints(iterator->GetRegisterOperand(0));
   const Hints& arg0 =
       environment()->register_hints(iterator->GetRegisterOperand(1));
-  FeedbackSlot slot = FeedbackVector::ToSlot(iterator->GetIndexOperand(2));
+  FeedbackSlot slot = iterator->GetSlotOperand(2);
 
   Hints receiver(zone());
   receiver.AddConstant(broker()->isolate()->factory()->undefined_value());
@@ -439,7 +439,7 @@ void SerializerForBackgroundCompilation::VisitCallUndefinedReceiver2(
       environment()->register_hints(iterator->GetRegisterOperand(1));
   const Hints& arg1 =
       environment()->register_hints(iterator->GetRegisterOperand(2));
-  FeedbackSlot slot = FeedbackVector::ToSlot(iterator->GetIndexOperand(3));
+  FeedbackSlot slot = iterator->GetSlotOperand(3);
 
   Hints receiver(zone());
   receiver.AddConstant(broker()->isolate()->factory()->undefined_value());
@@ -469,7 +469,7 @@ void SerializerForBackgroundCompilation::VisitCallProperty0(
       environment()->register_hints(iterator->GetRegisterOperand(0));
   const Hints& receiver =
       environment()->register_hints(iterator->GetRegisterOperand(1));
-  FeedbackSlot slot = FeedbackVector::ToSlot(iterator->GetIndexOperand(2));
+  FeedbackSlot slot = iterator->GetSlotOperand(2);
 
   HintsVector parameters({receiver}, zone());
   ProcessCallOrConstruct(callee, base::nullopt, parameters, slot);
@@ -483,7 +483,7 @@ void SerializerForBackgroundCompilation::VisitCallProperty1(
       environment()->register_hints(iterator->GetRegisterOperand(1));
   const Hints& arg0 =
       environment()->register_hints(iterator->GetRegisterOperand(2));
-  FeedbackSlot slot = FeedbackVector::ToSlot(iterator->GetIndexOperand(3));
+  FeedbackSlot slot = iterator->GetSlotOperand(3);
 
   HintsVector parameters({receiver, arg0}, zone());
   ProcessCallOrConstruct(callee, base::nullopt, parameters, slot);
@@ -499,7 +499,7 @@ void SerializerForBackgroundCompilation::VisitCallProperty2(
       environment()->register_hints(iterator->GetRegisterOperand(2));
   const Hints& arg1 =
       environment()->register_hints(iterator->GetRegisterOperand(3));
-  FeedbackSlot slot = FeedbackVector::ToSlot(iterator->GetIndexOperand(4));
+  FeedbackSlot slot = iterator->GetSlotOperand(4);
 
   HintsVector parameters({receiver, arg0, arg1}, zone());
   ProcessCallOrConstruct(callee, base::nullopt, parameters, slot);
@@ -603,7 +603,7 @@ void SerializerForBackgroundCompilation::ProcessCallVarArgs(
   int reg_count = static_cast<int>(iterator->GetRegisterCountOperand(2));
   FeedbackSlot slot;
   if (iterator->current_bytecode() != interpreter::Bytecode::kCallNoFeedback) {
-    slot = FeedbackVector::ToSlot(iterator->GetIndexOperand(3));
+    slot = iterator->GetSlotOperand(3);
   }
 
   HintsVector arguments(zone());
@@ -659,7 +659,7 @@ void SerializerForBackgroundCompilation::VisitConstruct(
       environment()->register_hints(iterator->GetRegisterOperand(0));
   interpreter::Register first_reg = iterator->GetRegisterOperand(1);
   size_t reg_count = iterator->GetRegisterCountOperand(2);
-  FeedbackSlot slot = FeedbackVector::ToSlot(iterator->GetIndexOperand(3));
+  FeedbackSlot slot = iterator->GetSlotOperand(3);
   const Hints& new_target = environment()->accumulator_hints();
 
   HintsVector arguments(zone());
@@ -674,13 +674,66 @@ void SerializerForBackgroundCompilation::VisitConstructWithSpread(
       environment()->register_hints(iterator->GetRegisterOperand(0));
   interpreter::Register first_reg = iterator->GetRegisterOperand(1);
   size_t reg_count = iterator->GetRegisterCountOperand(2);
-  FeedbackSlot slot = FeedbackVector::ToSlot(iterator->GetIndexOperand(3));
+  FeedbackSlot slot = iterator->GetSlotOperand(3);
   const Hints& new_target = environment()->accumulator_hints();
 
   HintsVector arguments(zone());
   environment()->ExportRegisterHints(first_reg, reg_count, arguments);
 
   ProcessCallOrConstruct(callee, new_target, arguments, slot, true);
+}
+
+void SerializerForBackgroundCompilation::ProcessFeedbackForKeyedPropertyAccess(
+    BytecodeArrayIterator* iterator) {
+  interpreter::Bytecode bytecode = iterator->current_bytecode();
+  DCHECK(bytecode == interpreter::Bytecode::kLdaKeyedProperty ||
+         bytecode == interpreter::Bytecode::kStaKeyedProperty ||
+         bytecode == interpreter::Bytecode::kStaInArrayLiteral);
+
+  if (environment()->function().feedback_vector.is_null()) return;
+
+  FeedbackSlot slot = iterator->GetSlotOperand(
+      bytecode == interpreter::Bytecode::kLdaKeyedProperty ? 1 : 2);
+  if (slot.IsInvalid()) return;
+
+  FeedbackNexus nexus(environment()->function().feedback_vector, slot);
+  if (broker()->HasFeedback(nexus)) return;
+
+  Handle<Name> name(nexus.GetName(), broker()->isolate());
+  CHECK_IMPLIES(nexus.GetKeyType() == ELEMENT, name->is_null());
+  if (!name->is_null() || nexus.GetKeyType() == PROPERTY) {
+    CHECK_NE(bytecode, interpreter::Bytecode::kStaInArrayLiteral);
+    return;  // TODO(neis): Support named access.
+  }
+  if (nexus.ic_state() == MEGAMORPHIC) {
+    return;
+  }
+
+  ProcessedFeedback& processed = broker()->GetOrCreateFeedback(nexus);
+  MapHandles maps;
+  nexus.ExtractMaps(&maps);
+  ProcessFeedbackMapsForElementAccess(broker()->isolate(), maps, &processed);
+
+  // TODO(neis): Have something like MapRef::SerializeForElementStore() and call
+  // it for every receiver map in case of an element store.
+}
+
+void SerializerForBackgroundCompilation::VisitLdaKeyedProperty(
+    BytecodeArrayIterator* iterator) {
+  environment()->accumulator_hints().Clear();
+  ProcessFeedbackForKeyedPropertyAccess(iterator);
+}
+
+void SerializerForBackgroundCompilation::VisitStaKeyedProperty(
+    BytecodeArrayIterator* iterator) {
+  environment()->accumulator_hints().Clear();
+  ProcessFeedbackForKeyedPropertyAccess(iterator);
+}
+
+void SerializerForBackgroundCompilation::VisitStaInArrayLiteral(
+    BytecodeArrayIterator* iterator) {
+  environment()->accumulator_hints().Clear();
+  ProcessFeedbackForKeyedPropertyAccess(iterator);
 }
 
 #define DEFINE_CLEAR_ENVIRONMENT(name, ...)             \

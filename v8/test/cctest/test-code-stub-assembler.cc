@@ -14,6 +14,7 @@
 #include "src/code-stub-assembler.h"
 #include "src/compiler/node.h"
 #include "src/debug/debug.h"
+#include "src/hash-seed-inl.h"
 #include "src/heap/heap-inl.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
@@ -350,7 +351,7 @@ TEST(ComputeIntegerHash) {
     Handle<Smi> key(Smi::FromInt(k), isolate);
     Handle<Object> result = ft.Call(key).ToHandleChecked();
 
-    uint32_t hash = ComputeSeededHash(k, isolate->heap()->HashSeed());
+    uint32_t hash = ComputeSeededHash(k, HashSeed(isolate));
     Smi expected = Smi::FromInt(hash);
     CHECK_EQ(expected, Smi::cast(*result));
   }
@@ -1710,14 +1711,13 @@ TEST(AllocateNameDictionary) {
 
   {
     for (int i = 0; i < 256; i = i * 1.1 + 1) {
-      Handle<Object> result =
-          ft.Call(handle(Smi::FromInt(i), isolate)).ToHandleChecked();
+      Handle<HeapObject> result = Handle<HeapObject>::cast(
+          ft.Call(handle(Smi::FromInt(i), isolate)).ToHandleChecked());
       Handle<NameDictionary> dict = NameDictionary::New(isolate, i);
       // Both dictionaries should be memory equal.
-      int size =
-          FixedArrayBase::kHeaderSize + (dict->length() - 1) * kPointerSize;
-      CHECK_EQ(0, memcmp(reinterpret_cast<void*>(dict->ptr()),
-                         reinterpret_cast<void*>(result->ptr()), size));
+      int size = dict->Size();
+      CHECK_EQ(0, memcmp(reinterpret_cast<void*>(dict->address()),
+                         reinterpret_cast<void*>(result->address()), size));
     }
   }
 }

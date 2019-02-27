@@ -75,7 +75,25 @@ bool Type::IsAbstractName(const std::string& name) const {
   return AbstractType::cast(this)->name() == name;
 }
 
-std::string AbstractType::GetGeneratedTNodeTypeName() const {
+std::string Type::GetGeneratedTypeName() const {
+  std::string result = GetGeneratedTypeNameImpl();
+  if (result.empty() || result == "compiler::TNode<>") {
+    ReportError("Generated type is required for type '", ToString(),
+                "'. Use 'generates' clause in definition.");
+  }
+  return result;
+}
+
+std::string Type::GetGeneratedTNodeTypeName() const {
+  std::string result = GetGeneratedTNodeTypeNameImpl();
+  if (result.empty()) {
+    ReportError("Generated TNode type is required for type '", ToString(),
+                "'. Use 'generates' clause in definition.");
+  }
+  return result;
+}
+
+std::string AbstractType::GetGeneratedTNodeTypeNameImpl() const {
   return generated_type_;
 }
 
@@ -124,7 +142,7 @@ std::string UnionType::MangledName() const {
   return result.str();
 }
 
-std::string UnionType::GetGeneratedTNodeTypeName() const {
+std::string UnionType::GetGeneratedTNodeTypeNameImpl() const {
   if (types_.size() <= 3) {
     std::set<std::string> members;
     for (const Type* t : types_) {
@@ -226,6 +244,18 @@ std::vector<const AggregateType*> AggregateType::GetHierarchy() {
   return hierarchy;
 }
 
+bool AggregateType::HasField(const std::string& name) const {
+  for (auto& field : fields_) {
+    if (field.name_and_type.name == name) return true;
+  }
+  if (parent() != nullptr) {
+    if (auto parent_class = ClassType::DynamicCast(parent())) {
+      return parent_class->HasField(name);
+    }
+  }
+  return false;
+}
+
 const Field& AggregateType::LookupField(const std::string& name) const {
   for (auto& field : fields_) {
     if (field.name_and_type.name == name) return field;
@@ -235,10 +265,10 @@ const Field& AggregateType::LookupField(const std::string& name) const {
       return parent_class->LookupField(name);
     }
   }
-  ReportError("no field ", name, "found");
+  ReportError("no field ", name, " found");
 }
 
-std::string StructType::GetGeneratedTypeName() const {
+std::string StructType::GetGeneratedTypeNameImpl() const {
   return nspace()->ExternalName() + "::" + name();
 }
 
@@ -261,7 +291,34 @@ std::string StructType::ToExplicitString() const {
   return result.str();
 }
 
-std::string ClassType::GetGeneratedTNodeTypeName() const {
+ClassType::ClassType(const Type* parent, Namespace* nspace,
+                     const std::string& name, bool is_extern, bool transient,
+                     const std::string& generates)
+    : AggregateType(Kind::kClassType, parent, nspace, name),
+      this_struct_(nullptr),
+      is_extern_(is_extern),
+      transient_(transient),
+      size_(0),
+      has_indexed_field_(false),
+      generates_(generates) {
+  CheckForDuplicateFields();
+  if (parent) {
+    if (const ClassType* super_class = ClassType::DynamicCast(parent)) {
+      if (super_class->HasIndexedField()) {
+        has_indexed_field_ = true;
+      }
+    }
+  }
+}
+
+bool ClassType::HasIndexedField() const {
+  if (has_indexed_field_) return true;
+  const ClassType* super_class = GetSuperClass();
+  if (super_class) return super_class->HasIndexedField();
+  return false;
+}
+
+std::string ClassType::GetGeneratedTNodeTypeNameImpl() const {
   if (!IsExtern()) return generates_;
   std::string prefix = nspace()->IsDefaultNamespace()
                            ? std::string{}
@@ -269,7 +326,7 @@ std::string ClassType::GetGeneratedTNodeTypeName() const {
   return prefix + generates_;
 }
 
-std::string ClassType::GetGeneratedTypeName() const {
+std::string ClassType::GetGeneratedTypeNameImpl() const {
   return IsConstexpr() ? GetGeneratedTNodeTypeName()
                        : "compiler::TNode<" + GetGeneratedTNodeTypeName() + ">";
 }
@@ -525,6 +582,10 @@ std::tuple<size_t, std::string, std::string> Field::GetFieldSizeInformation()
     field_size = kUInt8Size;
     size_string = "kUInt8Size";
     machine_type = "MachineType::Uint8()";
+  } else if (field_type == TypeOracle::GetFloat64Type()) {
+    field_size = kDoubleSize;
+    size_string = "kDoubleSize";
+    machine_type = "MachineType::Float64()";
   } else if (field_type == TypeOracle::GetIntPtrType()) {
     field_size = kIntptrSize;
     size_string = "kIntptrSize";

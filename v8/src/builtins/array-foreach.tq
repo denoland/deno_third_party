@@ -10,11 +10,10 @@ namespace array_foreach {
     // All continuation points in the optimized forEach implemntation are
     // after the ToObject(O) call that ensures we are dealing with a
     // JSReceiver.
-    const jsreceiver: JSReceiver =
-        Cast<JSReceiver>(receiver) otherwise unreachable;
-    const callbackfn: Callable = Cast<Callable>(callback) otherwise unreachable;
-    const numberK: Number = Cast<Number>(initialK) otherwise unreachable;
-    const numberLength: Number = Cast<Number>(length) otherwise unreachable;
+    const jsreceiver = Cast<JSReceiver>(receiver) otherwise unreachable;
+    const callbackfn = Cast<Callable>(callback) otherwise unreachable;
+    const numberK = Cast<Number>(initialK) otherwise unreachable;
+    const numberLength = Cast<Number>(length) otherwise unreachable;
 
     return ArrayForEachLoopContinuation(
         jsreceiver, callbackfn, thisArg, Undefined, jsreceiver, numberK,
@@ -28,11 +27,10 @@ namespace array_foreach {
     // All continuation points in the optimized forEach implemntation are
     // after the ToObject(O) call that ensures we are dealing with a
     // JSReceiver.
-    const jsreceiver: JSReceiver =
-        Cast<JSReceiver>(receiver) otherwise unreachable;
-    const callbackfn: Callable = Cast<Callable>(callback) otherwise unreachable;
-    const numberK: Number = Cast<Number>(initialK) otherwise unreachable;
-    const numberLength: Number = Cast<Number>(length) otherwise unreachable;
+    const jsreceiver = Cast<JSReceiver>(receiver) otherwise unreachable;
+    const callbackfn = Cast<Callable>(callback) otherwise unreachable;
+    const numberK = Cast<Number>(initialK) otherwise unreachable;
+    const numberLength = Cast<Number>(length) otherwise unreachable;
 
     return ArrayForEachLoopContinuation(
         jsreceiver, callbackfn, thisArg, Undefined, jsreceiver, numberK,
@@ -79,12 +77,13 @@ namespace array_foreach {
 
     // Build a fast loop over the smi array.
     for (; k < len; k++) {
+      fastO.Recheck() otherwise goto Bailout(k);
+
       // Ensure that we haven't walked beyond a possibly updated length.
       if (k >= fastO.Get().length) goto Bailout(k);
       const value: Object = LoadElementNoHole<FixedArrayType>(fastO.Get(), k)
           otherwise continue;
       Call(context, callbackfn, thisArg, value, k, fastO.Get());
-      fastO.Recheck() otherwise goto Bailout(k + 1);
     }
   }
 
@@ -92,8 +91,8 @@ namespace array_foreach {
       o: JSReceiver, len: Number, callbackfn: Callable, thisArg: Object): Object
       labels Bailout(Smi) {
     let k: Smi = 0;
-    const smiLen: Smi = Cast<Smi>(len) otherwise goto Bailout(k);
-    let fastO: FastJSArray = Cast<FastJSArray>(o) otherwise goto Bailout(k);
+    const smiLen = Cast<Smi>(len) otherwise goto Bailout(k);
+    let fastO = Cast<FastJSArray>(o) otherwise goto Bailout(k);
     const elementsKind: ElementsKind = fastO.map.elements_kind;
     if (IsElementsKindGreaterThan(elementsKind, HOLEY_ELEMENTS)) {
       VisitAllElements<FixedDoubleArray>(fastO, smiLen, callbackfn, thisArg)
@@ -123,8 +122,7 @@ namespace array_foreach {
       if (arguments.length == 0) {
         goto TypeError;
       }
-      const callbackfn: Callable =
-          Cast<Callable>(arguments[0]) otherwise TypeError;
+      const callbackfn = Cast<Callable>(arguments[0]) otherwise TypeError;
 
       // 4. If thisArg is present, let T be thisArg; else let T be undefined.
       const thisArg: Object = arguments.length > 1 ? arguments[1] : Undefined;
@@ -143,11 +141,10 @@ namespace array_foreach {
           o, callbackfn, thisArg, Undefined, o, k, len, Undefined);
     }
     label TypeError deferred {
-      ThrowTypeError(context, kCalledNonCallable, arguments[0]);
+      ThrowTypeError(kCalledNonCallable, arguments[0]);
     }
     label NullOrUndefinedError deferred {
-      ThrowTypeError(
-          context, kCalledOnNullOrUndefined, 'Array.prototype.forEach');
+      ThrowTypeError(kCalledOnNullOrUndefined, 'Array.prototype.forEach');
     }
   }
 }

@@ -14,11 +14,15 @@
 #include "src/compiler.h"
 #include "src/conversions.h"
 #include "src/counters.h"
+#include "src/hash-seed-inl.h"
+#include "src/heap/heap-inl.h"
+#include "src/heap/incremental-marking.h"
 #include "src/heap/mark-compact-inl.h"
 #include "src/ic/handler-configuration-inl.h"
 #include "src/interpreter/interpreter.h"
 #include "src/isolate-inl.h"
 #include "src/log.h"
+#include "src/objects/allocation-site-inl.h"
 #include "src/objects/api-callbacks.h"
 #include "src/objects/arguments-inl.h"
 #include "src/objects/bigint.h"
@@ -42,6 +46,7 @@
 #include "src/objects/scope-info.h"
 #include "src/objects/stack-frame-info-inl.h"
 #include "src/objects/struct-inl.h"
+#include "src/objects/template-objects-inl.h"
 #include "src/transitions-inl.h"
 #include "src/unicode-cache.h"
 #include "src/unicode-inl.h"
@@ -607,12 +612,12 @@ Handle<AccessorPair> Factory::NewAccessorPair() {
 
 // Internalized strings are created in the old generation (data space).
 Handle<String> Factory::InternalizeUtf8String(Vector<const char> string) {
-  Utf8StringKey key(string, isolate()->heap()->HashSeed());
+  Utf8StringKey key(string, HashSeed(isolate()));
   return InternalizeStringWithKey(&key);
 }
 
 Handle<String> Factory::InternalizeOneByteString(Vector<const uint8_t> string) {
-  OneByteStringKey key(string, isolate()->heap()->HashSeed());
+  OneByteStringKey key(string, HashSeed(isolate()));
   return InternalizeStringWithKey(&key);
 }
 
@@ -623,7 +628,7 @@ Handle<String> Factory::InternalizeOneByteString(
 }
 
 Handle<String> Factory::InternalizeTwoByteString(Vector<const uc16> string) {
-  TwoByteStringKey key(string, isolate()->heap()->HashSeed());
+  TwoByteStringKey key(string, HashSeed(isolate()));
   return InternalizeStringWithKey(&key);
 }
 
@@ -1820,7 +1825,7 @@ Handle<BytecodeArray> Factory::NewBytecodeArray(
   instance->set_bytecode_age(BytecodeArray::kNoAgeBytecodeAge);
   instance->set_constant_pool(*constant_pool);
   instance->set_handler_table(*empty_byte_array());
-  instance->set_source_position_table(*empty_byte_array());
+  instance->set_source_position_table(*undefined_value());
   CopyBytes(reinterpret_cast<byte*>(instance->GetFirstBytecodeAddress()),
             raw_bytecodes, length);
   instance->clear_padding();
@@ -1840,7 +1845,7 @@ Handle<FixedTypedArrayBase> Factory::NewFixedTypedArrayWithExternalPointer(
   Handle<FixedTypedArrayBase> elements(FixedTypedArrayBase::cast(result),
                                        isolate());
   elements->set_base_pointer(Smi::kZero, SKIP_WRITE_BARRIER);
-  elements->set_external_pointer(external_pointer, SKIP_WRITE_BARRIER);
+  elements->set_external_pointer(external_pointer);
   elements->set_length(length);
   return elements;
 }
@@ -1863,9 +1868,7 @@ Handle<FixedTypedArrayBase> Factory::NewFixedTypedArray(
                                        isolate());
   elements->set_base_pointer(*elements, SKIP_WRITE_BARRIER);
   elements->set_external_pointer(
-      reinterpret_cast<void*>(
-          ExternalReference::fixed_typed_array_base_data_offset().address()),
-      SKIP_WRITE_BARRIER);
+      FixedTypedArrayBase::ExternalPointerPtrForOnHeapArray());
   elements->set_length(static_cast<int>(length));
   if (initialize) memset(elements->DataPtr(), 0, elements->DataSize());
   return elements;
@@ -2036,6 +2039,7 @@ Map Factory::InitializeMap(Map map, InstanceType type, int instance_size,
                    Map::OwnsDescriptorsBit::encode(true) |
                    Map::ConstructionCounterBits::encode(Map::kNoSlackTracking);
   map->set_bit_field3(bit_field3);
+  map->clear_padding();
   map->set_elements_kind(elements_kind);
   map->set_new_target_is_base(true);
   isolate()->counters()->maps_created()->Increment();

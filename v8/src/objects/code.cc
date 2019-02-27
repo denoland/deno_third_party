@@ -4,13 +4,15 @@
 
 #include <iomanip>
 
+#include "src/objects/code.h"
+
 #include "src/assembler-inl.h"
 #include "src/cpu-features.h"
 #include "src/deoptimizer.h"
 #include "src/interpreter/bytecode-array-iterator.h"
 #include "src/interpreter/bytecode-decoder.h"
 #include "src/interpreter/interpreter.h"
-#include "src/objects/code.h"
+#include "src/objects/allocation-site-inl.h"
 #include "src/ostreams.h"
 #include "src/reloc-info.h"
 #include "src/roots-inl.h"
@@ -165,7 +167,7 @@ void SetStackFrameCacheCommon(Isolate* isolate, Handle<Code> code,
         ->set_stack_frame_cache(*cache);
     return;
   }
-  DCHECK(maybe_table->IsByteArray());
+  DCHECK(maybe_table->IsUndefined() || maybe_table->IsByteArray());
   Handle<ByteArray> table(Handle<ByteArray>::cast(maybe_table));
   Handle<SourcePositionTableWithFrameCache> table_with_cache =
       isolate->factory()->NewSourcePositionTableWithFrameCache(table, cache);
@@ -192,7 +194,7 @@ namespace {
 template <typename Code>
 void DropStackFrameCacheCommon(Code code) {
   i::Object maybe_table = code->source_position_table();
-  if (maybe_table->IsByteArray()) return;
+  if (maybe_table->IsUndefined() || maybe_table->IsByteArray()) return;
   DCHECK(maybe_table->IsSourcePositionTableWithFrameCache());
   code->set_source_position_table(
       i::SourcePositionTableWithFrameCache::cast(maybe_table)
@@ -1046,7 +1048,7 @@ void Code::SetMarkedForDeoptimization(const char* reason) {
       (deoptimization_data() != GetReadOnlyRoots().empty_fixed_array())) {
     DeoptimizationData deopt_data =
         DeoptimizationData::cast(deoptimization_data());
-    CodeTracer::Scope scope(GetHeap()->isolate()->GetCodeTracer());
+    CodeTracer::Scope scope(GetIsolate()->GetCodeTracer());
     PrintF(scope.file(),
            "[marking dependent code " V8PRIxPTR_FMT
            " (opt #%d) for deoptimization, reason: %s]\n",

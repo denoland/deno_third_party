@@ -978,6 +978,9 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
     case IrOpcode::kLoadDataViewElement:
       result = LowerLoadDataViewElement(node);
       break;
+    case IrOpcode::kLoadStackArgument:
+      result = LowerLoadStackArgument(node);
+      break;
     case IrOpcode::kStoreTypedElement:
       LowerStoreTypedElement(node);
       break;
@@ -1544,7 +1547,7 @@ void EffectControlLinearizer::LowerCheckMaps(Node* node, Node* frame_state) {
 }
 
 Node* EffectControlLinearizer::LowerCompareMaps(Node* node) {
-  ZoneHandleSet<Map> const& maps = CompareMapsParametersOf(node->op()).maps();
+  ZoneHandleSet<Map> const& maps = CompareMapsParametersOf(node->op());
   size_t const map_count = maps.size();
   Node* value = node->InputAt(0);
 
@@ -4339,6 +4342,16 @@ Node* EffectControlLinearizer::LowerLoadDataViewElement(Node* node) {
   // We're done, return {result}.
   __ Bind(&done);
   return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerLoadStackArgument(Node* node) {
+  Node* base = node->InputAt(0);
+  Node* index = node->InputAt(1);
+
+  Node* argument =
+      __ LoadElement(AccessBuilder::ForStackArgument(), base, index);
+
+  return __ BitcastWordToTagged(argument);
 }
 
 void EffectControlLinearizer::LowerStoreDataViewElement(Node* node) {

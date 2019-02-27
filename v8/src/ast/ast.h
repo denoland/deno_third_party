@@ -11,6 +11,7 @@
 #include "src/ast/modules.h"
 #include "src/ast/variables.h"
 #include "src/bailout-reason.h"
+#include "src/base/threaded-list.h"
 #include "src/globals.h"
 #include "src/heap/factory.h"
 #include "src/isolate.h"
@@ -180,9 +181,6 @@ class AstNode: public ZoneObject {
 
 
 class Statement : public AstNode {
- public:
-  bool IsJump() const;
-
  protected:
   Statement(int position, NodeType type) : AstNode(position, type) {}
 
@@ -341,11 +339,6 @@ class Block : public BreakableStatement {
   }
 
   inline ZonePtrList<const AstRawString>* labels() const;
-
-  bool IsJump() const {
-    return !statements_.is_empty() && statements_.last()->IsJump() &&
-           labels() == nullptr;  // Good enough as an approximation...
-  }
 
   Scope* scope() const { return scope_; }
   void set_scope(Scope* scope) { scope_ = scope; }
@@ -677,7 +670,6 @@ class ExpressionStatement final : public Statement {
  public:
   void set_expression(Expression* e) { expression_ = e; }
   Expression* expression() const { return expression_; }
-  bool IsJump() const { return expression_->IsThrow(); }
 
  private:
   friend class AstNodeFactory;
@@ -690,9 +682,6 @@ class ExpressionStatement final : public Statement {
 
 
 class JumpStatement : public Statement {
- public:
-  bool IsJump() const { return true; }
-
  protected:
   JumpStatement(int pos, NodeType type) : Statement(pos, type) {}
 };
@@ -837,11 +826,6 @@ class IfStatement final : public Statement {
 
   void set_then_statement(Statement* s) { then_statement_ = s; }
   void set_else_statement(Statement* s) { else_statement_ = s; }
-
-  bool IsJump() const {
-    return HasThenStatement() && then_statement()->IsJump()
-        && HasElseStatement() && else_statement()->IsJump();
-  }
 
  private:
   friend class AstNodeFactory;
@@ -2212,8 +2196,6 @@ class FunctionLiteral final : public Expression {
     kWrapped,
   };
 
-  enum IdType { kIdTypeInvalid = -1, kIdTypeTopLevel = 0 };
-
   enum ParameterFlag : uint8_t {
     kNoDuplicateParameters,
     kHasDuplicateParameters
@@ -2248,7 +2230,7 @@ class FunctionLiteral final : public Expression {
   }
   bool is_oneshot_iife() const { return OneshotIIFEBit::decode(bit_field_); }
   bool is_toplevel() const {
-    return function_literal_id() == FunctionLiteral::kIdTypeTopLevel;
+    return function_literal_id() == kFunctionLiteralIdTopLevel;
   }
   bool is_wrapped() const { return function_type() == kWrapped; }
   LanguageMode language_mode() const;
@@ -2272,6 +2254,18 @@ class FunctionLiteral final : public Expression {
     }
     return false;
   }
+
+  // We can safely skip the arguments adaptor frame setup even
+  // in case of arguments mismatches for strict mode functions,
+  // as long as there's
+  //
+  //   1. no use of the arguments object (either explicitly or
+  //      potentially implicitly via a direct eval() call), and
+  //   2. rest parameters aren't being used in the function.
+  //
+  // See http://bit.ly/v8-faster-calls-with-arguments-mismatch
+  // for the details here (https://crbug.com/v8/8895).
+  bool SafeToSkipArgumentsAdaptor() const;
 
   // Returns either name or inferred name as a cstring.
   std::unique_ptr<char[]> GetDebugName() const;
@@ -2702,7 +2696,6 @@ class AstVisitor {
     for (int i = 0; i < statements->length(); i++) {
       Statement* stmt = statements->at(i);
       Visit(stmt);
-      if (stmt->IsJump()) break;
     }
   }
 
@@ -3221,7 +3214,7 @@ class AstNodeFactory final {
         FunctionLiteral::kAnonymousExpression,
         FunctionLiteral::kNoDuplicateParameters,
         FunctionLiteral::kShouldLazyCompile, 0, /* has_braces */ false,
-        FunctionLiteral::kIdTypeTopLevel);
+        kFunctionLiteralIdTopLevel);
   }
 
   ClassLiteral::Property* NewClassLiteralProperty(

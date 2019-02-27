@@ -272,6 +272,16 @@ enum class ObjectType {
 #undef ENUM_ELEMENT
 #undef ENUM_STRUCT_ELEMENT
 
+enum class CheckBounds { kAlways, kDebugOnly };
+inline bool NeedsBoundsCheck(CheckBounds check_bounds) {
+  switch (check_bounds) {
+    case CheckBounds::kAlways:
+      return true;
+    case CheckBounds::kDebugOnly:
+      return DEBUG_BOOL;
+  }
+}
+
 class AccessCheckNeeded;
 class BigIntWrapper;
 class ClassBoilerplate;
@@ -1079,6 +1089,12 @@ class V8_EXPORT_PRIVATE CodeAssembler {
     return Unsigned(
         IntPtrSub(static_cast<Node*>(left), static_cast<Node*>(right)));
   }
+  TNode<RawPtrT> RawPtrAdd(TNode<RawPtrT> left, TNode<IntPtrT> right) {
+    return ReinterpretCast<RawPtrT>(IntPtrAdd(left, right));
+  }
+  TNode<RawPtrT> RawPtrAdd(TNode<IntPtrT> left, TNode<RawPtrT> right) {
+    return ReinterpretCast<RawPtrT>(IntPtrAdd(left, right));
+  }
 
   TNode<WordT> WordShl(SloppyTNode<WordT> value, int shift);
   TNode<WordT> WordShr(SloppyTNode<WordT> value, int shift);
@@ -1572,6 +1588,10 @@ class CodeAssemblerLabel {
   std::map<CodeAssemblerVariable::Impl*, std::vector<Node*>,
            CodeAssemblerVariable::ImplComparator>
       variable_merges_;
+
+  // Cannot be copied because the destructor explicitly call the destructor of
+  // the underlying {RawMachineLabel}, hence only one pointer can point to it.
+  DISALLOW_COPY_AND_ASSIGN(CodeAssemblerLabel);
 };
 
 class CodeAssemblerParameterizedLabelBase {

@@ -171,13 +171,11 @@ declare_args() {
   # setting the "check_v8_header_includes" gclient variable to run a
   # specific hook).
   v8_check_header_includes = false
-
-  # We reuse the snapshot toolchain for building torque and other generators to
-  # avoid building v8_libbase on the host more than once. On mips with big
-  # endian, the snapshot toolchain is the target toolchain and, hence, can't be
-  # used.
 }
 
+# We reuse the snapshot toolchain for building torque and other generators to
+# avoid building v8_libbase on the host more than once. On mips with big endian,
+# the snapshot toolchain is the target toolchain and, hence, can't be used.
 v8_generator_toolchain = v8_snapshot_toolchain
 if (host_cpu == "x64" &&
     (v8_current_cpu == "mips" || v8_current_cpu == "mips64")) {
@@ -222,20 +220,6 @@ v8_toolset_for_shell = "host"
 ###############################################################################
 # Configurations
 #
-config("internal_config") {
-  visibility = [ ":*" ]  # Only targets in this file can depend on this.
-
-  include_dirs = [
-    ".",
-    "$target_gen_dir",
-  ]
-
-  configs = [ "//build/config/compiler:wexit_time_destructors" ]
-
-  if (is_component_build) {
-    defines = [ "BUILDING_V8_SHARED" ]
-  }
-}
 
 config("internal_config_base") {
   visibility = [ ":*" ]  # Only targets in this file can depend on this.
@@ -244,6 +228,21 @@ config("internal_config_base") {
     ".",
     "$target_gen_dir",
   ]
+}
+
+config("internal_config") {
+  defines = []
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
+
+  configs = [
+    "//build/config/compiler:wexit_time_destructors",
+    ":internal_config_base",
+    ":v8_header_features",
+  ]
+
+  if (is_component_build) {
+    defines += [ "BUILDING_V8_SHARED" ]
+  }
 }
 
 # This config should be applied to code using the libplatform.
@@ -274,17 +273,9 @@ config("libsampler_config") {
 # itself.
 config("external_config") {
   defines = []
+  configs = [ ":v8_header_features" ]
   if (is_component_build) {
     defines += [ "USING_V8_SHARED" ]
-  }
-  if (v8_enable_v8_checks) {
-    defines += [ "V8_ENABLE_CHECKS" ]  # Used in "include/v8.h".
-  }
-  if (v8_deprecation_warnings) {
-    defines += [ "V8_DEPRECATION_WARNINGS" ]
-  }
-  if (v8_imminent_deprecation_warnings) {
-    defines += [ "V8_IMMINENT_DEPRECATION_WARNINGS" ]
   }
   include_dirs = [
     "include",
@@ -300,10 +291,38 @@ config("external_startup_data") {
   }
 }
 
+# Put defines that are used in public headers here; public headers are
+# defined in "v8_headers" and are included by embedders of V8.
+config("v8_header_features") {
+  visibility = [ ":*" ]
+
+  defines = []
+
+  if (v8_enable_v8_checks) {
+    defines += [ "V8_ENABLE_CHECKS" ]  # Used in "include/v8.h".
+  }
+  if (v8_enable_pointer_compression) {
+    defines += [ "V8_COMPRESS_POINTERS" ]
+  }
+  if (v8_enable_pointer_compression || v8_enable_31bit_smis_on_64bit_arch) {
+    defines += [ "V8_31BIT_SMIS_ON_64BIT_ARCH" ]
+  }
+  if (v8_deprecation_warnings) {
+    defines += [ "V8_DEPRECATION_WARNINGS" ]
+  }
+  if (v8_imminent_deprecation_warnings) {
+    defines += [ "V8_IMMINENT_DEPRECATION_WARNINGS" ]
+  }
+}
+
+# Put defines here that are only used in our internal files and NEVER in
+# external headers that embedders (such as chromium and node) might include.
 config("features") {
   visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   defines = []
+
+  configs = [ ":v8_header_features" ]
 
   if (v8_embedder_string != "") {
     defines += [ "V8_EMBEDDER_STRING=\"$v8_embedder_string\"" ]
@@ -336,12 +355,6 @@ config("features") {
   if (v8_enable_minor_mc) {
     defines += [ "ENABLE_MINOR_MC" ]
   }
-  if (v8_enable_pointer_compression) {
-    defines += [ "V8_COMPRESS_POINTERS" ]
-  }
-  if (v8_enable_pointer_compression || v8_enable_31bit_smis_on_64bit_arch) {
-    defines += [ "V8_31BIT_SMIS_ON_64BIT_ARCH" ]
-  }
   if (v8_enable_object_print) {
     defines += [ "OBJECT_PRINT" ]
   }
@@ -363,15 +376,6 @@ config("features") {
   if (v8_enable_test_features) {
     defines += [ "V8_ENABLE_ALLOCATION_TIMEOUT" ]
     defines += [ "V8_ENABLE_FORCE_SLOW_PATH" ]
-  }
-  if (v8_enable_v8_checks) {
-    defines += [ "V8_ENABLE_CHECKS" ]
-  }
-  if (v8_deprecation_warnings) {
-    defines += [ "V8_DEPRECATION_WARNINGS" ]
-  }
-  if (v8_imminent_deprecation_warnings) {
-    defines += [ "V8_IMMINENT_DEPRECATION_WARNINGS" ]
   }
   if (v8_enable_i18n_support) {
     defines += [ "V8_INTL_SUPPORT" ]
@@ -607,6 +611,9 @@ config("toolchain") {
     cflags += [
       "-Wmissing-field-initializers",
 
+      # TODO(thakis): Remove once enabled globally, https://crbug.com/926235
+      "-Wextra-semi",
+
       # TODO(hans): Remove once http://crbug.com/428099 is resolved.
       "-Winconsistent-missing-override",
     ]
@@ -660,6 +667,32 @@ config("toolchain") {
   # Chromium uses a hand-picked subset of UBSan coverage. We want everything.
   if (is_ubsan) {
     cflags += [ "-fsanitize=undefined" ]
+  }
+}
+
+config("default_optimization") {
+  if (is_debug && !v8_optimized_debug) {
+    configs = [ "//build/config/compiler:no_optimize" ]
+  } else {
+    # TODO(crbug.com/621335) Rework this so that we don't have the confusion
+    # between "optimize_speed" and "optimize_max".
+    if (((is_posix && !is_android) || is_fuchsia) && !using_sanitizer) {
+      configs = [ "//build/config/compiler:optimize_speed" ]
+    } else {
+      configs = [ "//build/config/compiler:optimize_max" ]
+    }
+  }
+}
+
+# For code that is only run a few times during the build, C++ optimizations
+# are a waste of time.
+config("unoptimized_initializer") {
+  configs = [ ":internal_config" ]
+  if (using_sanitizer) {
+    # Some sanitizers rely on optimizations.
+    configs += [ ":default_optimization" ]
+  } else {
+    configs += [ "//build/config/compiler:no_optimize" ]
   }
 }
 
@@ -867,14 +900,18 @@ torque_files = [
   "src/builtins/arguments.tq",
   "src/builtins/array.tq",
   "src/builtins/array-copywithin.tq",
+  "src/builtins/array-every.tq",
   "src/builtins/array-filter.tq",
   "src/builtins/array-foreach.tq",
   "src/builtins/array-join.tq",
   "src/builtins/array-lastindexof.tq",
   "src/builtins/array-of.tq",
   "src/builtins/array-map.tq",
+  "src/builtins/array-reduce.tq",
+  "src/builtins/array-reduce-right.tq",
   "src/builtins/array-reverse.tq",
   "src/builtins/array-slice.tq",
+  "src/builtins/array-some.tq",
   "src/builtins/array-splice.tq",
   "src/builtins/array-unshift.tq",
   "src/builtins/collections.tq",
@@ -977,7 +1014,8 @@ v8_source_set("torque_generated_initializers") {
     ]
   }
 
-  configs = [ ":internal_config" ]
+  remove_configs = [ v8_path_prefix + ":default_optimization" ]
+  configs = [ ":unoptimized_initializer" ]
 }
 
 action("generate_bytecode_builtins_list") {
@@ -1314,6 +1352,9 @@ v8_source_set("v8_initializers") {
 
   deps = [
     ":torque_generated_initializers",
+  ]
+
+  public_deps = [
     ":v8_base",
   ]
 
@@ -1450,7 +1491,8 @@ v8_source_set("v8_initializers") {
     sources -= [ "src/builtins/builtins-intl-gen.cc" ]
   }
 
-  configs = [ ":internal_config" ]
+  remove_configs = [ v8_path_prefix + ":default_optimization" ]
+  configs = [ ":unoptimized_initializer" ]
 }
 
 v8_source_set("v8_init") {
@@ -1489,6 +1531,7 @@ v8_header_set("v8_version") {
 # can depend upon to get basic v8 types.
 v8_header_set("v8_headers") {
   configs = [ ":internal_config" ]
+  public_configs = [ ":v8_header_features" ]
 
   sources = [
     "include/v8-internal.h",
@@ -1506,6 +1549,20 @@ v8_header_set("v8_headers") {
 
   deps = [
     ":v8_version",
+  ]
+}
+
+# This is split out to share basic headers with Torque.
+v8_header_set("v8_shared_internal_headers") {
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
+  configs = [ ":internal_config" ]
+
+  sources = [
+    "src/globals.h",
+  ]
+
+  deps = [
+    ":v8_headers",
   ]
 }
 
@@ -1987,12 +2044,12 @@ v8_source_set("v8_base") {
     "src/gdb-jit.h",
     "src/global-handles.cc",
     "src/global-handles.h",
-    "src/globals.h",
     "src/handler-table.cc",
     "src/handler-table.h",
     "src/handles-inl.h",
     "src/handles.cc",
     "src/handles.h",
+    "src/hash-seed-inl.h",
     "src/heap-symbols.h",
     "src/heap/array-buffer-collector.cc",
     "src/heap/array-buffer-collector.h",
@@ -2335,6 +2392,7 @@ v8_source_set("v8_base") {
     "src/objects/string.h",
     "src/objects/struct-inl.h",
     "src/objects/struct.h",
+    "src/objects/template-objects-inl.h",
     "src/objects/template-objects.cc",
     "src/objects/template-objects.h",
     "src/objects/templates-inl.h",
@@ -2549,6 +2607,8 @@ v8_source_set("v8_base") {
     "src/third_party/utf8-decoder/utf8-decoder.h",
     "src/thread-id.cc",
     "src/thread-id.h",
+    "src/thread-local-top.cc",
+    "src/thread-local-top.h",
     "src/tracing/trace-event.cc",
     "src/tracing/trace-event.h",
     "src/tracing/traced-value.cc",
@@ -2678,6 +2738,7 @@ v8_source_set("v8_base") {
     "src/zone/zone-list-inl.h",
     "src/zone/zone-segment.cc",
     "src/zone/zone-segment.h",
+    "src/zone/zone-splay-tree.h",
     "src/zone/zone.cc",
     "src/zone/zone.h",
   ]
@@ -2962,19 +3023,21 @@ v8_source_set("v8_base") {
 
   defines = []
   deps = [
-    ":generate_bytecode_builtins_list",
-    ":run_torque",
     ":v8_headers",
     ":v8_libbase",
     ":v8_libsampler",
+    ":v8_shared_internal_headers",
     ":v8_version",
     "src/inspector:inspector",
   ]
 
+  public_deps = [
+    ":generate_bytecode_builtins_list",
+    ":run_torque",
+  ]
+
   if (v8_enable_i18n_support) {
-    public_deps = [
-      "//third_party/icu",
-    ]
+    public_deps += [ "//third_party/icu" ]
     if (is_win) {
       deps += [ "//third_party/icu:icudata" ]
     }
@@ -3060,6 +3123,8 @@ v8_source_set("torque_base") {
     "src/torque/instructions.h",
     "src/torque/source-positions.cc",
     "src/torque/source-positions.h",
+    "src/torque/torque-compiler.cc",
+    "src/torque/torque-compiler.h",
     "src/torque/torque-parser.cc",
     "src/torque/torque-parser.h",
     "src/torque/type-oracle.cc",
@@ -3072,6 +3137,25 @@ v8_source_set("torque_base") {
 
   deps = [
     ":v8_libbase",
+    ":v8_shared_internal_headers",
+  ]
+
+  configs = [ ":internal_config" ]
+  if (is_win && is_asan) {
+    remove_configs = [ "//build/config/sanitizers:default_sanitizer_flags" ]
+  }
+}
+
+v8_source_set("torque_ls_base") {
+  sources = [
+    "src/torque/ls/json-parser.cc",
+    "src/torque/ls/json-parser.h",
+    "src/torque/ls/json.cc",
+    "src/torque/ls/json.h",
+  ]
+
+  deps = [
+    ":torque_base",
   ]
 
   configs = [ ":internal_config" ]
@@ -3322,7 +3406,7 @@ v8_source_set("v8_libsampler") {
     "src/libsampler/sampler.h",
   ]
 
-  configs = [ ":internal_config_base" ]
+  configs = [ ":internal_config" ]
 
   public_configs = [ ":libsampler_config" ]
 
@@ -3573,6 +3657,7 @@ if (is_component_build) {
     public_deps = [
       ":torque_base",
       ":v8_base",
+      ":v8_headers",
       ":v8_maybe_snapshot",
     ]
 

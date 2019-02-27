@@ -15,6 +15,7 @@
 #include "src/external-reference-table.h"
 #include "src/frame-constants.h"
 #include "src/frames-inl.h"
+#include "src/heap/heap-inl.h"  // For MemoryChunk.
 #include "src/macro-assembler-inl.h"
 #include "src/register-configuration.h"
 #include "src/runtime/runtime.h"
@@ -1470,7 +1471,7 @@ void TurboAssembler::CopyDoubleWords(Register dst, Register src, Register count,
     Bind(&pointer1_below_pointer2);
     Add(pointer1, pointer1, pointer2);
   }
-  static_assert(kPointerSize == kDRegSize,
+  static_assert(kSystemPointerSize == kDRegSize,
                 "pointers must be the same size as doubles");
 
   int direction = (mode == kDstLessThanSrc) ? 1 : -1;
@@ -1481,21 +1482,23 @@ void TurboAssembler::CopyDoubleWords(Register dst, Register src, Register count,
   Label pairs, loop, done;
 
   Tbz(count, 0, &pairs);
-  Ldr(temp0, MemOperand(src, direction * kPointerSize, PostIndex));
+  Ldr(temp0, MemOperand(src, direction * kSystemPointerSize, PostIndex));
   Sub(count, count, 1);
-  Str(temp0, MemOperand(dst, direction * kPointerSize, PostIndex));
+  Str(temp0, MemOperand(dst, direction * kSystemPointerSize, PostIndex));
 
   Bind(&pairs);
   if (mode == kSrcLessThanDst) {
     // Adjust pointers for post-index ldp/stp with negative offset:
-    Sub(dst, dst, kPointerSize);
-    Sub(src, src, kPointerSize);
+    Sub(dst, dst, kSystemPointerSize);
+    Sub(src, src, kSystemPointerSize);
   }
   Bind(&loop);
   Cbz(count, &done);
-  Ldp(temp0, temp1, MemOperand(src, 2 * direction * kPointerSize, PostIndex));
+  Ldp(temp0, temp1,
+      MemOperand(src, 2 * direction * kSystemPointerSize, PostIndex));
   Sub(count, count, 2);
-  Stp(temp0, temp1, MemOperand(dst, 2 * direction * kPointerSize, PostIndex));
+  Stp(temp0, temp1,
+      MemOperand(dst, 2 * direction * kSystemPointerSize, PostIndex));
   B(&loop);
 
   // TODO(all): large copies may benefit from using temporary Q registers
@@ -1505,11 +1508,11 @@ void TurboAssembler::CopyDoubleWords(Register dst, Register src, Register count,
 }
 
 void TurboAssembler::SlotAddress(Register dst, int slot_offset) {
-  Add(dst, sp, slot_offset << kPointerSizeLog2);
+  Add(dst, sp, slot_offset << kSystemPointerSizeLog2);
 }
 
 void TurboAssembler::SlotAddress(Register dst, Register slot_offset) {
-  Add(dst, sp, Operand(slot_offset, LSL, kPointerSizeLog2));
+  Add(dst, sp, Operand(slot_offset, LSL, kSystemPointerSizeLog2));
 }
 
 void TurboAssembler::AssertFPCRState(Register fpcr) {
@@ -2170,23 +2173,25 @@ void TurboAssembler::PrepareForTailCall(const ParameterCount& callee_args_count,
 #endif
 
   // Calculate the end of destination area where we will put the arguments
-  // after we drop current frame. We add kPointerSize to count the receiver
-  // argument which is not included into formal parameters count.
+  // after we drop current frame. We add kSystemPointerSize to count the
+  // receiver argument which is not included into formal parameters count.
   Register dst_reg = scratch0;
-  Add(dst_reg, fp, Operand(caller_args_count_reg, LSL, kPointerSizeLog2));
-  Add(dst_reg, dst_reg, StandardFrameConstants::kCallerSPOffset + kPointerSize);
+  Add(dst_reg, fp, Operand(caller_args_count_reg, LSL, kSystemPointerSizeLog2));
+  Add(dst_reg, dst_reg,
+      StandardFrameConstants::kCallerSPOffset + kSystemPointerSize);
   // Round dst_reg up to a multiple of 16 bytes, so that we overwrite any
   // potential padding.
   Add(dst_reg, dst_reg, 15);
   Bic(dst_reg, dst_reg, 15);
 
   Register src_reg = caller_args_count_reg;
-  // Calculate the end of source area. +kPointerSize is for the receiver.
+  // Calculate the end of source area. +kSystemPointerSize is for the receiver.
   if (callee_args_count.is_reg()) {
-    Add(src_reg, sp, Operand(callee_args_count.reg(), LSL, kPointerSizeLog2));
-    Add(src_reg, src_reg, kPointerSize);
+    Add(src_reg, sp,
+        Operand(callee_args_count.reg(), LSL, kSystemPointerSizeLog2));
+    Add(src_reg, src_reg, kSystemPointerSize);
   } else {
-    Add(src_reg, sp, (callee_args_count.immediate() + 1) * kPointerSize);
+    Add(src_reg, sp, (callee_args_count.immediate() + 1) * kSystemPointerSize);
   }
 
   // Round src_reg up to a multiple of 16 bytes, so we include any potential
@@ -2213,8 +2218,8 @@ void TurboAssembler::PrepareForTailCall(const ParameterCount& callee_args_count,
   Label loop, entry;
   B(&entry);
   bind(&loop);
-  Ldr(tmp_reg, MemOperand(src_reg, -kPointerSize, PreIndex));
-  Str(tmp_reg, MemOperand(dst_reg, -kPointerSize, PreIndex));
+  Ldr(tmp_reg, MemOperand(src_reg, -kSystemPointerSize, PreIndex));
+  Str(tmp_reg, MemOperand(dst_reg, -kSystemPointerSize, PreIndex));
   bind(&entry);
   Cmp(sp, src_reg);
   B(ne, &loop);
@@ -2305,7 +2310,7 @@ void MacroAssembler::CheckDebugHook(Register fun, Register new_target,
     Operand actual_op = actual.is_immediate() ? Operand(actual.immediate())
                                               : Operand(actual.reg());
     Mov(x4, actual_op);
-    Ldr(x4, MemOperand(sp, x4, LSL, kPointerSizeLog2));
+    Ldr(x4, MemOperand(sp, x4, LSL, kSystemPointerSizeLog2));
     FrameScope frame(this,
                      has_frame() ? StackFrame::NONE : StackFrame::INTERNAL);
 
@@ -2487,7 +2492,7 @@ void TurboAssembler::EnterFrame(StackFrame::Type type) {
     // type_reg pushed twice for alignment.
     Push(lr, fp, type_reg, type_reg);
     const int kFrameSize =
-        TypedFrameConstants::kFixedFrameSizeFromFp + kPointerSize;
+        TypedFrameConstants::kFixedFrameSizeFromFp + kSystemPointerSize;
     Add(fp, sp, kFrameSize);
     // sp[3] : lr
     // sp[2] : fp
@@ -2515,7 +2520,8 @@ void TurboAssembler::EnterFrame(StackFrame::Type type) {
 
     // The context pointer isn't part of the fixed frame, so add an extra slot
     // to account for it.
-    Add(fp, sp, TypedFrameConstants::kFixedFrameSizeFromFp + kPointerSize);
+    Add(fp, sp,
+        TypedFrameConstants::kFixedFrameSizeFromFp + kSystemPointerSize);
     // sp[3] : lr
     // sp[2] : fp
     // sp[1] : type
@@ -2571,12 +2577,16 @@ void MacroAssembler::EnterExitFrame(bool save_doubles, const Register& scratch,
   //          fp[-16]: Space reserved for SPOffset.
   //          fp[-24]: CodeObject()
   //    sp -> fp[-32]: padding
-  STATIC_ASSERT((2 * kPointerSize) == ExitFrameConstants::kCallerSPOffset);
-  STATIC_ASSERT((1 * kPointerSize) == ExitFrameConstants::kCallerPCOffset);
-  STATIC_ASSERT((0 * kPointerSize) == ExitFrameConstants::kCallerFPOffset);
-  STATIC_ASSERT((-2 * kPointerSize) == ExitFrameConstants::kSPOffset);
-  STATIC_ASSERT((-3 * kPointerSize) == ExitFrameConstants::kCodeOffset);
-  STATIC_ASSERT((-4 * kPointerSize) == ExitFrameConstants::kPaddingOffset);
+  STATIC_ASSERT((2 * kSystemPointerSize) ==
+                ExitFrameConstants::kCallerSPOffset);
+  STATIC_ASSERT((1 * kSystemPointerSize) ==
+                ExitFrameConstants::kCallerPCOffset);
+  STATIC_ASSERT((0 * kSystemPointerSize) ==
+                ExitFrameConstants::kCallerFPOffset);
+  STATIC_ASSERT((-2 * kSystemPointerSize) == ExitFrameConstants::kSPOffset);
+  STATIC_ASSERT((-3 * kSystemPointerSize) == ExitFrameConstants::kCodeOffset);
+  STATIC_ASSERT((-4 * kSystemPointerSize) ==
+                ExitFrameConstants::kPaddingOffset);
 
   // Save the frame pointer and context pointer in the top frame.
   Mov(scratch,
@@ -2586,7 +2596,8 @@ void MacroAssembler::EnterExitFrame(bool save_doubles, const Register& scratch,
       ExternalReference::Create(IsolateAddressId::kContextAddress, isolate()));
   Str(cp, MemOperand(scratch));
 
-  STATIC_ASSERT((-4 * kPointerSize) == ExitFrameConstants::kLastExitFrameField);
+  STATIC_ASSERT((-4 * kSystemPointerSize) ==
+                ExitFrameConstants::kLastExitFrameField);
   if (save_doubles) {
     ExitFramePreserveFPRegs();
   }
@@ -2744,6 +2755,22 @@ void MacroAssembler::JumpIfNotRoot(const Register& obj, RootIndex index,
   B(ne, if_not_equal);
 }
 
+void MacroAssembler::JumpIfIsInRange(const Register& value,
+                                     unsigned lower_limit,
+                                     unsigned higher_limit,
+                                     Label* on_in_range) {
+  if (lower_limit != 0) {
+    UseScratchRegisterScope temps(this);
+    Register scratch = temps.AcquireW();
+    Sub(scratch, value, Operand(lower_limit));
+    CompareAndBranch(scratch, Operand(higher_limit - lower_limit), ls,
+                     on_in_range);
+  } else {
+    CompareAndBranch(value, Operand(higher_limit - lower_limit), ls,
+                     on_in_range);
+  }
+}
+
 void TurboAssembler::LoadTaggedPointerField(const Register& destination,
                                             const MemOperand& field_operand) {
 #ifdef V8_COMPRESS_POINTERS
@@ -2768,56 +2795,34 @@ void TurboAssembler::SmiUntagField(Register dst, const MemOperand& src) {
 
 void TurboAssembler::StoreTaggedField(const Register& value,
                                       const MemOperand& dst_field_operand) {
+#ifdef V8_COMPRESS_POINTERS
+  RecordComment("[ StoreTagged");
+  // Use temporary register to zero out and don't trash value register
+  UseScratchRegisterScope temps(this);
+  Register compressed_value = temps.AcquireX();
+  Uxtw(compressed_value, value);
+  Str(compressed_value, dst_field_operand);
+  RecordComment("]");
+#else
   Str(value, dst_field_operand);
+#endif
 }
 
 void TurboAssembler::DecompressTaggedSigned(const Register& destination,
                                             const MemOperand& field_operand) {
   RecordComment("[ DecompressTaggedSigned");
-#ifdef DEBUG
-  UseScratchRegisterScope temps(this);
-  Register expected_value = temps.AcquireX();
-  DCHECK(!AreAliased(destination, expected_value));
-  Ldr(expected_value, field_operand);
-  mov(destination, expected_value);
-#else
-  // TODO(ishell): use Ldrsw instead of Ldr,SXTW once kTaggedSize is shrinked
+  // TODO(solanes): use Ldrsw instead of Ldr,SXTW once kTaggedSize is shrinked
   Ldr(destination, field_operand);
-#endif
   Sxtw(destination, destination);
-#ifdef DEBUG
-  Label check_passed;
-  Cmp(destination, expected_value);
-  B(eq, &check_passed);
-  RecordComment("DecompressTaggedSigned failed");
-  brk(0);
-  bind(&check_passed);
-#endif
   RecordComment("]");
 }
 
 void TurboAssembler::DecompressTaggedPointer(const Register& destination,
                                              const MemOperand& field_operand) {
   RecordComment("[ DecompressTaggedPointer");
-#ifdef DEBUG
-  UseScratchRegisterScope temps(this);
-  Register expected_value = temps.AcquireX();
-  DCHECK(!AreAliased(destination, expected_value));
-  Ldr(expected_value, field_operand);
-  mov(destination, expected_value);
-#else
-  // TODO(ishell): use Ldrsw instead of Ldr,SXTW once kTaggedSize is shrinked
+  // TODO(solanes): use Ldrsw instead of Ldr,SXTW once kTaggedSize is shrinked
   Ldr(destination, field_operand);
-#endif
   Add(destination, kRootRegister, Operand(destination, SXTW));
-#ifdef DEBUG
-  Label check_passed;
-  Cmp(destination, expected_value);
-  B(eq, &check_passed);
-  RecordComment("DecompressTaggedPointer failed");
-  brk(0);
-  bind(&check_passed);
-#endif
   RecordComment("]");
 }
 
@@ -2825,15 +2830,8 @@ void TurboAssembler::DecompressAnyTagged(const Register& destination,
                                          const MemOperand& field_operand) {
   RecordComment("[ DecompressAnyTagged");
   UseScratchRegisterScope temps(this);
-#ifdef DEBUG
-  Register expected_value = temps.AcquireX();
-  DCHECK(!AreAliased(destination, expected_value));
-  Ldr(expected_value, field_operand);
-  mov(destination, expected_value);
-#else
-  // TODO(ishell): use Ldrsw instead of Ldr,SXTW once kTaggedSize is shrinked
+  // TODO(solanes): use Ldrsw instead of Ldr,SXTW once kTaggedSize is shrinked
   Ldr(destination, field_operand);
-#endif
   // Branchlessly compute |masked_root|:
   // masked_root = HAS_SMI_TAG(destination) ? 0 : kRootRegister;
   STATIC_ASSERT((kSmiTagSize == 1) && (kSmiTag == 0));
@@ -2844,14 +2842,6 @@ void TurboAssembler::DecompressAnyTagged(const Register& destination,
   // Now this add operation will either leave the value unchanged if it is a smi
   // or add the isolate root if it is a heap object.
   Add(destination, masked_root, Operand(destination, SXTW));
-#ifdef DEBUG
-  Label check_passed;
-  Cmp(destination, expected_value);
-  B(eq, &check_passed);
-  RecordComment("Decompression failed: Tagged");
-  brk(0);
-  bind(&check_passed);
-#endif
   RecordComment("]");
 }
 
@@ -2984,13 +2974,13 @@ void MacroAssembler::RecordWriteField(Register object, int offset,
   }
 
   // Although the object register is tagged, the offset is relative to the start
-  // of the object, so offset must be a multiple of kPointerSize.
-  DCHECK(IsAligned(offset, kPointerSize));
+  // of the object, so offset must be a multiple of kTaggedSize.
+  DCHECK(IsAligned(offset, kTaggedSize));
 
   Add(scratch, object, offset - kHeapObjectTag);
   if (emit_debug_code()) {
     Label ok;
-    Tst(scratch, kPointerSize - 1);
+    Tst(scratch, kTaggedSize - 1);
     B(eq, &ok);
     Abort(AbortReason::kUnalignedCellInWriteBarrier);
     Bind(&ok);
@@ -3106,7 +3096,7 @@ void MacroAssembler::RecordWrite(Register object, Register address,
     UseScratchRegisterScope temps(this);
     Register temp = temps.AcquireX();
 
-    Ldr(temp, MemOperand(address));
+    LoadTaggedPointerField(temp, MemOperand(address));
     Cmp(temp, value);
     Check(eq, AbortReason::kWrongAddressOrValuePassedToRecordWrite);
   }

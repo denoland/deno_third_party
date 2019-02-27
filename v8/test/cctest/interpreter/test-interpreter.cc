@@ -8,8 +8,11 @@
 
 #include "src/api-inl.h"
 #include "src/base/overflowing-math.h"
+#include "src/compiler.h"
 #include "src/execution.h"
 #include "src/handles.h"
+#include "src/hash-seed-inl.h"
+#include "src/heap/heap-inl.h"
 #include "src/interpreter/bytecode-array-builder.h"
 #include "src/interpreter/bytecode-array-iterator.h"
 #include "src/interpreter/bytecode-flags.h"
@@ -161,7 +164,7 @@ TEST(InterpreterLoadLiteral) {
   // Heap numbers.
   {
     AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                                isolate->heap()->HashSeed());
+                                HashSeed(isolate));
 
     BytecodeArrayBuilder builder(zone, 1, 0);
 
@@ -179,7 +182,7 @@ TEST(InterpreterLoadLiteral) {
   // Strings.
   {
     AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                                isolate->heap()->HashSeed());
+                                HashSeed(isolate));
 
     BytecodeArrayBuilder builder(zone, 1, 0);
 
@@ -485,7 +488,7 @@ TEST(InterpreterStringAdd) {
   Zone* zone = handles.main_zone();
   Factory* factory = isolate->factory();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
 
   struct TestCase {
     const AstRawString* lhs;
@@ -578,7 +581,7 @@ TEST(InterpreterParameter8) {
   Isolate* isolate = handles.main_isolate();
   Zone* zone = handles.main_zone();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
   FeedbackVectorSpec feedback_spec(zone);
   BytecodeArrayBuilder builder(zone, 8, 0, &feedback_spec);
 
@@ -631,7 +634,7 @@ TEST(InterpreterBinaryOpTypeFeedback) {
   i::Isolate* isolate = handles.main_isolate();
   Zone* zone = handles.main_zone();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
 
   struct BinaryOpExpectation {
     Token::Value op;
@@ -765,7 +768,7 @@ TEST(InterpreterBinaryOpSmiTypeFeedback) {
   i::Isolate* isolate = handles.main_isolate();
   Zone* zone = handles.main_zone();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
 
   struct BinaryOpExpectation {
     Token::Value op;
@@ -1130,7 +1133,7 @@ TEST(InterpreterLoadNamedProperty) {
   Isolate* isolate = handles.main_isolate();
   Zone* zone = handles.main_zone();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
 
   FeedbackVectorSpec feedback_spec(zone);
   FeedbackSlot slot = feedback_spec.AddLoadICSlot();
@@ -1182,7 +1185,7 @@ TEST(InterpreterLoadKeyedProperty) {
   Isolate* isolate = handles.main_isolate();
   Zone* zone = handles.main_zone();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
 
   FeedbackVectorSpec feedback_spec(zone);
   FeedbackSlot slot = feedback_spec.AddKeyedLoadICSlot();
@@ -1224,7 +1227,7 @@ TEST(InterpreterStoreNamedProperty) {
   Isolate* isolate = handles.main_isolate();
   Zone* zone = handles.main_zone();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
 
   FeedbackVectorSpec feedback_spec(zone);
   FeedbackSlot slot = feedback_spec.AddStoreICSlot(LanguageMode::kStrict);
@@ -1287,7 +1290,7 @@ TEST(InterpreterStoreKeyedProperty) {
   Isolate* isolate = handles.main_isolate();
   Zone* zone = handles.main_zone();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
 
   FeedbackVectorSpec feedback_spec(zone);
   FeedbackSlot slot = feedback_spec.AddKeyedStoreICSlot(LanguageMode::kSloppy);
@@ -1339,7 +1342,7 @@ TEST(InterpreterCall) {
   Zone* zone = handles.main_zone();
   Factory* factory = isolate->factory();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
 
   FeedbackVectorSpec feedback_spec(zone);
   FeedbackSlot slot = feedback_spec.AddLoadICSlot();
@@ -1651,7 +1654,7 @@ TEST(InterpreterJumpConstantWith16BitOperand) {
   Isolate* isolate = handles.main_isolate();
   Zone* zone = handles.main_zone();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
   FeedbackVectorSpec feedback_spec(zone);
   BytecodeArrayBuilder builder(zone, 1, 257, &feedback_spec);
 
@@ -1712,7 +1715,7 @@ TEST(InterpreterJumpWith32BitOperand) {
   Isolate* isolate = handles.main_isolate();
   Zone* zone = handles.main_zone();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
   BytecodeArrayBuilder builder(zone, 1, 1);
   Register reg(0);
   BytecodeLabel done;
@@ -1851,7 +1854,7 @@ TEST(InterpreterHeapNumberComparisons) {
         Isolate* isolate = handles.main_isolate();
         Zone* zone = handles.main_zone();
         AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                                    isolate->heap()->HashSeed());
+                                    HashSeed(isolate));
 
         FeedbackVectorSpec feedback_spec(zone);
         BytecodeArrayBuilder builder(zone, 1, 1, &feedback_spec);
@@ -1898,7 +1901,7 @@ TEST(InterpreterBigIntComparisons) {
         Isolate* isolate = handles.main_isolate();
         Zone* zone = handles.main_zone();
         AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                                    isolate->heap()->HashSeed());
+                                    HashSeed(isolate));
 
         FeedbackVectorSpec feedback_spec(zone);
         BytecodeArrayBuilder builder(zone, 1, 1, &feedback_spec);
@@ -1943,7 +1946,7 @@ TEST(InterpreterStringComparisons) {
     for (size_t i = 0; i < arraysize(inputs); i++) {
       for (size_t j = 0; j < arraysize(inputs); j++) {
         AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                                    isolate->heap()->HashSeed());
+                                    HashSeed(isolate));
 
         CanonicalHandleScope canonical(isolate);
         const char* lhs = inputs[i].c_str();
@@ -2026,7 +2029,7 @@ TEST(InterpreterMixedComparisons) {
             Isolate* isolate = handles.main_isolate();
             Zone* zone = handles.main_zone();
             AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                                        isolate->heap()->HashSeed());
+                                        HashSeed(isolate));
             FeedbackVectorSpec feedback_spec(zone);
             BytecodeArrayBuilder builder(zone, 1, 0, &feedback_spec);
 
@@ -2264,7 +2267,7 @@ TEST(InterpreterTestIn) {
   Zone* zone = handles.main_zone();
   Factory* factory = isolate->factory();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
   // Allocate an array
   Handle<i::JSArray> array =
       factory->NewJSArray(0, i::ElementsKind::PACKED_SMI_ELEMENTS);
@@ -2322,7 +2325,7 @@ TEST(InterpreterUnaryNotNonBoolean) {
   Isolate* isolate = handles.main_isolate();
   Zone* zone = handles.main_zone();
   AstValueFactory ast_factory(zone, isolate->ast_string_constants(),
-                              isolate->heap()->HashSeed());
+                              HashSeed(isolate));
 
   std::pair<LiteralForTest, bool> object_type_tuples[] = {
       std::make_pair(LiteralForTest(LiteralForTest::kUndefined), true),
@@ -5057,6 +5060,82 @@ TEST(InterpreterGetBytecodeHandler) {
       interpreter->GetBytecodeHandler(Bytecode::kAdd, OperandScale::kDouble);
 
   CHECK_EQ(add_wide_handler->builtin_index(), Builtins::kAddWideHandler);
+}
+
+TEST(InterpreterCollectSourcePositions) {
+  FLAG_enable_lazy_source_positions = true;
+  HandleAndZoneScope handles;
+  Isolate* isolate = handles.main_isolate();
+
+  const char* source =
+      "(function () {\n"
+      "  return 1;\n"
+      "})";
+
+  Handle<JSFunction> function = Handle<JSFunction>::cast(v8::Utils::OpenHandle(
+      *v8::Local<v8::Function>::Cast(CompileRun(source))));
+
+  Handle<SharedFunctionInfo> sfi = handle(function->shared(), isolate);
+  Handle<BytecodeArray> bytecode_array =
+      handle(sfi->GetBytecodeArray(), isolate);
+  ByteArray source_position_table = bytecode_array->SourcePositionTable();
+  CHECK_EQ(source_position_table->length(), 0);
+
+  Compiler::CollectSourcePositions(isolate, sfi);
+
+  source_position_table = bytecode_array->SourcePositionTable();
+  CHECK_GT(source_position_table->length(), 0);
+}
+
+namespace {
+
+void CheckStringEqual(const char* expected_ptr, Handle<Object> actual_handle) {
+  v8::String::Utf8Value utf8(
+      v8::Isolate::GetCurrent(),
+      v8::Utils::ToLocal(Handle<String>::cast(actual_handle)));
+  std::string expected(expected_ptr);
+  std::string actual(*utf8);
+  CHECK_EQ(expected, actual);
+}
+
+}  // namespace
+
+TEST(InterpreterCollectSourcePositions_GenerateStackTrace) {
+  FLAG_enable_lazy_source_positions = true;
+  HandleAndZoneScope handles;
+  Isolate* isolate = handles.main_isolate();
+
+  const char* source =
+      R"javascript(
+      (function () {
+        try {
+          throw new Error();
+        } catch (e) {
+          return e.stack;
+        }
+      });
+      )javascript";
+
+  Handle<JSFunction> function = Handle<JSFunction>::cast(v8::Utils::OpenHandle(
+      *v8::Local<v8::Function>::Cast(CompileRun(source))));
+
+  Handle<SharedFunctionInfo> sfi = handle(function->shared(), isolate);
+  Handle<BytecodeArray> bytecode_array =
+      handle(sfi->GetBytecodeArray(), isolate);
+  ByteArray source_position_table = bytecode_array->SourcePositionTable();
+  CHECK_EQ(source_position_table->length(), 0);
+
+  {
+    Handle<Object> result =
+        Execution::Call(isolate, function,
+                        ReadOnlyRoots(isolate).undefined_value_handle(), 0,
+                        nullptr)
+            .ToHandleChecked();
+    CheckStringEqual("Error\n    at <anonymous>:4:17", result);
+  }
+
+  source_position_table = bytecode_array->SourcePositionTable();
+  CHECK_GT(source_position_table->length(), 0);
 }
 
 }  // namespace interpreter

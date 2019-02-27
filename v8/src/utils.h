@@ -52,11 +52,6 @@ inline char HexCharOfValue(int value) {
 
 inline int BoolToInt(bool b) { return b ? 1 : 0; }
 
-// Same as strcmp, but can handle NULL arguments.
-inline bool CStringEquals(const char* s1, const char* s2) {
-  return (s1 == s2) || (s1 != nullptr && s2 != nullptr && strcmp(s1, s2) == 0);
-}
-
 // Checks if value is in range [lower_limit, higher_limit] using a single
 // branch.
 template <typename T, typename U>
@@ -218,14 +213,6 @@ template <typename T,
           typename = typename std::enable_if<std::is_signed<T>::value>::type>
 T Nabs(T a) {
   return a < 0 ? a : -a;
-}
-
-// Floor(-0.0) == 0.0
-inline double Floor(double x) {
-#if V8_CC_MSVC
-  if (x == 0) return x;  // Fix for issue 3477.
-#endif
-  return std::floor(x);
 }
 
 inline double Modulo(double x, double y) {
@@ -583,36 +570,6 @@ class SetOncePointer {
 
  private:
   T* pointer_ = nullptr;
-};
-
-
-template <typename T, int kSize>
-class EmbeddedVector : public Vector<T> {
- public:
-  EmbeddedVector() : Vector<T>(buffer_, kSize) { }
-
-  explicit EmbeddedVector(T initial_value) : Vector<T>(buffer_, kSize) {
-    for (int i = 0; i < kSize; ++i) {
-      buffer_[i] = initial_value;
-    }
-  }
-
-  // When copying, make underlying Vector to reference our buffer.
-  EmbeddedVector(const EmbeddedVector& rhs) V8_NOEXCEPT : Vector<T>(rhs) {
-    MemCopy(buffer_, rhs.buffer_, sizeof(T) * kSize);
-    this->set_start(buffer_);
-  }
-
-  EmbeddedVector& operator=(const EmbeddedVector& rhs) V8_NOEXCEPT {
-    if (this == &rhs) return *this;
-    Vector<T>::operator=(rhs);
-    MemCopy(buffer_, rhs.buffer_, sizeof(T) * kSize);
-    this->set_start(buffer_);
-    return *this;
-  }
-
- private:
-  T buffer_[kSize];
 };
 
 // Compare 8bit/16bit chars to 8bit/16bit chars.

@@ -74,23 +74,14 @@
 
   # BUG(5193). The cpu profiler tests are notoriously flaky.
   'test-profile-generator/RecordStackTraceAtStartProfiling': [SKIP],
-  'test-cpu-profiler/CollectCpuProfile': [SKIP],
-  'test-cpu-profiler/CollectCpuProfileCallerLineNumbers': [SKIP],
-  'test-cpu-profiler/CollectCpuProfileSamples': [SKIP],
   'test-cpu-profiler/CollectDeoptEvents': [SKIP],
-  'test-cpu-profiler/CpuProfileDeepStack': [SKIP],
-  'test-cpu-profiler/DeoptAtFirstLevelInlinedSource': [SKIP],
-  'test-cpu-profiler/DeoptAtSecondLevelInlinedSource': [SKIP],
-  'test-cpu-profiler/DeoptUntrackedFunction': [SKIP],
-  'test-cpu-profiler/FunctionApplySample': [SKIP],
-  'test-cpu-profiler/HotDeoptNoFrameEntry': [SKIP],
+  'test-cpu-profiler/CollectCpuProfile': [SKIP],
   'test-cpu-profiler/JsNative1JsNative2JsSample': [SKIP],
   'test-cpu-profiler/JsNativeJsRuntimeJsSample': [SKIP],
   'test-cpu-profiler/JsNativeJsRuntimeJsSampleMultiple': [SKIP],
   'test-cpu-profiler/JsNativeJsSample': [SKIP],
-  'test-cpu-profiler/NativeAccessorUninitializedIC': [SKIP],
+  'test-cpu-profiler/HotDeoptNoFrameEntry': [SKIP],
   'test-cpu-profiler/SampleWhenFrameIsNotSetup': [SKIP],
-  'test-cpu-profiler/TracingCpuProfiler': [SKIP],
   'test-sampler/LibSamplerCollectSample': [SKIP],
 
   # BUG(7202). The test is flaky.
@@ -425,6 +416,9 @@
   # TODO(ppc/s390): implement atomic operations
   'test-run-wasm-atomics/*': [SKIP],
 
+  # TODO(ppc/s390): support concurrent patching of jump table
+  'test-jump-table-assembler/*': [SKIP],
+
 }],  # 'arch == ppc or arch == ppc64 or arch == s390 or arch == s390x'
 
 ['arch == ppc64', {
@@ -528,7 +522,9 @@
   'test-heap/IncrementalMarkingStepMakesBigProgressWithLargeObjects': [SKIP],
 
   # TODO(v8:7777): Re-enable once wasm is supported in jitless mode.
-  'test-api/WasmStreamingFinishWithSuccess': [SKIP],
+  'test-api/WasmI32AtomicWaitCallback': [SKIP],
+  'test-api/WasmI64AtomicWaitCallback': [SKIP],
+  'test-api/WasmStreaming*': [SKIP],
   'test-c-wasm-entry/*': [SKIP],
   'test-jump-table-assembler/*': [SKIP],
   'test-run-wasm-64/*': [SKIP],
@@ -572,7 +568,18 @@
   'test-regexp/MacroAssemblerNativeSuccess': [SKIP],
   'test-regexp/MacroAssemblerStackOverflow': [SKIP],
   'test-run-calls-to-external-references/*': [SKIP],
+
+  # Field representation tracking is disabled in jitless mode.
+  'test-field-type-tracking/*': [SKIP],
 }], # lite_mode or variant == jitless
+
+##############################################################################
+['lite_mode', {
+  # TODO(v8:8510): Tests that currently fail with lazy source positions.
+  'test-cpu-profiler/TickLinesBaseline': [SKIP],
+  'test-cpu-profiler/TickLinesOptimized': [SKIP],
+  'test-cpu-profiler/Inlining2': [SKIP],
+}], # lite_mode
 
 ##############################################################################
 ['variant == jitless', {
@@ -612,5 +619,10 @@
   'test-macro-assembler-arm/LoadAndStoreWithRepresentation': [PASS, ['arch == arm and not simulator_run', SKIP]],
   'test-macro-assembler-arm/ReplaceLane': [PASS, ['arch == arm and not simulator_run', SKIP]],
 }], # variant == jitless
+
+##############################################################################
+['variant == jitless and not embedded_builtins', {
+  '*': [SKIP],
+}], # variant == jitless and not embedded_builtins
 
 ]

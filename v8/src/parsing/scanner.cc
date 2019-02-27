@@ -339,27 +339,46 @@ void Scanner::TryToParseSourceURLComment() {
 
 Token::Value Scanner::SkipMultiLineComment() {
   DCHECK_EQ(c0_, '*');
-  Advance();
 
+  // Until we see the first newline, check for * and newline characters.
+  if (!next().after_line_terminator) {
+    do {
+      AdvanceUntil([](uc32 c0) {
+        if (V8_UNLIKELY(static_cast<uint32_t>(c0) > kMaxAscii)) {
+          return unibrow::IsLineTerminator(c0);
+        }
+        uint8_t char_flags = character_scan_flags[c0];
+        return MultilineCommentCharacterNeedsSlowPath(char_flags);
+      });
+
+      while (c0_ == '*') {
+        Advance();
+        if (c0_ == '/') {
+          Advance();
+          return Token::WHITESPACE;
+        }
+      }
+
+      if (unibrow::IsLineTerminator(c0_)) {
+        next().after_line_terminator = true;
+        break;
+      }
+    } while (c0_ != kEndOfInput);
+  }
+
+  // After we've seen newline, simply try to find '*/'.
   while (c0_ != kEndOfInput) {
-    DCHECK(!unibrow::IsLineTerminator(kEndOfInput));
-    if (!HasLineTerminatorBeforeNext() && unibrow::IsLineTerminator(c0_)) {
-      // Following ECMA-262, section 7.4, a comment containing
-      // a newline will make the comment count as a line-terminator.
-      next().after_line_terminator = true;
-    }
+    AdvanceUntil([](uc32 c0) { return c0 == '*'; });
 
-    while (V8_UNLIKELY(c0_ == '*')) {
+    while (c0_ == '*') {
       Advance();
       if (c0_ == '/') {
         Advance();
         return Token::WHITESPACE;
       }
     }
-    Advance();
   }
 
-  // Unterminated multi-line comment.
   return Token::ILLEGAL;
 }
 
@@ -501,48 +520,42 @@ uc32 Scanner::ScanOctalEscape(uc32 c, int length) {
 
 Token::Value Scanner::ScanString() {
   uc32 quote = c0_;
-  Advance();  // consume quote
 
   next().literal_chars.Start();
   while (true) {
-    if (V8_UNLIKELY(c0_ == kEndOfInput)) return Token::ILLEGAL;
-    if ((V8_UNLIKELY(static_cast<uint32_t>(c0_) >= kMaxAscii) &&
-         !unibrow::IsStringLiteralLineTerminator(c0_)) ||
-        !MayTerminateString(character_scan_flags[c0_])) {
-      AddLiteralChar(c0_);
-      AdvanceUntil([this](uc32 c0) {
-        if (V8_UNLIKELY(static_cast<uint32_t>(c0) > kMaxAscii)) {
-          if (V8_UNLIKELY(unibrow::IsStringLiteralLineTerminator(c0))) {
-            return true;
-          }
-          AddLiteralChar(c0);
-          return false;
+    AdvanceUntil([this](uc32 c0) {
+      if (V8_UNLIKELY(static_cast<uint32_t>(c0) > kMaxAscii)) {
+        if (V8_UNLIKELY(unibrow::IsStringLiteralLineTerminator(c0))) {
+          return true;
         }
-        uint8_t char_flags = character_scan_flags[c0];
-        if (MayTerminateString(char_flags)) return true;
         AddLiteralChar(c0);
         return false;
-      });
-    }
-    if (c0_ == quote) {
-      Advance();
-      return Token::STRING;
-    }
-    if (c0_ == '\\') {
+      }
+      uint8_t char_flags = character_scan_flags[c0];
+      if (MayTerminateString(char_flags)) return true;
+      AddLiteralChar(c0);
+      return false;
+    });
+
+    while (c0_ == '\\') {
       Advance();
       // TODO(verwaest): Check whether we can remove the additional check.
       if (V8_UNLIKELY(c0_ == kEndOfInput || !ScanEscape<false>())) {
         return Token::ILLEGAL;
       }
-      continue;
     }
+
+    if (c0_ == quote) {
+      Advance();
+      return Token::STRING;
+    }
+
     if (V8_UNLIKELY(c0_ == kEndOfInput ||
                     unibrow::IsStringLiteralLineTerminator(c0_))) {
       return Token::ILLEGAL;
     }
-    DCHECK_NE(quote, c0_);
-    DCHECK((c0_ == '\'' || c0_ == '"'));
-    AddLiteralCharAdvance();
+
+    AddLiteralChar(c0_);
   }
 }
 
@@ -1007,16 +1020,17 @@ Token::Value Scanner::ScanIdentifierOrKeywordInnerSlow(bool escaped,
     Vector<const uint8_t> chars = next().literal_chars.one_byte_literal();
     Token::Value token =
         KeywordOrIdentifierToken(chars.start(), chars.length());
-    /* TODO(adamk): YIELD should be handled specially. */
+    if (IsInRange(token, Token::IDENTIFIER, Token::YIELD)) return token;
+
     if (token == Token::FUTURE_STRICT_RESERVED_WORD) {
       if (escaped) return Token::ESCAPED_STRICT_RESERVED_WORD;
       return token;
     }
-    if (token == Token::IDENTIFIER) return token;
 
     if (!escaped) return token;
 
-    if (token == Token::LET || token == Token::STATIC) {
+    STATIC_ASSERT(Token::LET + 1 == Token::STATIC);
+    if (IsInRange(token, Token::LET, Token::STATIC)) {
       return Token::ESCAPED_STRICT_RESERVED_WORD;
     }
     return Token::ESCAPED_KEYWORD;

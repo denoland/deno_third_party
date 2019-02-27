@@ -12,6 +12,7 @@
 #include "src/code-stub-assembler.h"
 #include "src/frame-constants.h"
 #include "src/heap/factory-inl.h"
+#include "src/objects/allocation-site-inl.h"
 #include "src/objects/arguments-inl.h"
 #include "src/objects/property-cell.h"
 
@@ -367,9 +368,9 @@ Node* ArrayBuiltinsAssembler::FindProcessor(Node* k_value, Node* k) {
         TYPED_ARRAYS(INSTANCE_TYPE)
 #undef INSTANCE_TYPE
     };
-    std::vector<Label> labels;
+    std::list<Label> labels;
     for (size_t i = 0; i < instance_types.size(); ++i) {
-      labels.push_back(Label(this));
+      labels.emplace_back(this);
     }
     std::vector<Label*> label_ptrs;
     for (Label& label : labels) {
@@ -390,8 +391,9 @@ Node* ArrayBuiltinsAssembler::FindProcessor(Node* k_value, Node* k) {
     Switch(instance_type, &unexpected_instance_type, instance_types.data(),
            label_ptrs.data(), labels.size());
 
-    for (size_t i = 0; i < labels.size(); ++i) {
-      BIND(&labels[i]);
+    size_t i = 0;
+    for (auto it = labels.begin(); it != labels.end(); ++i, ++it) {
+      BIND(&*it);
       Label done(this);
       source_elements_kind_ = ElementsKindForInstanceType(
           static_cast<InstanceType>(instance_types[i]));
@@ -1607,87 +1609,6 @@ TF_BUILTIN(TypedArrayPrototypeForEach, ArrayBuiltinsAssembler) {
       &ArrayBuiltinsAssembler::NullPostLoopAction);
 }
 
-TF_BUILTIN(ArraySomeLoopLazyDeoptContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* this_arg = Parameter(Descriptor::kThisArg);
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-  Node* result = Parameter(Descriptor::kResult);
-
-  // This custom lazy deopt point is right after the callback. every() needs
-  // to pick up at the next step, which is either continuing to the next
-  // array element or returning false if {result} is false.
-  Label true_continue(this), false_continue(this);
-
-  // iii. If selected is true, then...
-  BranchIfToBooleanIsTrue(result, &true_continue, &false_continue);
-  BIND(&true_continue);
-  { Return(TrueConstant()); }
-  BIND(&false_continue);
-  {
-    // Increment k.
-    initial_k = NumberInc(initial_k);
-
-    Return(CallBuiltin(Builtins::kArraySomeLoopContinuation, context, receiver,
-                       callbackfn, this_arg, FalseConstant(), receiver,
-                       initial_k, len, UndefinedConstant()));
-  }
-}
-
-TF_BUILTIN(ArraySomeLoopEagerDeoptContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* this_arg = Parameter(Descriptor::kThisArg);
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-
-  Return(CallBuiltin(Builtins::kArraySomeLoopContinuation, context, receiver,
-                     callbackfn, this_arg, FalseConstant(), receiver, initial_k,
-                     len, UndefinedConstant()));
-}
-
-TF_BUILTIN(ArraySomeLoopContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* this_arg = Parameter(Descriptor::kThisArg);
-  Node* array = Parameter(Descriptor::kArray);
-  TNode<JSReceiver> object = CAST(Parameter(Descriptor::kObject));
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-  Node* to = Parameter(Descriptor::kTo);
-
-  InitIteratingArrayBuiltinLoopContinuation(context, receiver, callbackfn,
-                                            this_arg, array, object, initial_k,
-                                            len, to);
-
-  GenerateIteratingArrayBuiltinLoopContinuation(
-      &ArrayBuiltinsAssembler::SomeProcessor,
-      &ArrayBuiltinsAssembler::NullPostLoopAction, MissingPropertyMode::kSkip);
-}
-
-TF_BUILTIN(ArraySome, ArrayBuiltinsAssembler) {
-  TNode<IntPtrT> argc =
-      ChangeInt32ToIntPtr(Parameter(Descriptor::kJSActualArgumentsCount));
-  CodeStubArguments args(this, argc);
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = args.GetReceiver();
-  Node* callbackfn = args.GetOptionalArgumentValue(0);
-  Node* this_arg = args.GetOptionalArgumentValue(1);
-
-  InitIteratingArrayBuiltinBody(context, receiver, callbackfn, this_arg, argc);
-
-  GenerateIteratingArrayBuiltinBody(
-      "Array.prototype.some", &ArrayBuiltinsAssembler::SomeResultGenerator,
-      &ArrayBuiltinsAssembler::SomeProcessor,
-      &ArrayBuiltinsAssembler::NullPostLoopAction,
-      Builtins::CallableFor(isolate(), Builtins::kArraySomeLoopContinuation),
-      MissingPropertyMode::kSkip);
-}
-
 TF_BUILTIN(TypedArrayPrototypeSome, ArrayBuiltinsAssembler) {
   TNode<IntPtrT> argc =
       ChangeInt32ToIntPtr(Parameter(Descriptor::kJSActualArgumentsCount));
@@ -1704,87 +1625,6 @@ TF_BUILTIN(TypedArrayPrototypeSome, ArrayBuiltinsAssembler) {
       &ArrayBuiltinsAssembler::SomeResultGenerator,
       &ArrayBuiltinsAssembler::SomeProcessor,
       &ArrayBuiltinsAssembler::NullPostLoopAction);
-}
-
-TF_BUILTIN(ArrayEveryLoopLazyDeoptContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* this_arg = Parameter(Descriptor::kThisArg);
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-  Node* result = Parameter(Descriptor::kResult);
-
-  // This custom lazy deopt point is right after the callback. every() needs
-  // to pick up at the next step, which is either continuing to the next
-  // array element or returning false if {result} is false.
-  Label true_continue(this), false_continue(this);
-
-  // iii. If selected is true, then...
-  BranchIfToBooleanIsTrue(result, &true_continue, &false_continue);
-  BIND(&true_continue);
-  {
-    // Increment k.
-    initial_k = NumberInc(initial_k);
-
-    Return(CallBuiltin(Builtins::kArrayEveryLoopContinuation, context, receiver,
-                       callbackfn, this_arg, TrueConstant(), receiver,
-                       initial_k, len, UndefinedConstant()));
-  }
-  BIND(&false_continue);
-  { Return(FalseConstant()); }
-}
-
-TF_BUILTIN(ArrayEveryLoopEagerDeoptContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* this_arg = Parameter(Descriptor::kThisArg);
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-
-  Return(CallBuiltin(Builtins::kArrayEveryLoopContinuation, context, receiver,
-                     callbackfn, this_arg, TrueConstant(), receiver, initial_k,
-                     len, UndefinedConstant()));
-}
-
-TF_BUILTIN(ArrayEveryLoopContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* this_arg = Parameter(Descriptor::kThisArg);
-  Node* array = Parameter(Descriptor::kArray);
-  TNode<JSReceiver> object = CAST(Parameter(Descriptor::kObject));
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-  Node* to = Parameter(Descriptor::kTo);
-
-  InitIteratingArrayBuiltinLoopContinuation(context, receiver, callbackfn,
-                                            this_arg, array, object, initial_k,
-                                            len, to);
-
-  GenerateIteratingArrayBuiltinLoopContinuation(
-      &ArrayBuiltinsAssembler::EveryProcessor,
-      &ArrayBuiltinsAssembler::NullPostLoopAction, MissingPropertyMode::kSkip);
-}
-
-TF_BUILTIN(ArrayEvery, ArrayBuiltinsAssembler) {
-  TNode<IntPtrT> argc =
-      ChangeInt32ToIntPtr(Parameter(Descriptor::kJSActualArgumentsCount));
-  CodeStubArguments args(this, argc);
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = args.GetReceiver();
-  Node* callbackfn = args.GetOptionalArgumentValue(0);
-  Node* this_arg = args.GetOptionalArgumentValue(1);
-
-  InitIteratingArrayBuiltinBody(context, receiver, callbackfn, this_arg, argc);
-
-  GenerateIteratingArrayBuiltinBody(
-      "Array.prototype.every", &ArrayBuiltinsAssembler::EveryResultGenerator,
-      &ArrayBuiltinsAssembler::EveryProcessor,
-      &ArrayBuiltinsAssembler::NullPostLoopAction,
-      Builtins::CallableFor(isolate(), Builtins::kArrayEveryLoopContinuation),
-      MissingPropertyMode::kSkip);
 }
 
 TF_BUILTIN(TypedArrayPrototypeEvery, ArrayBuiltinsAssembler) {
@@ -1805,86 +1645,6 @@ TF_BUILTIN(TypedArrayPrototypeEvery, ArrayBuiltinsAssembler) {
       &ArrayBuiltinsAssembler::NullPostLoopAction);
 }
 
-TF_BUILTIN(ArrayReduceLoopContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* this_arg = Parameter(Descriptor::kThisArg);
-  Node* accumulator = Parameter(Descriptor::kAccumulator);
-  TNode<JSReceiver> object = CAST(Parameter(Descriptor::kObject));
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-  Node* to = Parameter(Descriptor::kTo);
-
-  InitIteratingArrayBuiltinLoopContinuation(context, receiver, callbackfn,
-                                            this_arg, accumulator, object,
-                                            initial_k, len, to);
-
-  GenerateIteratingArrayBuiltinLoopContinuation(
-      &ArrayBuiltinsAssembler::ReduceProcessor,
-      &ArrayBuiltinsAssembler::ReducePostLoopAction,
-      MissingPropertyMode::kSkip);
-}
-
-TF_BUILTIN(ArrayReducePreLoopEagerDeoptContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-
-  // Simulate starting the loop at 0, but ensuring that the accumulator is
-  // the hole. The continuation stub will search for the initial non-hole
-  // element, rightly throwing an exception if not found.
-  Return(CallBuiltin(Builtins::kArrayReduceLoopContinuation, context, receiver,
-                     callbackfn, UndefinedConstant(), TheHoleConstant(),
-                     receiver, SmiConstant(0), len, UndefinedConstant()));
-}
-
-TF_BUILTIN(ArrayReduceLoopEagerDeoptContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* accumulator = Parameter(Descriptor::kAccumulator);
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-
-  Return(CallBuiltin(Builtins::kArrayReduceLoopContinuation, context, receiver,
-                     callbackfn, UndefinedConstant(), accumulator, receiver,
-                     initial_k, len, UndefinedConstant()));
-}
-
-TF_BUILTIN(ArrayReduceLoopLazyDeoptContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-  Node* result = Parameter(Descriptor::kResult);
-
-  Return(CallBuiltin(Builtins::kArrayReduceLoopContinuation, context, receiver,
-                     callbackfn, UndefinedConstant(), result, receiver,
-                     initial_k, len, UndefinedConstant()));
-}
-
-TF_BUILTIN(ArrayReduce, ArrayBuiltinsAssembler) {
-  TNode<IntPtrT> argc =
-      ChangeInt32ToIntPtr(Parameter(Descriptor::kJSActualArgumentsCount));
-  CodeStubArguments args(this, argc);
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = args.GetReceiver();
-  Node* callbackfn = args.GetOptionalArgumentValue(0);
-  Node* initial_value = args.GetOptionalArgumentValue(1, TheHoleConstant());
-
-  InitIteratingArrayBuiltinBody(context, receiver, callbackfn, initial_value,
-                                argc);
-
-  GenerateIteratingArrayBuiltinBody(
-      "Array.prototype.reduce", &ArrayBuiltinsAssembler::ReduceResultGenerator,
-      &ArrayBuiltinsAssembler::ReduceProcessor,
-      &ArrayBuiltinsAssembler::ReducePostLoopAction,
-      Builtins::CallableFor(isolate(), Builtins::kArrayReduceLoopContinuation),
-      MissingPropertyMode::kSkip);
-}
 
 TF_BUILTIN(TypedArrayPrototypeReduce, ArrayBuiltinsAssembler) {
   TNode<IntPtrT> argc =
@@ -1903,91 +1663,6 @@ TF_BUILTIN(TypedArrayPrototypeReduce, ArrayBuiltinsAssembler) {
       &ArrayBuiltinsAssembler::ReduceResultGenerator,
       &ArrayBuiltinsAssembler::ReduceProcessor,
       &ArrayBuiltinsAssembler::ReducePostLoopAction);
-}
-
-TF_BUILTIN(ArrayReduceRightLoopContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* this_arg = Parameter(Descriptor::kThisArg);
-  Node* accumulator = Parameter(Descriptor::kAccumulator);
-  TNode<JSReceiver> object = CAST(Parameter(Descriptor::kObject));
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-  Node* to = Parameter(Descriptor::kTo);
-
-  InitIteratingArrayBuiltinLoopContinuation(context, receiver, callbackfn,
-                                            this_arg, accumulator, object,
-                                            initial_k, len, to);
-
-  GenerateIteratingArrayBuiltinLoopContinuation(
-      &ArrayBuiltinsAssembler::ReduceProcessor,
-      &ArrayBuiltinsAssembler::ReducePostLoopAction, MissingPropertyMode::kSkip,
-      ForEachDirection::kReverse);
-}
-
-TF_BUILTIN(ArrayReduceRightPreLoopEagerDeoptContinuation,
-           ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  TNode<Smi> len = CAST(Parameter(Descriptor::kLength));
-
-  // Simulate starting the loop at 0, but ensuring that the accumulator is
-  // the hole. The continuation stub will search for the initial non-hole
-  // element, rightly throwing an exception if not found.
-  Return(CallBuiltin(Builtins::kArrayReduceRightLoopContinuation, context,
-                     receiver, callbackfn, UndefinedConstant(),
-                     TheHoleConstant(), receiver, SmiSub(len, SmiConstant(1)),
-                     len, UndefinedConstant()));
-}
-
-TF_BUILTIN(ArrayReduceRightLoopEagerDeoptContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* accumulator = Parameter(Descriptor::kAccumulator);
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-
-  Return(CallBuiltin(Builtins::kArrayReduceRightLoopContinuation, context,
-                     receiver, callbackfn, UndefinedConstant(), accumulator,
-                     receiver, initial_k, len, UndefinedConstant()));
-}
-
-TF_BUILTIN(ArrayReduceRightLoopLazyDeoptContinuation, ArrayBuiltinsAssembler) {
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
-  Node* callbackfn = Parameter(Descriptor::kCallbackFn);
-  Node* initial_k = Parameter(Descriptor::kInitialK);
-  TNode<Number> len = CAST(Parameter(Descriptor::kLength));
-  Node* result = Parameter(Descriptor::kResult);
-
-  Return(CallBuiltin(Builtins::kArrayReduceRightLoopContinuation, context,
-                     receiver, callbackfn, UndefinedConstant(), result,
-                     receiver, initial_k, len, UndefinedConstant()));
-}
-
-TF_BUILTIN(ArrayReduceRight, ArrayBuiltinsAssembler) {
-  TNode<IntPtrT> argc =
-      ChangeInt32ToIntPtr(Parameter(Descriptor::kJSActualArgumentsCount));
-  CodeStubArguments args(this, argc);
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  TNode<Object> receiver = args.GetReceiver();
-  Node* callbackfn = args.GetOptionalArgumentValue(0);
-  Node* initial_value = args.GetOptionalArgumentValue(1, TheHoleConstant());
-
-  InitIteratingArrayBuiltinBody(context, receiver, callbackfn, initial_value,
-                                argc);
-
-  GenerateIteratingArrayBuiltinBody(
-      "Array.prototype.reduceRight",
-      &ArrayBuiltinsAssembler::ReduceResultGenerator,
-      &ArrayBuiltinsAssembler::ReduceProcessor,
-      &ArrayBuiltinsAssembler::ReducePostLoopAction,
-      Builtins::CallableFor(isolate(),
-                            Builtins::kArrayReduceRightLoopContinuation),
-      MissingPropertyMode::kSkip, ForEachDirection::kReverse);
 }
 
 TF_BUILTIN(TypedArrayPrototypeReduceRight, ArrayBuiltinsAssembler) {
@@ -2251,7 +1926,8 @@ void ArrayIncludesIndexofAssembler::GenerateSmiOrObject(
   {
     GotoIfNot(UintPtrLessThan(index_var.value(), array_length_untagged),
               &return_not_found);
-    Node* element_k = LoadFixedArrayElement(CAST(elements), index_var.value());
+    Node* element_k =
+        UnsafeLoadFixedArrayElement(CAST(elements), index_var.value());
     GotoIf(WordEqual(element_k, search_element), &return_found);
 
     Increment(&index_var);
@@ -2263,7 +1939,8 @@ void ArrayIncludesIndexofAssembler::GenerateSmiOrObject(
 
     GotoIfNot(UintPtrLessThan(index_var.value(), array_length_untagged),
               &return_not_found);
-    Node* element_k = LoadFixedArrayElement(CAST(elements), index_var.value());
+    Node* element_k =
+        UnsafeLoadFixedArrayElement(CAST(elements), index_var.value());
     GotoIf(IsUndefined(element_k), &return_found);
     GotoIf(IsTheHole(element_k), &return_found);
 
@@ -2283,7 +1960,7 @@ void ArrayIncludesIndexofAssembler::GenerateSmiOrObject(
       GotoIfNot(UintPtrLessThan(index_var.value(), array_length_untagged),
                 &return_not_found);
       Node* element_k =
-          LoadFixedArrayElement(CAST(elements), index_var.value());
+          UnsafeLoadFixedArrayElement(CAST(elements), index_var.value());
       GotoIfNot(TaggedIsSmi(element_k), &not_smi);
       Branch(Float64Equal(search_num.value(), SmiToFloat64(element_k)),
              &return_found, &continue_loop);
@@ -2305,7 +1982,7 @@ void ArrayIncludesIndexofAssembler::GenerateSmiOrObject(
       GotoIfNot(UintPtrLessThan(index_var.value(), array_length_untagged),
                 &return_not_found);
       Node* element_k =
-          LoadFixedArrayElement(CAST(elements), index_var.value());
+          UnsafeLoadFixedArrayElement(CAST(elements), index_var.value());
       GotoIf(TaggedIsSmi(element_k), &continue_loop);
       GotoIfNot(IsHeapNumber(CAST(element_k)), &continue_loop);
       BranchIfFloat64IsNaN(LoadHeapNumberValue(element_k), &return_found,
@@ -2328,7 +2005,8 @@ void ArrayIncludesIndexofAssembler::GenerateSmiOrObject(
     BIND(&next_iteration);
     GotoIfNot(UintPtrLessThan(index_var.value(), array_length_untagged),
               &return_not_found);
-    Node* element_k = LoadFixedArrayElement(CAST(elements), index_var.value());
+    Node* element_k =
+        UnsafeLoadFixedArrayElement(CAST(elements), index_var.value());
     GotoIf(TaggedIsSmi(element_k), &continue_loop);
     GotoIf(WordEqual(search_element_string, element_k), &return_found);
     Node* element_k_type = LoadInstanceType(element_k);
@@ -2356,7 +2034,8 @@ void ArrayIncludesIndexofAssembler::GenerateSmiOrObject(
     GotoIfNot(UintPtrLessThan(index_var.value(), array_length_untagged),
               &return_not_found);
 
-    Node* element_k = LoadFixedArrayElement(CAST(elements), index_var.value());
+    Node* element_k =
+        UnsafeLoadFixedArrayElement(CAST(elements), index_var.value());
     Label continue_loop(this);
     GotoIf(TaggedIsSmi(element_k), &continue_loop);
     GotoIfNot(IsBigInt(CAST(element_k)), &continue_loop);
@@ -3424,39 +3103,39 @@ TF_BUILTIN(ArrayNArgumentsConstructor, ArrayBuiltinsAssembler) {
 
 // The ArrayNoArgumentConstructor builtin family.
 GENERATE_ARRAY_CTOR(NoArgument, PackedSmi, PACKED_SMI_ELEMENTS, DontOverride,
-                    DONT_OVERRIDE);
+                    DONT_OVERRIDE)
 GENERATE_ARRAY_CTOR(NoArgument, HoleySmi, HOLEY_SMI_ELEMENTS, DontOverride,
-                    DONT_OVERRIDE);
+                    DONT_OVERRIDE)
 GENERATE_ARRAY_CTOR(NoArgument, PackedSmi, PACKED_SMI_ELEMENTS,
-                    DisableAllocationSites, DISABLE_ALLOCATION_SITES);
+                    DisableAllocationSites, DISABLE_ALLOCATION_SITES)
 GENERATE_ARRAY_CTOR(NoArgument, HoleySmi, HOLEY_SMI_ELEMENTS,
-                    DisableAllocationSites, DISABLE_ALLOCATION_SITES);
+                    DisableAllocationSites, DISABLE_ALLOCATION_SITES)
 GENERATE_ARRAY_CTOR(NoArgument, Packed, PACKED_ELEMENTS, DisableAllocationSites,
-                    DISABLE_ALLOCATION_SITES);
+                    DISABLE_ALLOCATION_SITES)
 GENERATE_ARRAY_CTOR(NoArgument, Holey, HOLEY_ELEMENTS, DisableAllocationSites,
-                    DISABLE_ALLOCATION_SITES);
+                    DISABLE_ALLOCATION_SITES)
 GENERATE_ARRAY_CTOR(NoArgument, PackedDouble, PACKED_DOUBLE_ELEMENTS,
-                    DisableAllocationSites, DISABLE_ALLOCATION_SITES);
+                    DisableAllocationSites, DISABLE_ALLOCATION_SITES)
 GENERATE_ARRAY_CTOR(NoArgument, HoleyDouble, HOLEY_DOUBLE_ELEMENTS,
-                    DisableAllocationSites, DISABLE_ALLOCATION_SITES);
+                    DisableAllocationSites, DISABLE_ALLOCATION_SITES)
 
 // The ArraySingleArgumentConstructor builtin family.
 GENERATE_ARRAY_CTOR(SingleArgument, PackedSmi, PACKED_SMI_ELEMENTS,
-                    DontOverride, DONT_OVERRIDE);
+                    DontOverride, DONT_OVERRIDE)
 GENERATE_ARRAY_CTOR(SingleArgument, HoleySmi, HOLEY_SMI_ELEMENTS, DontOverride,
-                    DONT_OVERRIDE);
+                    DONT_OVERRIDE)
 GENERATE_ARRAY_CTOR(SingleArgument, PackedSmi, PACKED_SMI_ELEMENTS,
-                    DisableAllocationSites, DISABLE_ALLOCATION_SITES);
+                    DisableAllocationSites, DISABLE_ALLOCATION_SITES)
 GENERATE_ARRAY_CTOR(SingleArgument, HoleySmi, HOLEY_SMI_ELEMENTS,
-                    DisableAllocationSites, DISABLE_ALLOCATION_SITES);
+                    DisableAllocationSites, DISABLE_ALLOCATION_SITES)
 GENERATE_ARRAY_CTOR(SingleArgument, Packed, PACKED_ELEMENTS,
-                    DisableAllocationSites, DISABLE_ALLOCATION_SITES);
+                    DisableAllocationSites, DISABLE_ALLOCATION_SITES)
 GENERATE_ARRAY_CTOR(SingleArgument, Holey, HOLEY_ELEMENTS,
-                    DisableAllocationSites, DISABLE_ALLOCATION_SITES);
+                    DisableAllocationSites, DISABLE_ALLOCATION_SITES)
 GENERATE_ARRAY_CTOR(SingleArgument, PackedDouble, PACKED_DOUBLE_ELEMENTS,
-                    DisableAllocationSites, DISABLE_ALLOCATION_SITES);
+                    DisableAllocationSites, DISABLE_ALLOCATION_SITES)
 GENERATE_ARRAY_CTOR(SingleArgument, HoleyDouble, HOLEY_DOUBLE_ELEMENTS,
-                    DisableAllocationSites, DISABLE_ALLOCATION_SITES);
+                    DisableAllocationSites, DISABLE_ALLOCATION_SITES)
 
 #undef GENERATE_ARRAY_CTOR
 

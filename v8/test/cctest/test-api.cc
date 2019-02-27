@@ -49,6 +49,7 @@
 #include "src/feedback-vector.h"
 #include "src/futex-emulation.h"
 #include "src/global-handles.h"
+#include "src/heap/heap-inl.h"
 #include "src/heap/incremental-marking.h"
 #include "src/heap/local-allocator.h"
 #include "src/lookup.h"
@@ -64,6 +65,8 @@
 #include "src/wasm/wasm-js.h"
 #include "test/cctest/heap/heap-tester.h"
 #include "test/cctest/heap/heap-utils.h"
+#include "test/cctest/wasm/wasm-run-utils.h"
+#include "test/common/wasm/wasm-macro-gen.h"
 
 static const bool kLogThreading = false;
 
@@ -621,6 +624,13 @@ TEST(MakingExternalStringConditions) {
   CcTest::CollectGarbage(i::NEW_SPACE);
 
   uint16_t* two_byte_string = AsciiToTwoByteString("s1");
+  Local<String> tiny_local_string =
+      String::NewFromTwoByte(env->GetIsolate(), two_byte_string,
+                             v8::NewStringType::kNormal)
+          .ToLocalChecked();
+  i::DeleteArray(two_byte_string);
+
+  two_byte_string = AsciiToTwoByteString("s1234");
   Local<String> local_string =
       String::NewFromTwoByte(env->GetIsolate(), two_byte_string,
                              v8::NewStringType::kNormal)
@@ -634,6 +644,11 @@ TEST(MakingExternalStringConditions) {
   CcTest::CollectGarbage(i::NEW_SPACE);  // in old gen now
   // Old space strings should be accepted.
   CHECK(local_string->CanMakeExternal());
+
+  // Tiny strings are not in-place externalizable when pointer compression is
+  // enabled.
+  CHECK_EQ(i::kTaggedSize == i::kSystemPointerSize,
+           tiny_local_string->CanMakeExternal());
 }
 
 
@@ -645,7 +660,8 @@ TEST(MakingExternalOneByteStringConditions) {
   CcTest::CollectGarbage(i::NEW_SPACE);
   CcTest::CollectGarbage(i::NEW_SPACE);
 
-  Local<String> local_string = v8_str("s1");
+  Local<String> tiny_local_string = v8_str("s");
+  Local<String> local_string = v8_str("s1234");
   // We should refuse to externalize new space strings.
   CHECK(!local_string->CanMakeExternal());
   // Trigger GCs so that the newly allocated string moves to old gen.
@@ -653,6 +669,11 @@ TEST(MakingExternalOneByteStringConditions) {
   CcTest::CollectGarbage(i::NEW_SPACE);  // in old gen now
   // Old space strings should be accepted.
   CHECK(local_string->CanMakeExternal());
+
+  // Tiny strings are not in-place externalizable when pointer compression is
+  // enabled.
+  CHECK_EQ(i::kTaggedSize == i::kSystemPointerSize,
+           tiny_local_string->CanMakeExternal());
 }
 
 
@@ -11044,9 +11065,9 @@ THREADED_TEST(ShadowObjectAndDataProperty) {
   i::FeedbackSlot slot = i::FeedbackVector::ToSlot(0);
   i::FeedbackNexus nexus(foo->feedback_vector(), slot);
   CHECK_EQ(i::FeedbackSlotKind::kStoreGlobalSloppy, nexus.kind());
-  CHECK_EQ(i::PREMONOMORPHIC, nexus.StateFromFeedback());
+  CHECK_EQ(i::PREMONOMORPHIC, nexus.ic_state());
   CompileRun("foo(1)");
-  CHECK_EQ(i::MONOMORPHIC, nexus.StateFromFeedback());
+  CHECK_EQ(i::MONOMORPHIC, nexus.ic_state());
   // We go a bit further, checking that the form of monomorphism is
   // a PropertyCell in the vector. This is because we want to make sure
   // we didn't settle for a "poor man's monomorphism," such as a
@@ -11094,9 +11115,9 @@ THREADED_TEST(ShadowObjectAndDataPropertyTurbo) {
   i::FeedbackSlot slot = i::FeedbackVector::ToSlot(0);
   i::FeedbackNexus nexus(foo->feedback_vector(), slot);
   CHECK_EQ(i::FeedbackSlotKind::kStoreGlobalSloppy, nexus.kind());
-  CHECK_EQ(i::PREMONOMORPHIC, nexus.StateFromFeedback());
+  CHECK_EQ(i::PREMONOMORPHIC, nexus.ic_state());
   CompileRun("%OptimizeFunctionOnNextCall(foo); foo(1)");
-  CHECK_EQ(i::MONOMORPHIC, nexus.StateFromFeedback());
+  CHECK_EQ(i::MONOMORPHIC, nexus.ic_state());
   i::HeapObject heap_object;
   CHECK(nexus.GetFeedback().GetHeapObject(&heap_object));
   CHECK(heap_object->IsPropertyCell());
@@ -19998,6 +20019,7 @@ TEST(IsolateNewDispose) {
   CHECK_NOT_NULL(isolate);
   CHECK(current_isolate != isolate);
   CHECK(current_isolate == CcTest::isolate());
+  CHECK(isolate->GetArrayBufferAllocator() == CcTest::array_buffer_allocator());
 
   isolate->SetFatalErrorHandler(StoringErrorCallback);
   last_location = last_message = nullptr;
@@ -27556,15 +27578,10 @@ void AtomicsWaitCallbackForTesting(
   }
 }
 
-TEST(AtomicsWaitCallback) {
-  LocalContext env;
-  v8::Isolate* isolate = env->GetIsolate();
-  v8::HandleScope scope(isolate);
-
-  Local<Value> sab = CompileRun(
-      "sab = new SharedArrayBuffer(12);"
-      "int32arr = new Int32Array(sab, 4);"
-      "sab");
+// Must be called from within HandleScope
+void AtomicsWaitCallbackCommon(v8::Isolate* isolate, Local<Value> sab,
+                               size_t initial_offset,
+                               size_t offset_multiplier) {
   CHECK(sab->IsSharedArrayBuffer());
 
   AtomicsWaitCallbackInfo info;
@@ -27574,52 +27591,52 @@ TEST(AtomicsWaitCallback) {
 
   {
     v8::TryCatch try_catch(isolate);
-    info.expected_offset = 4;
+    info.expected_offset = initial_offset;
     info.expected_timeout = std::numeric_limits<double>::infinity();
     info.expected_value = 0;
     info.expected_event = v8::Isolate::AtomicsWaitEvent::kTerminatedExecution;
     info.action = AtomicsWaitCallbackAction::Interrupt;
     info.ncalls = 0;
-    CompileRun("Atomics.wait(int32arr, 0, 0);");
+    CompileRun("wait(0, 0);");
     CHECK_EQ(info.ncalls, 2);
     CHECK(try_catch.HasTerminated());
   }
 
   {
     v8::TryCatch try_catch(isolate);
-    info.expected_offset = 8;
+    info.expected_offset = initial_offset + offset_multiplier;
     info.expected_timeout = std::numeric_limits<double>::infinity();
     info.expected_value = 1;
     info.expected_event = v8::Isolate::AtomicsWaitEvent::kNotEqual;
     info.action = AtomicsWaitCallbackAction::KeepWaiting;
     info.ncalls = 0;
-    CompileRun("Atomics.wait(int32arr, 1, 1);");  // real value is 0 != 1
+    CompileRun("wait(1, 1);");  // real value is 0 != 1
     CHECK_EQ(info.ncalls, 2);
     CHECK(!try_catch.HasCaught());
   }
 
   {
     v8::TryCatch try_catch(isolate);
-    info.expected_offset = 8;
+    info.expected_offset = initial_offset + offset_multiplier;
     info.expected_timeout = 0.125;
     info.expected_value = 0;
     info.expected_event = v8::Isolate::AtomicsWaitEvent::kTimedOut;
     info.action = AtomicsWaitCallbackAction::KeepWaiting;
     info.ncalls = 0;
-    CompileRun("Atomics.wait(int32arr, 1, 0, 0.125);");  // timeout
+    CompileRun("wait(1, 0, 0.125);");  // timeout
     CHECK_EQ(info.ncalls, 2);
     CHECK(!try_catch.HasCaught());
   }
 
   {
     v8::TryCatch try_catch(isolate);
-    info.expected_offset = 8;
+    info.expected_offset = initial_offset + offset_multiplier;
     info.expected_timeout = std::numeric_limits<double>::infinity();
     info.expected_value = 0;
     info.expected_event = v8::Isolate::AtomicsWaitEvent::kAPIStopped;
     info.action = AtomicsWaitCallbackAction::StopAndThrowInFirstCall;
     info.ncalls = 0;
-    CompileRun("Atomics.wait(int32arr, 1, 0);");
+    CompileRun("wait(1, 0);");
     CHECK_EQ(info.ncalls, 1);  // Only one extra call
     CHECK(try_catch.HasCaught());
     CHECK(try_catch.Exception()->IsInt32());
@@ -27628,13 +27645,13 @@ TEST(AtomicsWaitCallback) {
 
   {
     v8::TryCatch try_catch(isolate);
-    info.expected_offset = 8;
+    info.expected_offset = initial_offset + offset_multiplier;
     info.expected_timeout = std::numeric_limits<double>::infinity();
     info.expected_value = 0;
     info.expected_event = v8::Isolate::AtomicsWaitEvent::kAPIStopped;
     info.action = AtomicsWaitCallbackAction::StopAndThrowInSecondCall;
     info.ncalls = 0;
-    CompileRun("Atomics.wait(int32arr, 1, 0);");
+    CompileRun("wait(1, 0);");
     CHECK_EQ(info.ncalls, 2);
     CHECK(try_catch.HasCaught());
     CHECK(try_catch.Exception()->IsInt32());
@@ -27644,15 +27661,15 @@ TEST(AtomicsWaitCallback) {
   {
     // Same test as before, but with a different `expected_value`.
     v8::TryCatch try_catch(isolate);
-    info.expected_offset = 8;
+    info.expected_offset = initial_offset + offset_multiplier;
     info.expected_timeout = std::numeric_limits<double>::infinity();
     info.expected_value = 200;
     info.expected_event = v8::Isolate::AtomicsWaitEvent::kAPIStopped;
     info.action = AtomicsWaitCallbackAction::StopAndThrowInSecondCall;
     info.ncalls = 0;
     CompileRun(
-        "int32arr[1] = 200;"
-        "Atomics.wait(int32arr, 1, 200);");
+        "setArrayElemAs(1, 200);"
+        "wait(1, 200);");
     CHECK_EQ(info.ncalls, 2);
     CHECK(try_catch.HasCaught());
     CHECK(try_catch.Exception()->IsInt32());
@@ -27662,19 +27679,120 @@ TEST(AtomicsWaitCallback) {
   {
     // Wake the `Atomics.wait()` call from a thread.
     v8::TryCatch try_catch(isolate);
-    info.expected_offset = 4;
+    info.expected_offset = initial_offset;
     info.expected_timeout = std::numeric_limits<double>::infinity();
     info.expected_value = 0;
     info.expected_event = v8::Isolate::AtomicsWaitEvent::kAPIStopped;
     info.action = AtomicsWaitCallbackAction::StopFromThreadAndThrow;
     info.ncalls = 0;
-    CompileRun("Atomics.wait(int32arr, 0, 0);");
+    CompileRun(
+        "setArrayElemAs(1, 0);"
+        "wait(0, 0);");
     CHECK_EQ(info.ncalls, 2);
     CHECK(try_catch.HasCaught());
     CHECK(try_catch.Exception()->IsInt32());
     CHECK_EQ(try_catch.Exception().As<v8::Int32>()->Value(), 42);
   }
 }
+
+TEST(AtomicsWaitCallback) {
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+  const char* init = R"(
+      let sab = new SharedArrayBuffer(16);
+      let int32arr = new Int32Array(sab, 4);
+      let setArrayElemAs = function(id, val) {
+        int32arr[id] = val;
+      };
+      let wait = function(id, val, timeout) {
+        if(arguments.length == 2) return Atomics.wait(int32arr, id, val);
+        return Atomics.wait(int32arr, id, val, timeout);
+      };
+      sab;)";
+  AtomicsWaitCallbackCommon(isolate, CompileRun(init), 4, 4);
+}
+
+namespace v8 {
+namespace internal {
+namespace wasm {
+TEST(WasmI32AtomicWaitCallback) {
+  FlagScope<bool> wasm_threads_flag(&i::FLAG_experimental_wasm_threads, true);
+  WasmRunner<int32_t, int32_t, int32_t, double> r(ExecutionTier::kOptimized);
+  r.builder().AddMemory(kWasmPageSize, SharedFlag::kShared);
+  r.builder().SetHasSharedMemory();
+  BUILD(r, WASM_ATOMICS_WAIT(kExprI32AtomicWait, WASM_GET_LOCAL(0),
+                             WASM_GET_LOCAL(1),
+                             WASM_I64_SCONVERT_F64(WASM_GET_LOCAL(2)), 4));
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+  Handle<JSFunction> func = r.builder().WrapCode(0);
+  CHECK(env->Global()
+            ->Set(env.local(), v8_str("func"), v8::Utils::ToLocal(func))
+            .FromJust());
+  Handle<JSArrayBuffer> memory(
+      r.builder().instance_object()->memory_object()->array_buffer(),
+      i_isolate);
+  CHECK(env->Global()
+            ->Set(env.local(), v8_str("sab"), v8::Utils::ToLocal(memory))
+            .FromJust());
+
+  const char* init = R"(
+      let int32arr = new Int32Array(sab, 4);
+      let setArrayElemAs = function(id, val) {
+        int32arr[id] = val;
+      };
+      let wait = function(id, val, timeout) {
+        if(arguments.length === 2)
+          return func(id << 2, val, -1);
+        return func(id << 2, val, timeout*1000000);
+      };
+      sab;)";
+  AtomicsWaitCallbackCommon(isolate, CompileRun(init), 4, 4);
+}
+
+TEST(WasmI64AtomicWaitCallback) {
+  FlagScope<bool> wasm_threads_flag(&i::FLAG_experimental_wasm_threads, true);
+  WasmRunner<int32_t, int32_t, double, double> r(ExecutionTier::kOptimized);
+  r.builder().AddMemory(kWasmPageSize, SharedFlag::kShared);
+  r.builder().SetHasSharedMemory();
+  BUILD(r, WASM_ATOMICS_WAIT(kExprI64AtomicWait, WASM_GET_LOCAL(0),
+                             WASM_I64_SCONVERT_F64(WASM_GET_LOCAL(1)),
+                             WASM_I64_SCONVERT_F64(WASM_GET_LOCAL(2)), 8));
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+  Handle<JSFunction> func = r.builder().WrapCode(0);
+  CHECK(env->Global()
+            ->Set(env.local(), v8_str("func"), v8::Utils::ToLocal(func))
+            .FromJust());
+  Handle<JSArrayBuffer> memory(
+      r.builder().instance_object()->memory_object()->array_buffer(),
+      i_isolate);
+  CHECK(env->Global()
+            ->Set(env.local(), v8_str("sab"), v8::Utils::ToLocal(memory))
+            .FromJust());
+
+  const char* init = R"(
+      let int64arr = new BigInt64Array(sab, 8);
+      let setArrayElemAs = function(id, val) {
+        int64arr[id] = BigInt(val);
+      };
+      let wait = function(id, val, timeout) {
+        if(arguments.length === 2)
+          return func(id << 3, val, -1);
+        return func(id << 3, val, timeout*1000000);
+      };
+      sab;)";
+  AtomicsWaitCallbackCommon(isolate, CompileRun(init), 8, 8);
+}
+
+}  // namespace wasm
+}  // namespace internal
+}  // namespace v8
 
 TEST(BigIntAPI) {
   LocalContext env;

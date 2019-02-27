@@ -483,6 +483,20 @@
           ]
         },
         {
+          "name": "StringNormalize",
+          "main": "run.js",
+          "resources": [ "string-normalize.js" ],
+          "test_flags": [ "string-normalize" ],
+          "results_regexp": "^%s\\-Strings\\(Score\\): (.+)$",
+          "run_count": 1,
+          "tests": [
+            {"name": "StringNormalize"},
+            {"name": "StringNormalizeNFD"},
+            {"name": "StringNormalizeNFKC"},
+            {"name": "StringNormalizeNFKD"}
+          ]
+        },
+        {
           "name": "StringLocaleCompare",
           "main": "run.js",
           "resources": [ "string-localeCompare.js" ],
@@ -491,6 +505,20 @@
           "run_count": 1,
           "tests": [
             {"name": "StringLocaleCompare"}
+          ]
+        },
+        {
+          "name": "StringToLocaleCase",
+          "main": "run.js",
+          "resources": [ "string-toLocaleCase.js" ],
+          "test_flags": [ "string-toLocaleCase" ],
+          "results_regexp": "^%s\\-Strings\\(Score\\): (.+)$",
+          "run_count": 1,
+          "tests": [
+            {"name": "StringToLocaleLowerCase"},
+            {"name": "StringToLocaleUpperCase"},
+            {"name": "StringToLocaleLowerCaseTR"},
+            {"name": "StringToLocaleUpperCaseTR"}
           ]
         },
         {
@@ -991,6 +1019,27 @@
         {"name": "for loop"},
         {"name": "Array#indexOf"},
         {"name": "Array#includes"}
+      ]
+    },
+    {
+      "name": "ArrayInOperator",
+      "path": ["ArrayInOperator"],
+      "main": "run.js",
+      "resources": [],
+      "results_regexp": "^%s\\-ArrayInOperator\\(Score\\): (.+)$",
+      "tests": [
+        {"name": "PackedSMI"},
+        {"name": "PackedDouble"},
+        {"name": "PackedElements"},
+        {"name": "HoleySMI"},
+        {"name": "HoleyDouble"},
+        {"name": "HoleyElements"},
+        {"name": "SparseSMI"},
+        {"name": "SparseDouble"},
+        {"name": "SparseElements"},
+        {"name": "TypedUint8"},
+        {"name": "TypedInt32"},
+        {"name": "TypedFloat64"}
       ]
     },
     {

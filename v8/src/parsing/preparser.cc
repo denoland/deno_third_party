@@ -14,15 +14,16 @@
 #include "src/parsing/preparser.h"
 #include "src/unicode.h"
 #include "src/utils.h"
+#include "src/zone/zone-list-inl.h"
 
 namespace v8 {
 namespace internal {
 
 namespace {
 
-PreParserIdentifier GetSymbolHelper(Scanner* scanner,
-                                    const AstRawString* string,
-                                    AstValueFactory* avf) {
+PreParserIdentifier GetIdentifierHelper(Scanner* scanner,
+                                        const AstRawString* string,
+                                        AstValueFactory* avf) {
   // These symbols require slightly different treatement:
   // - regular keywords (async, await, etc.; treated in 1st switch.)
   // - 'contextual' keywords (and may contain escaped; treated in 2nd switch.)
@@ -57,10 +58,10 @@ PreParserIdentifier GetSymbolHelper(Scanner* scanner,
 
 }  // unnamed namespace
 
-PreParserIdentifier PreParser::GetSymbol() const {
+PreParserIdentifier PreParser::GetIdentifier() const {
   const AstRawString* result = scanner()->CurrentSymbol(ast_value_factory());
   PreParserIdentifier symbol =
-      GetSymbolHelper(scanner(), result, ast_value_factory());
+      GetIdentifierHelper(scanner(), result, ast_value_factory());
   DCHECK_NOT_NULL(result);
   symbol.string_ = result;
   return symbol;

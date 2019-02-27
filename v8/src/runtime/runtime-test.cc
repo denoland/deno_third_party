@@ -16,6 +16,8 @@
 #include "src/counters.h"
 #include "src/deoptimizer.h"
 #include "src/frames-inl.h"
+#include "src/heap/heap-inl.h"  // For ToBoolean. TODO(jkummerow): Drop.
+#include "src/heap/heap-write-barrier-inl.h"
 #include "src/ic/stub-cache.h"
 #include "src/isolate-inl.h"
 #include "src/objects/heap-object-inl.h"
@@ -45,7 +47,7 @@ using WasmCompileControlsMap = std::map<v8::Isolate*, WasmCompileControls>;
 // isolates concurrently. Methods need to hold the accompanying mutex on access.
 // To avoid upsetting the static initializer count, we lazy initialize this.
 DEFINE_LAZY_LEAKY_OBJECT_GETTER(WasmCompileControlsMap,
-                                GetPerIsolateWasmControls);
+                                GetPerIsolateWasmControls)
 base::LazyMutex g_PerIsolateWasmControlsMutex = LAZY_MUTEX_INITIALIZER;
 
 bool IsWasmCompileAllowed(v8::Isolate* isolate, v8::Local<v8::Value> value,
@@ -805,7 +807,7 @@ RUNTIME_FUNCTION(Runtime_InNewSpace) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_CHECKED(Object, obj, 0);
-  return isolate->heap()->ToBoolean(Heap::InYoungGeneration(obj));
+  return isolate->heap()->ToBoolean(ObjectInYoungGeneration(obj));
 }
 
 RUNTIME_FUNCTION(Runtime_IsAsmWasmCode) {
@@ -935,6 +937,7 @@ ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(SmiOrObjectElements)
 ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(DoubleElements)
 ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(HoleyElements)
 ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(DictionaryElements)
+ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(PackedElements)
 ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(SloppyArgumentsElements)
 // Properties test sitting with elements tests - not fooling anyone.
 ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(FastProperties)

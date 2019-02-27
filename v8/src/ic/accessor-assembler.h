@@ -82,7 +82,7 @@ class AccessorAssembler : public CodeStubAssembler {
     Node* holder;
   };
 
-  void LoadGlobalIC(TNode<FeedbackVector> vector, Node* slot,
+  void LoadGlobalIC(Node* vector, Node* slot,
                     const LazyNode<Context>& lazy_context,
                     const LazyNode<Name>& lazy_name, TypeofMode typeof_mode,
                     ExitPoint* exit_point,
@@ -122,8 +122,6 @@ class AccessorAssembler : public CodeStubAssembler {
                                              StoreTransitionMapFlags flags);
 
   void JumpIfDataProperty(Node* details, Label* writable, Label* readonly);
-
-  void BranchIfStrictMode(Node* vector, Node* slot, Label* if_strict);
 
   void InvalidateValidityCellIfPrototype(Node* map, Node* bitfield2 = nullptr);
 
@@ -274,11 +272,13 @@ class AccessorAssembler : public CodeStubAssembler {
                            const OnFoundOnReceiver& on_found_on_receiver,
                            Label* miss, ICMode ic_mode);
 
-  Node* GetLanguageMode(Node* vector, Node* slot);
-
   Node* PrepareValueForStore(Node* handler_word, Node* holder,
                              Representation representation, Node* value,
                              Label* bailout);
+
+  void BranchIfPrototypeShouldbeFast(Node* receiver_map,
+                                     Label* prototype_not_fast,
+                                     Label* prototype_fast);
 
   // Extends properties backing store by JSObject::kFieldsAdded elements,
   // returns updated properties backing store.
@@ -299,6 +299,7 @@ class AccessorAssembler : public CodeStubAssembler {
                        Label* miss, ExitPoint* exit_point);
   void NameDictionaryNegativeLookup(Node* object, SloppyTNode<Name> name,
                                     Label* miss);
+  TNode<BoolT> IsPropertyDetailsConst(Node* details);
 
   // Stub cache access helpers.
 

@@ -40,6 +40,7 @@
 #include "src/optimized-compilation-info.h"
 #include "src/tracing/trace-event.h"
 #include "src/trap-handler/trap-handler.h"
+#include "src/vector.h"
 #include "src/wasm/function-body-decoder.h"
 #include "src/wasm/function-compiler.h"
 #include "src/wasm/graph-builder-interface.h"
@@ -2691,8 +2692,16 @@ Node* WasmGraphBuilder::BuildImportCall(wasm::FunctionSig* sig, Node** args,
 
   // Load the target from the imported_targets array at the offset of
   // {func_index}.
-  STATIC_ASSERT(kTaggedSize == kSystemPointerSize);
-  Node* func_index_times_pointersize = func_index_times_tagged_size;
+  Node* func_index_times_pointersize;
+  if (kSystemPointerSize == kTaggedSize) {
+    func_index_times_pointersize = func_index_times_tagged_size;
+
+  } else {
+    DCHECK_EQ(kSystemPointerSize, kTaggedSize + kTaggedSize);
+    func_index_times_pointersize = graph()->NewNode(
+        mcgraph()->machine()->Int32Add(), func_index_times_tagged_size,
+        func_index_times_tagged_size);
+  }
   Node* imported_targets =
       LOAD_INSTANCE_FIELD(ImportedFunctionTargets, MachineType::Pointer());
   Node* target_node = SetEffect(graph()->NewNode(
@@ -2774,15 +2783,14 @@ Node* WasmGraphBuilder::CallIndirect(uint32_t sig_index, Node** args,
   Node* ift_instances = LOAD_INSTANCE_FIELD(IndirectFunctionTableRefs,
                                             MachineType::TaggedPointer());
 
-  Node* intptr_scaled_key = graph()->NewNode(
-      machine->Word32Shl(), key, Int32Constant(kSystemPointerSizeLog2));
-
-  Node* target = SetEffect(
-      graph()->NewNode(machine->Load(MachineType::Pointer()), ift_targets,
-                       intptr_scaled_key, Effect(), Control()));
-
-  STATIC_ASSERT(kTaggedSize == kSystemPointerSize);
-  Node* tagged_scaled_key = intptr_scaled_key;
+  Node* tagged_scaled_key;
+  if (kTaggedSize == kInt32Size) {
+    tagged_scaled_key = int32_scaled_key;
+  } else {
+    DCHECK_EQ(kTaggedSize, kInt32Size * 2);
+    tagged_scaled_key = graph()->NewNode(machine->Int32Add(), int32_scaled_key,
+                                         int32_scaled_key);
+  }
 
   Node* target_instance = SetEffect(graph()->NewNode(
       machine->Load(MachineType::TaggedPointer()),
@@ -2790,8 +2798,20 @@ Node* WasmGraphBuilder::CallIndirect(uint32_t sig_index, Node** args,
       Int32Constant(wasm::ObjectAccess::ElementOffsetInTaggedFixedArray(0)),
       Effect(), Control()));
 
-  args[0] = target;
+  Node* intptr_scaled_key;
+  if (kSystemPointerSize == kTaggedSize) {
+    intptr_scaled_key = tagged_scaled_key;
+  } else {
+    DCHECK_EQ(kSystemPointerSize, kTaggedSize + kTaggedSize);
+    intptr_scaled_key = graph()->NewNode(machine->Int32Add(), tagged_scaled_key,
+                                         tagged_scaled_key);
+  }
 
+  Node* target = SetEffect(
+      graph()->NewNode(machine->Load(MachineType::Pointer()), ift_targets,
+                       intptr_scaled_key, Effect(), Control()));
+
+  args[0] = target;
   return BuildWasmCall(sig, args, rets, position, target_instance,
                        untrusted_code_mitigations_ ? kRetpoline : kNoRetpoline);
 }
@@ -4295,7 +4315,7 @@ Node* WasmGraphBuilder::AtomicOp(wasm::WasmOpcode opcode, Node* const* inputs,
 
     case wasm::kExprI64AtomicWait: {
       Node* index = CheckBoundsAndAlignment(
-          wasm::ValueTypes::MemSize(MachineType::Uint32()), inputs[0], offset,
+          wasm::ValueTypes::MemSize(MachineType::Uint64()), inputs[0], offset,
           position);
       // Now that we've bounds-checked, compute the effective address.
       Node* address = graph()->NewNode(mcgraph()->machine()->Int32Add(),
@@ -4381,10 +4401,10 @@ Node* WasmGraphBuilder::MemoryInit(uint32_t data_segment_index, Node* dst,
     // Load segment's base pointer from WasmInstanceObject::data_segment_starts.
     Node* seg_start_array =
         LOAD_INSTANCE_FIELD(DataSegmentStarts, MachineType::Pointer());
-    STATIC_ASSERT(wasm::kV8MaxWasmDataSegments <= kMaxUInt32 >>
-                  kPointerSizeLog2);
+    STATIC_ASSERT(wasm::kV8MaxWasmDataSegments <=
+                  kMaxUInt32 / kSystemPointerSize);
     Node* scaled_index = Uint32ToUintptr(graph()->NewNode(
-        m->Word32Shl(), seg_index, Int32Constant(kPointerSizeLog2)));
+        m->Word32Shl(), seg_index, Int32Constant(kSystemPointerSizeLog2)));
     Node* seg_start = SetEffect(
         graph()->NewNode(m->Load(MachineType::Pointer()), seg_start_array,
                          scaled_index, Effect(), Control()));
