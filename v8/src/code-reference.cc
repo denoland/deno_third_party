@@ -4,6 +4,7 @@
 
 #include "src/code-reference.h"
 
+#include "src/code-desc.h"
 #include "src/globals.h"
 #include "src/handles-inl.h"
 #include "src/objects-inl.h"
@@ -87,14 +88,14 @@ struct CodeDescOps {
     }                                            \
   }
 
-DISPATCH(Address, constant_pool);
-DISPATCH(Address, instruction_start);
-DISPATCH(Address, instruction_end);
-DISPATCH(int, instruction_size);
-DISPATCH(const byte*, relocation_start);
-DISPATCH(const byte*, relocation_end);
-DISPATCH(int, relocation_size);
-DISPATCH(Address, code_comments);
+DISPATCH(Address, constant_pool)
+DISPATCH(Address, instruction_start)
+DISPATCH(Address, instruction_end)
+DISPATCH(int, instruction_size)
+DISPATCH(const byte*, relocation_start)
+DISPATCH(const byte*, relocation_end)
+DISPATCH(int, relocation_size)
+DISPATCH(Address, code_comments)
 
 #undef DISPATCH
 

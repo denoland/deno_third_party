@@ -38,6 +38,7 @@
 #include "src/frames-inl.h"
 #include "src/function-kind.h"
 #include "src/globals.h"
+#include "src/heap/heap-inl.h"
 #include "src/ic/ic.h"
 #include "src/identity-map.h"
 #include "src/isolate-inl.h"
@@ -48,6 +49,7 @@
 #include "src/message-template.h"
 #include "src/microtask-queue.h"
 #include "src/objects-body-descriptors-inl.h"
+#include "src/objects/allocation-site-inl.h"
 #include "src/objects/api-callbacks.h"
 #include "src/objects/arguments-inl.h"
 #include "src/objects/bigint.h"
@@ -577,6 +579,11 @@ bool Object::BooleanValue(Isolate* isolate) {
   if (IsHeapNumber()) return DoubleToBoolean(HeapNumber::cast(*this)->value());
   if (IsBigInt()) return BigInt::cast(*this)->ToBoolean();
   return true;
+}
+
+Object Object::ToBoolean(Isolate* isolate) {
+  if (IsBoolean()) return *this;
+  return isolate->heap()->ToBoolean(BooleanValue(isolate));
 }
 
 namespace {
@@ -2349,25 +2356,25 @@ bool HeapObject::CanBeRehashed() const {
   return false;
 }
 
-void HeapObject::RehashBasedOnMap(Isolate* isolate) {
+void HeapObject::RehashBasedOnMap(ReadOnlyRoots roots) {
   switch (map()->instance_type()) {
     case HASH_TABLE_TYPE:
       UNREACHABLE();
       break;
     case NAME_DICTIONARY_TYPE:
-      NameDictionary::cast(*this)->Rehash(isolate);
+      NameDictionary::cast(*this)->Rehash(roots);
       break;
     case GLOBAL_DICTIONARY_TYPE:
-      GlobalDictionary::cast(*this)->Rehash(isolate);
+      GlobalDictionary::cast(*this)->Rehash(roots);
       break;
     case NUMBER_DICTIONARY_TYPE:
-      NumberDictionary::cast(*this)->Rehash(isolate);
+      NumberDictionary::cast(*this)->Rehash(roots);
       break;
     case SIMPLE_NUMBER_DICTIONARY_TYPE:
-      SimpleNumberDictionary::cast(*this)->Rehash(isolate);
+      SimpleNumberDictionary::cast(*this)->Rehash(roots);
       break;
     case STRING_TABLE_TYPE:
-      StringTable::cast(*this)->Rehash(isolate);
+      StringTable::cast(*this)->Rehash(roots);
       break;
     case DESCRIPTOR_ARRAY_TYPE:
       DCHECK_LE(1, DescriptorArray::cast(*this)->number_of_descriptors());
@@ -2390,18 +2397,8 @@ void HeapObject::RehashBasedOnMap(Isolate* isolate) {
   }
 }
 
-const char* Representation::Mnemonic() const {
-  switch (kind_) {
-    case kNone: return "v";
-    case kTagged: return "t";
-    case kSmi: return "s";
-    case kDouble: return "d";
-    case kInteger32: return "i";
-    case kHeapObject: return "h";
-    case kExternal: return "x";
-    default:
-      UNREACHABLE();
-  }
+bool HeapObject::IsExternal(Isolate* isolate) const {
+  return map()->FindRootMap(isolate) == isolate->heap()->external_map();
 }
 
 void DescriptorArray::GeneralizeAllFields() {
@@ -4849,7 +4846,7 @@ Object Script::GetNameOrSourceURL() {
 
 MaybeHandle<SharedFunctionInfo> Script::FindSharedFunctionInfo(
     Isolate* isolate, const FunctionLiteral* fun) {
-  CHECK_NE(fun->function_literal_id(), FunctionLiteral::kIdTypeInvalid);
+  CHECK_NE(fun->function_literal_id(), kFunctionLiteralIdInvalid);
   // If this check fails, the problem is most probably the function id
   // renumbering done by AstFunctionLiteralIdReindexer; in particular, that
   // AstTraversalVisitor doesn't recurse properly in the construct which
@@ -4873,6 +4870,15 @@ Script Script::Iterator::Next() {
     return Script::cast(o);
   }
   return Script();
+}
+
+uint32_t SharedFunctionInfo::Hash() {
+  // Hash SharedFunctionInfo based on its start position and script id. Note: we
+  // don't use the function's literal id since getting that is slow for compiled
+  // funcitons.
+  int start_pos = StartPosition();
+  int script_id = script()->IsScript() ? Script::cast(script())->id() : 0;
+  return static_cast<uint32_t>(base::hash_combine(start_pos, script_id));
 }
 
 Code SharedFunctionInfo::GetCode() const {
@@ -5241,6 +5247,11 @@ bool SharedFunctionInfo::IsInlineable() {
     return false;
   }
 
+  if (HasBreakInfo()) {
+    TraceInlining(*this, "false (may contain break points)");
+    return false;
+  }
+
   TraceInlining(*this, "true");
   return true;
 }
@@ -5251,7 +5262,7 @@ int SharedFunctionInfo::FindIndexInScript(Isolate* isolate) const {
   DisallowHeapAllocation no_gc;
 
   Object script_obj = script();
-  if (!script_obj->IsScript()) return FunctionLiteral::kIdTypeInvalid;
+  if (!script_obj->IsScript()) return kFunctionLiteralIdInvalid;
 
   WeakFixedArray shared_info_list =
       Script::cast(script_obj)->shared_function_infos();
@@ -5266,7 +5277,7 @@ int SharedFunctionInfo::FindIndexInScript(Isolate* isolate) const {
     }
   }
 
-  return FunctionLiteral::kIdTypeInvalid;
+  return kFunctionLiteralIdInvalid;
 }
 
 
@@ -5367,6 +5378,8 @@ void SharedFunctionInfo::InitFromFunctionLiteral(
     shared_info->set_length(lit->function_length());
     shared_info->set_has_duplicate_parameters(lit->has_duplicate_parameters());
     shared_info->SetExpectedNofPropertiesFromEstimate(lit);
+    shared_info->set_is_safe_to_skip_arguments_adaptor(
+        lit->SafeToSkipArgumentsAdaptor());
     DCHECK_NULL(lit->produced_preparse_data());
     // If we're about to eager compile, we'll have the function literal
     // available, so there's no need to wastefully allocate an uncompiled data.
@@ -5378,6 +5391,7 @@ void SharedFunctionInfo::InitFromFunctionLiteral(
     // value after compiling, but avoid overwriting values set manually by the
     // bootstrapper.
     shared_info->set_length(SharedFunctionInfo::kInvalidLength);
+    shared_info->set_is_safe_to_skip_arguments_adaptor(false);
     ProducedPreparseData* scope_data = lit->produced_preparse_data();
     if (scope_data != nullptr) {
       Handle<PreparseData> preparse_data =
@@ -5406,10 +5420,6 @@ void SharedFunctionInfo::SetExpectedNofPropertiesFromEstimate(
   // If no properties are added in the constructor, they are more likely
   // to be added later.
   if (estimate == 0) estimate = 2;
-
-  // Inobject slack tracking will reclaim redundant inobject space later,
-  // so we can afford to adjust the estimate generously.
-  estimate += 8;
 
   // Limit actual estimate to fit in a 8 bit field, we will never allocate
   // more than this in any case.
@@ -5501,6 +5511,25 @@ void SharedFunctionInfo::SetPosition(int start_position, int end_position) {
   } else {
     UNREACHABLE();
   }
+}
+
+// static
+void SharedFunctionInfo::EnsureSourcePositionsAvailable(
+    Isolate* isolate, Handle<SharedFunctionInfo> shared_info) {
+  if (FLAG_enable_lazy_source_positions && shared_info->HasBytecodeArray() &&
+      !shared_info->GetBytecodeArray()->HasSourcePositionTable()) {
+    Compiler::CollectSourcePositions(isolate, shared_info);
+  }
+}
+
+bool BytecodeArray::IsBytecodeEqual(const BytecodeArray other) const {
+  if (length() != other->length()) return false;
+
+  for (int i = 0; i < length(); ++i) {
+    if (get(i) != other->get(i)) return false;
+  }
+
+  return true;
 }
 
 // static
@@ -5847,7 +5876,7 @@ Handle<Object> JSPromise::Fulfill(Handle<JSPromise> promise,
   Isolate* const isolate = promise->GetIsolate();
 
   // 1. Assert: The value of promise.[[PromiseState]] is "pending".
-  DCHECK_EQ(Promise::kPending, promise->status());
+  CHECK_EQ(Promise::kPending, promise->status());
 
   // 2. Let reactions be promise.[[PromiseFulfillReactions]].
   Handle<Object> reactions(promise->reactions(), isolate);
@@ -5875,7 +5904,7 @@ Handle<Object> JSPromise::Reject(Handle<JSPromise> promise,
                           isolate->factory()->undefined_value());
 
   // 1. Assert: The value of promise.[[PromiseState]] is "pending".
-  DCHECK_EQ(Promise::kPending, promise->status());
+  CHECK_EQ(Promise::kPending, promise->status());
 
   // 2. Let reactions be promise.[[PromiseRejectReactions]].
   Handle<Object> reactions(promise->reactions(), isolate);
@@ -5977,7 +6006,7 @@ Handle<Object> JSPromise::TriggerPromiseReactions(Isolate* isolate,
                                                   Handle<Object> reactions,
                                                   Handle<Object> argument,
                                                   PromiseReaction::Type type) {
-  DCHECK(reactions->IsSmi() || reactions->IsPromiseReaction());
+  CHECK(reactions->IsSmi() || reactions->IsPromiseReaction());
 
   // We need to reverse the {reactions} here, since we record them
   // on the JSPromise in the reverse order.
@@ -6001,15 +6030,25 @@ Handle<Object> JSPromise::TriggerPromiseReactions(Isolate* isolate,
     Handle<PromiseReaction> reaction = Handle<PromiseReaction>::cast(task);
     reactions = handle(reaction->next(), isolate);
 
+    Handle<NativeContext> handler_context;
+
     STATIC_ASSERT(static_cast<int>(PromiseReaction::kSize) ==
                   static_cast<int>(PromiseReactionJobTask::kSize));
     if (type == PromiseReaction::kFulfill) {
+      Handle<HeapObject> handler = handle(reaction->fulfill_handler(), isolate);
+      if (handler->IsJSReceiver()) {
+        JSReceiver::GetContextForMicrotask(Handle<JSReceiver>::cast(handler))
+            .ToHandle(&handler_context);
+      }
+      if (handler_context.is_null())
+        handler_context = isolate->native_context();
+
       task->synchronized_set_map(
           ReadOnlyRoots(isolate).promise_fulfill_reaction_job_task_map());
       Handle<PromiseFulfillReactionJobTask>::cast(task)->set_argument(
           *argument);
       Handle<PromiseFulfillReactionJobTask>::cast(task)->set_context(
-          *isolate->native_context());
+          *handler_context);
       STATIC_ASSERT(
           static_cast<int>(PromiseReaction::kFulfillHandlerOffset) ==
           static_cast<int>(PromiseFulfillReactionJobTask::kHandlerOffset));
@@ -6019,20 +6058,26 @@ Handle<Object> JSPromise::TriggerPromiseReactions(Isolate* isolate,
               PromiseFulfillReactionJobTask::kPromiseOrCapabilityOffset));
     } else {
       DisallowHeapAllocation no_gc;
-      HeapObject handler = reaction->reject_handler();
+      Handle<HeapObject> handler = handle(reaction->reject_handler(), isolate);
+      if (handler->IsJSReceiver()) {
+        JSReceiver::GetContextForMicrotask(Handle<JSReceiver>::cast(handler))
+            .ToHandle(&handler_context);
+      }
+      if (handler_context.is_null())
+        handler_context = isolate->native_context();
       task->synchronized_set_map(
           ReadOnlyRoots(isolate).promise_reject_reaction_job_task_map());
       Handle<PromiseRejectReactionJobTask>::cast(task)->set_argument(*argument);
       Handle<PromiseRejectReactionJobTask>::cast(task)->set_context(
-          *isolate->native_context());
-      Handle<PromiseRejectReactionJobTask>::cast(task)->set_handler(handler);
+          *handler_context);
+      Handle<PromiseRejectReactionJobTask>::cast(task)->set_handler(*handler);
       STATIC_ASSERT(
           static_cast<int>(PromiseReaction::kPromiseOrCapabilityOffset) ==
           static_cast<int>(
               PromiseRejectReactionJobTask::kPromiseOrCapabilityOffset));
     }
 
-    isolate->native_context()->microtask_queue()->EnqueueMicrotask(
+    handler_context->microtask_queue()->EnqueueMicrotask(
         *Handle<PromiseReactionJobTask>::cast(task));
   }
 
@@ -6427,7 +6472,7 @@ Handle<Derived> HashTable<Derived, Shape>::NewInternal(
 }
 
 template <typename Derived, typename Shape>
-void HashTable<Derived, Shape>::Rehash(Isolate* isolate, Derived new_table) {
+void HashTable<Derived, Shape>::Rehash(ReadOnlyRoots roots, Derived new_table) {
   DisallowHeapAllocation no_gc;
   WriteBarrierMode mode = new_table->GetWriteBarrierMode(no_gc);
 
@@ -6440,12 +6485,11 @@ void HashTable<Derived, Shape>::Rehash(Isolate* isolate, Derived new_table) {
 
   // Rehash the elements.
   int capacity = this->Capacity();
-  ReadOnlyRoots roots(isolate);
   for (int i = 0; i < capacity; i++) {
     uint32_t from_index = EntryToIndex(i);
     Object k = this->get(from_index);
     if (!Shape::IsLive(roots, k)) continue;
-    uint32_t hash = Shape::HashForObject(isolate, k);
+    uint32_t hash = Shape::HashForObject(roots, k);
     uint32_t insertion_index =
         EntryToIndex(new_table->FindInsertionEntry(hash));
     for (int j = 0; j < Shape::kEntrySize; j++) {
@@ -6457,10 +6501,10 @@ void HashTable<Derived, Shape>::Rehash(Isolate* isolate, Derived new_table) {
 }
 
 template <typename Derived, typename Shape>
-uint32_t HashTable<Derived, Shape>::EntryForProbe(Isolate* isolate, Object k,
+uint32_t HashTable<Derived, Shape>::EntryForProbe(ReadOnlyRoots roots, Object k,
                                                   int probe,
                                                   uint32_t expected) {
-  uint32_t hash = Shape::HashForObject(isolate, k);
+  uint32_t hash = Shape::HashForObject(roots, k);
   uint32_t capacity = this->Capacity();
   uint32_t entry = FirstProbe(hash, capacity);
   for (int i = 1; i < probe; i++) {
@@ -6488,10 +6532,9 @@ void HashTable<Derived, Shape>::Swap(uint32_t entry1, uint32_t entry2,
 }
 
 template <typename Derived, typename Shape>
-void HashTable<Derived, Shape>::Rehash(Isolate* isolate) {
+void HashTable<Derived, Shape>::Rehash(ReadOnlyRoots roots) {
   DisallowHeapAllocation no_gc;
   WriteBarrierMode mode = GetWriteBarrierMode(no_gc);
-  ReadOnlyRoots roots(isolate);
   uint32_t capacity = Capacity();
   bool done = false;
   for (int probe = 1; !done; probe++) {
@@ -6501,11 +6544,11 @@ void HashTable<Derived, Shape>::Rehash(Isolate* isolate) {
     for (uint32_t current = 0; current < capacity; current++) {
       Object current_key = KeyAt(current);
       if (!Shape::IsLive(roots, current_key)) continue;
-      uint32_t target = EntryForProbe(isolate, current_key, probe, current);
+      uint32_t target = EntryForProbe(roots, current_key, probe, current);
       if (current == target) continue;
       Object target_key = KeyAt(target);
       if (!Shape::IsLive(roots, target_key) ||
-          EntryForProbe(isolate, target_key, probe, target) != target) {
+          EntryForProbe(roots, target_key, probe, target) != target) {
         // Put the current element into the correct position.
         Swap(current, target, mode);
         // The other element will be processed on the next iteration.
@@ -6543,7 +6586,7 @@ Handle<Derived> HashTable<Derived, Shape>::EnsureCapacity(
   Handle<Derived> new_table = HashTable::New(
       isolate, new_nof, should_pretenure ? TENURED : NOT_TENURED);
 
-  table->Rehash(isolate, *new_table);
+  table->Rehash(ReadOnlyRoots(isolate), *new_table);
   return new_table;
 }
 
@@ -6592,7 +6635,7 @@ Handle<Derived> HashTable<Derived, Shape>::Shrink(Isolate* isolate,
       HashTable::New(isolate, new_capacity, pretenure ? TENURED : NOT_TENURED,
                      USE_CUSTOM_MINIMUM_CAPACITY);
 
-  table->Rehash(isolate, *new_table);
+  table->Rehash(ReadOnlyRoots(isolate), *new_table);
   return new_table;
 }
 
@@ -6671,7 +6714,7 @@ MaybeHandle<String> StringTable::LookupTwoCharsStringIfExists(
     Isolate* isolate,
     uint16_t c1,
     uint16_t c2) {
-  TwoCharHashTableKey key(c1, c2, isolate->heap()->HashSeed());
+  TwoCharHashTableKey key(c1, c2, HashSeed(isolate));
   Handle<StringTable> string_table = isolate->factory()->string_table();
   int entry = string_table->FindEntry(isolate, &key);
   if (entry == kNotFound) return MaybeHandle<String>();
@@ -6976,7 +7019,7 @@ Address StringTable::LookupStringIfExists_NoAllocate(Isolate* isolate,
   Heap* heap = isolate->heap();
   StringTable table = heap->string_table();
 
-  StringTableNoAllocateKey key(string, heap->HashSeed());
+  StringTableNoAllocateKey key(string, HashSeed(isolate));
 
   // String could be an array index.
   uint32_t hash = string->hash_field();
@@ -7804,7 +7847,7 @@ Handle<Derived> ObjectHashTableBase<Derived, Shape>::Put(Isolate* isolate,
   // Rehash if more than 33% of the entries are deleted entries.
   // TODO(jochen): Consider to shrink the fixed array in place.
   if ((table->NumberOfDeletedElements() << 1) > table->NumberOfElements()) {
-    table->Rehash(isolate);
+    table->Rehash(roots);
   }
   // If we're out of luck, we didn't get a GC recently, and so rehashing
   // isn't enough to avoid a crash.
@@ -7816,7 +7859,7 @@ Handle<Derived> ObjectHashTableBase<Derived, Shape>::Put(Isolate* isolate,
         isolate->heap()->CollectAllGarbage(
             Heap::kNoGCFlags, GarbageCollectionReason::kFullHashtable);
       }
-      table->Rehash(isolate);
+      table->Rehash(roots);
     }
   }
 
@@ -8126,6 +8169,7 @@ void PropertyCell::SetValueWithInvalidation(Isolate* isolate,
 int JSGeneratorObject::source_position() const {
   CHECK(is_suspended());
   DCHECK(function()->shared()->HasBytecodeArray());
+  DCHECK(function()->shared()->GetBytecodeArray()->HasSourcePositionTable());
 
   int code_offset = Smi::ToInt(input_or_debug_pos());
 
@@ -8323,7 +8367,7 @@ BaseNameDictionary<GlobalDictionary, GlobalDictionaryShape>::Add(
     PropertyDetails, int*);
 
 template void HashTable<GlobalDictionary, GlobalDictionaryShape>::Rehash(
-    Isolate* isolate);
+    ReadOnlyRoots roots);
 
 template Handle<NameDictionary>
 BaseNameDictionary<NameDictionary, NameDictionaryShape>::EnsureCapacity(

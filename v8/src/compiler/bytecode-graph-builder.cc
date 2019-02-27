@@ -18,6 +18,7 @@
 #include "src/objects/js-generator.h"
 #include "src/objects/literal-objects-inl.h"
 #include "src/objects/smi.h"
+#include "src/objects/template-objects-inl.h"
 #include "src/vector-slot-pair.h"
 
 namespace v8 {
@@ -550,6 +551,7 @@ BytecodeGraphBuilder::BytecodeGraphBuilder(
       state_values_cache_(jsgraph),
       source_positions_(source_positions),
       start_position_(shared_info->StartPosition(), inlining_id),
+      shared_info_(shared_info),
       native_context_(native_context) {}
 
 Node* BytecodeGraphBuilder::GetFunctionClosure() {
@@ -1696,8 +1698,8 @@ void BytecodeGraphBuilder::VisitGetTemplateObject() {
     // It's not observable when the template object is created, so we
     // can just create it eagerly during graph building and bake in
     // the JSArray constant here.
-    cached_value =
-        TemplateObjectDescription::CreateTemplateObject(isolate(), description);
+    cached_value = TemplateObjectDescription::GetTemplateObject(
+        isolate(), native_context(), description, shared_info(), slot.ToInt());
     nexus.vector()->Set(slot, *cached_value);
   } else {
     cached_value =
@@ -2805,7 +2807,7 @@ void BytecodeGraphBuilder::VisitDebugger() {
 // We cannot create a graph from the debugger copy of the bytecode array.
 #define DEBUG_BREAK(Name, ...) \
   void BytecodeGraphBuilder::Visit##Name() { UNREACHABLE(); }
-DEBUG_BREAK_BYTECODE_LIST(DEBUG_BREAK);
+DEBUG_BREAK_BYTECODE_LIST(DEBUG_BREAK)
 #undef DEBUG_BREAK
 
 void BytecodeGraphBuilder::VisitIncBlockCounter() {

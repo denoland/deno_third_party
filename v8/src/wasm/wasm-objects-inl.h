@@ -8,12 +8,15 @@
 #include "src/wasm/wasm-objects.h"
 
 #include "src/contexts-inl.h"
-#include "src/heap/heap-inl.h"
+#include "src/heap/heap-write-barrier-inl.h"
 #include "src/objects/foreign-inl.h"
 #include "src/objects/heap-number-inl.h"
 #include "src/objects/js-array-buffer-inl.h"
+#include "src/objects/js-objects-inl.h"
 #include "src/objects/managed.h"
 #include "src/objects/oddball-inl.h"
+#include "src/objects/script-inl.h"
+#include "src/roots.h"
 #include "src/v8memory.h"
 #include "src/wasm/wasm-code-manager.h"
 #include "src/wasm/wasm-module.h"
@@ -62,10 +65,10 @@ CAST_ACCESSOR(AsmWasmData)
 
 #define PRIMITIVE_ACCESSORS(holder, name, type, offset) \
   type holder::name() const {                           \
-    return READ_PRIMITIVE_FIELD(this, type, offset);    \
+    return READ_PRIMITIVE_FIELD(*this, type, offset);   \
   }                                                     \
   void holder::set_##name(type value) {                 \
-    WRITE_PRIMITIVE_FIELD(this, type, offset, value);   \
+    WRITE_PRIMITIVE_FIELD(*this, type, offset, value);  \
   }
 
 // WasmModuleObject
@@ -91,7 +94,7 @@ const wasm::WasmModule* WasmModuleObject::module() const {
   return native_module()->module();
 }
 void WasmModuleObject::reset_breakpoint_infos() {
-  WRITE_FIELD(this, kBreakPointInfosOffset,
+  WRITE_FIELD(*this, kBreakPointInfosOffset,
               GetReadOnlyRoots().undefined_value());
 }
 bool WasmModuleObject::is_asm_js() {

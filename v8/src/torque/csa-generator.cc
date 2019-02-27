@@ -4,6 +4,7 @@
 
 #include "src/torque/csa-generator.h"
 
+#include "src/globals.h"
 #include "src/torque/type-oracle.h"
 #include "src/torque/utils.h"
 
@@ -54,8 +55,20 @@ Stack<std::string> CSAGenerator::EmitBlock(const Block* block) {
   return stack;
 }
 
+void CSAGenerator::EmitSourcePosition(SourcePosition pos, bool always_emit) {
+  const std::string& file = SourceFileMap::GetSource(pos.source);
+  if (always_emit || !previous_position_.CompareStartIgnoreColumn(pos)) {
+    // Lines in Torque SourcePositions are zero-based, while the
+    // CodeStubAssembler and downwind systems are one-based.
+    out_ << "    ca_.SetSourcePosition(\"" << file << "\", "
+         << (pos.start.line + 1) << ");\n";
+    previous_position_ = pos;
+  }
+}
+
 void CSAGenerator::EmitInstruction(const Instruction& instruction,
                                    Stack<std::string>* stack) {
+  EmitSourcePosition(instruction->pos);
   switch (instruction.kind()) {
 #define ENUM_ITEM(T)          \
   case InstructionKind::k##T: \
@@ -667,7 +680,7 @@ void CSAGenerator::EmitInstruction(const AbortInstruction& instruction,
           StringLiteralQuote(SourceFileMap::GetSource(instruction.pos.source));
       out_ << "    CodeStubAssembler(state_).FailAssert("
            << StringLiteralQuote(instruction.message) << ", " << file << ", "
-           << instruction.pos.line + 1 << ");\n";
+           << instruction.pos.start.line + 1 << ");\n";
       break;
     }
   }
@@ -705,8 +718,8 @@ void CSAGenerator::EmitInstruction(
     out_ << field.name_and_type.type->GetGeneratedTypeName() << " "
          << result_name << " = ca_.UncheckedCast<"
          << field.name_and_type.type->GetGeneratedTNodeTypeName()
-         << ">(CodeStubAssembler(state_).LoadFixedArrayElement(" << stack->Top()
-         << ", " << (field.offset / kTaggedSize) << "));\n";
+         << ">(CodeStubAssembler(state_).UnsafeLoadFixedArrayElement("
+         << stack->Top() << ", " << (field.offset / kTaggedSize) << "));\n";
   }
   stack->Poke(stack->AboveTop() - 1, result_name);
 }
@@ -741,8 +754,9 @@ void CSAGenerator::EmitInstruction(
            << machine_type << ".representation());\n";
     }
   } else {
-    out_ << "    CodeStubAssembler(state_).StoreFixedArrayElement(" << object
-         << ", " << (field.offset / kTaggedSize) << ", " << value << ");\n";
+    out_ << "    CodeStubAssembler(state_).UnsafeStoreFixedArrayElement("
+         << object << ", " << (field.offset / kTaggedSize) << ", " << value
+         << ");\n";
   }
 }
 

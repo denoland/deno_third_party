@@ -205,6 +205,7 @@ namespace internal {
 #endif  // V8_INTL_SUPPORT
 
 #define FOR_EACH_INTRINSIC_INTERNAL(F, I)            \
+  F(AccessCheck, 1, 1)                               \
   F(AllocateInNewSpace, 1, 1)                        \
   F(AllocateInTargetSpace, 2, 1)                     \
   F(AllocateSeqOneByteString, 1, 1)                  \
@@ -213,10 +214,10 @@ namespace internal {
   F(CheckIsBootstrapping, 0, 1)                      \
   I(CreateAsyncFromSyncIterator, 1, 1)               \
   F(CreateListFromArrayLike, 1, 1)                   \
-  F(CreateTemplateObject, 1, 1)                      \
   F(FatalProcessOutOfMemoryInAllocateRaw, 0, 1)      \
   F(FatalProcessOutOfMemoryInvalidArrayLength, 0, 1) \
   F(GetAndResetRuntimeCallStats, -1 /* <= 2 */, 1)   \
+  F(GetTemplateObject, 3, 1)                         \
   F(IncrementUseCounter, 1, 1)                       \
   F(Interrupt, 0, 1)                                 \
   F(NewReferenceError, 2, 1)                         \
@@ -248,6 +249,7 @@ namespace internal {
   F(ThrowSymbolIteratorInvalid, 0, 1)                \
   F(ThrowThrowMethodMissing, 0, 1)                   \
   F(ThrowTypeError, -1 /* >= 1 */, 1)                \
+  F(ThrowTypeErrorIfStrict, -1 /* >= 1 */, 1)        \
   F(Typeof, 1, 1)                                    \
   F(UnwindAndFindExceptionHandler, 0, 1)             \
   F(FinalizationGroupCleanupJob, 1, 1)
@@ -369,7 +371,6 @@ namespace internal {
   F(RegExpExec, 4, 1)                               \
   F(RegExpExecMultiple, 4, 1)                       \
   F(RegExpInitializeAndCompile, 3, 1)               \
-  F(RegExpInternalReplace, 3, 1)                    \
   F(RegExpReplace, 3, 1)                            \
   F(RegExpSplit, 3, 1)                              \
   F(StringReplaceNonGlobalRegExpWithFunction, 3, 1) \
@@ -411,6 +412,7 @@ namespace internal {
   F(StringBuilderJoin, 3, 1)              \
   F(StringCharCodeAt, 2, 1)               \
   F(StringEqual, 2, 1)                    \
+  F(StringEscapeQuotes, 1, 1)             \
   F(StringGreaterThan, 2, 1)              \
   F(StringGreaterThanOrEqual, 2, 1)       \
   F(StringIncludes, 3, 1)                 \
@@ -461,6 +463,7 @@ namespace internal {
   F(GetWasmRecoveredTrapCount, 0, 1)          \
   F(GlobalPrint, 1, 1)                        \
   F(HasDictionaryElements, 1, 1)              \
+  F(HasPackedElements, 1, 1)                  \
   F(HasDoubleElements, 1, 1)                  \
   F(HasFastElements, 1, 1)                    \
   F(HasFastProperties, 1, 1)                  \
@@ -555,7 +558,6 @@ namespace internal {
   F(ElementsTransitionAndStoreIC_Miss, 6, 1) \
   F(KeyedLoadIC_Miss, 4, 1)                  \
   F(KeyedStoreIC_Miss, 5, 1)                 \
-  F(KeyedStoreICNoFeedback_Miss, 3, 1)       \
   F(StoreInArrayLiteralIC_Miss, 5, 1)        \
   F(KeyedStoreIC_Slow, 3, 1)                 \
   F(LoadAccessorProperty, 4, 1)              \
@@ -570,7 +572,6 @@ namespace internal {
   F(StoreGlobalICNoFeedback_Miss, 2, 1)      \
   F(StoreGlobalIC_Slow, 5, 1)                \
   F(StoreIC_Miss, 5, 1)                      \
-  F(StoreICNoFeedback_Miss, 4, 1)            \
   F(StoreInArrayLiteralIC_Slow, 5, 1)        \
   F(StorePropertyWithInterceptor, 5, 1)      \
   F(CloneObjectIC_Miss, 4, 1)

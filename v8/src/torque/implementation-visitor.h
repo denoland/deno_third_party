@@ -54,6 +54,26 @@ class LocationReference {
     result.eval_function_ = "." + fieldname;
     result.assign_function_ = "." + fieldname + "=";
     result.call_arguments_ = {object};
+    result.index_field_ = base::nullopt;
+    return result;
+  }
+  static LocationReference IndexedFieldIndexedAccess(
+      const LocationReference& indexed_field, VisitResult index) {
+    LocationReference result;
+    DCHECK(indexed_field.IsIndexedFieldAccess());
+    std::string fieldname = *indexed_field.index_field_;
+    result.eval_function_ = "." + fieldname + "[]";
+    result.assign_function_ = "." + fieldname + "[]=";
+    result.call_arguments_ = indexed_field.call_arguments_;
+    result.call_arguments_.push_back(index);
+    result.index_field_ = fieldname;
+    return result;
+  }
+  static LocationReference IndexedFieldAccess(VisitResult object,
+                                              std::string fieldname) {
+    LocationReference result;
+    result.call_arguments_ = {object};
+    result.index_field_ = fieldname;
     return result;
   }
 
@@ -82,6 +102,13 @@ class LocationReference {
     return *temporary_description_;
   }
 
+  bool IsArrayField() const { return index_field_.has_value(); }
+  bool IsIndexedFieldAccess() const {
+    return IsArrayField() && !IsCallAccess();
+  }
+  bool IsIndexedFieldIndexedAccess() const {
+    return IsArrayField() && IsCallAccess();
+  }
   bool IsCallAccess() const {
     bool is_call_access = eval_function_.has_value();
     DCHECK_EQ(is_call_access, assign_function_.has_value());
@@ -107,6 +134,7 @@ class LocationReference {
   base::Optional<std::string> eval_function_;
   base::Optional<std::string> assign_function_;
   VisitResultVector call_arguments_;
+  base::Optional<std::string> index_field_;
 
   LocationReference() = default;
 };
@@ -138,6 +166,11 @@ class Binding : public T {
         previous_binding_(this) {
     std::swap(previous_binding_, manager_->current_bindings_[name]);
   }
+  template <class... Args>
+  Binding(BindingsManager<T>* manager, const Identifier* name, Args&&... args)
+      : Binding(manager, name->value, std::forward<Args>(args)...) {
+    declaration_position_ = name->pos;
+  }
   ~Binding() { manager_->current_bindings_[name_] = previous_binding_; }
 
   const std::string& name() const { return name_; }
@@ -156,16 +189,15 @@ class BlockBindings {
  public:
   explicit BlockBindings(BindingsManager<T>* manager) : manager_(manager) {}
   void Add(std::string name, T value) {
-    for (const auto& binding : bindings_) {
-      if (binding->name() == name) {
-        ReportError(
-            "redeclaration of name \"", name,
-            "\" in the same block is illegal, previous declaration at: ",
-            binding->declaration_position());
-      }
-    }
+    ReportErrorIfAlreadyBound(name);
     bindings_.push_back(base::make_unique<Binding<T>>(manager_, std::move(name),
                                                       std::move(value)));
+  }
+
+  void Add(const Identifier* name, T value) {
+    ReportErrorIfAlreadyBound(name->value);
+    bindings_.push_back(
+        base::make_unique<Binding<T>>(manager_, name, std::move(value)));
   }
 
   std::vector<Binding<T>*> bindings() const {
@@ -178,6 +210,17 @@ class BlockBindings {
   }
 
  private:
+  void ReportErrorIfAlreadyBound(const std::string& name) {
+    for (const auto& binding : bindings_) {
+      if (binding->name() == name) {
+        ReportError(
+            "redeclaration of name \"", name,
+            "\" in the same block is illegal, previous declaration at: ",
+            binding->declaration_position());
+      }
+    }
+  }
+
   BindingsManager<T>* manager_;
   std::vector<std::unique_ptr<Binding<T>>> bindings_;
 };
@@ -201,8 +244,9 @@ struct Arguments {
   std::vector<Binding<LocalLabel>*> labels;
 };
 
+// Determine if a callable should be considered as an overload.
 bool IsCompatibleSignature(const Signature& sig, const TypeVector& types,
-                           const std::vector<Binding<LocalLabel>*>& labels);
+                           size_t label_count);
 
 class ImplementationVisitor : public FileVisitor {
  public:
@@ -251,8 +295,8 @@ class ImplementationVisitor : public FileVisitor {
   VisitResult Visit(CallExpression* expr, bool is_tail = false);
   VisitResult Visit(CallMethodExpression* expr);
   VisitResult Visit(IntrinsicCallExpression* intrinsic);
-  VisitResult Visit(LoadObjectFieldExpression* intrinsic);
-  VisitResult Visit(StoreObjectFieldExpression* intrinsic);
+  VisitResult Visit(LoadObjectFieldExpression* expr);
+  VisitResult Visit(StoreObjectFieldExpression* expr);
   const Type* Visit(TailCallStatement* stmt);
 
   VisitResult Visit(ConditionalExpression* expr);

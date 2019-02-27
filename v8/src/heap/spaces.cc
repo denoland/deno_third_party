@@ -307,8 +307,7 @@ void MemoryAllocator::Unmapper::CancelAndWaitForPendingTasks() {
   }
 }
 
-void MemoryAllocator::Unmapper::PrepareForMarkCompact() {
-  CancelAndWaitForPendingTasks();
+void MemoryAllocator::Unmapper::PrepareForGC() {
   // Free non-regular chunks because they cannot be re-used.
   PerformFreeMemoryOnQueuedNonRegularChunks();
 }
@@ -670,6 +669,8 @@ MemoryChunk* MemoryChunk::Initialize(Heap* heap, Address base, size_t size,
   }
 
   DCHECK_EQ(kFlagsOffset, OFFSET_OF(MemoryChunk, flags_));
+  DCHECK_EQ(kHeapOffset, OFFSET_OF(MemoryChunk, heap_));
+  DCHECK_EQ(kOwnerOffset, OFFSET_OF(MemoryChunk, owner_));
 
   if (executable == EXECUTABLE) {
     chunk->SetFlag(IS_EXECUTABLE);
@@ -1463,6 +1464,12 @@ void MemoryChunk::ReleaseMarkingBitmap() {
 
 // -----------------------------------------------------------------------------
 // PagedSpace implementation
+
+void Space::CheckOffsetsAreConsistent() const {
+  static_assert(Space::kIdOffset == heap_internals::Space::kIdOffset,
+                "ID offset inconsistent");
+  DCHECK_EQ(Space::kIdOffset, OFFSET_OF(Space, id_));
+}
 
 void Space::AddAllocationObserver(AllocationObserver* observer) {
   allocation_observers_.push_back(observer);
@@ -3455,6 +3462,7 @@ AllocationResult LargeObjectSpace::AllocateRaw(int object_size,
       heap()->incremental_marking()->marking_state()->IsBlack(object));
   page->InitializationMemoryFence();
   heap()->NotifyOldGenerationExpansion();
+  AllocationStep(object_size, object->address(), object_size);
   return object;
 }
 
@@ -3471,7 +3479,6 @@ LargePage* LargeObjectSpace::AllocateLargePage(int object_size,
 
   heap()->CreateFillerObjectAt(object->address(), object_size,
                                ClearRecordedSlots::kNo);
-  AllocationStep(object_size, object->address(), object_size);
   return page;
 }
 
@@ -3771,6 +3778,7 @@ AllocationResult NewLargeObjectSpace::AllocateRaw(int object_size) {
   page->InitializationMemoryFence();
   DCHECK(page->IsLargePage());
   DCHECK_EQ(page->owner()->identity(), NEW_LO_SPACE);
+  AllocationStep(object_size, result->address(), object_size);
   return result;
 }
 
@@ -3788,12 +3796,14 @@ void NewLargeObjectSpace::FreeDeadObjects(
     const std::function<bool(HeapObject)>& is_dead) {
   bool is_marking = heap()->incremental_marking()->IsMarking();
   size_t surviving_object_size = 0;
+  bool freed_pages = false;
   for (auto it = begin(); it != end();) {
     LargePage* page = *it;
     it++;
     HeapObject object = page->GetObject();
     size_t size = static_cast<size_t>(object->Size());
     if (is_dead(object)) {
+      freed_pages = true;
       RemovePage(page, size);
       heap()->memory_allocator()->Free<MemoryAllocator::kPreFreeAndQueue>(page);
       if (FLAG_concurrent_marking && is_marking) {
@@ -3806,6 +3816,9 @@ void NewLargeObjectSpace::FreeDeadObjects(
   // Right-trimming does not update the objects_size_ counter. We are lazily
   // updating it after every GC.
   objects_size_ = surviving_object_size;
+  if (freed_pages) {
+    heap()->memory_allocator()->unmapper()->FreeQueuedChunks();
+  }
 }
 
 void NewLargeObjectSpace::SetCapacity(size_t capacity) {

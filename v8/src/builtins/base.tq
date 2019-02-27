@@ -19,7 +19,7 @@ type Tagged generates 'TNode<Object>' constexpr 'ObjectPtr';
 type Smi extends Tagged generates 'TNode<Smi>' constexpr 'Smi';
 
 // A Smi that is greater than or equal to 0. See TaggedIsPositiveSmi.
-type PositiveSmi extends Smi generates 'TNode<Smi>';
+type PositiveSmi extends Smi;
 
 extern class HeapObject extends Tagged { map: Map; }
 
@@ -51,7 +51,7 @@ type AbstractCode extends HeapObject generates 'TNode<AbstractCode>';
 type Code extends AbstractCode generates 'TNode<Code>';
 type BuiltinPtr extends Smi generates 'TNode<BuiltinPtr>';
 type Context extends HeapObject generates 'TNode<Context>';
-type NativeContext extends Context generates 'TNode<Context>';
+type NativeContext extends Context;
 type String extends HeapObject generates 'TNode<String>';
 type Oddball extends HeapObject generates 'TNode<Oddball>';
 type HeapNumber extends HeapObject generates 'TNode<HeapNumber>';
@@ -61,16 +61,19 @@ type Numeric = Number | BigInt;
 
 // A direct string can be accessed directly through CSA without going into the
 // C++ runtime. See also: ToDirectStringAssembler.
-type DirectString extends String generates 'TNode<String>';
+type DirectString extends String;
 
 type RootIndex generates 'TNode<Int32T>' constexpr 'RootIndex';
 
 type Map extends HeapObject generates 'TNode<Map>';
 
-type FixedArrayBase extends HeapObject generates 'TNode<FixedArrayBase>';
-type FixedArray extends FixedArrayBase generates 'TNode<FixedArray>';
-type FixedDoubleArray extends FixedArrayBase
-    generates 'TNode<FixedDoubleArray>';
+extern class FixedArrayBase extends HeapObject { length: Smi; }
+
+extern class FixedArray extends FixedArrayBase { objects[length]: Object; }
+
+extern class FixedDoubleArray extends FixedArrayBase {
+  floats[length]: float64;
+}
 
 // These intrinsics should never be called from Torque code. They're used
 // internally by the 'new' operator and only declared here because it's simpler
@@ -83,7 +86,7 @@ extern class JSReceiver extends HeapObject {
   properties_or_hash: FixedArrayBase | Smi;
 }
 
-type Constructor extends JSReceiver generates 'TNode<JSReceiver>';
+type Constructor extends JSReceiver;
 type JSProxy extends JSReceiver generates 'TNode<JSProxy>';
 
 extern class JSObject extends JSReceiver {
@@ -123,16 +126,13 @@ extern class JSArray extends JSObject {
 
 // A HeapObject with a JSArray map, and either fast packed elements, or fast
 // holey elements when the global NoElementsProtector is not invalidated.
-transient type FastJSArray extends JSArray
-    generates 'TNode<JSArray>';
+transient type FastJSArray extends JSArray;
 
 // A FastJSArray when the global ArraySpeciesProtector is not invalidated.
-transient type FastJSArrayForCopy extends FastJSArray
-    generates 'TNode<JSArray>';
+transient type FastJSArrayForCopy extends FastJSArray;
 
 // A FastJSArray when the global ArrayIteratorProtector is not invalidated.
-transient type FastJSArrayWithNoCustomIteration extends FastJSArray
-    generates 'TNode<JSArray>';
+transient type FastJSArrayWithNoCustomIteration extends FastJSArray;
 
 type NoSharedNameSentinel extends Smi;
 type Script extends HeapObject;
@@ -172,12 +172,18 @@ extern class JSBoundFunction extends JSObject {
 }
 
 type Callable = JSFunction | JSBoundFunction | JSProxy;
-type FixedTypedArrayBase extends FixedArrayBase
-    generates 'TNode<FixedTypedArrayBase>';
+
+extern class FixedTypedArrayBase extends FixedArrayBase {
+  base_pointer: Smi;
+  external_pointer: RawPtr;
+}
+extern operator '.length_intptr' macro LoadAndUntagFixedArrayBaseLength(
+    FixedArrayBase): intptr;
+
 type FixedTypedArray extends FixedTypedArrayBase
     generates 'TNode<FixedTypedArray>';
-type SloppyArgumentsElements extends FixedArray
-    generates 'TNode<FixedArray>';
+
+extern class SloppyArgumentsElements extends FixedArray {}
 type NumberDictionary extends HeapObject
     generates 'TNode<NumberDictionary>';
 
@@ -221,14 +227,40 @@ extern class JSArrayBufferView extends JSObject {
   byte_length: uintptr;
 }
 
-extern class JSTypedArray extends JSArrayBufferView {}
+extern class JSTypedArray extends JSArrayBufferView {
+  AttachOffHeapBuffer(
+      buffer: JSArrayBuffer, map: Map, length: PositiveSmi,
+      byteOffset: uintptr): void {
+    const basePointer: Smi = 0;
+
+    // The max byteOffset is 8 * MaxSmi on the particular platform. 32 bit
+    // platforms are self-limiting, because we can't allocate an array bigger
+    // than our 32-bit arithmetic range anyway. 64 bit platforms could
+    // theoretically have an offset up to 2^35 - 1.
+    const backingStore = buffer.backing_store;
+    const externalPointer = backingStore + Convert<intptr>(byteOffset);
+
+    // Assert no overflow has occurred. Only assert if the mock array buffer
+    // allocator is NOT used. When the mock array buffer is used, impossibly
+    // large allocations are allowed that would erroneously cause an overflow
+    // and this assertion to fail.
+    assert(
+        IsMockArrayBufferAllocatorFlag() ||
+        Convert<uintptr>(externalPointer) >= Convert<uintptr>(backingStore));
+
+    this.buffer = buffer;
+    this.elements = new
+    FixedTypedArrayBase{map, length, basePointer, externalPointer};
+  }
+
+  length: Smi;
+}
 
 type JSDataView extends JSArrayBufferView generates 'TNode<JSDataView>';
 
 type InstanceType generates 'TNode<Int32T>' constexpr 'InstanceType';
 type ElementsKind generates 'TNode<Int32T>' constexpr 'ElementsKind';
-type LanguageMode extends Smi
-    generates 'TNode<Smi>' constexpr 'LanguageMode';
+type LanguageMode extends Smi constexpr 'LanguageMode';
 type ExtractFixedArrayFlags
     generates 'TNode<Smi>'
     constexpr 'CodeStubAssembler::ExtractFixedArrayFlags';
@@ -314,6 +346,8 @@ const kEmptyFixedArrayRootIndex:
 const kTheHoleValueRootIndex:
     constexpr RootIndex generates 'RootIndex::kTheHoleValue';
 
+const kInvalidArrayBufferLength: constexpr MessageTemplate
+    generates 'MessageTemplate::kInvalidArrayBufferLength';
 const kInvalidArrayLength: constexpr MessageTemplate
     generates 'MessageTemplate::kInvalidArrayLength';
 const kCalledNonCallable: constexpr MessageTemplate
@@ -330,6 +364,8 @@ const kIteratorValueNotAnObject: constexpr MessageTemplate
     generates 'MessageTemplate::kIteratorValueNotAnObject';
 const kNotIterable: constexpr MessageTemplate
     generates 'MessageTemplate::kNotIterable';
+const kReduceNoInitial: constexpr MessageTemplate
+    generates 'MessageTemplate::kReduceNoInitial';
 const kFirstArgumentNotRegExp: constexpr MessageTemplate
     generates 'MessageTemplate::kFirstArgumentNotRegExp';
 
@@ -378,12 +414,12 @@ const kInvalidDataViewAccessorOffset: constexpr MessageTemplate
 const kStrictReadOnlyProperty: constexpr MessageTemplate
     generates 'MessageTemplate::kStrictReadOnlyProperty';
 
-type Hole extends Oddball generates 'TNode<Oddball>';
-type Null extends Oddball generates 'TNode<Oddball>';
-type Undefined extends Oddball generates 'TNode<Oddball>';
-type True extends Oddball generates 'TNode<Oddball>';
-type False extends Oddball generates 'TNode<Oddball>';
-type EmptyString extends String generates 'TNode<String>';
+type Hole extends Oddball;
+type Null extends Oddball;
+type Undefined extends Oddball;
+type True extends Oddball;
+type False extends Oddball;
+type EmptyString extends String;
 type Boolean = True | False;
 
 type NumberOrUndefined = Number | Undefined;
@@ -452,14 +488,18 @@ extern transitioning builtin HasProperty(implicit context: Context)(
 extern transitioning macro HasProperty_Inline(implicit context: Context)(
     JSReceiver, Object): Boolean;
 
-extern macro ThrowRangeError(Context, constexpr MessageTemplate): never;
-extern macro ThrowRangeError(Context, constexpr MessageTemplate, Object): never;
-extern macro ThrowTypeError(Context, constexpr MessageTemplate): never;
-extern macro ThrowTypeError(
-    Context, constexpr MessageTemplate, constexpr string): never;
-extern macro ThrowTypeError(Context, constexpr MessageTemplate, Object): never;
-extern macro ThrowTypeError(
-    Context, constexpr MessageTemplate, Object, Object, Object): never;
+extern macro ThrowRangeError(implicit context: Context)(
+    constexpr MessageTemplate): never;
+extern macro ThrowRangeError(implicit context: Context)(
+    constexpr MessageTemplate, Object): never;
+extern macro ThrowTypeError(implicit context: Context)(
+    constexpr MessageTemplate): never;
+extern macro ThrowTypeError(implicit context: Context)(
+    constexpr MessageTemplate, constexpr string): never;
+extern macro ThrowTypeError(implicit context: Context)(
+    constexpr MessageTemplate, Object): never;
+extern macro ThrowTypeError(implicit context: Context)(
+    constexpr MessageTemplate, Object, Object, Object): never;
 extern macro ArraySpeciesCreate(Context, Object, Number): JSReceiver;
 extern macro ArrayCreate(implicit context: Context)(Number): JSArray;
 extern macro BuildAppendJSArray(
@@ -515,6 +555,8 @@ extern runtime ThrowInvalidStringLength(Context): never;
 
 extern operator '==' macro WordEqual(RawPtr, RawPtr): bool;
 extern operator '!=' macro WordNotEqual(RawPtr, RawPtr): bool;
+extern operator '+' macro RawPtrAdd(RawPtr, intptr): RawPtr;
+extern operator '+' macro RawPtrAdd(intptr, RawPtr): RawPtr;
 
 extern operator '<' macro Int32LessThan(int32, int32): bool;
 extern operator '<' macro Uint32LessThan(uint32, uint32): bool;
@@ -899,33 +941,6 @@ Cast<FastJSArray>(implicit context: Context)(o: HeapObject): FastJSArray
   return %RawDownCast<FastJSArray>(o);
 }
 
-struct FastJSArrayWitness {
-  constructor(array: FastJSArray) {
-    this.stable = this.unstable = array;
-    this.map = array.map;
-  }
-
-  Get(): FastJSArray {
-    return this.unstable;
-  }
-
-  Recheck() labels CastError {
-    if (this.stable.map != this.map) goto CastError;
-    // We don't need to check elements kind or whether the prototype
-    // has changed away from the default JSArray prototype, because
-    // if the map remains the same then those properties hold.
-    //
-    // However, we have to make sure there are no elements in the
-    // prototype chain.
-    if (IsNoElementsProtectorCellInvalid()) goto CastError;
-    this.unstable = %RawDownCast<FastJSArray>(this.stable);
-  }
-
-  stable: JSArray;
-  unstable: FastJSArray;
-  map: Map;
-}
-
 Cast<FastJSArrayForCopy>(implicit context: Context)(o: HeapObject):
     FastJSArrayForCopy
     labels CastError {
@@ -999,6 +1014,7 @@ extern macro IntPtrConstant(constexpr int32): intptr;
 extern macro Int32Constant(constexpr int31): int31;
 extern macro Int32Constant(constexpr int32): int32;
 extern macro Float64Constant(constexpr int31): float64;
+extern macro Float64Constant(constexpr float64): float64;
 extern macro SmiConstant(constexpr int31): Smi;
 extern macro SmiConstant(constexpr Smi): Smi;
 extern macro BoolConstant(constexpr bool): bool;
@@ -1072,6 +1088,9 @@ FromConstexpr<uintptr, constexpr int31>(i: constexpr int31): uintptr {
   return ChangeUint32ToWord(i);
 }
 FromConstexpr<float64, constexpr int31>(i: constexpr int31): float64 {
+  return Float64Constant(i);
+}
+FromConstexpr<float64, constexpr float64>(i: constexpr float64): float64 {
   return Float64Constant(i);
 }
 FromConstexpr<bool, constexpr bool>(b: constexpr bool): bool {
@@ -1232,6 +1251,7 @@ extern macro IsArrayIteratorProtectorCellInvalid(): bool;
 extern macro IsArraySpeciesProtectorCellInvalid(): bool;
 extern macro IsTypedArraySpeciesProtectorCellInvalid(): bool;
 extern macro IsPromiseSpeciesProtectorCellInvalid(): bool;
+extern macro IsMockArrayBufferAllocatorFlag(): bool;
 
 extern operator '.data_ptr' macro TypedArrayBuiltinsAssembler::LoadDataPtr(
     JSTypedArray): RawPtr;
@@ -1240,49 +1260,50 @@ extern operator '.elements_kind' macro LoadMapElementsKind(Map): ElementsKind;
 extern operator '.elements_kind' macro LoadElementsKind(JSTypedArray):
     ElementsKind;
 
-extern operator '.length' macro LoadJSTypedArrayLength(JSTypedArray): Smi;
 extern operator '.length' macro LoadFastJSArrayLength(FastJSArray): Smi;
 
-extern operator '.length' macro LoadFixedArrayBaseLength(FixedArrayBase): Smi;
-extern operator '.length_intptr' macro LoadAndUntagFixedArrayBaseLength(
-    FixedArrayBase): intptr;
-extern operator '[]' macro LoadFixedArrayElement(FixedArray, intptr): Object;
-extern operator '[]' macro LoadFixedArrayElement(FixedArray, Smi): Object;
-extern operator '[]' macro LoadFixedArrayElement(
+extern operator '.objects[]' macro LoadFixedArrayElement(
+    FixedArray, intptr): Object;
+extern operator '.objects[]' macro LoadFixedArrayElement(
+    FixedArray, Smi): Object;
+extern operator '.objects[]' macro LoadFixedArrayElement(
     FixedArray, constexpr int31): Object;
-extern operator '[]=' macro StoreFixedArrayElement(
+extern operator '.objects[]=' macro StoreFixedArrayElement(
     FixedArray, intptr, Smi): void;
-extern operator '[]=' macro StoreFixedArrayElement(FixedArray, Smi, Smi): void;
-extern operator '[]=' macro StoreFixedArrayElement(
+extern operator '.objects[]=' macro StoreFixedArrayElement(
+    FixedArray, Smi, Smi): void;
+extern operator '.objects[]=' macro StoreFixedArrayElement(
     FixedArray, intptr, HeapObject): void;
-extern operator '[]=' macro StoreFixedArrayElement(
+extern operator '.objects[]=' macro StoreFixedArrayElement(
     FixedArray, constexpr int31, Smi): void;
-extern operator '[]=' macro StoreFixedArrayElement(
+extern operator '.objects[]=' macro StoreFixedArrayElement(
     FixedArray, constexpr int31, HeapObject): void;
-extern operator '[]=' macro StoreFixedArrayElementSmi(
+extern operator '.objects[]=' macro StoreFixedArrayElementSmi(
     FixedArray, Smi, Object): void;
-operator '[]=' macro StoreFixedDoubleArrayNumber(
-    a: FixedDoubleArray, index: Smi, value: Number): void {
-  a[index] = Convert<float64>(value);
-}
-
-extern macro StoreFixedArrayElementSmi(
+extern operator '.objects[]=' macro StoreFixedArrayElementSmi(
     FixedArray, Smi, Object, constexpr WriteBarrierMode): void;
+extern macro StoreFixedArrayElement(
+    FixedArray, intptr, Object, constexpr WriteBarrierMode): void;
+extern operator '.floats[]=' macro StoreFixedDoubleArrayElement(
+    FixedDoubleArray, intptr, float64): void;
+extern operator '.floats[]=' macro StoreFixedDoubleArrayElementSmi(
+    FixedDoubleArray, Smi, float64): void;
+operator '.floats[]=' macro StoreFixedDoubleArrayElementSmi(
+    a: FixedDoubleArray, i: Smi, n: Number): void {
+  StoreFixedDoubleArrayElementSmi(a, i, Convert<float64>(n));
+}
+operator '[]=' macro StoreFixedDoubleArrayDirect(
+    a: FixedDoubleArray, i: Smi, v: Number) {
+  a.floats[i] = Convert<float64>(v);
+}
+operator '[]=' macro StoreFixedArrayDirect(a: FixedArray, i: Smi, v: Object) {
+  a.objects[i] = v;
+}
 
 extern operator '.instance_type' macro LoadMapInstanceType(Map): int32;
 
-extern macro LoadFixedDoubleArrayElement(FixedDoubleArray, Smi): float64;
 extern macro Float64SilenceNaN(float64): float64;
 
-extern macro StoreFixedDoubleArrayElement(
-    FixedDoubleArray, Object, float64, constexpr ParameterMode);
-extern macro StoreFixedArrayElement(
-    FixedArray, intptr, Object, constexpr WriteBarrierMode): void;
-
-macro StoreFixedDoubleArrayElementWithSmiIndex(
-    array: FixedDoubleArray, index: Smi, value: float64) {
-  StoreFixedDoubleArrayElement(array, index, value, SMI_PARAMETERS);
-}
 extern macro GetNumberDictionaryNumberOfElements(NumberDictionary): Smi;
 extern macro GetIteratorMethod(implicit context: Context)(HeapObject): Object
     labels IfIteratorUndefined;
@@ -1349,9 +1370,6 @@ extern macro CopyFixedArrayElements(
 extern macro AllocateJSArray(constexpr ElementsKind, Map, intptr, Smi): JSArray;
 extern macro AllocateJSArray(constexpr ElementsKind, Map, Smi, Smi): JSArray;
 extern macro AllocateJSObjectFromMap(Map): JSObject;
-
-extern operator '[]=' macro StoreFixedDoubleArrayElementSmi(
-    FixedDoubleArray, Smi, float64): void;
 
 extern macro LoadDoubleWithHoleCheck(FixedDoubleArray, Smi): float64
     labels IfHole;
@@ -1439,7 +1457,7 @@ LoadElementNoHole<FixedArray>(implicit context: Context)(
   try {
     let elements: FixedArray =
         Cast<FixedArray>(a.elements) otherwise Unexpected;
-    let e: Object = elements[index];
+    let e: Object = elements.objects[index];
     if (e == Hole) {
       goto IfHole;
     }
@@ -1462,6 +1480,47 @@ LoadElementNoHole<FixedDoubleArray>(implicit context: Context)(
   label Unexpected {
     unreachable;
   }
+}
+
+struct FastJSArrayWitness {
+  constructor(array: FastJSArray) {
+    this.stable = this.unstable = array;
+    this.map = array.map;
+    let kind = array.map.elements_kind;
+    this.hasDoubles = !IsElementsKindLessThanOrEqual(kind, HOLEY_ELEMENTS);
+  }
+
+  Get(): FastJSArray {
+    return this.unstable;
+  }
+
+  Recheck() labels CastError {
+    if (this.stable.map != this.map) goto CastError;
+    // We don't need to check elements kind or whether the prototype
+    // has changed away from the default JSArray prototype, because
+    // if the map remains the same then those properties hold.
+    //
+    // However, we have to make sure there are no elements in the
+    // prototype chain.
+    if (IsNoElementsProtectorCellInvalid()) goto CastError;
+    this.unstable = %RawDownCast<FastJSArray>(this.stable);
+  }
+
+  LoadElementNoHole(implicit context: Context)(k: Smi): Object
+      labels FoundHole {
+    if (this.hasDoubles) {
+      return LoadElementNoHole<FixedDoubleArray>(this.unstable, k)
+          otherwise FoundHole;
+    } else {
+      return LoadElementNoHole<FixedArray>(this.unstable, k)
+          otherwise FoundHole;
+    }
+  }
+
+  stable: JSArray;
+  unstable: FastJSArray;
+  map: Map;
+  hasDoubles: bool;
 }
 
 extern macro TransitionElementsKind(

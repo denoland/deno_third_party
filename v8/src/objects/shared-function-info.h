@@ -492,6 +492,17 @@ class SharedFunctionInfo : public HeapObject {
   // is only executed once.
   DECL_BOOLEAN_ACCESSORS(is_oneshot_iife)
 
+  // Indicates that the function represented by the shared function info
+  // cannot observe the actual parameters passed at a call site, which
+  // means the function doesn't use the arguments object, doesn't use
+  // rest parameters, and is also in strict mode (meaning that there's
+  // no way to get to the actual arguments via the non-standard "arguments"
+  // accessor on sloppy mode functions). This can be used to speed up calls
+  // to this function even in the presence of arguments mismatch.
+  // See http://bit.ly/v8-faster-calls-with-arguments-mismatch for more
+  // information on this.
+  DECL_BOOLEAN_ACCESSORS(is_safe_to_skip_arguments_adaptor)
+
   // Indicates that the function has been reported for binary code coverage.
   DECL_BOOLEAN_ACCESSORS(has_reported_binary_coverage)
 
@@ -584,6 +595,12 @@ class SharedFunctionInfo : public HeapObject {
   void SetFunctionTokenPosition(int function_token_position,
                                 int start_position);
 
+  static void EnsureSourcePositionsAvailable(
+      Isolate* isolate, Handle<SharedFunctionInfo> shared_info);
+
+  // Hash based on function literal id and script id.
+  uint32_t Hash();
+
   inline bool construct_as_builtin() const;
 
   // Determines and sets the ConstructAsBuiltinBit in |flags|, based on the
@@ -629,7 +646,7 @@ class SharedFunctionInfo : public HeapObject {
     Script::Iterator script_iterator_;
     WeakArrayList::Iterator noscript_sfi_iterator_;
     SharedFunctionInfo::ScriptIterator sfi_iterator_;
-    DISALLOW_HEAP_ALLOCATION(no_gc_);
+    DISALLOW_HEAP_ALLOCATION(no_gc_)
     DISALLOW_COPY_AND_ASSIGN(GlobalIterator);
   };
 
@@ -650,28 +667,29 @@ class SharedFunctionInfo : public HeapObject {
   class BodyDescriptor;
 
 // Bit positions in |flags|.
-#define FLAGS_BIT_FIELDS(V, _)                           \
-  V(IsNativeBit, bool, 1, _)                             \
-  V(IsStrictBit, bool, 1, _)                             \
-  V(IsWrappedBit, bool, 1, _)                            \
-  V(IsClassConstructorBit, bool, 1, _)                   \
-  V(IsDerivedConstructorBit, bool, 1, _)                 \
-  V(FunctionKindBits, FunctionKind, 5, _)                \
-  V(HasDuplicateParametersBit, bool, 1, _)               \
-  V(AllowLazyCompilationBit, bool, 1, _)                 \
-  V(NeedsHomeObjectBit, bool, 1, _)                      \
-  V(IsDeclarationBit, bool, 1, _)                        \
-  V(IsAsmWasmBrokenBit, bool, 1, _)                      \
-  V(FunctionMapIndexBits, int, 5, _)                     \
-  V(DisabledOptimizationReasonBits, BailoutReason, 4, _) \
-  V(RequiresInstanceMembersInitializer, bool, 1, _)      \
-  V(ConstructAsBuiltinBit, bool, 1, _)                   \
-  V(IsAnonymousExpressionBit, bool, 1, _)                \
-  V(NameShouldPrintAsAnonymousBit, bool, 1, _)           \
-  V(HasReportedBinaryCoverageBit, bool, 1, _)            \
-  V(IsNamedExpressionBit, bool, 1, _)                    \
-  V(IsTopLevelBit, bool, 1, _)                           \
-  V(IsOneshotIIFEBit, bool, 1, _)
+#define FLAGS_BIT_FIELDS(V, _)                               \
+  /* Have FunctionKind first to make it cheaper to access */ \
+  V(FunctionKindBits, FunctionKind, 5, _)                    \
+  V(IsNativeBit, bool, 1, _)                                 \
+  V(IsStrictBit, bool, 1, _)                                 \
+  V(IsWrappedBit, bool, 1, _)                                \
+  V(IsClassConstructorBit, bool, 1, _)                       \
+  V(HasDuplicateParametersBit, bool, 1, _)                   \
+  V(AllowLazyCompilationBit, bool, 1, _)                     \
+  V(NeedsHomeObjectBit, bool, 1, _)                          \
+  V(IsDeclarationBit, bool, 1, _)                            \
+  V(IsAsmWasmBrokenBit, bool, 1, _)                          \
+  V(FunctionMapIndexBits, int, 5, _)                         \
+  V(DisabledOptimizationReasonBits, BailoutReason, 4, _)     \
+  V(RequiresInstanceMembersInitializer, bool, 1, _)          \
+  V(ConstructAsBuiltinBit, bool, 1, _)                       \
+  V(IsAnonymousExpressionBit, bool, 1, _)                    \
+  V(NameShouldPrintAsAnonymousBit, bool, 1, _)               \
+  V(HasReportedBinaryCoverageBit, bool, 1, _)                \
+  V(IsNamedExpressionBit, bool, 1, _)                        \
+  V(IsTopLevelBit, bool, 1, _)                               \
+  V(IsOneshotIIFEBit, bool, 1, _)                            \
+  V(IsSafeToSkipArgumentsAdaptorBit, bool, 1, _)
   DEFINE_BIT_FIELDS(FLAGS_BIT_FIELDS)
 #undef FLAGS_BIT_FIELDS
 
@@ -733,7 +751,7 @@ class SharedFunctionInfoWithID : public SharedFunctionInfo {
 
   static const int kAlignedSize = POINTER_SIZE_ALIGN(kSize);
 
-  OBJECT_CONSTRUCTORS(SharedFunctionInfoWithID, SharedFunctionInfo)
+  OBJECT_CONSTRUCTORS(SharedFunctionInfoWithID, SharedFunctionInfo);
 };
 
 // Printing support.

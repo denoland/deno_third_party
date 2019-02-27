@@ -6,6 +6,7 @@
 #define V8_OBJECTS_HEAP_OBJECT_H_
 
 #include "src/globals.h"
+#include "src/roots.h"
 
 #include "src/objects.h"
 
@@ -62,7 +63,7 @@ class HeapObject : public Object {
   HEAP_OBJECT_TYPE_LIST(IS_TYPE_FUNCTION_DECL)
 #undef IS_TYPE_FUNCTION_DECL
 
-  V8_INLINE bool IsExternal(Isolate* isolate) const;
+  bool IsExternal(Isolate* isolate) const;
 
 // Oddball checks are faster when they are raw pointer comparisons, so the
 // isolate/read-only roots overloads should be preferred where possible.
@@ -172,7 +173,7 @@ class HeapObject : public Object {
   bool CanBeRehashed() const;
 
   // Rehash the object based on the layout inferred from its map.
-  void RehashBasedOnMap(Isolate* isolate);
+  void RehashBasedOnMap(ReadOnlyRoots roots);
 
   // Layout description.
 #define HEAP_OBJECT_FIELDS(V) \

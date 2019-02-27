@@ -23,6 +23,7 @@
 #include "src/property-details.h"
 #include "src/property.h"
 #include "src/string-stream.h"
+#include "src/zone/zone-list-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -151,26 +152,6 @@ bool Expression::IsAccessorFunctionDefinition() const {
   return IsFunctionLiteral() && IsAccessorFunction(AsFunctionLiteral()->kind());
 }
 
-bool Statement::IsJump() const {
-  switch (node_type()) {
-#define JUMP_NODE_LIST(V) \
-  V(Block)                \
-  V(ExpressionStatement)  \
-  V(ContinueStatement)    \
-  V(BreakStatement)       \
-  V(ReturnStatement)      \
-  V(IfStatement)
-#define GENERATE_CASE(Node) \
-  case k##Node:             \
-    return static_cast<const Node*>(this)->IsJump();
-    JUMP_NODE_LIST(GENERATE_CASE)
-#undef GENERATE_CASE
-#undef JUMP_NODE_LIST
-    default:
-      return false;
-  }
-}
-
 VariableProxy::VariableProxy(Variable* var, int start_position)
     : Expression(start_position, kVariableProxy),
       raw_name_(var->raw_name()),
@@ -231,6 +212,18 @@ void FunctionLiteral::SetShouldEagerCompile() {
 
 bool FunctionLiteral::AllowsLazyCompilation() {
   return scope()->AllowsLazyCompilation();
+}
+
+bool FunctionLiteral::SafeToSkipArgumentsAdaptor() const {
+  // TODO(bmeurer,verwaest): The --fast_calls_with_arguments_mismatches
+  // is mostly here for checking the real-world impact of the calling
+  // convention. There's not really a point in turning off this flag
+  // otherwise, so we should remove it at some point, when we're done
+  // with the experiments (https://crbug.com/v8/8895).
+  return FLAG_fast_calls_with_arguments_mismatches &&
+         language_mode() == LanguageMode::kStrict &&
+         scope()->arguments() == nullptr &&
+         scope()->rest_parameter() == nullptr;
 }
 
 Handle<String> FunctionLiteral::name(Isolate* isolate) const {

@@ -9,6 +9,7 @@
 #include "src/objects/js-weak-refs.h"
 #include "src/objects/microtask-inl.h"
 #include "src/objects/promise.h"
+#include "src/objects/smi-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -34,7 +35,7 @@ class MicrotaskQueueBuiltinsAssembler : public CodeStubAssembler {
                                            TNode<IntPtrT> start,
                                            TNode<IntPtrT> index);
 
-  void PrepareForContext(TNode<Context> microtask_context);
+  void PrepareForContext(TNode<Context> microtask_context, Label* bailout);
   void RunSingleMicrotask(TNode<Context> current_context,
                           TNode<Microtask> microtask);
   void IncrementFinishedMicrotaskCount(TNode<RawPtrT> microtask_queue);
@@ -104,8 +105,13 @@ TNode<IntPtrT> MicrotaskQueueBuiltinsAssembler::CalculateRingBufferOffset(
 }
 
 void MicrotaskQueueBuiltinsAssembler::PrepareForContext(
-    TNode<Context> native_context) {
+    TNode<Context> native_context, Label* bailout) {
   CSA_ASSERT(this, IsNativeContext(native_context));
+
+  // Skip the microtask execution if the associated context is shutdown.
+  GotoIf(WordEqual(GetMicrotaskQueue(native_context), IntPtrConstant(0)),
+         bailout);
+
   EnterMicrotaskContext(native_context);
   SetCurrentContext(native_context);
 }
@@ -150,7 +156,7 @@ void MicrotaskQueueBuiltinsAssembler::RunSingleMicrotask(
     TNode<Context> microtask_context =
         LoadObjectField<Context>(microtask, CallableTask::kContextOffset);
     TNode<Context> native_context = LoadNativeContext(microtask_context);
-    PrepareForContext(native_context);
+    PrepareForContext(native_context, &done);
 
     TNode<JSReceiver> callable =
         LoadObjectField<JSReceiver>(microtask, CallableTask::kCallableOffset);
@@ -193,7 +199,7 @@ void MicrotaskQueueBuiltinsAssembler::RunSingleMicrotask(
     TNode<Context> microtask_context = LoadObjectField<Context>(
         microtask, PromiseResolveThenableJobTask::kContextOffset);
     TNode<Context> native_context = LoadNativeContext(microtask_context);
-    PrepareForContext(native_context);
+    PrepareForContext(native_context, &done);
 
     Node* const promise_to_resolve = LoadObjectField(
         microtask, PromiseResolveThenableJobTask::kPromiseToResolveOffset);
@@ -217,7 +223,7 @@ void MicrotaskQueueBuiltinsAssembler::RunSingleMicrotask(
     TNode<Context> microtask_context = LoadObjectField<Context>(
         microtask, PromiseReactionJobTask::kContextOffset);
     TNode<Context> native_context = LoadNativeContext(microtask_context);
-    PrepareForContext(native_context);
+    PrepareForContext(native_context, &done);
 
     Node* const argument =
         LoadObjectField(microtask, PromiseReactionJobTask::kArgumentOffset);
@@ -250,7 +256,7 @@ void MicrotaskQueueBuiltinsAssembler::RunSingleMicrotask(
     TNode<Context> microtask_context = LoadObjectField<Context>(
         microtask, PromiseReactionJobTask::kContextOffset);
     TNode<Context> native_context = LoadNativeContext(microtask_context);
-    PrepareForContext(native_context);
+    PrepareForContext(native_context, &done);
 
     Node* const argument =
         LoadObjectField(microtask, PromiseReactionJobTask::kArgumentOffset);
@@ -286,7 +292,7 @@ void MicrotaskQueueBuiltinsAssembler::RunSingleMicrotask(
             FinalizationGroupCleanupJobTask::kFinalizationGroupOffset);
     TNode<Context> native_context = LoadObjectField<Context>(
         finalization_group, JSFinalizationGroup::kNativeContextOffset);
-    PrepareForContext(native_context);
+    PrepareForContext(native_context, &done);
 
     Node* const result = CallRuntime(Runtime::kFinalizationGroupCleanupJob,
                                      native_context, finalization_group);
@@ -471,6 +477,11 @@ TF_BUILTIN(EnqueueMicrotask, MicrotaskQueueBuiltinsAssembler) {
   TNode<Context> native_context = LoadNativeContext(context);
   TNode<RawPtrT> microtask_queue = GetMicrotaskQueue(native_context);
 
+  // Do not store the microtask if MicrotaskQueue is not available, that may
+  // happen when the context shutdown.
+  Label if_shutdown(this, Label::kDeferred);
+  GotoIf(WordEqual(microtask_queue, IntPtrConstant(0)), &if_shutdown);
+
   TNode<RawPtrT> ring_buffer = GetMicrotaskRingBuffer(microtask_queue);
   TNode<IntPtrT> capacity = GetMicrotaskQueueCapacity(microtask_queue);
   TNode<IntPtrT> size = GetMicrotaskQueueSize(microtask_queue);
@@ -503,6 +514,9 @@ TF_BUILTIN(EnqueueMicrotask, MicrotaskQueueBuiltinsAssembler) {
                    isolate_constant, microtask_queue, microtask);
     Return(UndefinedConstant());
   }
+
+  Bind(&if_shutdown);
+  Return(UndefinedConstant());
 }
 
 TF_BUILTIN(RunMicrotasks, MicrotaskQueueBuiltinsAssembler) {

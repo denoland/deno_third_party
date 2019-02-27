@@ -21,19 +21,20 @@
 #include "src/double.h"
 #include "src/handles-inl.h"
 #include "src/heap/factory.h"
+#include "src/heap/heap-write-barrier-inl.h"
 #include "src/keys.h"
-#include "src/lookup-inl.h"
+#include "src/lookup-inl.h"  // TODO(jkummerow): Drop.
 #include "src/objects/bigint.h"
 #include "src/objects/heap-number-inl.h"
 #include "src/objects/heap-object.h"
-#include "src/objects/js-proxy-inl.h"
+#include "src/objects/js-proxy-inl.h"  // TODO(jkummerow): Drop.
 #include "src/objects/literal-objects.h"
 #include "src/objects/oddball.h"
 #include "src/objects/regexp-match-info.h"
 #include "src/objects/scope-info.h"
+#include "src/objects/shared-function-info.h"
 #include "src/objects/slots-inl.h"
 #include "src/objects/smi-inl.h"
-#include "src/objects/template-objects.h"
 #include "src/objects/templates.h"
 #include "src/property-details.h"
 #include "src/property.h"
@@ -80,10 +81,6 @@ bool HeapObject::IsDataHandler() const {
 }
 
 bool HeapObject::IsClassBoilerplate() const { return IsFixedArrayExact(); }
-
-bool HeapObject::IsExternal(Isolate* isolate) const {
-  return map()->FindRootMap(isolate) == isolate->heap()->external_map();
-}
 
 #define IS_TYPE_FUNCTION_DEF(type_)                                \
   bool Object::Is##type_() const {                                 \
@@ -395,24 +392,18 @@ bool Object::IsMinusZero() const {
          i::IsMinusZero(HeapNumber::cast(*this)->value());
 }
 
-OBJECT_CONSTRUCTORS_IMPL(HeapObject, Object)
 OBJECT_CONSTRUCTORS_IMPL(RegExpMatchInfo, FixedArray)
 OBJECT_CONSTRUCTORS_IMPL(ScopeInfo, FixedArray)
 OBJECT_CONSTRUCTORS_IMPL(BigIntBase, HeapObject)
 OBJECT_CONSTRUCTORS_IMPL(BigInt, BigIntBase)
 OBJECT_CONSTRUCTORS_IMPL(FreshlyAllocatedBigInt, BigIntBase)
 
-OBJECT_CONSTRUCTORS_IMPL(TemplateObjectDescription, Tuple2)
-
 // ------------------------------------
 // Cast operations
 
 CAST_ACCESSOR(BigInt)
-CAST_ACCESSOR(HeapObject)
-CAST_ACCESSOR(Object)
 CAST_ACCESSOR(RegExpMatchInfo)
 CAST_ACCESSOR(ScopeInfo)
-CAST_ACCESSOR(TemplateObjectDescription)
 
 bool Object::HasValidElements() {
   // Dictionary is covered under FixedArray.
@@ -586,7 +577,7 @@ MaybeHandle<Object> Object::SetElement(Isolate* isolate, Handle<Object> object,
 }
 
 ObjectSlot HeapObject::RawField(int byte_offset) const {
-  return ObjectSlot(FIELD_ADDR(this, byte_offset));
+  return ObjectSlot(FIELD_ADDR(*this, byte_offset));
 }
 
 ObjectSlot HeapObject::RawField(const HeapObject obj, int byte_offset) {
@@ -594,7 +585,7 @@ ObjectSlot HeapObject::RawField(const HeapObject obj, int byte_offset) {
 }
 
 MaybeObjectSlot HeapObject::RawMaybeWeakField(int byte_offset) const {
-  return MaybeObjectSlot(FIELD_ADDR(this, byte_offset));
+  return MaybeObjectSlot(FIELD_ADDR(*this, byte_offset));
 }
 
 MaybeObjectSlot HeapObject::RawMaybeWeakField(HeapObject obj, int byte_offset) {
@@ -618,15 +609,34 @@ HeapObject MapWord::ToForwardingAddress() {
 
 #ifdef VERIFY_HEAP
 void HeapObject::VerifyObjectField(Isolate* isolate, int offset) {
-  VerifyPointer(isolate, READ_FIELD(this, offset));
+  VerifyPointer(isolate, READ_FIELD(*this, offset));
+#ifdef V8_COMPRESS_POINTERS
+  STATIC_ASSERT(kTaggedSize == kSystemPointerSize);
+  // Ensure upper 32-bits are zeros.
+  Address value = *(FullObjectSlot(FIELD_ADDR(*this, offset)).location());
+  CHECK_EQ(kNullAddress, RoundDown<kPtrComprIsolateRootAlignment>(value));
+#endif
 }
 
 void HeapObject::VerifyMaybeObjectField(Isolate* isolate, int offset) {
-  MaybeObject::VerifyMaybeObjectPointer(isolate, READ_WEAK_FIELD(this, offset));
+  MaybeObject::VerifyMaybeObjectPointer(isolate,
+                                        READ_WEAK_FIELD(*this, offset));
+#ifdef V8_COMPRESS_POINTERS
+  STATIC_ASSERT(kTaggedSize == kSystemPointerSize);
+  // Ensure upper 32-bits are zeros.
+  Address value = *(FullObjectSlot(FIELD_ADDR(*this, offset)).location());
+  CHECK_EQ(kNullAddress, RoundDown<kPtrComprIsolateRootAlignment>(value));
+#endif
 }
 
 void HeapObject::VerifySmiField(int offset) {
-  CHECK(READ_FIELD(this, offset)->IsSmi());
+  CHECK(READ_FIELD(*this, offset)->IsSmi());
+#ifdef V8_COMPRESS_POINTERS
+  STATIC_ASSERT(kTaggedSize == kSystemPointerSize);
+  // Ensure upper 32-bits are zeros.
+  Address value = *(FullObjectSlot(FIELD_ADDR(*this, offset)).location());
+  CHECK_EQ(kNullAddress, RoundDown<kPtrComprIsolateRootAlignment>(value));
+#endif
 }
 
 #endif
@@ -634,7 +644,7 @@ void HeapObject::VerifySmiField(int offset) {
 ReadOnlyRoots HeapObject::GetReadOnlyRoots() const {
   // TODO(v8:7464): When RO_SPACE is embedded, this will access a global
   // variable instead.
-  return ReadOnlyRoots(MemoryChunk::FromHeapObject(*this)->heap());
+  return ReadOnlyRoots(GetHeapFromWritableObject(*this));
 }
 
 Map HeapObject::map() const { return map_word().ToMap(); }
@@ -642,7 +652,7 @@ Map HeapObject::map() const { return map_word().ToMap(); }
 void HeapObject::set_map(Map value) {
   if (!value.is_null()) {
 #ifdef VERIFY_HEAP
-    Heap::FromWritableHeapObject(*this)->VerifyObjectLayoutChange(*this, value);
+    GetHeapFromWritableObject(*this)->VerifyObjectLayoutChange(*this, value);
 #endif
   }
   set_map_word(MapWord::FromMap(value));
@@ -660,7 +670,7 @@ Map HeapObject::synchronized_map() const {
 void HeapObject::synchronized_set_map(Map value) {
   if (!value.is_null()) {
 #ifdef VERIFY_HEAP
-    Heap::FromWritableHeapObject(*this)->VerifyObjectLayoutChange(*this, value);
+    GetHeapFromWritableObject(*this)->VerifyObjectLayoutChange(*this, value);
 #endif
   }
   synchronized_set_map_word(MapWord::FromMap(value));
@@ -676,7 +686,7 @@ void HeapObject::synchronized_set_map(Map value) {
 void HeapObject::set_map_no_write_barrier(Map value) {
   if (!value.is_null()) {
 #ifdef VERIFY_HEAP
-    Heap::FromWritableHeapObject(*this)->VerifyObjectLayoutChange(*this, value);
+    GetHeapFromWritableObject(*this)->VerifyObjectLayoutChange(*this, value);
 #endif
   }
   set_map_word(MapWord::FromMap(value));
@@ -805,10 +815,7 @@ void RegExpMatchInfo::SetCapture(int i, int value) {
 
 WriteBarrierMode HeapObject::GetWriteBarrierMode(
     const DisallowHeapAllocation& promise) {
-  Heap* heap = Heap::FromWritableHeapObject(*this);
-  if (heap->incremental_marking()->IsMarking()) return UPDATE_WRITE_BARRIER;
-  if (Heap::InYoungGeneration(*this)) return SKIP_WRITE_BARRIER;
-  return UPDATE_WRITE_BARRIER;
+  return GetWriteBarrierModeForObject(*this, &promise);
 }
 
 AllocationAlignment HeapObject::RequiredAlignment(Map map) {
@@ -824,12 +831,8 @@ AllocationAlignment HeapObject::RequiredAlignment(Map map) {
 }
 
 Address HeapObject::GetFieldAddress(int field_offset) const {
-  return FIELD_ADDR(this, field_offset);
+  return FIELD_ADDR(*this, field_offset);
 }
-
-ACCESSORS(TemplateObjectDescription, raw_strings, FixedArray, kRawStringsOffset)
-ACCESSORS(TemplateObjectDescription, cooked_strings, FixedArray,
-          kCookedStringsOffset)
 
 // static
 Maybe<bool> Object::GreaterThan(Isolate* isolate, Handle<Object> x,
@@ -959,6 +962,10 @@ Object Object::GetSimpleHash(Object object) {
     uint32_t hash = BigInt::cast(object)->Hash();
     return Smi::FromInt(hash & Smi::kMaxValue);
   }
+  if (object->IsSharedFunctionInfo()) {
+    uint32_t hash = SharedFunctionInfo::cast(object)->Hash();
+    return Smi::FromInt(hash & Smi::kMaxValue);
+  }
   DCHECK(object->IsJSReceiver());
   return object;
 }
@@ -993,7 +1000,7 @@ Relocatable::~Relocatable() {
 // offset of the address in respective MemoryChunk.
 static inline uint32_t ObjectAddressForHashing(Address object) {
   uint32_t value = static_cast<uint32_t>(object);
-  return value & MemoryChunk::kAlignmentMask;
+  return value & kPageAlignmentMask;
 }
 
 static inline Handle<Object> MakeEntryPair(Isolate* isolate, uint32_t index,

@@ -13,6 +13,7 @@
 #include "src/elements.h"
 #include "src/execution.h"
 #include "src/heap/factory.h"
+#include "src/heap/heap-inl.h"
 #include "src/isolate-inl.h"
 #include "src/message-template.h"
 #include "src/ostreams.h"
@@ -28,6 +29,7 @@
 #include "src/string-search.h"
 #include "src/unicode-decoder.h"
 #include "src/unicode-inl.h"
+#include "src/zone/zone-list-inl.h"
 
 #ifdef V8_INTL_SUPPORT
 #include "unicode/uniset.h"
@@ -562,12 +564,12 @@ Handle<RegExpMatchInfo> RegExpImpl::SetLastMatchInfo(
   result->SetNumberOfCaptureRegisters(capture_register_count);
 
   if (*result != *last_match_info) {
-    // The match info has been reallocated, update the corresponding reference
-    // on the native context.
     if (*last_match_info == *isolate->regexp_last_match_info()) {
+      // This inner condition is only needed for special situations like the
+      // regexp fuzzer, where we pass our own custom RegExpMatchInfo to
+      // RegExpImpl::Exec; there actually want to bypass the Isolate's match
+      // info and execute the regexp without side effects.
       isolate->native_context()->set_regexp_last_match_info(*result);
-    } else if (*last_match_info == *isolate->regexp_internal_match_info()) {
-      isolate->native_context()->set_regexp_internal_match_info(*result);
     }
   }
 
@@ -6754,7 +6756,7 @@ RegExpEngine::CompilationResult RegExpEngine::Compile(
 bool RegExpEngine::TooMuchRegExpCode(Isolate* isolate, Handle<String> pattern) {
   Heap* heap = isolate->heap();
   bool too_much = pattern->length() > RegExpImpl::kRegExpTooLargeToOptimize;
-  if (heap->isolate()->total_regexp_code_generated() >
+  if (isolate->total_regexp_code_generated() >
           RegExpImpl::kRegExpCompiledLimit &&
       heap->CommittedMemoryExecutable() >
           RegExpImpl::kRegExpExecutableMemoryLimit) {

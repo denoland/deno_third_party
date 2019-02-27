@@ -498,6 +498,15 @@ namespace test {
     check(UnsafeCast<Smi>(ExampleGenericOverload<Object>(xObject)) == 5);
   }
 
+  macro TestEquality(implicit context: Context)() {
+    const notEqual: bool =
+        AllocateHeapNumberWithValue(0.5) != AllocateHeapNumberWithValue(0.5);
+    check(!notEqual);
+    const equal: bool =
+        AllocateHeapNumberWithValue(0.5) == AllocateHeapNumberWithValue(0.5);
+    check(equal);
+  }
+
   macro BoolToBranch(x: bool): never
       labels Taken, NotTaken {
     if (x) {
@@ -637,7 +646,7 @@ namespace test {
   macro TestCatch1(implicit context: Context)(): Smi {
     let r: Smi = 0;
     try {
-      ThrowTypeError(context, kInvalidArrayLength);
+      ThrowTypeError(kInvalidArrayLength);
     } catch (e) {
       r = 1;
       return r;
@@ -645,7 +654,7 @@ namespace test {
   }
 
   macro TestCatch2Wrapper(implicit context: Context)(): never {
-    ThrowTypeError(context, kInvalidArrayLength);
+    ThrowTypeError(kInvalidArrayLength);
   }
 
   macro TestCatch2(implicit context: Context)(): Smi {
@@ -660,7 +669,7 @@ namespace test {
 
   macro TestCatch3WrapperWithLabel(implicit context: Context)(): never
       labels Abort {
-    ThrowTypeError(context, kInvalidArrayLength);
+    ThrowTypeError(kInvalidArrayLength);
   }
 
   macro TestCatch3(implicit context: Context)(): Smi {

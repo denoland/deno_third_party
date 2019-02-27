@@ -6,10 +6,11 @@
 #define V8_FEEDBACK_VECTOR_INL_H_
 
 #include "src/feedback-vector.h"
+
 #include "src/globals.h"
 #include "src/heap/factory-inl.h"
-#include "src/heap/heap-inl.h"
-#include "src/heap/heap-write-barrier.h"
+#include "src/heap/heap-write-barrier-inl.h"
+#include "src/objects/code-inl.h"
 #include "src/objects/maybe-object-inl.h"
 #include "src/objects/shared-function-info.h"
 #include "src/objects/smi.h"
@@ -32,19 +33,19 @@ INT32_ACCESSORS(FeedbackMetadata, slot_count, kSlotCountOffset)
 
 int32_t FeedbackMetadata::synchronized_slot_count() const {
   return base::Acquire_Load(reinterpret_cast<const base::Atomic32*>(
-      FIELD_ADDR(this, kSlotCountOffset)));
+      FIELD_ADDR(*this, kSlotCountOffset)));
 }
 
 int32_t FeedbackMetadata::get(int index) const {
   DCHECK(index >= 0 && index < length());
   int offset = kHeaderSize + index * kInt32Size;
-  return READ_INT32_FIELD(this, offset);
+  return READ_INT32_FIELD(*this, offset);
 }
 
 void FeedbackMetadata::set(int index, int32_t value) {
   DCHECK(index >= 0 && index < length());
   int offset = kHeaderSize + index * kInt32Size;
-  WRITE_INT32_FIELD(this, offset, value);
+  WRITE_INT32_FIELD(*this, offset, value);
 }
 
 bool FeedbackMetadata::is_empty() const { return slot_count() == 0; }

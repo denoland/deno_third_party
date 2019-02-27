@@ -1046,6 +1046,11 @@ void AccessorAssembler::CheckFieldType(TNode<DescriptorArray> descriptors,
   BIND(&all_fine);
 }
 
+TNode<BoolT> AccessorAssembler::IsPropertyDetailsConst(Node* details) {
+  return Word32Equal(DecodeWord32<PropertyDetails::ConstnessField>(details),
+                     Int32Constant(static_cast<int32_t>(VariableMode::kConst)));
+}
+
 void AccessorAssembler::OverwriteExistingFastDataProperty(
     Node* object, Node* object_map, Node* descriptors,
     Node* descriptor_name_index, Node* details, Node* value, Label* slow,
@@ -1062,15 +1067,6 @@ void AccessorAssembler::OverwriteExistingFastDataProperty(
 
   BIND(&if_field);
   {
-    if (FLAG_track_constant_fields && !do_transitioning_store) {
-      // TODO(ishell): Taking the slow path is not necessary if new and old
-      // values are identical.
-      GotoIf(Word32Equal(
-                 DecodeWord32<PropertyDetails::ConstnessField>(details),
-                 Int32Constant(static_cast<int32_t>(VariableMode::kConst))),
-             slow);
-    }
-
     Node* representation =
         DecodeWord32<PropertyDetails::RepresentationField>(details);
 
@@ -1100,6 +1096,13 @@ void AccessorAssembler::OverwriteExistingFastDataProperty(
         if (FLAG_unbox_double_fields) {
           if (do_transitioning_store) {
             StoreMap(object, object_map);
+          } else if (FLAG_track_constant_fields) {
+            Label if_mutable(this);
+            GotoIfNot(IsPropertyDetailsConst(details), &if_mutable);
+            Node* current_value =
+                LoadObjectField(object, field_offset, MachineType::Float64());
+            Branch(Float64Equal(current_value, double_value), &done, slow);
+            BIND(&if_mutable);
           }
           StoreObjectFieldNoWriteBarrier(object, field_offset, double_value,
                                          MachineRepresentation::kFloat64);
@@ -1111,6 +1114,13 @@ void AccessorAssembler::OverwriteExistingFastDataProperty(
             StoreObjectField(object, field_offset, mutable_heap_number);
           } else {
             Node* mutable_heap_number = LoadObjectField(object, field_offset);
+            if (FLAG_track_constant_fields) {
+              Label if_mutable(this);
+              GotoIfNot(IsPropertyDetailsConst(details), &if_mutable);
+              Node* current_value = LoadHeapNumberValue(mutable_heap_number);
+              Branch(Float64Equal(current_value, double_value), &done, slow);
+              BIND(&if_mutable);
+            }
             StoreHeapNumberValue(mutable_heap_number, double_value);
           }
         }
@@ -1121,6 +1131,13 @@ void AccessorAssembler::OverwriteExistingFastDataProperty(
       {
         if (do_transitioning_store) {
           StoreMap(object, object_map);
+        } else if (FLAG_track_constant_fields) {
+          Label if_mutable(this);
+          GotoIfNot(IsPropertyDetailsConst(details), &if_mutable);
+          Node* current_value =
+              LoadObjectField(object, field_offset, MachineType::AnyTagged());
+          Branch(WordEqual(current_value, value), &done, slow);
+          BIND(&if_mutable);
         }
         StoreObjectField(object, field_offset, value);
         Goto(&done);
@@ -1170,11 +1187,26 @@ void AccessorAssembler::OverwriteExistingFastDataProperty(
           Node* mutable_heap_number =
               LoadPropertyArrayElement(properties, backing_store_index);
           Node* double_value = ChangeNumberToFloat64(value);
+          if (FLAG_track_constant_fields) {
+            Label if_mutable(this);
+            GotoIfNot(IsPropertyDetailsConst(details), &if_mutable);
+            Node* current_value = LoadHeapNumberValue(mutable_heap_number);
+            Branch(Float64Equal(current_value, double_value), &done, slow);
+            BIND(&if_mutable);
+          }
           StoreHeapNumberValue(mutable_heap_number, double_value);
           Goto(&done);
         }
         BIND(&tagged_rep);
         {
+          if (FLAG_track_constant_fields) {
+            Label if_mutable(this);
+            GotoIfNot(IsPropertyDetailsConst(details), &if_mutable);
+            Node* current_value =
+                LoadPropertyArrayElement(properties, backing_store_index);
+            Branch(WordEqual(current_value, value), &done, slow);
+            BIND(&if_mutable);
+          }
           StorePropertyArrayElement(properties, backing_store_index, value);
           Goto(&done);
         }
@@ -1393,17 +1425,6 @@ void AccessorAssembler::HandleStoreICProtoHandler(
   }
 }
 
-Node* AccessorAssembler::GetLanguageMode(Node* vector, Node* slot) {
-  VARIABLE(var_language_mode, MachineRepresentation::kTaggedSigned,
-           SmiConstant(LanguageMode::kStrict));
-  Label language_mode_determined(this);
-  BranchIfStrictMode(vector, slot, &language_mode_determined);
-  var_language_mode.Bind(SmiConstant(LanguageMode::kSloppy));
-  Goto(&language_mode_determined);
-  BIND(&language_mode_determined);
-  return var_language_mode.value();
-}
-
 void AccessorAssembler::HandleStoreToProxy(const StoreICParameters* p,
                                            Node* proxy, Label* miss,
                                            ElementSupport support_elements) {
@@ -1413,18 +1434,13 @@ void AccessorAssembler::HandleStoreToProxy(const StoreICParameters* p,
   Label if_index(this), if_unique_name(this),
       to_name_failed(this, Label::kDeferred);
 
-  // TODO(8580): Get the language mode lazily when required to avoid the
-  // computation of GetLanguageMode here. Also make the computation of
-  // language mode not dependent on vector.
-  Node* language_mode = GetLanguageMode(p->vector, p->slot);
-
   if (support_elements == kSupportElements) {
     TryToName(p->name, &if_index, &var_index, &if_unique_name, &var_unique,
               &to_name_failed);
 
     BIND(&if_unique_name);
     CallBuiltin(Builtins::kProxySetProperty, p->context, proxy,
-                var_unique.value(), p->value, p->receiver, language_mode);
+                var_unique.value(), p->value, p->receiver);
     Return(p->value);
 
     // The index case is handled earlier by the runtime.
@@ -1439,7 +1455,7 @@ void AccessorAssembler::HandleStoreToProxy(const StoreICParameters* p,
   } else {
     Node* name = CallBuiltin(Builtins::kToName, p->context, p->name);
     TailCallBuiltin(Builtins::kProxySetProperty, p->context, proxy, name,
-                    p->value, p->receiver, language_mode);
+                    p->value, p->receiver);
   }
 }
 
@@ -1780,13 +1796,14 @@ void AccessorAssembler::EmitElementLoad(
   BIND(&if_fast_packed);
   {
     Comment("fast packed elements");
-    exit_point->Return(LoadFixedArrayElement(CAST(elements), intptr_index));
+    exit_point->Return(
+        UnsafeLoadFixedArrayElement(CAST(elements), intptr_index));
   }
 
   BIND(&if_fast_holey);
   {
     Comment("fast holey elements");
-    Node* element = LoadFixedArrayElement(CAST(elements), intptr_index);
+    Node* element = UnsafeLoadFixedArrayElement(CAST(elements), intptr_index);
     GotoIf(WordEqual(element, TheHoleConstant()), if_hole);
     exit_point->Return(element);
   }
@@ -1949,43 +1966,6 @@ void AccessorAssembler::NameDictionaryNegativeLookup(Node* object,
   BIND(&done);
 }
 
-void AccessorAssembler::BranchIfStrictMode(Node* vector, Node* slot,
-                                           Label* if_strict) {
-  Node* sfi =
-      LoadObjectField(vector, FeedbackVector::kSharedFunctionInfoOffset);
-  TNode<FeedbackMetadata> metadata = CAST(LoadObjectField(
-      sfi, SharedFunctionInfo::kOuterScopeInfoOrFeedbackMetadataOffset));
-  Node* slot_int = SmiToInt32(slot);
-
-  // See VectorICComputer::index().
-  const int kItemsPerWord = FeedbackMetadata::VectorICComputer::kItemsPerWord;
-  Node* word_index = Int32Div(slot_int, Int32Constant(kItemsPerWord));
-  Node* word_offset = Int32Mod(slot_int, Int32Constant(kItemsPerWord));
-
-  int32_t first_item = FeedbackMetadata::kHeaderSize - kHeapObjectTag;
-  Node* offset =
-      ElementOffsetFromIndex(ChangeInt32ToIntPtr(word_index), UINT32_ELEMENTS,
-                             INTPTR_PARAMETERS, first_item);
-
-  Node* data = Load(MachineType::Int32(), metadata, offset);
-
-  // See VectorICComputer::decode().
-  const int kBitsPerItem = FeedbackMetadata::kFeedbackSlotKindBits;
-  Node* shift = Int32Mul(word_offset, Int32Constant(kBitsPerItem));
-  const int kMask = FeedbackMetadata::VectorICComputer::kMask;
-  Node* kind = Word32And(Word32Shr(data, shift), Int32Constant(kMask));
-
-  STATIC_ASSERT(FeedbackSlotKind::kStoreGlobalSloppy <=
-                FeedbackSlotKind::kLastSloppyKind);
-  STATIC_ASSERT(FeedbackSlotKind::kStoreKeyedSloppy <=
-                FeedbackSlotKind::kLastSloppyKind);
-  STATIC_ASSERT(FeedbackSlotKind::kStoreNamedSloppy <=
-                FeedbackSlotKind::kLastSloppyKind);
-  GotoIfNot(Int32LessThanOrEqual(kind, Int32Constant(static_cast<int>(
-                                           FeedbackSlotKind::kLastSloppyKind))),
-            if_strict);
-}
-
 void AccessorAssembler::InvalidateValidityCellIfPrototype(Node* map,
                                                           Node* bitfield2) {
   Label is_prototype(this), cont(this);
@@ -2100,10 +2080,10 @@ void AccessorAssembler::GenericPropertyLoad(Node* receiver, Node* receiver_map,
   // for a handler in the stub cache.
   TNode<DescriptorArray> descriptors = LoadMapDescriptors(receiver_map);
 
-  Label if_descriptor_found(this), stub_cache(this);
+  Label if_descriptor_found(this), try_stub_cache(this);
   TVARIABLE(IntPtrT, var_name_index);
-  Label* notfound =
-      use_stub_cache == kUseStubCache ? &stub_cache : &lookup_prototype_chain;
+  Label* notfound = use_stub_cache == kUseStubCache ? &try_stub_cache
+                                                    : &lookup_prototype_chain;
   DescriptorLookup(p->name, descriptors, bitfield3, &if_descriptor_found,
                    &var_name_index, notfound);
 
@@ -2116,6 +2096,13 @@ void AccessorAssembler::GenericPropertyLoad(Node* receiver, Node* receiver_map,
   }
 
   if (use_stub_cache == kUseStubCache) {
+    Label stub_cache(this);
+    BIND(&try_stub_cache);
+    // When there is no feedback vector don't use stub cache.
+    GotoIfNot(IsUndefined(p->vector), &stub_cache);
+    // Fall back to the slow path for private symbols.
+    Branch(IsPrivateSymbol(p->name), slow, &lookup_prototype_chain);
+
     BIND(&stub_cache);
     Comment("stub cache probe for fast property load");
     TVARIABLE(MaybeObject, var_handler);
@@ -2247,7 +2234,10 @@ Node* AccessorAssembler::StubCachePrimaryOffset(Node* name, Node* map) {
   // Using only the low bits in 64-bit mode is unlikely to increase the
   // risk of collision even if the heap is spread over an area larger than
   // 4Gb (and not at all if it isn't).
-  Node* map32 = TruncateIntPtrToInt32(BitcastTaggedToWord(map));
+  Node* map_word = BitcastTaggedToWord(map);
+
+  Node* map32 = TruncateIntPtrToInt32(UncheckedCast<IntPtrT>(
+      WordXor(map_word, WordShr(map_word, StubCache::kMapKeyShift))));
   // Base the offset on a simple combination of name and map.
   Node* hash = Int32Add(hash_field, map32);
   uint32_t mask = (StubCache::kPrimaryTableSize - 1)
@@ -2350,16 +2340,17 @@ void AccessorAssembler::LoadIC_BytecodeHandler(const LoadICParameters* p,
   // changes in control flow and logic. We currently have no way of ensuring
   // that no frame is constructed, so it's easy to break this optimization by
   // accident.
-  Label stub_call(this, Label::kDeferred), miss(this, Label::kDeferred);
+  Label stub_call(this, Label::kDeferred), miss(this, Label::kDeferred),
+      no_feedback(this, Label::kDeferred);
 
-  GotoIf(IsUndefined(p->vector), &miss);
+  Node* recv_map = LoadReceiverMap(p->receiver);
+  GotoIf(IsDeprecatedMap(recv_map), &miss);
+
+  GotoIf(IsUndefined(p->vector), &no_feedback);
 
   // Inlined fast path.
   {
     Comment("LoadIC_BytecodeHandler_fast");
-
-    Node* recv_map = LoadReceiverMap(p->receiver);
-    GotoIf(IsDeprecatedMap(recv_map), &miss);
 
     TVARIABLE(MaybeObject, var_handler);
     Label try_polymorphic(this), if_handler(this, &var_handler);
@@ -2391,6 +2382,15 @@ void AccessorAssembler::LoadIC_BytecodeHandler(const LoadICParameters* p,
     Node* code_target = HeapConstant(ic.code());
     exit_point->ReturnCallStub(ic.descriptor(), code_target, p->context,
                                p->receiver, p->name, p->slot, p->vector);
+  }
+
+  BIND(&no_feedback);
+  {
+    Comment("LoadIC_BytecodeHandler_nofeedback");
+    // Call into the stub that implements the non-inlined parts of LoadIC.
+    exit_point->ReturnCallStub(
+        Builtins::CallableFor(isolate(), Builtins::kLoadIC_Uninitialized),
+        p->context, p->receiver, p->name, p->slot, p->vector);
   }
 
   BIND(&miss);
@@ -2477,20 +2477,61 @@ void AccessorAssembler::LoadIC_Noninlined(const LoadICParameters* p,
   }
 }
 
+// TODO(8860): This check is only required so we can make prototypes fast on
+// the first load. This is not really useful when there is no feedback vector
+// and may not be important when lazily allocating feedback vectors. Once lazy
+// allocation of feedback vectors has landed try to eliminate this check.
+void AccessorAssembler::BranchIfPrototypeShouldbeFast(Node* receiver_map,
+                                                      Label* prototype_not_fast,
+                                                      Label* prototype_fast) {
+  VARIABLE(var_map, MachineRepresentation::kTagged);
+  var_map.Bind(receiver_map);
+  Label loop_body(this, &var_map);
+  Goto(&loop_body);
+
+  BIND(&loop_body);
+  {
+    Node* map = var_map.value();
+    Node* prototype = LoadMapPrototype(map);
+    GotoIf(IsNull(prototype), prototype_fast);
+    TNode<PrototypeInfo> proto_info =
+        LoadMapPrototypeInfo(receiver_map, prototype_not_fast);
+    GotoIf(IsNull(prototype), prototype_not_fast);
+    TNode<Uint32T> flags =
+        LoadObjectField<Uint32T>(proto_info, PrototypeInfo::kBitFieldOffset);
+    GotoIf(Word32Equal(flags, Uint32Constant(0)), prototype_not_fast);
+
+    Node* prototype_map = LoadMap(prototype);
+    var_map.Bind(prototype_map);
+    Goto(&loop_body);
+  }
+}
+
 void AccessorAssembler::LoadIC_Uninitialized(const LoadICParameters* p) {
-  Label miss(this, Label::kDeferred);
+  Label miss(this, Label::kDeferred),
+      check_if_fast_prototype(this, Label::kDeferred),
+      check_function_prototype(this);
   Node* receiver = p->receiver;
   GotoIf(TaggedIsSmi(receiver), &miss);
   Node* receiver_map = LoadMap(receiver);
   Node* instance_type = LoadMapInstanceType(receiver_map);
 
+  GotoIf(IsUndefined(p->vector), &check_if_fast_prototype);
   // Optimistically write the state transition to the vector.
   StoreFeedbackVectorSlot(p->vector, p->slot,
                           LoadRoot(RootIndex::kpremonomorphic_symbol),
                           SKIP_WRITE_BARRIER, 0, SMI_PARAMETERS);
   StoreWeakReferenceInFeedbackVector(p->vector, p->slot, receiver_map,
                                      kTaggedSize, SMI_PARAMETERS);
+  Goto(&check_function_prototype);
 
+  BIND(&check_if_fast_prototype);
+  {
+    BranchIfPrototypeShouldbeFast(receiver_map, &miss,
+                                  &check_function_prototype);
+  }
+
+  BIND(&check_function_prototype);
   {
     // Special case for Function.prototype load, because it's very common
     // for ICs that are only executed once (MyFunc.prototype.foo = ...).
@@ -2510,28 +2551,34 @@ void AccessorAssembler::LoadIC_Uninitialized(const LoadICParameters* p) {
 
   BIND(&miss);
   {
+    Label call_runtime(this, Label::kDeferred);
+    GotoIf(IsUndefined(p->vector), &call_runtime);
     // Undo the optimistic state transition.
     StoreFeedbackVectorSlot(p->vector, p->slot,
                             LoadRoot(RootIndex::kuninitialized_symbol),
                             SKIP_WRITE_BARRIER, 0, SMI_PARAMETERS);
+    Goto(&call_runtime);
 
+    BIND(&call_runtime);
     TailCallRuntime(Runtime::kLoadIC_Miss, p->context, p->receiver, p->name,
                     p->slot, p->vector);
   }
 }
 
-void AccessorAssembler::LoadGlobalIC(TNode<FeedbackVector> vector, Node* slot,
+void AccessorAssembler::LoadGlobalIC(Node* vector, Node* slot,
                                      const LazyNode<Context>& lazy_context,
                                      const LazyNode<Name>& lazy_name,
                                      TypeofMode typeof_mode,
                                      ExitPoint* exit_point,
                                      ParameterMode slot_mode) {
   Label try_handler(this, Label::kDeferred), miss(this, Label::kDeferred);
-  LoadGlobalIC_TryPropertyCellCase(vector, slot, lazy_context, exit_point,
+  GotoIf(IsUndefined(vector), &miss);
+
+  LoadGlobalIC_TryPropertyCellCase(CAST(vector), slot, lazy_context, exit_point,
                                    &try_handler, &miss, slot_mode);
 
   BIND(&try_handler);
-  LoadGlobalIC_TryHandlerCase(vector, slot, lazy_context, lazy_name,
+  LoadGlobalIC_TryHandlerCase(CAST(vector), slot, lazy_context, lazy_name,
                               typeof_mode, exit_point, &miss, slot_mode);
 
   BIND(&miss);
@@ -2621,10 +2668,12 @@ void AccessorAssembler::KeyedLoadIC(const LoadICParameters* p) {
   Label if_handler(this, &var_handler), try_polymorphic(this, Label::kDeferred),
       try_megamorphic(this, Label::kDeferred),
       try_polymorphic_name(this, Label::kDeferred),
-      miss(this, Label::kDeferred);
+      miss(this, Label::kDeferred), generic(this, Label::kDeferred);
 
   Node* receiver_map = LoadReceiverMap(p->receiver);
   GotoIf(IsDeprecatedMap(receiver_map), &miss);
+
+  GotoIf(IsUndefined(p->vector), &generic);
 
   // Check monomorphic case.
   TNode<MaybeObject> feedback =
@@ -2651,13 +2700,17 @@ void AccessorAssembler::KeyedLoadIC(const LoadICParameters* p) {
   {
     // Check megamorphic case.
     Comment("KeyedLoadIC_try_megamorphic");
-    GotoIfNot(
-        WordEqual(strong_feedback, LoadRoot(RootIndex::kmegamorphic_symbol)),
-        &try_polymorphic_name);
+    Branch(WordEqual(strong_feedback, LoadRoot(RootIndex::kmegamorphic_symbol)),
+           &generic, &try_polymorphic_name);
+  }
+
+  BIND(&generic);
+  {
     // TODO(jkummerow): Inline this? Or some of it?
     TailCallBuiltin(Builtins::kKeyedLoadIC_Megamorphic, p->context, p->receiver,
                     p->name, p->slot, p->vector);
   }
+
   BIND(&try_polymorphic_name);
   {
     // We might have a name in feedback, and a weak fixed array in the next
@@ -2842,10 +2895,13 @@ void AccessorAssembler::StoreIC(const StoreICParameters* p) {
       if_handler_from_stub_cache(this, &var_handler, Label::kDeferred),
       try_polymorphic(this, Label::kDeferred),
       try_megamorphic(this, Label::kDeferred),
-      try_uninitialized(this, Label::kDeferred), miss(this, Label::kDeferred);
+      try_uninitialized(this, Label::kDeferred), miss(this, Label::kDeferred),
+      no_feedback(this, Label::kDeferred);
 
   Node* receiver_map = LoadReceiverMap(p->receiver);
   GotoIf(IsDeprecatedMap(receiver_map), &miss);
+
+  GotoIf(IsUndefined(p->vector), &no_feedback);
 
   // Check monomorphic case.
   TNode<MaybeObject> feedback =
@@ -2881,12 +2937,17 @@ void AccessorAssembler::StoreIC(const StoreICParameters* p) {
   BIND(&try_uninitialized);
   {
     // Check uninitialized case.
-    GotoIfNot(
+    Branch(
         WordEqual(strong_feedback, LoadRoot(RootIndex::kuninitialized_symbol)),
-        &miss);
+        &no_feedback, &miss);
+  }
+
+  BIND(&no_feedback);
+  {
     TailCallBuiltin(Builtins::kStoreIC_Uninitialized, p->context, p->receiver,
                     p->name, p->value, p->slot, p->vector);
   }
+
   BIND(&miss);
   {
     TailCallRuntime(Runtime::kStoreIC_Miss, p->context, p->value, p->slot,
@@ -3027,10 +3088,13 @@ void AccessorAssembler::KeyedStoreIC(const StoreICParameters* p) {
     Label if_handler(this, &var_handler),
         try_polymorphic(this, Label::kDeferred),
         try_megamorphic(this, Label::kDeferred),
+        no_feedback(this, Label::kDeferred),
         try_polymorphic_name(this, Label::kDeferred);
 
     Node* receiver_map = LoadReceiverMap(p->receiver);
     GotoIf(IsDeprecatedMap(receiver_map), &miss);
+
+    GotoIf(IsUndefined(p->vector), &no_feedback);
 
     // Check monomorphic case.
     TNode<MaybeObject> feedback =
@@ -3058,11 +3122,15 @@ void AccessorAssembler::KeyedStoreIC(const StoreICParameters* p) {
     {
       // Check megamorphic case.
       Comment("KeyedStoreIC_try_megamorphic");
-      GotoIfNot(
+      Branch(
           WordEqual(strong_feedback, LoadRoot(RootIndex::kmegamorphic_symbol)),
-          &try_polymorphic_name);
+          &no_feedback, &try_polymorphic_name);
+    }
+
+    BIND(&no_feedback);
+    {
       TailCallBuiltin(Builtins::kKeyedStoreIC_Megamorphic, p->context,
-                      p->receiver, p->name, p->value, p->slot, p->vector);
+                      p->receiver, p->name, p->value, p->slot);
     }
 
     BIND(&try_polymorphic_name);
@@ -3098,6 +3166,9 @@ void AccessorAssembler::StoreInArrayLiteralIC(const StoreICParameters* p) {
 
     Node* array_map = LoadReceiverMap(p->receiver);
     GotoIf(IsDeprecatedMap(array_map), &miss);
+
+    GotoIf(IsUndefined(p->vector), &miss);
+
     TNode<MaybeObject> feedback =
         TryMonomorphicCase(p->slot, p->vector, array_map, &if_handler,
                            &var_handler, &try_polymorphic);
@@ -3278,11 +3349,12 @@ void AccessorAssembler::GenerateLoadGlobalIC(TypeofMode typeof_mode) {
   Node* context = Parameter(Descriptor::kContext);
 
   ExitPoint direct_exit(this);
-  LoadGlobalIC(CAST(vector), slot,
-               // lazy_context
-               [=] { return CAST(context); },
-               // lazy_name
-               [=] { return CAST(name); }, typeof_mode, &direct_exit);
+  LoadGlobalIC(
+      vector, slot,
+      // lazy_context
+      [=] { return CAST(context); },
+      // lazy_name
+      [=] { return CAST(name); }, typeof_mode, &direct_exit);
 }
 
 void AccessorAssembler::GenerateLoadGlobalICTrampoline(TypeofMode typeof_mode) {
@@ -3503,6 +3575,7 @@ void AccessorAssembler::GenerateCloneObjectIC_Slow() {
   {
     Label cont(this);
     GotoIf(IsJSObjectInstanceType(type), &cont);
+    GotoIf(InstanceTypeEqual(type, JS_PROXY_TYPE), &call_runtime);
     GotoIfNot(IsStringInstanceType(type), &done);
     Branch(SmiEqual(LoadStringLengthAsSmi(CAST(source)), SmiConstant(0)), &done,
            &call_runtime);
@@ -3537,10 +3610,13 @@ void AccessorAssembler::GenerateCloneObjectIC() {
   TVARIABLE(MaybeObject, var_handler);
   Label if_handler(this, &var_handler);
   Label miss(this, Label::kDeferred), try_polymorphic(this, Label::kDeferred),
-      try_megamorphic(this, Label::kDeferred);
+      try_megamorphic(this, Label::kDeferred), slow(this, Label::kDeferred);
 
   TNode<Map> source_map = LoadMap(UncheckedCast<HeapObject>(source));
   GotoIf(IsDeprecatedMap(source_map), &miss);
+
+  GotoIf(IsUndefined(vector), &slow);
+
   TNode<MaybeObject> feedback = TryMonomorphicCase(
       slot, vector, source_map, &if_handler, &var_handler, &try_polymorphic);
 
@@ -3657,6 +3733,11 @@ void AccessorAssembler::GenerateCloneObjectIC() {
     GotoIfNot(
         WordEqual(strong_feedback, LoadRoot(RootIndex::kmegamorphic_symbol)),
         &miss);
+    Goto(&slow);
+  }
+
+  BIND(&slow);
+  {
     TailCallBuiltin(Builtins::kCloneObjectIC_Slow, context, source, flags, slot,
                     vector);
   }

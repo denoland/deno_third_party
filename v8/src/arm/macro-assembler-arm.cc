@@ -18,6 +18,7 @@
 #include "src/double.h"
 #include "src/external-reference-table.h"
 #include "src/frames-inl.h"
+#include "src/heap/heap-inl.h"  // For MemoryChunk.
 #include "src/macro-assembler.h"
 #include "src/objects-inl.h"
 #include "src/register-configuration.h"
@@ -585,41 +586,6 @@ void TurboAssembler::Bfc(Register dst, Register src, int lsb, int width,
     CpuFeatureScope scope(this, ARMv7);
     Move(dst, src, cond);
     bfc(dst, lsb, width, cond);
-  }
-}
-
-void MacroAssembler::Load(Register dst,
-                          const MemOperand& src,
-                          Representation r) {
-  DCHECK(!r.IsDouble());
-  if (r.IsInteger8()) {
-    ldrsb(dst, src);
-  } else if (r.IsUInteger8()) {
-    ldrb(dst, src);
-  } else if (r.IsInteger16()) {
-    ldrsh(dst, src);
-  } else if (r.IsUInteger16()) {
-    ldrh(dst, src);
-  } else {
-    ldr(dst, src);
-  }
-}
-
-void MacroAssembler::Store(Register src,
-                           const MemOperand& dst,
-                           Representation r) {
-  DCHECK(!r.IsDouble());
-  if (r.IsInteger8() || r.IsUInteger8()) {
-    strb(src, dst);
-  } else if (r.IsInteger16() || r.IsUInteger16()) {
-    strh(src, dst);
-  } else {
-    if (r.IsHeapObject()) {
-      AssertNotSmi(src);
-    } else if (r.IsSmi()) {
-      AssertSmi(src);
-    }
-    str(src, dst);
   }
 }
 
@@ -1760,6 +1726,20 @@ void MacroAssembler::CompareRoot(Register obj, RootIndex index) {
   DCHECK(obj != scratch);
   LoadRoot(scratch, index);
   cmp(obj, scratch);
+}
+
+void MacroAssembler::JumpIfIsInRange(Register value, unsigned lower_limit,
+                                     unsigned higher_limit,
+                                     Label* on_in_range) {
+  if (lower_limit != 0) {
+    UseScratchRegisterScope temps(this);
+    Register scratch = temps.Acquire();
+    sub(scratch, value, Operand(lower_limit));
+    cmp(scratch, Operand(higher_limit - lower_limit));
+  } else {
+    cmp(value, Operand(higher_limit));
+  }
+  b(ls, on_in_range);
 }
 
 void MacroAssembler::TryDoubleToInt32Exact(Register result,

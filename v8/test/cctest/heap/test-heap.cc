@@ -37,8 +37,10 @@
 #include "src/execution.h"
 #include "src/field-type.h"
 #include "src/global-handles.h"
+#include "src/hash-seed-inl.h"
 #include "src/heap/factory.h"
 #include "src/heap/gc-tracer.h"
+#include "src/heap/heap-inl.h"
 #include "src/heap/incremental-marking.h"
 #include "src/heap/mark-compact.h"
 #include "src/heap/memory-reducer.h"
@@ -1785,8 +1787,9 @@ static HeapObject NewSpaceAllocateAligned(int size,
 static Address AlignNewSpace(AllocationAlignment alignment, int offset) {
   Address* top_addr = CcTest::heap()->new_space()->allocation_top_address();
   int fill = Heap::GetFillToAlign(*top_addr, alignment);
-  if (fill) {
-    NewSpaceAllocateAligned(fill + offset, kWordAligned);
+  int allocation = fill + offset;
+  if (allocation) {
+    NewSpaceAllocateAligned(allocation, kWordAligned);
   }
   return *top_addr;
 }
@@ -1908,6 +1911,64 @@ TEST(TestAlignedOverAllocation) {
   }
 }
 
+TEST(HeapNumberAlignment) {
+  CcTest::InitializeVM();
+  Isolate* isolate = CcTest::i_isolate();
+  Factory* factory = isolate->factory();
+  Heap* heap = isolate->heap();
+  HandleScope sc(isolate);
+
+  const auto required_alignment =
+      HeapObject::RequiredAlignment(*factory->heap_number_map());
+  const int maximum_misalignment =
+      Heap::GetMaximumFillToAlign(required_alignment);
+
+  for (int offset = 0; offset <= maximum_misalignment; offset += kTaggedSize) {
+    AlignNewSpace(required_alignment, offset);
+    Handle<Object> number_new = factory->NewNumber(1.000123);
+    CHECK(number_new->IsHeapNumber());
+    CHECK(Heap::InYoungGeneration(*number_new));
+    CHECK_EQ(0, Heap::GetFillToAlign(HeapObject::cast(*number_new)->address(),
+                                     required_alignment));
+
+    AlignOldSpace(required_alignment, offset);
+    Handle<Object> number_old = factory->NewNumber(1.000321, TENURED);
+    CHECK(number_old->IsHeapNumber());
+    CHECK(heap->InOldSpace(*number_old));
+    CHECK_EQ(0, Heap::GetFillToAlign(HeapObject::cast(*number_old)->address(),
+                                     required_alignment));
+  }
+}
+
+TEST(MutableHeapNumberAlignment) {
+  CcTest::InitializeVM();
+  Isolate* isolate = CcTest::i_isolate();
+  Factory* factory = isolate->factory();
+  Heap* heap = isolate->heap();
+  HandleScope sc(isolate);
+
+  const auto required_alignment =
+      HeapObject::RequiredAlignment(*factory->mutable_heap_number_map());
+  const int maximum_misalignment =
+      Heap::GetMaximumFillToAlign(required_alignment);
+
+  for (int offset = 0; offset <= maximum_misalignment; offset += kTaggedSize) {
+    AlignNewSpace(required_alignment, offset);
+    Handle<Object> number_new = factory->NewMutableHeapNumber(1.000123);
+    CHECK(number_new->IsMutableHeapNumber());
+    CHECK(Heap::InYoungGeneration(*number_new));
+    CHECK_EQ(0, Heap::GetFillToAlign(HeapObject::cast(*number_new)->address(),
+                                     required_alignment));
+
+    AlignOldSpace(required_alignment, offset);
+    Handle<Object> number_old =
+        factory->NewMutableHeapNumber(1.000321, TENURED);
+    CHECK(number_old->IsMutableHeapNumber());
+    CHECK(heap->InOldSpace(*number_old));
+    CHECK_EQ(0, Heap::GetFillToAlign(HeapObject::cast(*number_old)->address(),
+                                     required_alignment));
+  }
+}
 
 TEST(TestSizeOfObjectsVsHeapIteratorPrecision) {
   CcTest::InitializeVM();
@@ -1960,6 +2021,8 @@ TEST(GrowAndShrinkNewSpace) {
 
   // Make sure we're in a consistent state to start out.
   CcTest::CollectAllGarbage();
+  CcTest::CollectAllGarbage();
+  new_space->Shrink();
 
   // Explicitly growing should double the space capacity.
   size_t old_capacity, new_capacity;
@@ -3089,6 +3152,9 @@ TEST(ReleaseOverReservedPages) {
   Factory* factory = isolate->factory();
   Heap* heap = isolate->heap();
   v8::HandleScope scope(CcTest::isolate());
+  // Ensure that the young generation is empty.
+  CcTest::CollectGarbage(NEW_SPACE);
+  CcTest::CollectGarbage(NEW_SPACE);
   static const int number_of_test_pages = 20;
 
   // Prepare many pages with low live-bytes count.
@@ -3122,7 +3188,7 @@ TEST(ReleaseOverReservedPages) {
   // boots, but if the 20 small arrays don't fit on the first page then that's
   // an indication that it is too small.
   CcTest::CollectAllAvailableGarbage();
-  CHECK_EQ(initial_page_count, old_space->CountTotalPages());
+  CHECK_GE(initial_page_count, old_space->CountTotalPages());
 }
 
 static int forced_gc_counter = 0;
@@ -3222,7 +3288,7 @@ static void CheckVectorIC(Handle<JSFunction> f, int slot_index,
   FeedbackVectorHelper helper(vector);
   FeedbackSlot slot = helper.slot(slot_index);
   FeedbackNexus nexus(vector, slot);
-  CHECK(nexus.StateFromFeedback() == desired_state);
+  CHECK(nexus.ic_state() == desired_state);
 }
 
 TEST(IncrementalMarkingPreservesMonomorphicConstructor) {
@@ -4613,7 +4679,7 @@ void CheckIC(Handle<JSFunction> function, int slot_index,
   FeedbackVector vector = function->feedback_vector();
   FeedbackSlot slot(slot_index);
   FeedbackNexus nexus(vector, slot);
-  CHECK_EQ(nexus.StateFromFeedback(), state);
+  CHECK_EQ(nexus.ic_state(), state);
 }
 
 TEST(MonomorphicStaysMonomorphicAfterGC) {
@@ -5752,7 +5818,8 @@ TEST(ContinuousLeftTrimFixedArrayInBlackArea) {
   Address start_address = array->address();
   Address end_address = start_address + array->Size();
   Page* page = Page::FromAddress(start_address);
-  IncrementalMarking::MarkingState* marking_state = marking->marking_state();
+  IncrementalMarking::NonAtomicMarkingState* marking_state =
+      marking->non_atomic_marking_state();
   CHECK(marking_state->IsBlack(*array));
   CHECK(marking_state->bitmap(page)->AllBitsSetInRange(
       page->AddressToMarkbitIndex(start_address),
@@ -5819,7 +5886,8 @@ TEST(ContinuousRightTrimFixedArrayInBlackArea) {
   Address start_address = array->address();
   Address end_address = start_address + array->Size();
   Page* page = Page::FromAddress(start_address);
-  IncrementalMarking::MarkingState* marking_state = marking->marking_state();
+  IncrementalMarking::NonAtomicMarkingState* marking_state =
+      marking->non_atomic_marking_state();
   CHECK(marking_state->IsBlack(*array));
 
   CHECK(marking_state->bitmap(page)->AllBitsSetInRange(
@@ -6072,7 +6140,7 @@ HEAP_TEST(Regress670675) {
   if (marking->IsStopped()) {
     marking->Start(i::GarbageCollectionReason::kTesting);
   }
-  size_t array_length = Page::kPageSize / kTaggedSize + 100;
+  size_t array_length = 128 * KB;
   size_t n = heap->OldGenerationSpaceAvailable() / array_length;
   for (size_t i = 0; i < n + 40; i++) {
     {
@@ -6256,7 +6324,7 @@ UNINITIALIZED_TEST(ReinitializeStringHashSeed) {
     {
       v8::Isolate::Scope isolate_scope(isolate);
       CHECK_EQ(static_cast<uint64_t>(1337 * i),
-               reinterpret_cast<i::Isolate*>(isolate)->heap()->HashSeed());
+               HashSeed(reinterpret_cast<i::Isolate*>(isolate)));
       v8::HandleScope handle_scope(isolate);
       v8::Local<v8::Context> context = v8::Context::New(isolate);
       CHECK(!context.IsEmpty());

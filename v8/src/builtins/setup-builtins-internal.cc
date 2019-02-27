@@ -8,8 +8,8 @@
 #include "src/builtins/builtins.h"
 #include "src/code-events.h"
 #include "src/compiler/code-assembler.h"
-
 #include "src/handles-inl.h"
+#include "src/heap/heap-inl.h"  // For MemoryAllocator::code_range.
 #include "src/interface-descriptors.h"
 #include "src/interpreter/bytecodes.h"
 #include "src/interpreter/interpreter-generator.h"
@@ -42,7 +42,7 @@ AssemblerOptions BuiltinAssemblerOptions(Isolate* isolate,
   CHECK(!options.isolate_independent_code);
   CHECK(!options.use_pc_relative_calls_and_jumps);
 
-  if (!isolate->ShouldLoadConstantsFromRootList() ||
+  if (!isolate->IsGeneratingEmbeddedBuiltins() ||
       !Builtins::IsIsolateIndependent(builtin_index)) {
     return options;
   }

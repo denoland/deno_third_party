@@ -278,13 +278,13 @@ class ParserBase {
   bool allow_##name() const { return allow_##name##_; } \
   void set_allow_##name(bool allow) { allow_##name##_ = allow; }
 
-  ALLOW_ACCESSORS(natives);
-  ALLOW_ACCESSORS(harmony_public_fields);
-  ALLOW_ACCESSORS(harmony_static_fields);
-  ALLOW_ACCESSORS(harmony_dynamic_import);
-  ALLOW_ACCESSORS(harmony_import_meta);
-  ALLOW_ACCESSORS(harmony_private_methods);
-  ALLOW_ACCESSORS(eval_cache);
+  ALLOW_ACCESSORS(natives)
+  ALLOW_ACCESSORS(harmony_public_fields)
+  ALLOW_ACCESSORS(harmony_static_fields)
+  ALLOW_ACCESSORS(harmony_dynamic_import)
+  ALLOW_ACCESSORS(harmony_import_meta)
+  ALLOW_ACCESSORS(harmony_private_methods)
+  ALLOW_ACCESSORS(eval_cache)
 
 #undef ALLOW_ACCESSORS
 
@@ -797,6 +797,7 @@ class ParserBase {
 
   bool PeekContextualKeyword(const AstRawString* name) {
     return peek() == Token::IDENTIFIER &&
+           !scanner()->next_literal_contains_escapes() &&
            scanner()->NextSymbol(ast_value_factory()) == name;
   }
 
@@ -808,13 +809,20 @@ class ParserBase {
     return false;
   }
 
-  void ExpectMetaProperty(const AstRawString* property_name,
-                          const char* full_name, int pos);
-
-  void ExpectContextualKeyword(const AstRawString* name) {
+  void ExpectContextualKeyword(const AstRawString* name,
+                               const char* fullname = nullptr, int pos = -1) {
     Expect(Token::IDENTIFIER);
     if (V8_UNLIKELY(scanner()->CurrentSymbol(ast_value_factory()) != name)) {
       ReportUnexpectedToken(scanner()->current_token());
+    }
+    if (V8_UNLIKELY(scanner()->literal_contains_escapes())) {
+      const char* full = fullname == nullptr
+                             ? reinterpret_cast<const char*>(name->raw_data())
+                             : fullname;
+      int start = pos == -1 ? position() : pos;
+      impl()->ReportMessageAt(Scanner::Location(start, end_position()),
+                              MessageTemplate::kInvalidEscapedMetaProperty,
+                              full);
     }
   }
 
@@ -987,6 +995,8 @@ class ParserBase {
   // mode.
   IdentifierT ParseNonRestrictedIdentifier();
 
+  // This method should be used to ambiguously parse property names that can
+  // become destructuring identifiers.
   V8_INLINE IdentifierT ParsePropertyName();
 
   ExpressionT ParsePropertyOrPrivatePropertyName();
@@ -1046,10 +1056,11 @@ class ParserBase {
   ExpressionT ParseAwaitExpression();
   V8_INLINE ExpressionT ParseUnaryExpression();
   V8_INLINE ExpressionT ParsePostfixExpression();
+  V8_NOINLINE ExpressionT ParsePostfixContinuation(ExpressionT expression,
+                                                   int lhs_beg_pos);
   V8_INLINE ExpressionT ParseLeftHandSideExpression();
   ExpressionT ParseLeftHandSideContinuation(ExpressionT expression);
   ExpressionT ParseMemberWithPresentNewPrefixesExpression();
-  V8_INLINE ExpressionT ParseMemberWithNewPrefixesExpression();
   ExpressionT ParseFunctionExpression();
   V8_INLINE ExpressionT ParseMemberExpression();
   V8_INLINE ExpressionT
@@ -1472,9 +1483,8 @@ template <typename Impl>
 typename ParserBase<Impl>::IdentifierT
 ParserBase<Impl>::ParseAndClassifyIdentifier(Token::Value next) {
   DCHECK_EQ(scanner()->current_token(), next);
-  STATIC_ASSERT(Token::IDENTIFIER + 1 == Token::ASYNC);
   if (V8_LIKELY(IsInRange(next, Token::IDENTIFIER, Token::ASYNC))) {
-    IdentifierT name = impl()->GetSymbol();
+    IdentifierT name = impl()->GetIdentifier();
     if (V8_UNLIKELY(impl()->IsArguments(name) &&
                     scope()->ShouldBanArguments())) {
       ReportMessage(MessageTemplate::kArgumentsDisallowedInInitializer);
@@ -1492,13 +1502,13 @@ ParserBase<Impl>::ParseAndClassifyIdentifier(Token::Value next) {
   if (next == Token::AWAIT) {
     expression_scope()->RecordAsyncArrowParametersError(
         scanner()->location(), MessageTemplate::kAwaitBindingIdentifier);
-    return impl()->GetSymbol();
+    return impl()->GetIdentifier();
   }
 
   DCHECK(Token::IsStrictReservedWord(next));
   expression_scope()->RecordStrictModeParameterError(
       scanner()->location(), MessageTemplate::kUnexpectedStrictReserved);
-  return impl()->GetSymbol();
+  return impl()->GetIdentifier();
 }
 
 template <class Impl>
@@ -1513,7 +1523,7 @@ typename ParserBase<Impl>::IdentifierT ParserBase<Impl>::ParseIdentifier(
     return impl()->EmptyIdentifierString();
   }
 
-  return impl()->GetSymbol();
+  return impl()->GetIdentifier();
 }
 
 template <typename Impl>
@@ -1533,7 +1543,7 @@ ParserBase<Impl>::ParseNonRestrictedIdentifier() {
 template <typename Impl>
 typename ParserBase<Impl>::IdentifierT ParserBase<Impl>::ParsePropertyName() {
   Token::Value next = Next();
-  if (V8_LIKELY(Token::IsPropertyName(next))) return impl()->GetSymbol();
+  if (V8_LIKELY(Token::IsPropertyName(next))) return impl()->GetIdentifier();
 
   ReportUnexpectedToken(next);
   return impl()->EmptyIdentifierString();
@@ -1550,7 +1560,23 @@ ParserBase<Impl>::ParsePropertyOrPrivatePropertyName() {
     name = impl()->GetSymbol();
     key = factory()->NewStringLiteral(name, pos);
   } else if (allow_harmony_private_fields() && next == Token::PRIVATE_NAME) {
-    name = impl()->GetSymbol();
+    // In the case of a top level function, we completely skip
+    // analysing it's scope, meaning, we don't have a chance to
+    // resolve private names and find that they are not enclosed in a
+    // class body.
+    //
+    // Here, we check if this is a new private name reference in a top
+    // level function and throw an error if so.
+    //
+    // Bug(v8:7468): This hack will go away once we refactor private
+    // name resolution to happen independently from scope resolution.
+    if (scope()->scope_type() == FUNCTION_SCOPE &&
+        scope()->outer_scope() != nullptr &&
+        scope()->outer_scope()->scope_type() == SCRIPT_SCOPE) {
+      ReportMessage(MessageTemplate::kInvalidPrivateFieldResolution);
+    }
+
+    name = impl()->GetIdentifier();
     key = impl()->ExpressionFromIdentifier(name, pos, InferName::kNo);
   } else {
     ReportUnexpectedToken(next);
@@ -1648,7 +1674,8 @@ ParserBase<Impl>::ParsePrimaryExpression() {
     FunctionKind kind = FunctionKind::kArrowFunction;
 
     if (V8_UNLIKELY(token == Token::ASYNC &&
-                    !scanner()->HasLineTerminatorBeforeNext())) {
+                    !scanner()->HasLineTerminatorBeforeNext() &&
+                    !scanner()->literal_contains_escapes())) {
       // async function ...
       if (peek() == Token::FUNCTION) return ParseAsyncFunctionLiteral();
 
@@ -1679,6 +1706,9 @@ ParserBase<Impl>::ParsePrimaryExpression() {
   }
 
   switch (token) {
+    case Token::NEW:
+      return ParseMemberWithPresentNewPrefixesExpression();
+
     case Token::THIS: {
       Consume(Token::THIS);
       return impl()->ThisExpression();
@@ -1687,6 +1717,17 @@ ParserBase<Impl>::ParsePrimaryExpression() {
     case Token::ASSIGN_DIV:
     case Token::DIV:
       return ParseRegExpLiteral();
+
+    case Token::FUNCTION:
+      return ParseFunctionExpression();
+
+    case Token::SUPER: {
+      const bool is_new = false;
+      return ParseSuperExpression(is_new);
+    }
+    case Token::IMPORT:
+      if (!allow_harmony_dynamic_import()) break;
+      return ParseImportExpressions();
 
     case Token::LBRACK:
       return ParseArrayLiteral();
@@ -1925,9 +1966,12 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseProperty(
     Token::Value token = peek();
     if ((token != Token::MUL && prop_info->ParsePropertyKindFromToken(token)) ||
         scanner()->HasLineTerminatorBeforeNext()) {
-      prop_info->name = impl()->GetSymbol();
+      prop_info->name = impl()->GetIdentifier();
       impl()->PushLiteralName(prop_info->name);
       return factory()->NewStringLiteral(prop_info->name, position());
+    }
+    if (V8_UNLIKELY(scanner()->literal_contains_escapes())) {
+      impl()->ReportUnexpectedToken(Token::ESCAPED_KEYWORD);
     }
     prop_info->function_flags = ParseFunctionFlag::kIsAsync;
     prop_info->kind = ParsePropertyKind::kMethod;
@@ -1939,20 +1983,20 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseProperty(
   }
 
   if (prop_info->kind == ParsePropertyKind::kNotSet &&
-      Check(Token::IDENTIFIER)) {
-    IdentifierT symbol = impl()->GetSymbol();
-    if (!prop_info->ParsePropertyKindFromToken(peek())) {
-      if (impl()->IdentifierEquals(symbol, ast_value_factory()->get_string())) {
-        prop_info->kind = ParsePropertyKind::kAccessorGetter;
-      } else if (impl()->IdentifierEquals(symbol,
-                                          ast_value_factory()->set_string())) {
-        prop_info->kind = ParsePropertyKind::kAccessorSetter;
-      }
-    }
-    if (!IsAccessor(prop_info->kind)) {
-      prop_info->name = symbol;
+      IsInRange(peek(), Token::GET, Token::SET)) {
+    Token::Value token = Next();
+    if (prop_info->ParsePropertyKindFromToken(peek())) {
+      prop_info->name = impl()->GetIdentifier();
       impl()->PushLiteralName(prop_info->name);
       return factory()->NewStringLiteral(prop_info->name, position());
+    }
+    if (V8_UNLIKELY(scanner()->literal_contains_escapes())) {
+      impl()->ReportUnexpectedToken(Token::ESCAPED_KEYWORD);
+    }
+    if (token == Token::GET) {
+      prop_info->kind = ParsePropertyKind::kAccessorGetter;
+    } else if (token == Token::SET) {
+      prop_info->kind = ParsePropertyKind::kAccessorSetter;
     }
   }
 
@@ -1977,19 +2021,25 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseProperty(
       if (prop_info->kind == ParsePropertyKind::kNotSet) {
         prop_info->ParsePropertyKindFromToken(peek());
       }
-      prop_info->name = impl()->GetSymbol();
-      if (prop_info->position == PropertyPosition::kObjectLiteral ||
-          (!allow_harmony_private_methods() &&
-           (IsAccessor(prop_info->kind) ||
-            prop_info->kind == ParsePropertyKind::kMethod))) {
+      prop_info->name = impl()->GetIdentifier();
+      if (V8_UNLIKELY(prop_info->position ==
+                      PropertyPosition::kObjectLiteral)) {
+        ReportUnexpectedToken(Token::PRIVATE_NAME);
+        prop_info->kind = ParsePropertyKind::kNotSet;
+        return impl()->FailureExpression();
+      }
+      if (V8_UNLIKELY(!allow_harmony_private_methods() &&
+                      (IsAccessor(prop_info->kind) ||
+                       prop_info->kind == ParsePropertyKind::kMethod))) {
         ReportUnexpectedToken(Next());
+        prop_info->kind = ParsePropertyKind::kNotSet;
         return impl()->FailureExpression();
       }
       break;
 
     case Token::STRING:
       Consume(Token::STRING);
-      prop_info->name = impl()->GetSymbol();
+      prop_info->name = impl()->GetIdentifier();
       is_array_index = impl()->IsArrayIndex(prop_info->name, &index);
       break;
 
@@ -2082,13 +2132,13 @@ ParserBase<Impl>::ParseClassPropertyDefinition(ClassInfo* class_info,
     if (peek() == Token::LPAREN) {
       prop_info->kind = ParsePropertyKind::kMethod;
       // TODO(bakkot) specialize on 'static'
-      prop_info->name = impl()->GetSymbol();
+      prop_info->name = impl()->GetIdentifier();
       name_expression =
           factory()->NewStringLiteral(prop_info->name, position());
     } else if (peek() == Token::ASSIGN || peek() == Token::SEMICOLON ||
                peek() == Token::RBRACE) {
       // TODO(bakkot) specialize on 'static'
-      prop_info->name = impl()->GetSymbol();
+      prop_info->name = impl()->GetIdentifier();
       name_expression =
           factory()->NewStringLiteral(prop_info->name, position());
     } else {
@@ -2274,12 +2324,10 @@ ParserBase<Impl>::ParseObjectPropertyDefinition(ParsePropertyInfo* prop_info,
   Token::Value name_token = peek();
   Scanner::Location next_loc = scanner()->peek_location();
 
-  if (name_token == Token::PRIVATE_NAME) {
-    ReportUnexpectedToken(Next());
-    return impl()->NullLiteralProperty();
-  }
-
   ExpressionT name_expression = ParseProperty(prop_info);
+
+  DCHECK_IMPLIES(name_token == Token::PRIVATE_NAME, has_error());
+
   IdentifierT name = prop_info->name;
   ParseFunctionFlags function_flags = prop_info->function_flags;
   ParsePropertyKind kind = prop_info->kind;
@@ -2678,6 +2726,9 @@ ParserBase<Impl>::ParseYieldExpression() {
   expression_scope()->RecordParameterInitializerError(
       scanner()->peek_location(), MessageTemplate::kYieldInParameter);
   Consume(Token::YIELD);
+  if (V8_UNLIKELY(scanner()->literal_contains_escapes())) {
+    impl()->ReportUnexpectedToken(Token::ESCAPED_KEYWORD);
+  }
 
   CheckStackOverflow();
 
@@ -2902,6 +2953,9 @@ ParserBase<Impl>::ParseAwaitExpression() {
       MessageTemplate::kAwaitExpressionFormalParameter);
   int await_pos = peek_position();
   Consume(Token::AWAIT);
+  if (V8_UNLIKELY(scanner()->literal_contains_escapes())) {
+    impl()->ReportUnexpectedToken(Token::ESCAPED_KEYWORD);
+  }
 
   CheckStackOverflow();
 
@@ -2945,24 +2999,29 @@ ParserBase<Impl>::ParsePostfixExpression() {
 
   int lhs_beg_pos = peek_position();
   ExpressionT expression = ParseLeftHandSideExpression();
-  if (!scanner()->HasLineTerminatorBeforeNext() && Token::IsCountOp(peek())) {
-    if (V8_UNLIKELY(!IsValidReferenceExpression(expression))) {
-      expression = RewriteInvalidReferenceExpression(
-          expression, lhs_beg_pos, end_position(),
-          MessageTemplate::kInvalidLhsInPostfixOp);
-    }
-    if (impl()->IsIdentifier(expression)) {
-      expression_scope()->MarkIdentifierAsAssigned();
-    }
-
-    Token::Value next = Next();
-    expression =
-        factory()->NewCountOperation(next,
-                                     false /* postfix */,
-                                     expression,
-                                     position());
+  if (V8_LIKELY(!Token::IsCountOp(peek()) ||
+                scanner()->HasLineTerminatorBeforeNext())) {
+    return expression;
   }
-  return expression;
+  return ParsePostfixContinuation(expression, lhs_beg_pos);
+}
+
+template <typename Impl>
+typename ParserBase<Impl>::ExpressionT
+ParserBase<Impl>::ParsePostfixContinuation(ExpressionT expression,
+                                           int lhs_beg_pos) {
+  if (V8_UNLIKELY(!IsValidReferenceExpression(expression))) {
+    expression = RewriteInvalidReferenceExpression(
+        expression, lhs_beg_pos, end_position(),
+        MessageTemplate::kInvalidLhsInPostfixOp);
+  }
+  if (impl()->IsIdentifier(expression)) {
+    expression_scope()->MarkIdentifierAsAssigned();
+  }
+
+  Token::Value next = Next();
+  return factory()->NewCountOperation(next, false /* postfix */, expression,
+                                      position());
 }
 
 template <typename Impl>
@@ -2971,7 +3030,7 @@ ParserBase<Impl>::ParseLeftHandSideExpression() {
   // LeftHandSideExpression ::
   //   (NewExpression | MemberExpression) ...
 
-  ExpressionT result = ParseMemberWithNewPrefixesExpression();
+  ExpressionT result = ParseMemberExpression();
   if (!Token::IsPropertyOrCall(peek())) return result;
   return ParseLeftHandSideContinuation(result);
 }
@@ -2983,7 +3042,8 @@ ParserBase<Impl>::ParseLeftHandSideContinuation(ExpressionT result) {
 
   if (V8_UNLIKELY(peek() == Token::LPAREN && impl()->IsIdentifier(result) &&
                   scanner()->current_token() == Token::ASYNC &&
-                  !scanner()->HasLineTerminatorBeforeNext())) {
+                  !scanner()->HasLineTerminatorBeforeNext() &&
+                  !scanner()->literal_contains_escapes())) {
     DCHECK(impl()->IsAsync(impl()->AsIdentifier(result)));
     int pos = position();
 
@@ -3140,7 +3200,7 @@ ParserBase<Impl>::ParseMemberWithPresentNewPrefixesExpression() {
     result = ParseNewTargetExpression();
     return ParseMemberExpressionContinuation(result);
   } else {
-    result = ParseMemberWithNewPrefixesExpression();
+    result = ParseMemberExpression();
   }
   if (peek() == Token::LPAREN) {
     // NewExpression with arguments.
@@ -3161,13 +3221,6 @@ ParserBase<Impl>::ParseMemberWithPresentNewPrefixesExpression() {
   // NewExpression without arguments.
   ExpressionListT args(pointer_buffer());
   return factory()->NewCallNew(result, args, new_pos);
-}
-
-template <typename Impl>
-typename ParserBase<Impl>::ExpressionT
-ParserBase<Impl>::ParseMemberWithNewPrefixesExpression() {
-  return peek() == Token::NEW ? ParseMemberWithPresentNewPrefixesExpression()
-                              : ParseMemberExpression();
 }
 
 template <typename Impl>
@@ -3219,22 +3272,11 @@ ParserBase<Impl>::ParseMemberExpression() {
   //     ('[' Expression ']' | '.' Identifier | Arguments | TemplateLiteral)*
   //
   // The '[' Expression ']' and '.' Identifier parts are parsed by
-  // ParseMemberExpressionContinuation, and the Arguments part is parsed by the
-  // caller.
+  // ParseMemberExpressionContinuation, and everything preceeding it is merged
+  // into ParsePrimaryExpression.
 
   // Parse the initial primary or function expression.
-  ExpressionT result;
-  if (peek() == Token::FUNCTION) {
-    result = ParseFunctionExpression();
-  } else if (peek() == Token::SUPER) {
-    const bool is_new = false;
-    result = ParseSuperExpression(is_new);
-  } else if (allow_harmony_dynamic_import() && peek() == Token::IMPORT) {
-    result = ParseImportExpressions();
-  } else {
-    result = ParsePrimaryExpression();
-  }
-
+  ExpressionT result = ParsePrimaryExpression();
   return ParseMemberExpressionContinuation(result);
 }
 
@@ -3245,8 +3287,9 @@ ParserBase<Impl>::ParseImportExpressions() {
 
   Consume(Token::IMPORT);
   int pos = position();
-  if (allow_harmony_import_meta() && peek() == Token::PERIOD) {
-    ExpectMetaProperty(ast_value_factory()->meta_string(), "import.meta", pos);
+  if (allow_harmony_import_meta() && Check(Token::PERIOD)) {
+    ExpectContextualKeyword(ast_value_factory()->meta_string(), "import.meta",
+                            pos);
     if (!parsing_module_) {
       impl()->ReportMessageAt(scanner()->location(),
                               MessageTemplate::kImportMetaOutsideModule);
@@ -3279,6 +3322,13 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseSuperExpression(
   if (IsConciseMethod(kind) || IsAccessorFunction(kind) ||
       IsClassConstructor(kind)) {
     if (Token::IsProperty(peek())) {
+      if (peek() == Token::PERIOD && PeekAhead() == Token::PRIVATE_NAME) {
+        Consume(Token::PERIOD);
+        Consume(Token::PRIVATE_NAME);
+
+        impl()->ReportMessage(MessageTemplate::kUnexpectedPrivateField);
+        return impl()->FailureExpression();
+      }
       scope->RecordSuperPropertyUsage();
       UseThis();
       return impl()->NewSuperPropertyReference(pos);
@@ -3300,22 +3350,12 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseSuperExpression(
 }
 
 template <typename Impl>
-void ParserBase<Impl>::ExpectMetaProperty(const AstRawString* property_name,
-                                          const char* full_name, int pos) {
-  Consume(Token::PERIOD);
-  ExpectContextualKeyword(property_name);
-  if (V8_UNLIKELY(scanner()->literal_contains_escapes())) {
-    impl()->ReportMessageAt(Scanner::Location(pos, end_position()),
-                            MessageTemplate::kInvalidEscapedMetaProperty,
-                            full_name);
-  }
-}
-
-template <typename Impl>
 typename ParserBase<Impl>::ExpressionT
 ParserBase<Impl>::ParseNewTargetExpression() {
   int pos = position();
-  ExpectMetaProperty(ast_value_factory()->target_string(), "new.target", pos);
+  Consume(Token::PERIOD);
+  ExpectContextualKeyword(ast_value_factory()->target_string(), "new.target",
+                          pos);
 
   if (!GetReceiverScope()->is_function_scope()) {
     impl()->ReportMessageAt(scanner()->location(),
@@ -3797,6 +3837,9 @@ ParserBase<Impl>::ParseAsyncFunctionDeclaration(
   //   async [no LineTerminator here] function BindingIdentifier[Await]
   //       ( FormalParameters[Await] ) { AsyncFunctionBody }
   DCHECK_EQ(scanner()->current_token(), Token::ASYNC);
+  if (V8_UNLIKELY(scanner()->literal_contains_escapes())) {
+    impl()->ReportUnexpectedToken(Token::ESCAPED_KEYWORD);
+  }
   int pos = position();
   DCHECK(!scanner()->HasLineTerminatorBeforeNext());
   Consume(Token::FUNCTION);
@@ -3974,6 +4017,8 @@ bool ParserBase<Impl>::IsNextLetKeyword() {
                       // tokens.
     case Token::YIELD:
     case Token::AWAIT:
+    case Token::GET:
+    case Token::SET:
     case Token::ASYNC:
       return true;
     case Token::FUTURE_STRICT_RESERVED_WORD:
@@ -4254,6 +4299,9 @@ ParserBase<Impl>::ParseAsyncFunctionLiteral() {
   //   async [no LineTerminator here] function BindingIdentifier[Await]
   //       ( FormalParameters[Await] ) { AsyncFunctionBody }
   DCHECK_EQ(scanner()->current_token(), Token::ASYNC);
+  if (V8_UNLIKELY(scanner()->literal_contains_escapes())) {
+    impl()->ReportUnexpectedToken(Token::ESCAPED_KEYWORD);
+  }
   int pos = position();
   Consume(Token::FUNCTION);
   IdentifierT name = impl()->NullIdentifier();

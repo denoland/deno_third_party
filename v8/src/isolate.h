@@ -20,7 +20,7 @@
 #include "src/base/macros.h"
 #include "src/builtins/builtins.h"
 #include "src/contexts.h"
-#include "src/debug/debug-interface.h"
+#include "src/debug/interface-types.h"
 #include "src/execution.h"
 #include "src/futex-emulation.h"
 #include "src/globals.h"
@@ -33,7 +33,6 @@
 #include "src/objects/code.h"
 #include "src/objects/debug-objects.h"
 #include "src/runtime/runtime.h"
-#include "src/thread-id.h"
 #include "src/unicode.h"
 
 #ifdef V8_INTL_SUPPORT
@@ -51,6 +50,7 @@ class RandomNumberGenerator;
 
 namespace debug {
 class ConsoleDelegate;
+class AsyncEventDelegate;
 }
 
 namespace internal {
@@ -76,7 +76,6 @@ class DeoptimizerData;
 class DescriptorLookupCache;
 class EmbeddedFileWriterInterface;
 class EternalHandles;
-class ExternalCallbackScope;
 class HandleScopeImplementer;
 class HeapObjectToIndexHashMap;
 class HeapProfiler;
@@ -86,7 +85,6 @@ class MaterializedObjectStore;
 class Microtask;
 class MicrotaskQueue;
 class OptimizingCompileDispatcher;
-class PromiseOnStack;
 class RegExpStack;
 class RootVisitor;
 class RuntimeProfiler;
@@ -340,101 +338,6 @@ class WasmEngine;
 V8_EXPORT_PRIVATE void DisableEmbeddedBlobRefcounting();
 V8_EXPORT_PRIVATE void FreeCurrentEmbeddedBlob();
 
-class ThreadLocalTop {
- public:
-  // Does early low-level initialization that does not depend on the
-  // isolate being present.
-  ThreadLocalTop() = default;
-
-  // Initialize the thread data.
-  void Initialize(Isolate*);
-
-  // Get the top C++ try catch handler or nullptr if none are registered.
-  //
-  // This method is not guaranteed to return an address that can be
-  // used for comparison with addresses into the JS stack.  If such an
-  // address is needed, use try_catch_handler_address.
-  FIELD_ACCESSOR(v8::TryCatch*, try_catch_handler)
-
-  // Get the address of the top C++ try catch handler or nullptr if
-  // none are registered.
-  //
-  // This method always returns an address that can be compared to
-  // pointers into the JavaScript stack.  When running on actual
-  // hardware, try_catch_handler_address and TryCatchHandler return
-  // the same pointer.  When running on a simulator with a separate JS
-  // stack, try_catch_handler_address returns a JS stack address that
-  // corresponds to the place on the JS stack where the C++ handler
-  // would have been if the stack were not separate.
-  Address try_catch_handler_address() {
-    return reinterpret_cast<Address>(
-        v8::TryCatch::JSStackComparableAddress(try_catch_handler()));
-  }
-
-  void Free();
-
-  Isolate* isolate_ = nullptr;
-  // The context where the current execution method is created and for variable
-  // lookups.
-  // TODO(3770): This field is read/written from generated code, so it would
-  // be cleaner to make it an "Address raw_context_", and construct a Context
-  // object in the getter. Same for {pending_handler_context_} below. In the
-  // meantime, assert that the memory layout is the same.
-  STATIC_ASSERT(sizeof(Context) == kSystemPointerSize);
-  Context context_;
-  ThreadId thread_id_ = ThreadId::Invalid();
-  Object pending_exception_;
-
-  // Communication channel between Isolate::FindHandler and the CEntry.
-  Context pending_handler_context_;
-  Address pending_handler_entrypoint_ = kNullAddress;
-  Address pending_handler_constant_pool_ = kNullAddress;
-  Address pending_handler_fp_ = kNullAddress;
-  Address pending_handler_sp_ = kNullAddress;
-
-  // Communication channel between Isolate::Throw and message consumers.
-  bool rethrowing_message_ = false;
-  Object pending_message_obj_;
-
-  // Use a separate value for scheduled exceptions to preserve the
-  // invariants that hold about pending_exception.  We may want to
-  // unify them later.
-  Object scheduled_exception_;
-  bool external_caught_exception_ = false;
-
-  // Stack.
-  // The frame pointer of the top c entry frame.
-  Address c_entry_fp_ = kNullAddress;
-  // Try-blocks are chained through the stack.
-  Address handler_ = kNullAddress;
-  // C function that was called at c entry.
-  Address c_function_ = kNullAddress;
-
-  // Throwing an exception may cause a Promise rejection.  For this purpose
-  // we keep track of a stack of nested promises and the corresponding
-  // try-catch handlers.
-  PromiseOnStack* promise_on_stack_ = nullptr;
-
-#ifdef USE_SIMULATOR
-  Simulator* simulator_ = nullptr;
-#endif
-
-  // The stack pointer of the bottom JS entry frame.
-  Address js_entry_sp_ = kNullAddress;
-  // The external callback we're currently in.
-  ExternalCallbackScope* external_callback_scope_ = nullptr;
-  StateTag current_vm_state_ = EXTERNAL;
-
-  // Call back function to report unsafe JS accesses.
-  v8::FailedAccessCheckCallback failed_access_check_callback_ = nullptr;
-
-  // Address of the thread-local "thread in wasm" flag.
-  Address thread_in_wasm_flag_address_ = kNullAddress;
-
- private:
-  v8::TryCatch* try_catch_handler_ = nullptr;
-};
-
 #ifdef DEBUG
 
 #define ISOLATE_INIT_DEBUG_ARRAY_LIST(V)               \
@@ -457,55 +360,55 @@ class ThreadLocalTop {
 
 typedef std::vector<HeapObject> DebugObjectCache;
 
-#define ISOLATE_INIT_LIST(V)                                                  \
-  /* Assembler state. */                                                      \
-  V(FatalErrorCallback, exception_behavior, nullptr)                          \
-  V(OOMErrorCallback, oom_behavior, nullptr)                                  \
-  V(LogEventCallback, event_logger, nullptr)                                  \
-  V(AllowCodeGenerationFromStringsCallback, allow_code_gen_callback, nullptr) \
-  V(AllowWasmCodeGenerationCallback, allow_wasm_code_gen_callback, nullptr)   \
-  V(ExtensionCallback, wasm_module_callback, &NoExtension)                    \
-  V(ExtensionCallback, wasm_instance_callback, &NoExtension)                  \
-  V(WasmStreamingCallback, wasm_streaming_callback, nullptr)                  \
-  V(WasmThreadsEnabledCallback, wasm_threads_enabled_callback, nullptr)       \
-  /* State for Relocatable. */                                                \
-  V(Relocatable*, relocatable_top, nullptr)                                   \
-  V(DebugObjectCache*, string_stream_debug_object_cache, nullptr)             \
-  V(Object, string_stream_current_security_token, Object())                   \
-  V(const intptr_t*, api_external_references, nullptr)                        \
-  V(AddressToIndexHashMap*, external_reference_map, nullptr)                  \
-  V(HeapObjectToIndexHashMap*, root_index_map, nullptr)                       \
-  V(MicrotaskQueue*, default_microtask_queue, nullptr)                        \
-  V(CompilationStatistics*, turbo_statistics, nullptr)                        \
-  V(CodeTracer*, code_tracer, nullptr)                                        \
-  V(uint32_t, per_isolate_assert_data, 0xFFFFFFFFu)                           \
-  V(PromiseRejectCallback, promise_reject_callback, nullptr)                  \
-  V(const v8::StartupData*, snapshot_blob, nullptr)                           \
-  V(int, code_and_metadata_size, 0)                                           \
-  V(int, bytecode_and_metadata_size, 0)                                       \
-  V(int, external_script_source_size, 0)                                      \
-  /* true if being profiled. Causes collection of extra compile info. */      \
-  V(bool, is_profiling, false)                                                \
-  /* true if a trace is being formatted through Error.prepareStackTrace. */   \
-  V(bool, formatting_stack_trace, false)                                      \
-  /* Perform side effect checks on function call and API callbacks. */        \
-  V(DebugInfo::ExecutionMode, debug_execution_mode, DebugInfo::kBreakpoints)  \
-  /* Current code coverage mode */                                            \
-  V(debug::Coverage::Mode, code_coverage_mode, debug::Coverage::kBestEffort)  \
-  V(debug::TypeProfile::Mode, type_profile_mode, debug::TypeProfile::kNone)   \
-  V(int, last_stack_frame_info_id, 0)                                         \
-  V(int, last_console_context_id, 0)                                          \
-  V(v8_inspector::V8Inspector*, inspector, nullptr)                           \
-  V(bool, next_v8_call_is_safe_for_termination, false)                        \
-  V(bool, only_terminate_in_safe_scope, false)                                \
+#define ISOLATE_INIT_LIST(V)                                                   \
+  /* Assembler state. */                                                       \
+  V(FatalErrorCallback, exception_behavior, nullptr)                           \
+  V(OOMErrorCallback, oom_behavior, nullptr)                                   \
+  V(LogEventCallback, event_logger, nullptr)                                   \
+  V(AllowCodeGenerationFromStringsCallback, allow_code_gen_callback, nullptr)  \
+  V(AllowWasmCodeGenerationCallback, allow_wasm_code_gen_callback, nullptr)    \
+  V(ExtensionCallback, wasm_module_callback, &NoExtension)                     \
+  V(ExtensionCallback, wasm_instance_callback, &NoExtension)                   \
+  V(WasmStreamingCallback, wasm_streaming_callback, nullptr)                   \
+  V(WasmThreadsEnabledCallback, wasm_threads_enabled_callback, nullptr)        \
+  /* State for Relocatable. */                                                 \
+  V(Relocatable*, relocatable_top, nullptr)                                    \
+  V(DebugObjectCache*, string_stream_debug_object_cache, nullptr)              \
+  V(Object, string_stream_current_security_token, Object())                    \
+  V(const intptr_t*, api_external_references, nullptr)                         \
+  V(AddressToIndexHashMap*, external_reference_map, nullptr)                   \
+  V(HeapObjectToIndexHashMap*, root_index_map, nullptr)                        \
+  V(MicrotaskQueue*, default_microtask_queue, nullptr)                         \
+  V(CompilationStatistics*, turbo_statistics, nullptr)                         \
+  V(CodeTracer*, code_tracer, nullptr)                                         \
+  V(uint32_t, per_isolate_assert_data, 0xFFFFFFFFu)                            \
+  V(PromiseRejectCallback, promise_reject_callback, nullptr)                   \
+  V(const v8::StartupData*, snapshot_blob, nullptr)                            \
+  V(int, code_and_metadata_size, 0)                                            \
+  V(int, bytecode_and_metadata_size, 0)                                        \
+  V(int, external_script_source_size, 0)                                       \
+  /* true if being profiled. Causes collection of extra compile info. */       \
+  V(bool, is_profiling, false)                                                 \
+  /* true if a trace is being formatted through Error.prepareStackTrace. */    \
+  V(bool, formatting_stack_trace, false)                                       \
+  /* Perform side effect checks on function call and API callbacks. */         \
+  V(DebugInfo::ExecutionMode, debug_execution_mode, DebugInfo::kBreakpoints)   \
+  /* Current code coverage mode */                                             \
+  V(debug::CoverageMode, code_coverage_mode, debug::CoverageMode::kBestEffort) \
+  V(debug::TypeProfileMode, type_profile_mode, debug::TypeProfileMode::kNone)  \
+  V(int, last_stack_frame_info_id, 0)                                          \
+  V(int, last_console_context_id, 0)                                           \
+  V(v8_inspector::V8Inspector*, inspector, nullptr)                            \
+  V(bool, next_v8_call_is_safe_for_termination, false)                         \
+  V(bool, only_terminate_in_safe_scope, false)                                 \
   V(bool, detailed_source_positions_for_profiling, FLAG_detailed_line_info)
 
-#define THREAD_LOCAL_TOP_ACCESSOR(type, name)                        \
-  inline void set_##name(type v) { thread_local_top_.name##_ = v; }  \
-  inline type name() const { return thread_local_top_.name##_; }
+#define THREAD_LOCAL_TOP_ACCESSOR(type, name)                         \
+  inline void set_##name(type v) { thread_local_top()->name##_ = v; } \
+  inline type name() const { return thread_local_top()->name##_; }
 
 #define THREAD_LOCAL_TOP_ADDRESS(type, name) \
-  type* name##_address() { return &thread_local_top_.name##_; }
+  type* name##_address() { return &thread_local_top()->name##_; }
 
 // HiddenFactory exists so Isolate can privately inherit from it without making
 // Factory's members available to Isolate directly.
@@ -608,11 +511,6 @@ class Isolate final : private HiddenFactory {
     return isolate;
   }
 
-  // Get the isolate that the given HeapObject lives in, returning true on
-  // success. If the object is not writable (i.e. lives in read-only space),
-  // return false.
-  inline static bool FromWritableHeapObject(HeapObject obj, Isolate** isolate);
-
   // Usually called by Init(), but can be called early e.g. to allow
   // testing components that require logging but not the whole
   // isolate.
@@ -665,9 +563,9 @@ class Isolate final : private HiddenFactory {
   Address get_address_from_id(IsolateAddressId id);
 
   // Access to top context (where the current function object was created).
-  Context context() { return thread_local_top_.context_; }
+  Context context() { return thread_local_top()->context_; }
   inline void set_context(Context context);
-  Context* context_address() { return &thread_local_top_.context_; }
+  Context* context_address() { return &thread_local_top()->context_; }
 
   // Access to current thread id.
   THREAD_LOCAL_TOP_ACCESSOR(ThreadId, thread_id)
@@ -692,17 +590,17 @@ class Isolate final : private HiddenFactory {
   THREAD_LOCAL_TOP_ACCESSOR(bool, external_caught_exception)
 
   v8::TryCatch* try_catch_handler() {
-    return thread_local_top_.try_catch_handler();
+    return thread_local_top()->try_catch_handler_;
   }
   bool* external_caught_exception_address() {
-    return &thread_local_top_.external_caught_exception_;
+    return &thread_local_top()->external_caught_exception_;
   }
 
   THREAD_LOCAL_TOP_ADDRESS(Object, scheduled_exception)
 
   inline void clear_pending_message();
   Address pending_message_obj_address() {
-    return reinterpret_cast<Address>(&thread_local_top_.pending_message_obj_);
+    return reinterpret_cast<Address>(&thread_local_top()->pending_message_obj_);
   }
 
   inline Object scheduled_exception();
@@ -719,22 +617,20 @@ class Isolate final : private HiddenFactory {
     return thread->c_entry_fp_;
   }
   static Address handler(ThreadLocalTop* thread) { return thread->handler_; }
-  Address c_function() { return thread_local_top_.c_function_; }
+  Address c_function() { return thread_local_top()->c_function_; }
 
   inline Address* c_entry_fp_address() {
-    return &thread_local_top_.c_entry_fp_;
+    return &thread_local_top()->c_entry_fp_;
   }
-  inline Address* handler_address() { return &thread_local_top_.handler_; }
+  inline Address* handler_address() { return &thread_local_top()->handler_; }
   inline Address* c_function_address() {
-    return &thread_local_top_.c_function_;
+    return &thread_local_top()->c_function_;
   }
 
   // Bottom JS entry.
-  Address js_entry_sp() {
-    return thread_local_top_.js_entry_sp_;
-  }
+  Address js_entry_sp() { return thread_local_top()->js_entry_sp_; }
   inline Address* js_entry_sp_address() {
-    return &thread_local_top_.js_entry_sp_;
+    return &thread_local_top()->js_entry_sp_;
   }
 
   // Returns the global object of the current context. It could be
@@ -745,7 +641,7 @@ class Isolate final : private HiddenFactory {
   inline Handle<JSObject> global_proxy();
 
   static int ArchiveSpacePerThread() { return sizeof(ThreadLocalTop); }
-  void FreeThreadResources() { thread_local_top_.Free(); }
+  void FreeThreadResources() { thread_local_top()->Free(); }
 
   // This method is called by the api after operations that may throw
   // exceptions.  If an exception was thrown and not handled by an external
@@ -970,6 +866,10 @@ class Isolate final : private HiddenFactory {
   }
   StackGuard* stack_guard() { return &stack_guard_; }
   Heap* heap() { return &heap_; }
+  static Isolate* FromHeap(Heap* heap) {
+    return reinterpret_cast<Isolate*>(reinterpret_cast<Address>(heap) -
+                                      OFFSET_OF(Isolate, heap_));
+  }
 
   const IsolateData* isolate_data() const { return &isolate_data_; }
   IsolateData* isolate_data() { return &isolate_data_; }
@@ -1017,7 +917,12 @@ class Isolate final : private HiddenFactory {
   void set_deoptimizer_lazy_throw(bool value) {
     deoptimizer_lazy_throw_ = value;
   }
-  ThreadLocalTop* thread_local_top() { return &thread_local_top_; }
+  ThreadLocalTop* thread_local_top() {
+    return &isolate_data_.thread_local_top_;
+  }
+  ThreadLocalTop const* thread_local_top() const {
+    return &isolate_data_.thread_local_top_;
+  }
 
   static uint32_t thread_in_wasm_flag_address_offset() {
     // For WebAssembly trap handlers there is a flag in thread-local storage
@@ -1026,7 +931,7 @@ class Isolate final : private HiddenFactory {
     // flag in ThreadLocalTop in thread_in_wasm_flag_address_. This function
     // here returns the offset of that member from {isolate_root()}.
     return static_cast<uint32_t>(
-        OFFSET_OF(Isolate, thread_local_top_.thread_in_wasm_flag_address_) -
+        OFFSET_OF(Isolate, thread_local_top()->thread_in_wasm_flag_address_) -
         isolate_root_bias());
   }
 
@@ -1144,23 +1049,23 @@ class Isolate final : private HiddenFactory {
   bool NeedsDetailedOptimizedCodeLineInfo() const;
 
   bool is_best_effort_code_coverage() const {
-    return code_coverage_mode() == debug::Coverage::kBestEffort;
+    return code_coverage_mode() == debug::CoverageMode::kBestEffort;
   }
 
   bool is_precise_count_code_coverage() const {
-    return code_coverage_mode() == debug::Coverage::kPreciseCount;
+    return code_coverage_mode() == debug::CoverageMode::kPreciseCount;
   }
 
   bool is_precise_binary_code_coverage() const {
-    return code_coverage_mode() == debug::Coverage::kPreciseBinary;
+    return code_coverage_mode() == debug::CoverageMode::kPreciseBinary;
   }
 
   bool is_block_count_code_coverage() const {
-    return code_coverage_mode() == debug::Coverage::kBlockCount;
+    return code_coverage_mode() == debug::CoverageMode::kBlockCount;
   }
 
   bool is_block_binary_code_coverage() const {
-    return code_coverage_mode() == debug::Coverage::kBlockBinary;
+    return code_coverage_mode() == debug::CoverageMode::kBlockBinary;
   }
 
   bool is_block_code_coverage() const {
@@ -1168,7 +1073,7 @@ class Isolate final : private HiddenFactory {
   }
 
   bool is_collecting_type_profile() const {
-    return type_profile_mode() == debug::TypeProfile::kCollect;
+    return type_profile_mode() == debug::TypeProfileMode::kCollect;
   }
 
   // Collect feedback vectors with data for code coverage or type profile.
@@ -1455,8 +1360,7 @@ class Isolate final : private HiddenFactory {
 
   // Off-heap builtins cannot embed constants within the code object itself,
   // and thus need to load them from the root list.
-  // TODO(jgruber): Rename to IsGeneratingEmbeddedBuiltins().
-  bool ShouldLoadConstantsFromRootList() const {
+  bool IsGeneratingEmbeddedBuiltins() const {
     return FLAG_embedded_builtins &&
            builtins_constants_table_builder() != nullptr;
   }
@@ -1712,7 +1616,6 @@ class Isolate final : private HiddenFactory {
   DeoptimizerData* deoptimizer_data_ = nullptr;
   bool deoptimizer_lazy_throw_ = false;
   MaterializedObjectStore* materialized_object_store_ = nullptr;
-  ThreadLocalTop thread_local_top_;
   bool capture_stack_trace_for_uncaught_exceptions_ = false;
   int stack_trace_for_uncaught_exceptions_frame_limit_ = 0;
   StackTrace::StackTraceOptions stack_trace_for_uncaught_exceptions_options_ =
@@ -1924,10 +1827,8 @@ class Isolate final : private HiddenFactory {
   DISALLOW_COPY_AND_ASSIGN(Isolate);
 };
 
-
 #undef FIELD_ACCESSOR
 #undef THREAD_LOCAL_TOP_ACCESSOR
-
 
 class PromiseOnStack {
  public:

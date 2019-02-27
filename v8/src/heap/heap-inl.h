@@ -294,19 +294,6 @@ void Heap::RegisterExternalString(String string) {
   external_string_table_.AddString(string);
 }
 
-void Heap::UpdateExternalString(String string, size_t old_payload,
-                                size_t new_payload) {
-  DCHECK(string->IsExternalString());
-  Page* page = Page::FromHeapObject(string);
-
-  if (old_payload > new_payload)
-    page->DecrementExternalBackingStoreBytes(
-        ExternalBackingStoreType::kExternalString, old_payload - new_payload);
-  else
-    page->IncrementExternalBackingStoreBytes(
-        ExternalBackingStoreType::kExternalString, new_payload - old_payload);
-}
-
 void Heap::FinalizeExternalString(String string) {
   DCHECK(string->IsExternalString());
   Page* page = Page::FromHeapObject(string);
@@ -328,34 +315,6 @@ void Heap::FinalizeExternalString(String string) {
 }
 
 Address Heap::NewSpaceTop() { return new_space_->top(); }
-
-// static
-bool Heap::InNewSpace(Object object) {
-  DCHECK(!HasWeakHeapObjectTag(object));
-  return object->IsHeapObject() && InNewSpace(HeapObject::cast(object));
-}
-
-// static
-bool Heap::InNewSpace(MaybeObject object) {
-  HeapObject heap_object;
-  return object->GetHeapObject(&heap_object) && InNewSpace(heap_object);
-}
-
-// static
-bool Heap::InNewSpace(HeapObject heap_object) {
-  // Inlined check from NewSpace::Contains.
-  bool result = MemoryChunk::FromHeapObject(heap_object)->InNewSpace();
-#ifdef DEBUG
-  // If in NEW_SPACE, then check we're either not in the middle of GC or the
-  // object is in to-space.
-  if (result) {
-    // If the object is in NEW_SPACE, then it's not in RO_SPACE so this is safe.
-    Heap* heap = Heap::FromWritableHeapObject(heap_object);
-    DCHECK_IMPLIES(heap->gc_state_ == NOT_IN_GC, InToPage(heap_object));
-  }
-#endif
-  return result;
-}
 
 bool Heap::InYoungGeneration(Object object) {
   DCHECK(!HasWeakHeapObjectTag(object));
@@ -541,7 +500,7 @@ void Heap::ExternalStringTable::AddString(String string) {
   DCHECK(string->IsExternalString());
   DCHECK(!Contains(string));
 
-  if (InNewSpace(string)) {
+  if (InYoungGeneration(string)) {
     young_strings_.push_back(string);
   } else {
     old_strings_.push_back(string);
@@ -551,14 +510,6 @@ void Heap::ExternalStringTable::AddString(String string) {
 Oddball Heap::ToBoolean(bool condition) {
   ReadOnlyRoots roots(this);
   return condition ? roots.true_value() : roots.false_value();
-}
-
-uint64_t Heap::HashSeed() {
-  uint64_t seed;
-  ReadOnlyRoots(this).hash_seed()->copy_out(0, reinterpret_cast<byte*>(&seed),
-                                            kInt64Size);
-  DCHECK(FLAG_randomize_hashes || seed == 0);
-  return seed;
 }
 
 int Heap::NextScriptId() {
