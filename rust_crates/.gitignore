@@ -2,7 +2,7 @@
 /registry/index/
 /registry/src/github.com-1ecc6299db9ec823/argon2rs-0.2.5/
 /registry/src/github.com-1ecc6299db9ec823/autocfg-0.1.2/
-/registry/src/github.com-1ecc6299db9ec823/backtrace-0.3.13/
+/registry/src/github.com-1ecc6299db9ec823/backtrace-0.3.14/
 /registry/src/github.com-1ecc6299db9ec823/backtrace-sys-0.1.28/
 /registry/src/github.com-1ecc6299db9ec823/blake2-rfc-0.2.18/
 /registry/src/github.com-1ecc6299db9ec823/cc-1.0.29/
@@ -21,7 +21,7 @@
 /registry/src/github.com-1ecc6299db9ec823/rdrand-0.4.0/
 /registry/src/github.com-1ecc6299db9ec823/redox_syscall-0.1.51/
 /registry/src/github.com-1ecc6299db9ec823/redox_termios-0.1.1/
-/registry/src/github.com-1ecc6299db9ec823/redox_users-0.2.0/
+/registry/src/github.com-1ecc6299db9ec823/redox_users-0.3.0/
 /registry/src/github.com-1ecc6299db9ec823/rustc-demangle-0.1.13/
 /registry/src/github.com-1ecc6299db9ec823/rustc_version-0.2.3/
 /registry/src/github.com-1ecc6299db9ec823/scoped_threadpool-0.1.9/
