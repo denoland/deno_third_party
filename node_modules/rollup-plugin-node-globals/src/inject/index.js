@@ -56,7 +56,7 @@ export default function(code, id, mod1, mod2, sourceMap) {
 
   try {
     ast = parse(code, {
-      ecmaVersion: 8,
+      ecmaVersion: 9,
       sourceType: 'module'
     });
   } catch (err) {

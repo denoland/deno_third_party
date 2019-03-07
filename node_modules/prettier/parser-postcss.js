@@ -18382,7 +18382,7 @@ module.exports = {
 
 
 function createError(message, loc) {
-  // Construct an error similar to the ones thrown by Babylon.
+  // Construct an error similar to the ones thrown by Babel.
   var error = new SyntaxError(message + " (" + loc.start.line + ":" + loc.start.column + ")");
   error.loc = loc;
   return error;
