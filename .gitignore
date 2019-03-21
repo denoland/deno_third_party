@@ -16,3 +16,5 @@ v8/third_party/llvm-build/
 
 # ts-simple-ast should use the same version of typescript
 /node_modules/ts-simple-ast/node_modules
+
+compile_commands.json
