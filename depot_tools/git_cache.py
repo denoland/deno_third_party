@@ -6,6 +6,7 @@
 """A git command for managing a local cache of git repositories."""
 
 from __future__ import print_function
+
 import contextlib
 import errno
 import logging
@@ -17,7 +18,12 @@ import threading
 import time
 import subprocess
 import sys
-import urlparse
+
+try:
+  import urlparse
+except ImportError:  # For Py3 compatibility
+  import urllib.parse as urlparse
+
 import zipfile
 
 from download_from_google_storage import Gsutil
@@ -357,21 +363,34 @@ class Mirror(object):
     """
     if not self.bootstrap_bucket:
       return False
-    python_fallback = False
-    if (sys.platform.startswith('win') and
-        not gclient_utils.FindExecutable('7z')):
-      python_fallback = True
-    elif sys.platform.startswith('darwin'):
-      # The OSX version of unzip doesn't support zip64.
-      python_fallback = True
-    elif not gclient_utils.FindExecutable('unzip'):
-      python_fallback = True
+    python_fallback = (
+        (sys.platform.startswith('win') and
+          not gclient_utils.FindExecutable('7z')) or
+        (not gclient_utils.FindExecutable('unzip')) or
+        ('ZIP64_SUPPORT' not in subprocess.check_output(["unzip", "-v"]))
+    )
 
     gs_folder = 'gs://%s/%s' % (self.bootstrap_bucket, self.basedir)
     gsutil = Gsutil(self.gsutil_exe, boto_path=None)
     # Get the most recent version of the zipfile.
     _, ls_out, ls_err = gsutil.check_call('ls', gs_folder)
-    ls_out_sorted = sorted(ls_out.splitlines())
+
+    def compare_filenames(a, b):
+      # |a| and |b| look like gs://.../.../9999.zip. They both have the same
+      # gs://bootstrap_bucket/basedir/ prefix because they come from the same
+      # `gsutil ls`.
+      # This function only compares the numeral parts before .zip.
+      regex_pattern = r'/(\d+)\.zip$'
+      match_a = re.search(regex_pattern, a)
+      match_b = re.search(regex_pattern, b)
+      if (match_a is not None) and (match_b is not None):
+        num_a = int(match_a.group(1))
+        num_b = int(match_b.group(1))
+        return cmp(num_a, num_b)
+      # If it doesn't match the format, fallback to string comparison.
+      return cmp(a, b)
+
+    ls_out_sorted = sorted(ls_out.splitlines(), cmp=compare_filenames)
     if not ls_out_sorted:
       # This repo is not on Google Storage.
       self.print('No bootstrap file for %s found in %s, stderr:\n  %s' %

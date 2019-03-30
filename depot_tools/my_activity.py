@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env vpython
 # Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -20,6 +20,17 @@ Example:
 # before end and modified after begin. Then, we get the details of each item and
 # check those details to determine if there was activity in the given period.
 # This means that query time scales mostly with (today() - begin).
+
+# [VPYTHON:BEGIN]
+# wheel: <
+#   name: "infra/python/wheels/python-dateutil-py2_py3"
+#   version: "version:2.7.3"
+# >
+# wheel: <
+#   name: "infra/python/wheels/six-py2_py3"
+#   version: "version:1.10.0"
+# >
+# [VPYTHON:END]
 
 import collections
 import contextlib
@@ -96,9 +107,7 @@ rietveld_instances = [
 
 gerrit_instances = [
   {
-    'url': 'chromium-review.googlesource.com',
-    'shorturl': 'crrev.com/c',
-    'short_url_protocol': 'https',
+    'url': 'android-review.googlesource.com',
   },
   {
     'url': 'chrome-internal-review.googlesource.com',
@@ -106,10 +115,15 @@ gerrit_instances = [
     'short_url_protocol': 'https',
   },
   {
-    'url': 'android-review.googlesource.com',
+    'url': 'chromium-review.googlesource.com',
+    'shorturl': 'crrev.com/c',
+    'short_url_protocol': 'https',
   },
   {
     'url': 'pdfium-review.googlesource.com',
+  },
+  {
+    'url': 'skia-review.googlesource.com',
   },
 ]
 
@@ -369,16 +383,22 @@ class MyActivity(object):
 
   def gerrit_search(self, instance, owner=None, reviewer=None):
     max_age = datetime.today() - self.modified_after
-    max_age = max_age.days * 24 * 3600 + max_age.seconds
-    user_filter = 'owner:%s' % owner if owner else 'reviewer:%s' % reviewer
-    filters = ['-age:%ss' % max_age, user_filter]
+    filters = ['-age:%ss' % (max_age.days * 24 * 3600 + max_age.seconds)]
+    if owner:
+      assert not reviewer
+      filters.append('owner:%s' % owner)
+    else:
+      filters.extend(('-owner:%s' % reviewer, 'reviewer:%s' % reviewer))
+    # TODO(cjhopman): Should abandoned changes be filtered out when
+    # merged_only is not enabled?
+    if self.options.merged_only:
+      filters.append('status:merged')
 
     issues = self.gerrit_changes_over_rest(instance, filters)
     self.show_progress()
     issues = [self.process_gerrit_issue(instance, issue)
               for issue in issues]
 
-    # TODO(cjhopman): should we filter abandoned changes?
     issues = filter(self.filter_issue, issues)
     issues = sorted(issues, key=lambda i: i['modified'], reverse=True)
 
@@ -400,7 +420,7 @@ class MyActivity(object):
     ret['review_url'] = '%s://%s/%s' % (protocol, url, issue['_number'])
 
     ret['header'] = issue['subject']
-    ret['owner'] = issue['owner']['email']
+    ret['owner'] = issue['owner'].get('email', '')
     ret['author'] = ret['owner']
     ret['created'] = datetime_from_gerrit(issue['created'])
     ret['modified'] = datetime_from_gerrit(issue['updated'])
@@ -430,7 +450,10 @@ class MyActivity(object):
     auth_config = auth.extract_auth_config_from_options(self.options)
     authenticator = auth.get_authenticator_for_host(
         'bugs.chromium.org', auth_config)
-    return authenticator.authorize(httplib2.Http())
+    # Manually use a long timeout (10m); for some users who have a
+    # long history on the issue tracker, whatever the default timeout
+    # is is reached.
+    return authenticator.authorize(httplib2.Http(timeout=600))
 
   def filter_modified_monorail_issue(self, issue):
     """Precisely checks if an issue has been modified in the time range.
@@ -515,6 +538,7 @@ class MyActivity(object):
 
   def monorail_issue_search(self, project):
     epoch = datetime.utcfromtimestamp(0)
+    # TODO(tandrii): support non-chromium email, too.
     user_str = '%s@chromium.org' % self.user
 
     issues = self.monorail_query_issues(project, {
@@ -523,6 +547,13 @@ class MyActivity(object):
       'publishedMax': '%d' % (self.modified_before - epoch).total_seconds(),
       'updatedMin': '%d' % (self.modified_after - epoch).total_seconds(),
     })
+
+    if self.options.completed_issues:
+      return [
+          issue for issue in issues
+          if (self.match(issue['owner']) and
+              issue['status'].lower() in ('verified', 'fixed'))
+      ]
 
     return [
         issue for issue in issues
@@ -564,6 +595,8 @@ class MyActivity(object):
                        change['header'],
                        change['review_url'],
                        change['author'],
+                       change['created'],
+                       change['modified'],
                        optional_values)
 
   def print_issue(self, issue):
@@ -578,6 +611,8 @@ class MyActivity(object):
                        issue['header'],
                        issue['url'],
                        issue['author'],
+                       issue['created'],
+                       issue['modified'],
                        optional_values)
 
   def print_review(self, review):
@@ -600,11 +635,13 @@ class MyActivity(object):
                        review['header'],
                        review['review_url'],
                        review['author'],
+                       review['created'],
+                       review['modified'],
                        optional_values)
 
   @staticmethod
   def print_generic(default_fmt, specific_fmt,
-                    title, url, author,
+                    title, url, author, created, modified,
                     optional_values=None):
     output_format = specific_fmt if specific_fmt is not None else default_fmt
     output_format = unicode(output_format)
@@ -612,6 +649,8 @@ class MyActivity(object):
         'title': title,
         'url': url,
         'author': author,
+        'created': created,
+        'modified': modified,
     }
     if optional_values is not None:
       values.update(optional_values)
@@ -669,7 +708,7 @@ class MyActivity(object):
     if self.changes:
       self.print_heading('Changes')
       for change in self.changes:
-          self.print_change(change)
+        self.print_change(change)
 
   def print_access_errors(self):
     if self.access_errors:
@@ -688,7 +727,6 @@ class MyActivity(object):
           gerrit_instances)
       rietveld_reviews = itertools.chain.from_iterable(rietveld_reviews.get())
       gerrit_reviews = itertools.chain.from_iterable(gerrit_reviews.get())
-      gerrit_reviews = [r for r in gerrit_reviews if r['owner'] != self.user]
       self.reviews = list(rietveld_reviews) + list(gerrit_reviews)
 
   def print_reviews(self):
@@ -827,7 +865,8 @@ def main():
   parser = optparse.OptionParser(description=sys.modules[__name__].__doc__)
   parser.add_option(
       '-u', '--user', metavar='<email>',
-      default=os.environ.get('USER'),
+      # Look for USER and USERNAME (Windows) environment variables.
+      default=os.environ.get('USER', os.environ.get('USERNAME')),
       help='Filter on user, default=%default')
   parser.add_option(
       '-b', '--begin', metavar='<date>',
@@ -899,9 +938,10 @@ def main():
                               'individually for each activity type. The format '
                               'is defined as documented for '
                               'string.format(...). The variables available for '
-                              'all activity types are url, title and author. '
-                              'Format options for specific activity types will '
-                              'override the generic format.')
+                              'all activity types are url, title, author, '
+                              'created and modified. Format options for '
+                              'specific activity types will override the '
+                              'generic format.')
   output_format_group.add_option(
       '-f', '--output-format', metavar='<format>',
       default=u'{url} {title}',
@@ -953,6 +993,19 @@ def main():
       help='Suppress non-error messages.'
   )
   parser.add_option(
+      '-M', '--merged-only',
+      action='store_true',
+      dest='merged_only',
+      default=False,
+      help='Shows only changes that have been merged.')
+  parser.add_option(
+      '-C', '--completed-issues',
+      action='store_true',
+      dest='completed_issues',
+      default=False,
+      help='Shows only monorail issues that have completed (Fixed|Verified) '
+           'by the user.')
+  parser.add_option(
       '-o', '--output', metavar='<file>',
       help='Where to output the results. By default prints to stdout.')
 
@@ -965,7 +1018,7 @@ def main():
   if args:
     parser.error('Args unsupported')
   if not options.user:
-    parser.error('USER is not set, please use -u')
+    parser.error('USER/USERNAME is not set, please use -u')
   options.user = username(options.user)
 
   logging.basicConfig(level=options.verbosity)
@@ -995,6 +1048,12 @@ def main():
     else:
       end = datetime.today()
   options.begin, options.end = begin, end
+  if begin >= end:
+    # The queries fail in peculiar ways when the begin date is in the future.
+    # Give a descriptive error message instead.
+    logging.error('Start date (%s) is the same or later than end date (%s)' %
+                  (begin, end))
+    return 1
 
   if options.markdown:
     options.output_format_heading = '### {heading}\n'

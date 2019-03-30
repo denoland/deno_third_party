@@ -88,25 +88,18 @@ def find_free_port(host, base_port):
 
 
 def wait_for_port_to_bind(host, port, process):
-  sock = socket.socket()
-
-  if sys.platform == 'darwin':
-    # On Mac SnowLeopard, if we attempt to connect to the socket
-    # immediately, it fails with EINVAL and never gets a chance to
-    # connect (putting us into a hard spin and then failing).
-    # Linux doesn't need this.
-    time.sleep(0.2)
-
   try:
     start = datetime.datetime.utcnow()
     maxdelay = datetime.timedelta(seconds=30)
     while (datetime.datetime.utcnow() - start) < maxdelay:
+      sock = socket.socket()
       try:
         sock.connect((host, port))
         logging.debug('%d is now bound' % port)
         return
       except (socket.error, EnvironmentError):
-        pass
+        # Sleep a little bit to avoid spinning too much.
+        time.sleep(0.2)
       logging.debug('%d is still not bound' % port)
   finally:
     sock.close()
@@ -320,7 +313,7 @@ class FakeReposBase(object):
 
 class FakeRepos(FakeReposBase):
   """Implements populateGit()."""
-  NB_GIT_REPOS = 14
+  NB_GIT_REPOS = 16
 
   def populateGit(self):
     # Testing:
@@ -550,6 +543,8 @@ deps = {
     'url': None,
   },
   'src/repo8': '/repo_8',
+  'src/repo15': '/repo_15',
+  'src/repo16': '/repo_16',
 }
 deps_os ={
   'mac': {
@@ -592,6 +587,8 @@ hooks_os = {
 recursedeps = [
   'src/repo2',
   'src/repo8',
+  'src/repo15',
+  'src/repo16',
 ]""" % {
         'git_base': self.git_base,
         'hash': self.git_hashes['repo_2'][1][0][:7]
@@ -739,6 +736,28 @@ deps = {
       'origin': 'git/repo_13@2\n',
     })
 
+    # src/repo12 is now a CIPD dependency.
+    self._commit_git('repo_13', {
+      'DEPS': """
+deps = {
+  'src/repo12': {
+    'packages': [
+      {
+        'package': 'foo',
+        'version': '1.3',
+      },
+    ],
+    'dep_type': 'cipd',
+  },
+}
+hooks = [{
+  # make sure src/repo12 exists and is a CIPD dir.
+  'action': ['python', '-c', 'with open("src/repo12/_cipd"): pass'],
+}]
+""",
+      'origin': 'git/repo_13@3\n'
+    })
+
     self._commit_git('repo_14', {
       'DEPS': textwrap.dedent("""\
         vars = {}
@@ -778,6 +797,29 @@ deps = {
       'origin': 'git/repo_14@2\n'
     })
 
+    # A repo with a hook to be recursed in, without use_relative_hooks
+    self._commit_git('repo_15', {
+      'DEPS': textwrap.dedent("""\
+        hooks = [{
+          "name": "absolute_cwd",
+          "pattern": ".",
+          "action": ["python", "-c", "pass"]
+        }]"""),
+      'origin': 'git/repo_15@2\n'
+    })
+    # A repo with a hook to be recursed in, with use_relative_hooks
+    self._commit_git('repo_16', {
+      'DEPS': textwrap.dedent("""\
+        use_relative_paths=True
+        use_relative_hooks=True
+        hooks = [{
+          "name": "relative_cwd",
+          "pattern": ".",
+          "action": ["python", "relative.py"]
+        }]"""),
+      'relative.py': 'pass',
+      'origin': 'git/repo_16@2\n'
+    })
 
 class FakeRepoSkiaDEPS(FakeReposBase):
   """Simulates the Skia DEPS transition in Chrome."""
@@ -905,9 +947,9 @@ class FakeReposTestBase(trial_dir.TestCase):
     actual = read_tree(tree_root)
     diff = dict_diff(tree, actual)
     if diff:
-      logging.debug('Actual %s\n%s' % (tree_root, pprint.pformat(actual)))
-      logging.debug('Expected\n%s' % pprint.pformat(tree))
-      logging.debug('Diff\n%s' % pprint.pformat(diff))
+      logging.error('Actual %s\n%s' % (tree_root, pprint.pformat(actual)))
+      logging.error('Expected\n%s' % pprint.pformat(tree))
+      logging.error('Diff\n%s' % pprint.pformat(diff))
     self.assertEquals(diff, {})
 
   def mangle_git_tree(self, *args):

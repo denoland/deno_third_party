@@ -2,6 +2,12 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+# Pin resolved versions in the repo, to reduce trust in the CIPD backend.
+#
+# To regenerate them (after modifying this file):
+#   cipd ensure-file-resolve -ensure-file cipd_manifest.txt
+$ResolvedVersions cipd_manifest.versions
+
 # Fully supported plaforms.
 $VerifiedPlatform linux-amd64 mac-amd64 windows-amd64 windows-386
 
@@ -9,19 +15,23 @@ $VerifiedPlatform linux-amd64 mac-amd64 windows-amd64 windows-386
 # them, but we do not test they work. They also may not have all necessary
 # vpython packages.
 $VerifiedPlatform linux-386 linux-ppc64 linux-ppc64le linux-s390x
-$VerifiedPlatform linux-arm64 linux-armv6l linux-mips64
+$VerifiedPlatform linux-arm64 linux-armv6l
+$VerifiedPlatform linux-mips64 linux-mips64le linux-mipsle
 
 # vpython.
-infra/tools/luci/vpython/${platform} git_revision:b9c4670197dcefd8762d6e509302acd3efc6e303
+infra/tools/luci/vpython/${platform} git_revision:edd5644be66d37cdf82978efb0e5d6504d0d552f
 
 # LUCI editor
-infra/tools/luci/led/${platform} git_revision:7ba61969ccbe1f9679661555f72ca947da508a70
+infra/tools/luci/led/${platform} git_revision:e4631c9c5c5abf39ac8247aaf647a95563714ec1
+
+# LUCI config generator
+infra/tools/luci/lucicfg/${platform} git_revision:1c7cb63dddad9d25afd20dcc425ce448b2fd0d40
 
 # Mac toolchain installer
-infra/tools/mac_toolchain/${os=mac}-${arch} git_revision:796d2b92cff93fc2059623ce0a66284373ceea0a
+infra/tools/mac_toolchain/${os=mac}-${arch} git_revision:edd5644be66d37cdf82978efb0e5d6504d0d552f
 
 # LUCI rpc command line tool
-infra/tools/prpc/${platform} git_revision:e1abc57be62d198b5c2f487bfb2fa2d2eb0e867c
+infra/tools/prpc/${platform} git_revision:edd5644be66d37cdf82978efb0e5d6504d0d552f
 
 # LUCI authentication command line tool
-infra/tools/luci-auth/${platform} git_revision:e1abc57be62d198b5c2f487bfb2fa2d2eb0e867c
+infra/tools/luci-auth/${platform} git_revision:edd5644be66d37cdf82978efb0e5d6504d0d552f

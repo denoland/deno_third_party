@@ -15,7 +15,9 @@ import os
 import re
 import sys
 
-# The -t tools are incompatible with -j and -l
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+
+# The -t tools are incompatible with -j
 t_specified = False
 j_specified = False
 output_dir = '.'
@@ -30,14 +32,20 @@ input_args = sys.argv
 if (sys.platform.startswith('win') and len(sys.argv) == 2 and
     input_args[1].count(' ') > 0):
   input_args = sys.argv[:1] + sys.argv[1].split()
+
+# Ninja uses getopt_long, which allow to intermix non-option arguments.
+# To leave non supported parameters untouched, we do not use getopt.
 for index, arg in enumerate(input_args[1:]):
-  if arg == '-j':
+  if arg.startswith('-j'):
     j_specified = True
-  if arg == '-t':
+  if arg.startswith('-t'):
     t_specified = True
   if arg == '-C':
     # + 1 to get the next argument and +1 because we trimmed off input_args[0]
     output_dir = input_args[index + 2]
+  elif arg.startswith('-C'):
+    # Support -Cout/Default
+    output_dir = arg[2:]
 
 use_goma = False
 try:
@@ -58,19 +66,31 @@ try:
 except IOError:
   pass
 
-if sys.platform.startswith('win'):
-  # Specify ninja.exe on Windows so that ninja.bat can call autoninja and not
-  # be called back.
-  args = ['ninja.exe'] + input_args[1:]
-else:
-  args = ['ninja'] + input_args[1:]
+# Specify ninja.exe on Windows so that ninja.bat can call autoninja and not
+# be called back.
+ninja_exe = 'ninja.exe' if sys.platform.startswith('win') else 'ninja'
+ninja_exe_path = os.path.join(SCRIPT_DIR, ninja_exe)
+
+# Use absolute path for ninja path,
+# or fail to execute ninja if depot_tools is not in PATH.
+args = [ninja_exe_path] + input_args[1:]
 
 num_cores = multiprocessing.cpu_count()
 if not j_specified and not t_specified:
   if use_goma:
     args.append('-j')
-    core_multiplier = int(os.environ.get("NINJA_CORE_MULTIPLIER", "20"))
-    args.append('%d' % (num_cores * core_multiplier))
+    core_multiplier = int(os.environ.get("NINJA_CORE_MULTIPLIER", "40"))
+    j_value = num_cores * core_multiplier
+
+    if sys.platform.startswith('win'):
+      # On windows, j value higher than 1000 does not improve build performance.
+      j_value = min(j_value, 1000)
+    elif sys.platform == 'darwin':
+      # On Mac, j value higher than 500 causes 'Too many open files' error
+      # (crbug.com/936864).
+      j_value = min(j_value, 500)
+
+    args.append('%d' % j_value)
   else:
     core_addition = os.environ.get("NINJA_CORE_ADDITION")
     if core_addition:
@@ -78,12 +98,14 @@ if not j_specified and not t_specified:
       args.append('-j')
       args.append('%d' % (num_cores + core_addition))
 
-if not t_specified:
-  # Specify a maximum CPU load so that running builds in two different command
-  # prompts won't overload the system too much. This is not reliable enough to
-  # be used to auto-adjust between goma/non-goma loads, but it is a nice
-  # fallback load balancer.
-  args.append('-l')
-  args.append('%d' % num_cores)
+# On Windows, fully quote the path so that the command processor doesn't think
+# the whole output is the command.
+# On Linux and Mac, if people put depot_tools in directories with ' ',
+# shell would misunderstand ' ' as a path separation.
+# TODO(yyanagisawa): provide proper quating for Windows.
+# see https://cs.chromium.org/chromium/src/tools/mb/mb.py
+for i in range(len(args)):
+  if (i == 0 and sys.platform.startswith('win')) or ' ' in args[i]:
+    args[i] = '"%s"' % args[i].replace('"', '\\"')
 
 print ' '.join(args)
