@@ -1,7 +1,7 @@
 use std::io;
 use std::mem;
 
-use futures::{Future, Poll};
+use futures::{Async, Future, Poll};
 
 use AsyncRead;
 
@@ -23,6 +23,7 @@ where
 {
     Read {
         state: State::Pending { rd: rd, buf: buf },
+        throttle: 0,
     }
 }
 
@@ -33,6 +34,7 @@ where
 #[derive(Debug)]
 pub struct Read<R, T> {
     state: State<R, T>,
+    throttle: u32,
 }
 
 impl<R, T> Future for Read<R, T>
@@ -48,7 +50,19 @@ where
             State::Pending {
                 ref mut rd,
                 ref mut buf,
-            } => try_ready!(rd.poll_read(&mut buf.as_mut()[..])),
+            } => {
+                let poll_result = if self.throttle < 32 {
+                    rd.poll_read(&mut buf.as_mut()[..])
+                } else {
+                    Ok(Async::NotReady)
+                };
+                self.throttle = match poll_result {
+                    Ok(Async::Ready(_)) => self.throttle + 1,
+                    _ => 0,
+                };
+                try_ready!(poll_result)
+            }
+
             State::Empty => panic!("poll a Read after it's done"),
         };
 
