@@ -1,5 +1,5 @@
 use bytes::{Buf, Bytes};
-use futures::{Async, Future, Poll, Stream};
+use futures::{Async, Future, Poll, Stream, task};
 use http::{Request, Response, StatusCode};
 use tokio_io::{AsyncRead, AsyncWrite};
 
@@ -96,7 +96,7 @@ where
     fn poll_inner(&mut self, should_shutdown: bool) -> Poll<Dispatched, ::Error> {
         T::update_date();
 
-        loop {
+        //loop {
             self.poll_read()?;
             self.poll_write()?;
             self.poll_flush()?;
@@ -109,10 +109,13 @@ where
             //
             // Using this instead of task::current() and notify() inside
             // the Conn is noticeably faster in pipelined benchmarks.
-            if !self.conn.wants_read_again() {
-                break;
+            //if !self.conn.wants_read_again() {
+            //    break;
+            //}
+            if self.conn.wants_read_again() {
+                task::current().notify();
             }
-        }
+        //}
 
         if self.is_done() {
             if let Some(pending) = self.conn.pending_upgrade() {
