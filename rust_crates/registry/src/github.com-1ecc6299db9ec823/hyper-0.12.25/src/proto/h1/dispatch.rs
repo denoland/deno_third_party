@@ -1,5 +1,5 @@
 use bytes::{Buf, Bytes};
-use futures::{Async, Future, Poll, Stream};
+use futures::{Async, Future, Poll, Stream, task};
 use http::{Request, Response, StatusCode};
 use tokio_io::{AsyncRead, AsyncWrite};
 
@@ -96,7 +96,7 @@ where
     fn poll_inner(&mut self, should_shutdown: bool) -> Poll<Dispatched, ::Error> {
         T::update_date();
 
-        loop {
+        for _ in 0..1 {
             self.poll_read()?;
             self.poll_write()?;
             self.poll_flush()?;
@@ -124,6 +124,9 @@ where
             self.conn.take_error()?;
             Ok(Async::Ready(Dispatched::Shutdown))
         } else {
+            if self.conn.wants_read_again() {
+                task::current().notify();
+            }
             Ok(Async::NotReady)
         }
     }
