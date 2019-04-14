@@ -109,6 +109,9 @@ RegExpMacroAssemblerPPC::RegExpMacroAssemblerPPC(Isolate* isolate, Zone* zone,
       internal_failure_label_() {
   DCHECK_EQ(0, registers_to_save % 2);
 
+  // Because RegExp code respects C ABI, so needs a FD
+  __ function_descriptor();
+
   __ b(&entry_label_);  // We'll write the entry code later.
   // If the code gets too big or corrupted, an internal exception will be
   // raised, and we will exit right away.
@@ -1128,7 +1131,19 @@ void RegExpMacroAssemblerPPC::CallCheckStackGuardState(Register scratch) {
   ExternalReference stack_guard_check =
       ExternalReference::re_check_stack_guard_state(isolate());
   __ mov(ip, Operand(stack_guard_check));
-  __ StoreReturnAddressAndCall(ip);
+
+  if (FLAG_embedded_builtins) {
+    EmbeddedData d = EmbeddedData::FromBlob();
+    CHECK(Builtins::IsIsolateIndependent(Builtins::kDirectCEntry));
+    Address entry = d.InstructionStartOfBuiltin(Builtins::kDirectCEntry);
+    __ mov(r0, Operand(entry, RelocInfo::OFF_HEAP_TARGET));
+  } else {
+    // TODO(v8:8519): Remove this once embedded builtins are on unconditionally.
+    Handle<Code> code = BUILTIN_CODE(isolate(), DirectCEntry);
+    __ mov(r0, Operand(reinterpret_cast<intptr_t>(code.location()),
+                       RelocInfo::CODE_TARGET));
+  }
+  __ Call(r0);
 
   // Restore the stack pointer
   stack_space = kNumRequiredStackFrameSlots + stack_passed_arguments;

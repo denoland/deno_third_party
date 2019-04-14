@@ -37,6 +37,7 @@
 #include "src/heap/object-stats.h"
 #include "src/heap/objects-visiting-inl.h"
 #include "src/heap/objects-visiting.h"
+#include "src/heap/read-only-heap.h"
 #include "src/heap/remembered-set.h"
 #include "src/heap/scavenge-job.h"
 #include "src/heap/scavenger-inl.h"
@@ -427,7 +428,7 @@ void Heap::PrintShortHeapStatistics() {
                ", available: %6" PRIuS
                " KB"
                ", committed: %6" PRIuS " KB\n",
-               lo_space_->SizeOfObjects() / KB,
+               code_lo_space_->SizeOfObjects() / KB,
                code_lo_space_->Available() / KB,
                code_lo_space_->CommittedMemory() / KB);
   PrintIsolate(isolate_,
@@ -842,7 +843,7 @@ void Heap::ProcessPretenuringFeedback() {
         if (DigestPretenuringFeedback(isolate_, site, maximum_size_scavenge)) {
           trigger_deoptimization = true;
         }
-        if (site->GetPretenureMode() == TENURED) {
+        if (site->GetAllocationType() == AllocationType::kOld) {
           tenure_decisions++;
         } else {
           dont_tenure_decisions++;
@@ -1498,7 +1499,7 @@ void Heap::MoveElements(FixedArray array, int dst_index, int src_index, int len,
                         WriteBarrierMode mode) {
   if (len == 0) return;
 
-  DCHECK(array->map() != ReadOnlyRoots(this).fixed_cow_array_map());
+  DCHECK_NE(array->map(), ReadOnlyRoots(this).fixed_cow_array_map());
   ObjectSlot dst = array->RawFieldOfElementAt(dst_index);
   ObjectSlot src = array->RawFieldOfElementAt(src_index);
   if (FLAG_concurrent_marking && incremental_marking()->IsMarking()) {
@@ -1523,6 +1524,41 @@ void Heap::MoveElements(FixedArray array, int dst_index, int src_index, int len,
   }
   if (mode == SKIP_WRITE_BARRIER) return;
   FIXED_ARRAY_ELEMENTS_WRITE_BARRIER(this, array, dst_index, len);
+}
+
+void Heap::CopyElements(FixedArray dst_array, FixedArray src_array,
+                        int dst_index, int src_index, int len,
+                        WriteBarrierMode mode) {
+  DCHECK_NE(dst_array, src_array);
+  if (len == 0) return;
+
+  DCHECK_NE(dst_array->map(), ReadOnlyRoots(this).fixed_cow_array_map());
+  ObjectSlot dst = dst_array->RawFieldOfElementAt(dst_index);
+  ObjectSlot src = src_array->RawFieldOfElementAt(src_index);
+  // Ensure ranges do not overlap.
+  DCHECK(dst + len <= src || src + len <= dst);
+  if (FLAG_concurrent_marking && incremental_marking()->IsMarking()) {
+    if (dst < src) {
+      for (int i = 0; i < len; i++) {
+        dst.Relaxed_Store(src.Relaxed_Load());
+        ++dst;
+        ++src;
+      }
+    } else {
+      // Copy backwards.
+      dst += len - 1;
+      src += len - 1;
+      for (int i = 0; i < len; i++) {
+        dst.Relaxed_Store(src.Relaxed_Load());
+        --dst;
+        --src;
+      }
+    }
+  } else {
+    MemCopy(dst.ToVoidPtr(), src.ToVoidPtr(), len * kTaggedSize);
+  }
+  if (mode == SKIP_WRITE_BARRIER) return;
+  FIXED_ARRAY_ELEMENTS_WRITE_BARRIER(this, dst_array, dst_index, len);
 }
 
 #ifdef VERIFY_HEAP
@@ -2379,13 +2415,13 @@ void Heap::ForeachAllocationSite(
   }
 }
 
-void Heap::ResetAllAllocationSitesDependentCode(PretenureFlag flag) {
+void Heap::ResetAllAllocationSitesDependentCode(AllocationType allocation) {
   DisallowHeapAllocation no_allocation_scope;
   bool marked = false;
 
   ForeachAllocationSite(allocation_sites_list(),
-                        [&marked, flag, this](AllocationSite site) {
-                          if (site->GetPretenureMode() == flag) {
+                        [&marked, allocation, this](AllocationSite site) {
+                          if (site->GetAllocationType() == allocation) {
                             site->ResetPretenureDecision();
                             site->set_deopt_dependent_code(true);
                             marked = true;
@@ -2395,7 +2431,6 @@ void Heap::ResetAllAllocationSitesDependentCode(PretenureFlag flag) {
                         });
   if (marked) isolate_->stack_guard()->RequestDeoptMarkedAllocationSites();
 }
-
 
 void Heap::EvaluateOldSpaceLocalPretenuring(
     uint64_t size_of_objects_before_gc) {
@@ -2409,7 +2444,7 @@ void Heap::EvaluateOldSpaceLocalPretenuring(
     // allocation sites may be the cause for that. We have to deopt all
     // dependent code registered in the allocation sites to re-evaluate
     // our pretenuring decisions.
-    ResetAllAllocationSitesDependentCode(TENURED);
+    ResetAllAllocationSitesDependentCode(AllocationType::kOld);
     if (FLAG_trace_pretenuring) {
       PrintF(
           "Deopt all allocation sites dependent code due to low survival "
@@ -2446,13 +2481,20 @@ void Heap::VisitExternalResources(v8::ExternalResourceVisitor* visitor) {
   external_string_table_.IterateAll(&external_string_table_visitor);
 }
 
-STATIC_ASSERT((FixedDoubleArray::kHeaderSize & kDoubleAlignmentMask) ==
-              0);  // NOLINT
-STATIC_ASSERT((FixedTypedArrayBase::kDataOffset & kDoubleAlignmentMask) ==
-              0);  // NOLINT
+STATIC_ASSERT(IsAligned(FixedDoubleArray::kHeaderSize, kDoubleAlignment));
+
+#ifdef V8_COMPRESS_POINTERS
+// TODO(ishell, v8:8875): When pointer compression is enabled the kHeaderSize
+// is only kTaggedSize aligned but we can keep using unaligned access since
+// both x64 and arm64 architectures (where pointer compression supported)
+// allow unaligned access to doubles.
+STATIC_ASSERT(IsAligned(FixedTypedArrayBase::kDataOffset, kTaggedSize));
+#else
+STATIC_ASSERT(IsAligned(FixedTypedArrayBase::kDataOffset, kDoubleAlignment));
+#endif
+
 #ifdef V8_HOST_ARCH_32_BIT
-STATIC_ASSERT((HeapNumber::kValueOffset & kDoubleAlignmentMask) !=
-              0);  // NOLINT
+STATIC_ASSERT((HeapNumber::kValueOffset & kDoubleAlignmentMask) == kTaggedSize);
 #endif
 
 
@@ -2476,6 +2518,10 @@ int Heap::GetFillToAlign(Address address, AllocationAlignment alignment) {
   if (alignment == kDoubleUnaligned && (address & kDoubleAlignmentMask) == 0)
     return kDoubleSize - kTaggedSize;  // No fill if double is always aligned.
   return 0;
+}
+
+size_t Heap::GetCodeRangeReservedAreaSize() {
+  return kReservedCodeRangePages * MemoryAllocator::GetCommitPageSize();
 }
 
 HeapObject Heap::PrecedeWithFiller(HeapObject object, int filler_size) {
@@ -2714,9 +2760,9 @@ FixedArrayBase Heap::LeftTrimFixedArray(FixedArrayBase object,
       FixedArrayBase::cast(HeapObject::FromAddress(new_start));
 
   // Remove recorded slots for the new map and length offset.
-  ClearRecordedSlot(new_object, HeapObject::RawField(new_object, 0));
-  ClearRecordedSlot(new_object, HeapObject::RawField(
-                                    new_object, FixedArrayBase::kLengthOffset));
+  ClearRecordedSlot(new_object, new_object.RawField(0));
+  ClearRecordedSlot(new_object,
+                    new_object.RawField(FixedArrayBase::kLengthOffset));
 
   // Handle invalidated old-to-old slots.
   if (incremental_marking()->IsCompacting() &&
@@ -2730,7 +2776,7 @@ FixedArrayBase Heap::LeftTrimFixedArray(FixedArrayBase object,
     // we need pointer granularity writes to avoid race with the concurrent
     // marking.
     if (filler->Size() > FreeSpace::kSize) {
-      MemsetTagged(HeapObject::RawField(filler, FreeSpace::kSize),
+      MemsetTagged(filler.RawField(FreeSpace::kSize),
                    ReadOnlyRoots(this).undefined_value(),
                    (filler->Size() - FreeSpace::kSize) / kTaggedSize);
     }
@@ -3543,14 +3589,21 @@ const char* Heap::GarbageCollectionReasonToString(
 }
 
 bool Heap::Contains(HeapObject value) {
+  // Check RO_SPACE first because IsOutsideAllocatedSpace cannot account for a
+  // shared RO_SPACE.
+  // TODO(goszczycki): Exclude read-only space. Use ReadOnlyHeap::Contains where
+  // appropriate.
+  if (read_only_space_ != nullptr && read_only_space_->Contains(value)) {
+    return true;
+  }
   if (memory_allocator()->IsOutsideAllocatedSpace(value->address())) {
     return false;
   }
   return HasBeenSetUp() &&
          (new_space_->ToSpaceContains(value) || old_space_->Contains(value) ||
           code_space_->Contains(value) || map_space_->Contains(value) ||
-          lo_space_->Contains(value) || read_only_space_->Contains(value) ||
-          code_lo_space_->Contains(value) || new_lo_space_->Contains(value));
+          lo_space_->Contains(value) || code_lo_space_->Contains(value) ||
+          new_lo_space_->Contains(value));
 }
 
 bool Heap::InSpace(HeapObject value, AllocationSpace space) {
@@ -3633,14 +3686,14 @@ class VerifyReadOnlyPointersVisitor : public VerifyPointersVisitor {
   void VerifyPointers(HeapObject host, MaybeObjectSlot start,
                       MaybeObjectSlot end) override {
     if (!host.is_null()) {
-      CHECK(heap_->InReadOnlySpace(host->map()));
+      CHECK(ReadOnlyHeap::Contains(host->map()));
     }
     VerifyPointersVisitor::VerifyPointers(host, start, end);
 
     for (MaybeObjectSlot current = start; current < end; ++current) {
       HeapObject heap_object;
       if ((*current)->GetHeapObject(&heap_object)) {
-        CHECK(heap_->InReadOnlySpace(heap_object));
+        CHECK(ReadOnlyHeap::Contains(heap_object));
       }
     }
   }
@@ -3727,6 +3780,11 @@ class SlotVerifyingVisitor : public ObjectVisitor {
     }
   }
 
+ protected:
+  bool InUntypedSet(ObjectSlot slot) {
+    return untyped_->count(slot.address()) > 0;
+  }
+
  private:
   bool InTypedSet(SlotType type, Address slot) {
     return typed_->count(std::make_pair(type, slot)) > 0;
@@ -3738,8 +3796,10 @@ class SlotVerifyingVisitor : public ObjectVisitor {
 class OldToNewSlotVerifyingVisitor : public SlotVerifyingVisitor {
  public:
   OldToNewSlotVerifyingVisitor(std::set<Address>* untyped,
-                               std::set<std::pair<SlotType, Address>>* typed)
-      : SlotVerifyingVisitor(untyped, typed) {}
+                               std::set<std::pair<SlotType, Address>>* typed,
+                               EphemeronRememberedSet* ephemeron_remembered_set)
+      : SlotVerifyingVisitor(untyped, typed),
+        ephemeron_remembered_set_(ephemeron_remembered_set) {}
 
   bool ShouldHaveBeenRecorded(HeapObject host, MaybeObject target) override {
     DCHECK_IMPLIES(target->IsStrongOrWeak() && Heap::InYoungGeneration(target),
@@ -3747,6 +3807,30 @@ class OldToNewSlotVerifyingVisitor : public SlotVerifyingVisitor {
     return target->IsStrongOrWeak() && Heap::InYoungGeneration(target) &&
            !Heap::InYoungGeneration(host);
   }
+
+  void VisitEphemeron(HeapObject host, int index, ObjectSlot key,
+                      ObjectSlot target) override {
+    VisitPointer(host, target);
+    if (FLAG_minor_mc) {
+      VisitPointer(host, target);
+    } else {
+      // Keys are handled separately and should never appear in this set.
+      CHECK(!InUntypedSet(key));
+      Object k = *key;
+      if (!ObjectInYoungGeneration(host) && ObjectInYoungGeneration(k)) {
+        EphemeronHashTable table = EphemeronHashTable::cast(host);
+        auto it = ephemeron_remembered_set_->find(table);
+        CHECK(it != ephemeron_remembered_set_->end());
+        int slot_index =
+            EphemeronHashTable::SlotToIndex(table.address(), key.address());
+        int entry = EphemeronHashTable::IndexToEntry(slot_index);
+        CHECK(it->second.find(entry) != it->second.end());
+      }
+    }
+  }
+
+ private:
+  EphemeronRememberedSet* ephemeron_remembered_set_;
 };
 
 template <RememberedSetType direction>
@@ -3773,7 +3857,7 @@ void CollectSlots(MemoryChunk* chunk, Address start, Address end,
 
 void Heap::VerifyRememberedSetFor(HeapObject object) {
   MemoryChunk* chunk = MemoryChunk::FromHeapObject(object);
-  DCHECK_IMPLIES(chunk->mutex() == nullptr, InReadOnlySpace(object));
+  DCHECK_IMPLIES(chunk->mutex() == nullptr, ReadOnlyHeap::Contains(object));
   // In RO_SPACE chunk->mutex() may be nullptr, so just ignore it.
   base::LockGuard<base::Mutex, base::NullBehavior::kIgnoreIfNull> lock_guard(
       chunk->mutex());
@@ -3784,7 +3868,8 @@ void Heap::VerifyRememberedSetFor(HeapObject object) {
   if (!InYoungGeneration(object)) {
     store_buffer()->MoveAllEntriesToRememberedSet();
     CollectSlots<OLD_TO_NEW>(chunk, start, end, &old_to_new, &typed_old_to_new);
-    OldToNewSlotVerifyingVisitor visitor(&old_to_new, &typed_old_to_new);
+    OldToNewSlotVerifyingVisitor visitor(&old_to_new, &typed_old_to_new,
+                                         &this->ephemeron_remembered_set_);
     object->IterateBody(&visitor);
   }
   // TODO(ulan): Add old to old slot set verification once all weak objects
@@ -4417,10 +4502,10 @@ HeapObject Heap::EnsureImmovableCode(HeapObject heap_object, int object_size) {
   return heap_object;
 }
 
-HeapObject Heap::AllocateRawWithLightRetry(int size, AllocationSpace space,
+HeapObject Heap::AllocateRawWithLightRetry(int size, AllocationType allocation,
                                            AllocationAlignment alignment) {
   HeapObject result;
-  AllocationResult alloc = AllocateRaw(size, space, alignment);
+  AllocationResult alloc = AllocateRaw(size, allocation, alignment);
   if (alloc.To(&result)) {
     DCHECK(result != ReadOnlyRoots(this).exception());
     return result;
@@ -4429,7 +4514,7 @@ HeapObject Heap::AllocateRawWithLightRetry(int size, AllocationSpace space,
   for (int i = 0; i < 2; i++) {
     CollectGarbage(alloc.RetrySpace(),
                    GarbageCollectionReason::kAllocationFailure);
-    alloc = AllocateRaw(size, space, alignment);
+    alloc = AllocateRaw(size, allocation, alignment);
     if (alloc.To(&result)) {
       DCHECK(result != ReadOnlyRoots(this).exception());
       return result;
@@ -4438,17 +4523,17 @@ HeapObject Heap::AllocateRawWithLightRetry(int size, AllocationSpace space,
   return HeapObject();
 }
 
-HeapObject Heap::AllocateRawWithRetryOrFail(int size, AllocationSpace space,
+HeapObject Heap::AllocateRawWithRetryOrFail(int size, AllocationType allocation,
                                             AllocationAlignment alignment) {
   AllocationResult alloc;
-  HeapObject result = AllocateRawWithLightRetry(size, space, alignment);
+  HeapObject result = AllocateRawWithLightRetry(size, allocation, alignment);
   if (!result.is_null()) return result;
 
   isolate()->counters()->gc_last_resort_from_handles()->Increment();
   CollectAllAvailableGarbage(GarbageCollectionReason::kLastResort);
   {
     AlwaysAllocateScope scope(isolate());
-    alloc = AllocateRaw(size, space, alignment);
+    alloc = AllocateRaw(size, allocation, alignment);
   }
   if (alloc.To(&result)) {
     DCHECK(result != ReadOnlyRoots(this).exception());
@@ -4540,8 +4625,19 @@ void Heap::SetUp() {
   for (int i = FIRST_SPACE; i <= LAST_SPACE; i++) {
     space_[i] = nullptr;
   }
+}
 
-  space_[RO_SPACE] = read_only_space_ = new ReadOnlySpace(this);
+void Heap::SetUpFromReadOnlyHeap(ReadOnlyHeap* ro_heap) {
+  DCHECK_NOT_NULL(ro_heap);
+  DCHECK_IMPLIES(read_only_space_ != nullptr,
+                 read_only_space_ == ro_heap->read_only_space());
+  read_only_heap_ = ro_heap;
+  space_[RO_SPACE] = read_only_space_ = ro_heap->read_only_space();
+}
+
+void Heap::SetUpSpaces() {
+  // Ensure SetUpFromReadOnlySpace has been ran.
+  DCHECK_NOT_NULL(read_only_space_);
   space_[NEW_SPACE] = new_space_ =
       new NewSpace(this, memory_allocator_->data_page_allocator(),
                    initial_semispace_size_, max_semi_space_size_);
@@ -4567,7 +4663,7 @@ void Heap::SetUp() {
   array_buffer_collector_.reset(new ArrayBufferCollector(this));
   gc_idle_time_handler_.reset(new GCIdleTimeHandler());
   memory_reducer_.reset(new MemoryReducer(this));
-  if (V8_UNLIKELY(FLAG_gc_stats)) {
+  if (V8_UNLIKELY(TracingFlags::is_gc_stats_enabled())) {
     live_object_stats_.reset(new ObjectStats(this));
     dead_object_stats_.reset(new ObjectStats(this));
   }
@@ -4685,7 +4781,6 @@ void Heap::NotifyDeserializationComplete() {
 #endif  // DEBUG
   }
 
-  read_only_space()->MarkAsReadOnly();
   deserialization_complete_ = true;
 }
 
@@ -4818,7 +4913,9 @@ void Heap::TearDown() {
 
   tracer_.reset();
 
-  for (int i = FIRST_SPACE; i <= LAST_SPACE; i++) {
+  read_only_heap_->OnHeapTearDown();
+  space_[RO_SPACE] = read_only_space_ = nullptr;
+  for (int i = FIRST_MUTABLE_SPACE; i <= LAST_MUTABLE_SPACE; i++) {
     delete space_[i];
     space_[i] = nullptr;
   }
@@ -4887,7 +4984,7 @@ void Heap::RemoveGCEpilogueCallback(v8::Isolate::GCCallbackWithData callback,
 namespace {
 Handle<WeakArrayList> CompactWeakArrayList(Heap* heap,
                                            Handle<WeakArrayList> array,
-                                           PretenureFlag pretenure) {
+                                           AllocationType allocation) {
   if (array->length() == 0) {
     return array;
   }
@@ -4899,7 +4996,7 @@ Handle<WeakArrayList> CompactWeakArrayList(Heap* heap,
   Handle<WeakArrayList> new_array = WeakArrayList::EnsureSpace(
       heap->isolate(),
       handle(ReadOnlyRoots(heap).empty_weak_array_list(), heap->isolate()),
-      new_length, pretenure);
+      new_length, allocation);
   // Allocation might have caused GC and turned some of the elements into
   // cleared weak heap objects. Count the number of live references again and
   // fill in the new array.
@@ -4915,7 +5012,7 @@ Handle<WeakArrayList> CompactWeakArrayList(Heap* heap,
 
 }  // anonymous namespace
 
-void Heap::CompactWeakArrayLists(PretenureFlag pretenure) {
+void Heap::CompactWeakArrayLists(AllocationType allocation) {
   // Find known PrototypeUsers and compact them.
   std::vector<Handle<PrototypeInfo>> prototype_infos;
   {
@@ -4932,24 +5029,25 @@ void Heap::CompactWeakArrayLists(PretenureFlag pretenure) {
   for (auto& prototype_info : prototype_infos) {
     Handle<WeakArrayList> array(
         WeakArrayList::cast(prototype_info->prototype_users()), isolate());
-    DCHECK_IMPLIES(pretenure == TENURED,
+    DCHECK_IMPLIES(allocation == AllocationType::kOld,
                    InOldSpace(*array) ||
                        *array == ReadOnlyRoots(this).empty_weak_array_list());
     WeakArrayList new_array = PrototypeUsers::Compact(
-        array, this, JSObject::PrototypeRegistryCompactionCallback, pretenure);
+        array, this, JSObject::PrototypeRegistryCompactionCallback, allocation);
     prototype_info->set_prototype_users(new_array);
   }
 
   // Find known WeakArrayLists and compact them.
   Handle<WeakArrayList> scripts(script_list(), isolate());
-  DCHECK_IMPLIES(pretenure == TENURED, InOldSpace(*scripts));
-  scripts = CompactWeakArrayList(this, scripts, pretenure);
+  DCHECK_IMPLIES(allocation == AllocationType::kOld, InOldSpace(*scripts));
+  scripts = CompactWeakArrayList(this, scripts, allocation);
   set_script_list(*scripts);
 
   Handle<WeakArrayList> no_script_list(noscript_shared_function_infos(),
                                        isolate());
-  DCHECK_IMPLIES(pretenure == TENURED, InOldSpace(*no_script_list));
-  no_script_list = CompactWeakArrayList(this, no_script_list, pretenure);
+  DCHECK_IMPLIES(allocation == AllocationType::kOld,
+                 InOldSpace(*no_script_list));
+  no_script_list = CompactWeakArrayList(this, no_script_list, allocation);
   set_noscript_shared_function_infos(*no_script_list);
 }
 
@@ -5254,7 +5352,6 @@ HeapIterator::HeapIterator(Heap* heap,
       space_iterator_(nullptr),
       object_iterator_(nullptr) {
   heap_->MakeHeapIterable();
-  heap_->heap_iterator_start();
   // Start the iteration.
   space_iterator_ = new SpaceIterator(heap_);
   switch (filtering_) {
@@ -5269,7 +5366,6 @@ HeapIterator::HeapIterator(Heap* heap,
 
 
 HeapIterator::~HeapIterator() {
-  heap_->heap_iterator_end();
 #ifdef DEBUG
   // Assert that in filtering mode we have iterated through all
   // objects. Otherwise, heap will be left in an inconsistent state.
@@ -5647,7 +5743,7 @@ bool Heap::AllowedToBeMigrated(HeapObject obj, AllocationSpace dst) {
 }
 
 void Heap::CreateObjectStats() {
-  if (V8_LIKELY(FLAG_gc_stats == 0)) return;
+  if (V8_LIKELY(!TracingFlags::is_gc_stats_enabled())) return;
   if (!live_object_stats_) {
     live_object_stats_.reset(new ObjectStats(this));
   }
@@ -5748,6 +5844,30 @@ void Heap::GenerationalBarrierSlow(HeapObject object, Address slot,
                                    HeapObject value) {
   Heap* heap = Heap::FromWritableHeapObject(object);
   heap->store_buffer()->InsertEntry(slot);
+}
+
+void Heap::RecordEphemeronKeyWrite(EphemeronHashTable table, Address slot) {
+  DCHECK(ObjectInYoungGeneration(HeapObjectSlot(slot).ToHeapObject()));
+  int slot_index = EphemeronHashTable::SlotToIndex(table.address(), slot);
+  int entry = EphemeronHashTable::IndexToEntry(slot_index);
+  auto it =
+      ephemeron_remembered_set_.insert({table, std::unordered_set<int>()});
+  it.first->second.insert(entry);
+}
+
+void Heap::EphemeronKeyWriteBarrierFromCode(Address raw_object,
+                                            Address key_slot_address,
+                                            Isolate* isolate) {
+  EphemeronHashTable table = EphemeronHashTable::cast(Object(raw_object));
+  MaybeObjectSlot key_slot(key_slot_address);
+  MaybeObject maybe_key = *key_slot;
+  HeapObject key;
+  if (!maybe_key.GetHeapObject(&key)) return;
+  if (!ObjectInYoungGeneration(table) && ObjectInYoungGeneration(key)) {
+    isolate->heap()->RecordEphemeronKeyWrite(table, key_slot_address);
+  }
+  isolate->heap()->incremental_marking()->RecordMaybeWeakWrite(table, key_slot,
+                                                               maybe_key);
 }
 
 void Heap::GenerationalBarrierForElementsSlow(Heap* heap, FixedArray array,

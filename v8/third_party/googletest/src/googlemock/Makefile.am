@@ -1,5 +1,7 @@
 # Automake file
 
+ACLOCAL_AMFLAGS = -I m4
+
 # Nonstandard package files for distribution.
 EXTRA_DIST = LICENSE
 
@@ -133,7 +135,6 @@ EXTRA_DIST += \
   make/Makefile
 
 # Pump scripts for generating Google Mock headers.
-# TODO(chandlerc@google.com): automate the generation of *.h from *.h.pump.
 EXTRA_DIST += \
   include/gmock/gmock-generated-actions.h.pump \
   include/gmock/gmock-generated-function-mockers.h.pump \
@@ -188,7 +189,6 @@ if HAVE_PYTHON
 # generated.
 $(test_gmock_fused_test_SOURCES): fused-gmock-internal
 
-# TODO(vladl@google.com): Find a way to add Google Tests's sources here.
 fused-gmock-internal: $(pkginclude_HEADERS) $(pkginclude_internal_HEADERS) \
                       $(lib_libgmock_la_SOURCES) $(GMOCK_SOURCE_INGLUDES) \
                       $(lib_libgmock_main_la_SOURCES) \

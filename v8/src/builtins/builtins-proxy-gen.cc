@@ -204,82 +204,6 @@ TF_BUILTIN(ProxyConstructor, ProxiesCodeStubAssembler) {
   }
 }
 
-TF_BUILTIN(ProxyRevocable, ProxiesCodeStubAssembler) {
-  Node* const target = Parameter(Descriptor::kTarget);
-  Node* const handler = Parameter(Descriptor::kHandler);
-  Node* const context = Parameter(Descriptor::kContext);
-  Node* const native_context = LoadNativeContext(context);
-
-  Label throw_proxy_non_object(this, Label::kDeferred),
-      throw_proxy_handler_or_target_revoked(this, Label::kDeferred),
-      return_create_proxy(this);
-
-  GotoIf(TaggedIsSmi(target), &throw_proxy_non_object);
-  GotoIfNot(IsJSReceiver(target), &throw_proxy_non_object);
-  GotoIfRevokedProxy(target, &throw_proxy_handler_or_target_revoked);
-
-  GotoIf(TaggedIsSmi(handler), &throw_proxy_non_object);
-  GotoIfNot(IsJSReceiver(handler), &throw_proxy_non_object);
-  GotoIfRevokedProxy(handler, &throw_proxy_handler_or_target_revoked);
-
-  Node* const proxy = AllocateProxy(target, handler, context);
-  Node* const revoke = AllocateProxyRevokeFunction(proxy, context);
-
-  Node* const result = Allocate(JSProxyRevocableResult::kSize);
-  Node* const result_map = LoadContextElement(
-      native_context, Context::PROXY_REVOCABLE_RESULT_MAP_INDEX);
-  StoreMapNoWriteBarrier(result, result_map);
-  StoreObjectFieldRoot(result, JSProxyRevocableResult::kPropertiesOrHashOffset,
-                       RootIndex::kEmptyFixedArray);
-  StoreObjectFieldRoot(result, JSProxyRevocableResult::kElementsOffset,
-                       RootIndex::kEmptyFixedArray);
-  StoreObjectFieldNoWriteBarrier(result, JSProxyRevocableResult::kProxyOffset,
-                                 proxy);
-  StoreObjectFieldNoWriteBarrier(result, JSProxyRevocableResult::kRevokeOffset,
-                                 revoke);
-  Return(result);
-
-  BIND(&throw_proxy_non_object);
-  ThrowTypeError(context, MessageTemplate::kProxyNonObject);
-
-  BIND(&throw_proxy_handler_or_target_revoked);
-  ThrowTypeError(context, MessageTemplate::kProxyHandlerOrTargetRevoked);
-}
-
-// Proxy Revocation Functions
-// https://tc39.github.io/ecma262/#sec-proxy-revocation-functions
-TF_BUILTIN(ProxyRevoke, ProxiesCodeStubAssembler) {
-  Node* const context = Parameter(Descriptor::kContext);
-
-  // 1. Let p be F.[[RevocableProxy]].
-  Node* const proxy_slot = IntPtrConstant(kProxySlot);
-  Node* const proxy = LoadContextElement(context, proxy_slot);
-
-  Label revoke_called(this);
-
-  // 2. If p is null, ...
-  GotoIf(IsNull(proxy), &revoke_called);
-
-  // 3. Set F.[[RevocableProxy]] to null.
-  StoreContextElement(context, proxy_slot, NullConstant());
-
-  // 4. Assert: p is a Proxy object.
-  CSA_ASSERT(this, IsJSProxy(proxy));
-
-  // 5. Set p.[[ProxyTarget]] to null.
-  StoreObjectField(proxy, JSProxy::kTargetOffset, NullConstant());
-
-  // 6. Set p.[[ProxyHandler]] to null.
-  StoreObjectField(proxy, JSProxy::kHandlerOffset, NullConstant());
-
-  // 7. Return undefined.
-  Return(UndefinedConstant());
-
-  BIND(&revoke_called);
-  // 2. ... return undefined.
-  Return(UndefinedConstant());
-}
-
 TF_BUILTIN(CallProxy, ProxiesCodeStubAssembler) {
   Node* argc = Parameter(Descriptor::kActualArgumentsCount);
   Node* argc_ptr = ChangeInt32ToIntPtr(argc);
@@ -636,6 +560,7 @@ void ProxiesCodeStubAssembler::CheckGetSetTrapResult(
 
   Label if_found_value(this), check_in_runtime(this, Label::kDeferred);
 
+  GotoIfNot(IsUniqueNameNoIndex(CAST(name)), &check_in_runtime);
   Node* instance_type = LoadInstanceType(target);
   TryGetOwnProperty(context, target, target, map, instance_type, name,
                     &if_found_value, &var_value, &var_details, &var_raw_value,
@@ -743,6 +668,7 @@ void ProxiesCodeStubAssembler::CheckHasTrapResult(Node* context, Node* target,
       throw_non_extensible(this, Label::kDeferred);
 
   // 9.a. Let targetDesc be ? target.[[GetOwnProperty]](P).
+  GotoIfNot(IsUniqueNameNoIndex(CAST(name)), if_bailout);
   Node* instance_type = LoadInstanceType(target);
   TryGetOwnProperty(context, target, target, target_map, instance_type, name,
                     &if_found_value, &var_value, &var_details, &var_raw_value,

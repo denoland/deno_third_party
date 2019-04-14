@@ -1164,8 +1164,8 @@ TEST(AnyOfArrayTest, BasicForms) {
   EXPECT_THAT(0, Not(AnyOfArray(ar, 0)));
   EXPECT_THAT(1, AnyOfArray(ar, 1));
   EXPECT_THAT(2, Not(AnyOfArray(ar, 1)));
-  EXPECT_THAT(3, AnyOfArray(ar + 1, 3));
-  EXPECT_THAT(4, Not(AnyOfArray(ar + 1, 3)));
+  EXPECT_THAT(3, AnyOfArray(ar + 1, 2));
+  EXPECT_THAT(4, Not(AnyOfArray(ar + 1, 2)));
   // Array
   // int ar0[0];  Not usable
   int ar1[1] = {1};
@@ -1262,7 +1262,7 @@ namespace adl_test {
 MATCHER(M, "") { return true; }
 
 template <typename T1, typename T2>
-bool AllOf(const T1& t1, const T2& t2) { return true; }
+bool AllOf(const T1& /*t1*/, const T2& /*t2*/) { return true; }
 
 TEST(AllOfTest, DoesNotCallAllOfUnqualified) {
   EXPECT_THAT(42, testing::AllOf(

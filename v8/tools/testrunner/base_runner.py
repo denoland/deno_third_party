@@ -183,6 +183,7 @@ class BuildConfig(object):
     self.dcheck_always_on = build_config['dcheck_always_on']
     self.gcov_coverage = build_config['is_gcov_coverage']
     self.is_android = build_config['is_android']
+    self.is_clang = build_config['is_clang']
     self.is_debug = build_config['is_debug']
     self.msan = build_config['is_msan']
     self.no_i18n = not build_config['v8_enable_i18n_support']
@@ -243,6 +244,11 @@ class BaseTestRunner(object):
     self.mode_options = None
     self.target_os = None
 
+  @property
+  def framework_name(self):
+    """String name of the base-runner subclass, used in test results."""
+    raise NotImplementedError()
+
   def execute(self, sys_args=None):
     if sys_args is None:  # pragma: no cover
       sys_args = sys.argv[1:]
@@ -269,7 +275,12 @@ class BaseTestRunner(object):
       self._setup_env()
       print(">>> Running tests for %s.%s" % (self.build_config.arch,
                                             self.mode_name))
-      return self._do_execute(tests, args, options)
+      exit_code = self._do_execute(tests, args, options)
+      if exit_code == utils.EXIT_CODE_FAILURES and options.json_test_results:
+        print("Force exit code 0 after failures. Json test results file "
+              "generated with failure information.")
+        exit_code = utils.EXIT_CODE_PASS
+      return exit_code
     except TestRunnerError:
       traceback.print_exc()
       return utils.EXIT_CODE_INTERNAL_ERROR
@@ -621,7 +632,8 @@ class BaseTestRunner(object):
       if options.verbose:
         print('>>> Loading test suite: %s' % name)
       suite = testsuite.TestSuite.Load(
-          os.path.join(options.test_root, name), test_config)
+          os.path.join(options.test_root, name), test_config,
+          self.framework_name)
 
       if self._is_testsuite_supported(suite, options):
         tests = suite.load_tests_from_disk(variables)
@@ -657,6 +669,7 @@ class BaseTestRunner(object):
       "gc_stress": False,
       "gcov_coverage": self.build_config.gcov_coverage,
       "isolates": options.isolates,
+      "is_clang": self.build_config.is_clang,
       "mips_arch_variant": mips_arch_variant,
       "mode": self.mode_options.status_mode
               if not self.build_config.dcheck_always_on
@@ -765,6 +778,7 @@ class BaseTestRunner(object):
     procs = [PROGRESS_INDICATORS[options.progress]()]
     if options.json_test_results:
       procs.append(progress.JsonTestProgressIndicator(
+        self.framework_name,
         options.json_test_results,
         self.build_config.arch,
         self.mode_options.execution_mode))

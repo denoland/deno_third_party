@@ -16,7 +16,6 @@
 #include "include/v8-internal.h"
 #include "include/v8.h"
 #include "src/allocation.h"
-#include "src/base/atomicops.h"
 #include "src/base/macros.h"
 #include "src/builtins/builtins.h"
 #include "src/contexts.h"
@@ -85,6 +84,7 @@ class MaterializedObjectStore;
 class Microtask;
 class MicrotaskQueue;
 class OptimizingCompileDispatcher;
+class ReadOnlyDeserializer;
 class RegExpStack;
 class RootVisitor;
 class RuntimeProfiler;
@@ -112,6 +112,10 @@ class PerIsolateCompilerCache;
 
 namespace wasm {
 class WasmEngine;
+}
+
+namespace win64_unwindinfo {
+class BuiltinUnwindInfo;
 }
 
 #define RETURN_FAILURE_IF_SCHEDULED_EXCEPTION(isolate) \
@@ -358,7 +362,7 @@ V8_EXPORT_PRIVATE void FreeCurrentEmbeddedBlob();
   V(int, suffix_table, (kBMMaxShift + 1))                                      \
   ISOLATE_INIT_DEBUG_ARRAY_LIST(V)
 
-typedef std::vector<HeapObject> DebugObjectCache;
+using DebugObjectCache = std::vector<Handle<HeapObject>>;
 
 #define ISOLATE_INIT_LIST(V)                                                   \
   /* Assembler state. */                                                       \
@@ -448,7 +452,7 @@ class Isolate final : private HiddenFactory {
 #endif
 
     bool Matches(Isolate* isolate, ThreadId thread_id) const {
-      return isolate_ == isolate && thread_id_.Equals(thread_id);
+      return isolate_ == isolate && thread_id_ == thread_id;
     }
 
    private:
@@ -499,7 +503,7 @@ class Isolate final : private HiddenFactory {
 
   // Returns the isolate inside which the current thread is running or nullptr.
   V8_INLINE static Isolate* TryGetCurrent() {
-    DCHECK_EQ(base::Relaxed_Load(&isolate_key_created_), 1);
+    DCHECK_EQ(true, isolate_key_created_.load(std::memory_order_relaxed));
     return reinterpret_cast<Isolate*>(
         base::Thread::GetExistingThreadLocal(isolate_key_));
   }
@@ -519,7 +523,9 @@ class Isolate final : private HiddenFactory {
   void InitializeLoggingAndCounters();
   bool InitializeCounters();  // Returns false if already initialized.
 
-  bool Init(StartupDeserializer* des);
+  bool InitWithoutSnapshot();
+  bool InitWithSnapshot(ReadOnlyDeserializer* read_only_deserializer,
+                        StartupDeserializer* startup_deserializer);
 
   // True if at least one thread Enter'ed this isolate.
   bool IsInUse() { return entry_stack_ != nullptr; }
@@ -575,7 +581,7 @@ class Isolate final : private HiddenFactory {
   inline void set_pending_exception(Object exception_obj);
   inline void clear_pending_exception();
 
-  bool AreWasmThreadsEnabled(Handle<Context> context);
+  V8_EXPORT_PRIVATE bool AreWasmThreadsEnabled(Handle<Context> context);
 
   THREAD_LOCAL_TOP_ADDRESS(Object, pending_exception)
 
@@ -638,7 +644,7 @@ class Isolate final : private HiddenFactory {
   inline Handle<JSGlobalObject> global_object();
 
   // Returns the global proxy object of the current context.
-  inline Handle<JSObject> global_proxy();
+  inline Handle<JSGlobalProxy> global_proxy();
 
   static int ArchiveSpacePerThread() { return sizeof(ThreadLocalTop); }
   void FreeThreadResources() { thread_local_top()->Free(); }
@@ -672,10 +678,8 @@ class Isolate final : private HiddenFactory {
     Handle<Object> pending_exception_;
   };
 
-  void SetCaptureStackTraceForUncaughtExceptions(
-      bool capture,
-      int frame_limit,
-      StackTrace::StackTraceOptions options);
+  V8_EXPORT_PRIVATE void SetCaptureStackTraceForUncaughtExceptions(
+      bool capture, int frame_limit, StackTrace::StackTraceOptions options);
 
   void SetAbortOnUncaughtExceptionCallback(
       v8::Isolate::AbortOnUncaughtExceptionCallback callback);
@@ -785,18 +789,19 @@ class Isolate final : private HiddenFactory {
   bool ComputeLocation(MessageLocation* target);
   bool ComputeLocationFromException(MessageLocation* target,
                                     Handle<Object> exception);
-  bool ComputeLocationFromStackTrace(MessageLocation* target,
-                                     Handle<Object> exception);
+  V8_EXPORT_PRIVATE bool ComputeLocationFromStackTrace(
+      MessageLocation* target, Handle<Object> exception);
 
-  Handle<JSMessageObject> CreateMessage(Handle<Object> exception,
-                                        MessageLocation* location);
+  V8_EXPORT_PRIVATE Handle<JSMessageObject> CreateMessage(
+      Handle<Object> exception, MessageLocation* location);
 
   // Out of resource exception helpers.
   Object StackOverflow();
   Object TerminateExecution();
   void CancelTerminateExecution();
 
-  void RequestInterrupt(InterruptCallback callback, void* data);
+  V8_EXPORT_PRIVATE void RequestInterrupt(InterruptCallback callback,
+                                          void* data);
   void InvokeApiInterruptCallbacks();
 
   // Administration
@@ -964,6 +969,7 @@ class Isolate final : private HiddenFactory {
 
   ThreadManager* thread_manager() { return thread_manager_; }
 
+#ifndef V8_INTL_SUPPORT
   unibrow::Mapping<unibrow::Ecma262UnCanonicalize>* jsregexp_uncanonicalize() {
     return &jsregexp_uncanonicalize_;
   }
@@ -972,14 +978,15 @@ class Isolate final : private HiddenFactory {
     return &jsregexp_canonrange_;
   }
 
-  RuntimeState* runtime_state() { return &runtime_state_; }
-
-  Builtins* builtins() { return &builtins_; }
-
   unibrow::Mapping<unibrow::Ecma262Canonicalize>*
       regexp_macro_assembler_canonicalize() {
     return &regexp_macro_assembler_canonicalize_;
   }
+#endif  // !V8_INTL_SUPPORT
+
+  RuntimeState* runtime_state() { return &runtime_state_; }
+
+  Builtins* builtins() { return &builtins_; }
 
   RegExpStack* regexp_stack() { return regexp_stack_; }
 
@@ -989,11 +996,6 @@ class Isolate final : private HiddenFactory {
   }
 
   std::vector<int>* regexp_indices() { return &regexp_indices_; }
-
-  unibrow::Mapping<unibrow::Ecma262Canonicalize>*
-      interp_canonicalize_mapping() {
-    return &regexp_macro_assembler_canonicalize_;
-  }
 
   Debug* debug() { return debug_; }
 
@@ -1040,13 +1042,13 @@ class Isolate final : private HiddenFactory {
   bool IsDead() { return has_fatal_error_; }
   void SignalFatalError() { has_fatal_error_ = true; }
 
-  bool use_optimizer();
+  V8_EXPORT_PRIVATE bool use_optimizer();
 
   bool initialized_from_snapshot() { return initialized_from_snapshot_; }
 
   bool NeedsSourcePositionsForProfiling() const;
 
-  bool NeedsDetailedOptimizedCodeLineInfo() const;
+  V8_EXPORT_PRIVATE bool NeedsDetailedOptimizedCodeLineInfo() const;
 
   bool is_best_effort_code_coverage() const {
     return code_coverage_mode() == debug::CoverageMode::kBestEffort;
@@ -1093,11 +1095,13 @@ class Isolate final : private HiddenFactory {
     return date_cache_;
   }
 
-  void set_date_cache(DateCache* date_cache);
+  V8_EXPORT_PRIVATE void set_date_cache(DateCache* date_cache);
 
 #ifdef V8_INTL_SUPPORT
 
   const std::string& default_locale() { return default_locale_; }
+
+  void ResetDefaultLocale() { default_locale_.clear(); }
 
   void set_default_locale(const std::string& locale) {
     DCHECK_EQ(default_locale_.length(), 0);
@@ -1125,7 +1129,7 @@ class Isolate final : private HiddenFactory {
   // Isolate::context is not set up, e.g. when calling directly into C++ from
   // CSA.
   bool IsNoElementsProtectorIntact(Context context);
-  bool IsNoElementsProtectorIntact();
+  V8_EXPORT_PRIVATE bool IsNoElementsProtectorIntact();
 
   bool IsArrayOrObjectOrStringPrototype(Object object);
 
@@ -1248,10 +1252,10 @@ class Isolate final : private HiddenFactory {
   // compile dispatcher's queue.
   void AbortConcurrentOptimization(BlockingBehavior blocking_behavior);
 
-  int id() const { return static_cast<int>(id_); }
+  int id() const { return id_; }
 
   CompilationStatistics* GetTurboStatistics();
-  CodeTracer* GetCodeTracer();
+  V8_EXPORT_PRIVATE CodeTracer* GetCodeTracer();
 
   void DumpAndResetStats();
 
@@ -1274,7 +1278,7 @@ class Isolate final : private HiddenFactory {
   int GenerateIdentityHash(uint32_t mask);
 
   // Given an address occupied by a live code object, return that object.
-  Code FindCodeObject(Address a);
+  V8_EXPORT_PRIVATE Code FindCodeObject(Address a);
 
   int NextOptimizationId() {
     int id = next_optimization_id_++;
@@ -1304,7 +1308,8 @@ class Isolate final : private HiddenFactory {
   Handle<Symbol> SymbolFor(RootIndex dictionary_index, Handle<String> name,
                            bool private_symbol);
 
-  void SetUseCounterCallback(v8::Isolate::UseCounterCallback callback);
+  V8_EXPORT_PRIVATE void SetUseCounterCallback(
+      v8::Isolate::UseCounterCallback callback);
   void CountUsage(v8::Isolate::UseCounterFeature feature);
 
   static std::string GetTurboCfgFileName(Isolate* isolate);
@@ -1342,17 +1347,14 @@ class Isolate final : private HiddenFactory {
                               double timeout_in_ms,
                               AtomicsWaitWakeHandle* stop_handle);
 
-  void SetPromiseHook(PromiseHook hook);
-  void RunPromiseHook(PromiseHookType type, Handle<JSPromise> promise,
-                      Handle<Object> parent);
+  V8_EXPORT_PRIVATE void SetPromiseHook(PromiseHook hook);
+  V8_EXPORT_PRIVATE void RunPromiseHook(PromiseHookType type,
+                                        Handle<JSPromise> promise,
+                                        Handle<Object> parent);
   void PromiseHookStateUpdated();
 
   void AddDetachedContext(Handle<Context> context);
   void CheckDetachedContextsAfterGC();
-
-  std::vector<Object>* read_only_object_cache() {
-    return &read_only_object_cache_;
-  }
 
   std::vector<Object>* partial_snapshot_cache() {
     return &partial_snapshot_cache_;
@@ -1374,8 +1376,8 @@ class Isolate final : private HiddenFactory {
   // builtins constants table to remain unchanged from build-time.
   size_t HashIsolateForEmbeddedBlob();
 
-  static const uint8_t* CurrentEmbeddedBlob();
-  static uint32_t CurrentEmbeddedBlobSize();
+  V8_EXPORT_PRIVATE static const uint8_t* CurrentEmbeddedBlob();
+  V8_EXPORT_PRIVATE static uint32_t CurrentEmbeddedBlobSize();
   static bool CurrentEmbeddedBlobIsBinaryEmbedded();
 
   // These always return the same result as static methods above, but don't
@@ -1421,12 +1423,13 @@ class Isolate final : private HiddenFactory {
 
   void SetHostImportModuleDynamicallyCallback(
       HostImportModuleDynamicallyCallback callback);
-  MaybeHandle<JSPromise> RunHostImportModuleDynamicallyCallback(
-      Handle<Script> referrer, Handle<Object> specifier);
+  V8_EXPORT_PRIVATE MaybeHandle<JSPromise>
+  RunHostImportModuleDynamicallyCallback(Handle<Script> referrer,
+                                         Handle<Object> specifier);
 
   void SetHostInitializeImportMetaObjectCallback(
       HostInitializeImportMetaObjectCallback callback);
-  Handle<JSObject> RunHostInitializeImportMetaObjectCallback(
+  V8_EXPORT_PRIVATE Handle<JSObject> RunHostInitializeImportMetaObjectCallback(
       Handle<Module> module);
 
   void RegisterEmbeddedFileWriter(EmbeddedFileWriterInterface* writer) {
@@ -1442,6 +1445,12 @@ class Isolate final : private HiddenFactory {
   // annotate the builtin blob with debugging information.
   void PrepareBuiltinSourcePositionMap();
 
+#if defined(V8_OS_WIN_X64)
+  void SetBuiltinUnwindData(
+      int builtin_index,
+      const win64_unwindinfo::BuiltinUnwindInfo& unwinding_info);
+#endif
+
   void SetPrepareStackTraceCallback(PrepareStackTraceCallback callback);
   MaybeHandle<Object> RunPrepareStackTraceCallback(Handle<Context>,
                                                    Handle<JSObject> Error,
@@ -1450,7 +1459,7 @@ class Isolate final : private HiddenFactory {
 
   void SetRAILMode(RAILMode rail_mode);
 
-  RAILMode rail_mode() { return rail_mode_.Value(); }
+  RAILMode rail_mode() { return rail_mode_.load(); }
 
   double LoadStartTimeMs();
 
@@ -1472,7 +1481,8 @@ class Isolate final : private HiddenFactory {
   bool allow_atomics_wait() { return allow_atomics_wait_; }
 
   // Register a finalizer to be called at isolate teardown.
-  void RegisterManagedPtrDestructor(ManagedPtrDestructor* finalizer);
+  V8_EXPORT_PRIVATE void RegisterManagedPtrDestructor(
+      ManagedPtrDestructor* finalizer);
 
   // Removes a previously-registered shared object finalizer.
   void UnregisterManagedPtrDestructor(ManagedPtrDestructor* finalizer);
@@ -1483,7 +1493,8 @@ class Isolate final : private HiddenFactory {
   }
 
   wasm::WasmEngine* wasm_engine() const { return wasm_engine_.get(); }
-  void SetWasmEngine(std::shared_ptr<wasm::WasmEngine> engine);
+  V8_EXPORT_PRIVATE void SetWasmEngine(
+      std::shared_ptr<wasm::WasmEngine> engine);
 
   const v8::Context::BackupIncumbentScope* top_backup_incumbent_scope() const {
     return top_backup_incumbent_scope_;
@@ -1493,11 +1504,14 @@ class Isolate final : private HiddenFactory {
     top_backup_incumbent_scope_ = top_backup_incumbent_scope;
   }
 
-  void SetIdle(bool is_idle);
+  V8_EXPORT_PRIVATE void SetIdle(bool is_idle);
 
  private:
   explicit Isolate(std::unique_ptr<IsolateAllocator> isolate_allocator);
   ~Isolate();
+
+  V8_EXPORT_PRIVATE bool Init(ReadOnlyDeserializer* read_only_deserializer,
+                              StartupDeserializer* startup_deserializer);
 
   void CheckIsolateLayout();
 
@@ -1548,11 +1562,8 @@ class Isolate final : private HiddenFactory {
   static base::Thread::LocalStorageKey per_isolate_thread_data_key_;
   static base::Thread::LocalStorageKey isolate_key_;
 
-  // A global counter for all generated Isolates, might overflow.
-  static base::Atomic32 isolate_counter_;
-
-#if DEBUG
-  static base::Atomic32 isolate_key_created_;
+#ifdef DEBUG
+  static std::atomic<bool> isolate_key_created_;
 #endif
 
   void Deinit();
@@ -1599,7 +1610,7 @@ class Isolate final : private HiddenFactory {
   std::unique_ptr<IsolateAllocator> isolate_allocator_;
   Heap heap_;
 
-  base::Atomic32 id_;
+  const int id_;
   EntryStackItem* entry_stack_ = nullptr;
   int stack_trace_nesting_level_ = 0;
   StringStream* incomplete_message_ = nullptr;
@@ -1632,16 +1643,18 @@ class Isolate final : private HiddenFactory {
   RuntimeState runtime_state_;
   Builtins builtins_;
   SetupIsolateDelegate* setup_delegate_ = nullptr;
+#ifndef V8_INTL_SUPPORT
   unibrow::Mapping<unibrow::Ecma262UnCanonicalize> jsregexp_uncanonicalize_;
   unibrow::Mapping<unibrow::CanonicalizationRange> jsregexp_canonrange_;
   unibrow::Mapping<unibrow::Ecma262Canonicalize>
       regexp_macro_assembler_canonicalize_;
+#endif  // !V8_INTL_SUPPORT
   RegExpStack* regexp_stack_ = nullptr;
   std::vector<int> regexp_indices_;
   DateCache* date_cache_ = nullptr;
   base::RandomNumberGenerator* random_number_generator_ = nullptr;
   base::RandomNumberGenerator* fuzzer_rng_ = nullptr;
-  base::AtomicValue<RAILMode> rail_mode_;
+  std::atomic<RAILMode> rail_mode_;
   v8::Isolate::AtomicsWaitCallback atomics_wait_callback_ = nullptr;
   void* atomics_wait_callback_data_ = nullptr;
   PromiseHook promise_hook_ = nullptr;
@@ -1691,7 +1704,7 @@ class Isolate final : private HiddenFactory {
   double time_millis_at_init_ = 0;
 
 #ifdef DEBUG
-  static std::atomic<size_t> non_disposed_isolates_;
+  V8_EXPORT_PRIVATE static std::atomic<size_t> non_disposed_isolates_;
 
   JSObject::SpillInformation js_spill_information_;
 #endif
@@ -1755,7 +1768,6 @@ class Isolate final : private HiddenFactory {
 
   v8::Isolate::UseCounterCallback use_counter_callback_ = nullptr;
 
-  std::vector<Object> read_only_object_cache_;
   std::vector<Object> partial_snapshot_cache_;
 
   // Used during builtins compilation to build the builtins constants table,

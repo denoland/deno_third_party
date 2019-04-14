@@ -245,12 +245,6 @@ void DeclarationVisitor::Visit(ExternConstDeclaration* decl) {
 void DeclarationVisitor::DeclareMethods(
     AggregateType* container_type, const std::vector<Declaration*>& methods) {
   // Declare the class' methods
-  IdentifierExpression* constructor_this = MakeNode<IdentifierExpression>(
-      std::vector<std::string>{}, MakeNode<Identifier>(kThisParameterName));
-  AggregateType* constructor_this_type =
-      container_type->IsStructType()
-          ? container_type
-          : ClassType::cast(container_type)->struct_type();
   for (auto declaration : methods) {
     CurrentSourcePosition::Scope pos_scope(declaration->pos);
     StandardDeclaration* standard_declaration =
@@ -264,91 +258,12 @@ void DeclarationVisitor::DeclareMethods(
         MakeNode<Identifier>(kThisParameterName));
     Statement* body = *(standard_declaration->body);
     std::string method_name(method->name);
-    if (method->name == kConstructMethodName) {
-      signature.parameter_types.types.insert(
-          signature.parameter_types.types.begin() + signature.implicit_count,
-          constructor_this_type);
-      // Constructor
-      if (!signature.return_type->IsVoid()) {
-        ReportError("constructors musn't have a return type");
-      }
-      if (signature.labels.size() != 0) {
-        ReportError("constructors musn't have labels");
-      }
-      method_name = kConstructMethodName;
-      Declarations::CreateMethod(constructor_this_type, method_name, signature,
-                                 false, body);
-    } else {
       signature.parameter_types.types.insert(
           signature.parameter_types.types.begin() + signature.implicit_count,
           container_type);
       Declarations::CreateMethod(container_type, method_name, signature, false,
                                  body);
-    }
   }
-
-  if (constructor_this_type->Constructors().size() != 0) return;
-
-  // TODO(danno): Currently, default constructors for classes with
-  // open-ended arrays at the end are not supported. For now, if one is
-  // encountered, don't actually create the constructor.
-  if (container_type->HasIndexedField()) return;
-
-  // Generate default constructor.
-  Signature constructor_signature;
-  constructor_signature.parameter_types.var_args = false;
-  constructor_signature.return_type = TypeOracle::GetVoidType();
-  std::vector<const AggregateType*> hierarchy = container_type->GetHierarchy();
-
-  std::vector<Statement*> statements;
-  std::vector<Statement*> initializer_statements;
-
-  size_t parameter_number = 0;
-  constructor_signature.parameter_names.push_back(
-      MakeNode<Identifier>(kThisParameterName));
-  constructor_signature.parameter_types.types.push_back(constructor_this_type);
-  std::vector<Expression*> super_arguments;
-  for (auto current_type : hierarchy) {
-    for (auto& f : current_type->fields()) {
-      DCHECK(!f.index);
-      std::string parameter_name("p" + std::to_string(parameter_number++));
-      constructor_signature.parameter_names.push_back(
-          MakeNode<Identifier>(parameter_name));
-      constructor_signature.parameter_types.types.push_back(
-          f.name_and_type.type);
-      IdentifierExpression* value = MakeNode<IdentifierExpression>(
-          std::vector<std::string>{}, MakeNode<Identifier>(parameter_name));
-      if (container_type != current_type) {
-        super_arguments.push_back(MakeNode<IdentifierExpression>(
-            std::vector<std::string>{}, MakeNode<Identifier>(parameter_name)));
-      } else {
-        LocationExpression* location = MakeNode<FieldAccessExpression>(
-            constructor_this, f.name_and_type.name);
-        Statement* statement = MakeNode<ExpressionStatement>(
-            MakeNode<AssignmentExpression>(location, base::nullopt, value));
-        initializer_statements.push_back(statement);
-      }
-    }
-  }
-
-  if (hierarchy.size() > 1) {
-    IdentifierExpression* super_identifier = MakeNode<IdentifierExpression>(
-        std::vector<std::string>{}, MakeNode<Identifier>(kSuperMethodName));
-    Statement* statement =
-        MakeNode<ExpressionStatement>(MakeNode<CallMethodExpression>(
-            constructor_this, super_identifier, super_arguments,
-            std::vector<std::string>{}));
-    statements.push_back(statement);
-  }
-
-  for (auto s : initializer_statements) {
-    statements.push_back(s);
-  }
-
-  Statement* constructor_body = MakeNode<BlockStatement>(false, statements);
-
-  Declarations::CreateMethod(constructor_this_type, kConstructMethodName,
-                             constructor_signature, false, constructor_body);
 }
 
 void DeclarationVisitor::Visit(StructDeclaration* decl) {
@@ -370,13 +285,13 @@ void DeclarationVisitor::Visit(ClassDeclaration* decl) {
       const ClassType* super_class = ClassType::DynamicCast(super_type);
       if (!super_class) {
         ReportError(
-            "class \"", decl->name,
+            "class \"", decl->name->value,
             "\" must extend either Tagged or an already declared class");
       }
     }
 
     // The generates clause must create a TNode<>
-    std::string generates = decl->name;
+    std::string generates = decl->name->value;
     if (decl->generates) {
       generates = *decl->generates;
       if (generates.length() < 7 || generates.substr(0, 6) != "TNode<" ||
@@ -388,7 +303,8 @@ void DeclarationVisitor::Visit(ClassDeclaration* decl) {
     }
 
     new_class = Declarations::DeclareClass(
-        super_type, decl->name, decl->is_extern, decl->transient, generates);
+        super_type, decl->name, decl->is_extern, decl->generate_print,
+        decl->transient, generates);
   } else {
     if (decl->super) {
       ReportError("Only extern classes can inherit.");
@@ -396,11 +312,11 @@ void DeclarationVisitor::Visit(ClassDeclaration* decl) {
     if (decl->generates) {
       ReportError("Only extern classes can specify a generated type.");
     }
-    new_class = Declarations::DeclareClass(TypeOracle::GetTaggedType(),
-                                           decl->name, decl->is_extern,
-                                           decl->transient, "FixedArray");
+    new_class = Declarations::DeclareClass(
+        TypeOracle::GetTaggedType(), decl->name, decl->is_extern,
+        decl->generate_print, decl->transient, "FixedArray");
   }
-  GlobalContext::RegisterClass(decl->name, new_class);
+  GlobalContext::RegisterClass(decl->name->value, new_class);
   class_declarations_.push_back(
       std::make_tuple(CurrentScope::Get(), decl, new_class));
 }
@@ -427,10 +343,18 @@ void DeclarationVisitor::Visit(TypeDeclaration* decl) {
     if (decl->transient) {
       ReportError("cannot declare a transient type that is also constexpr");
     }
-    std::string constexpr_name = CONSTEXPR_TYPE_PREFIX + decl->name;
-    base::Optional<std::string> constexpr_extends;
-    if (decl->extends)
-      constexpr_extends = CONSTEXPR_TYPE_PREFIX + *decl->extends;
+    // DeclareAbstractType expects an Identifier*. A new one is created from the
+    // declaration, and the SourcePosition copied from the original name.
+    Identifier* constexpr_name =
+        MakeNode<Identifier>(CONSTEXPR_TYPE_PREFIX + decl->name->value);
+    constexpr_name->pos = decl->name->pos;
+
+    base::Optional<Identifier*> constexpr_extends;
+    if (decl->extends) {
+      constexpr_extends =
+          MakeNode<Identifier>(CONSTEXPR_TYPE_PREFIX + (*decl->extends)->value);
+      (*constexpr_extends)->pos = (*decl->extends)->pos;
+    }
     Declarations::DeclareAbstractType(constexpr_name, false,
                                       *decl->constexpr_generates, type,
                                       constexpr_extends);
@@ -450,7 +374,7 @@ void DeclarationVisitor::DeclareSpecializedTypes(const SpecializationKey& key) {
   }
 
   for (auto type : key.specialized_types) {
-    std::string generic_type_name =
+    Identifier* generic_type_name =
         key.generic->declaration()->generic_parameters[i++];
     Declarations::DeclareType(generic_type_name, type, true);
   }
@@ -541,13 +465,16 @@ void DeclarationVisitor::FinalizeStructFieldsAndMethods(
     StructType* struct_type, StructDeclaration* struct_declaration) {
   size_t offset = 0;
   for (auto& field : struct_declaration->fields) {
+    CurrentSourcePosition::Scope position_activator(
+        field.name_and_type.type->pos);
     const Type* field_type = Declarations::GetType(field.name_and_type.type);
-    struct_type->RegisterField({field.name_and_type.type->pos,
+    struct_type->RegisterField({field.name_and_type.name->pos,
                                 struct_type,
                                 base::nullopt,
                                 {field.name_and_type.name->value, field_type},
                                 offset,
-                                false});
+                                false,
+                                field.const_qualified});
     offset += LoweredSlotCount(field_type);
   }
   CurrentSourcePosition::Scope position_activator(struct_declaration->pos);
@@ -582,12 +509,13 @@ void DeclarationVisitor::FinalizeClassFieldsAndMethods(
       const Field* index_field =
           &(class_type->LookupField(*field_expression.index));
       class_type->RegisterField(
-          {field_expression.name_and_type.type->pos,
+          {field_expression.name_and_type.name->pos,
            class_type,
            index_field,
            {field_expression.name_and_type.name->value, field_type},
            class_offset,
-           field_expression.weak});
+           field_expression.weak,
+           field_expression.const_qualified});
     } else {
       if (seen_indexed_field) {
         ReportError("cannot declare non-indexable field \"",
@@ -596,12 +524,13 @@ void DeclarationVisitor::FinalizeClassFieldsAndMethods(
                     "declaration");
       }
       const Field& field = class_type->RegisterField(
-          {field_expression.name_and_type.type->pos,
+          {field_expression.name_and_type.name->pos,
            class_type,
            base::nullopt,
            {field_expression.name_and_type.name->value, field_type},
            class_offset,
-           field_expression.weak});
+           field_expression.weak,
+           field_expression.const_qualified});
       size_t field_size;
       std::string size_string;
       std::string machine_type;
@@ -619,41 +548,6 @@ void DeclarationVisitor::FinalizeClassFieldsAndMethods(
   }
   class_type->SetSize(class_offset);
 
-  StructType* this_struct_type = Declarations::DeclareStruct(
-      kClassConstructorThisStructPrefix + class_type->name());
-  size_t struct_offset = 0;
-  const StructType* super_struct_type = nullptr;
-  // In order to ensure "atomicity" of object allocation, a class'
-  // constructors operate on a per-class internal struct rather than the class
-  // directly until the constructor has successfully completed and all class
-  // members are available. Create the appropriate struct type for use in the
-  // class' constructors, including a '_super' field in the struct that
-  // contains the values constructed by calls to super constructors.
-  if (super_class) {
-    super_struct_type = super_class->struct_type();
-    this_struct_type->RegisterField(
-        {CurrentSourcePosition::Get(),
-         super_struct_type,
-         base::nullopt,
-         {kConstructorStructSuperFieldName, super_struct_type},
-         struct_offset,
-         false});
-    struct_offset += LoweredSlotCount(super_struct_type);
-  }
-  for (auto& field : class_type->fields()) {
-    if (field.index) continue;
-    const Type* field_type = field.name_and_type.type;
-    this_struct_type->RegisterField({field.pos,
-                                     class_type,
-                                     base::nullopt,
-                                     {field.name_and_type.name, field_type},
-                                     struct_offset,
-                                     false});
-    struct_offset += LoweredSlotCount(field_type);
-  }
-  this_struct_type->SetDerivedFrom(class_type);
-  class_type->SetThisStruct(this_struct_type);
-
   // For each field, construct AST snippits that implement a CSA accessor
   // function and define a corresponding '.field' operator. The
   // implementation iterator will turn the snippits into code.
@@ -667,24 +561,22 @@ void DeclarationVisitor::FinalizeClassFieldsAndMethods(
     std::string camel_field_name = CamelifyString(field.name_and_type.name);
     std::string load_macro_name =
         "Load" + class_type->name() + camel_field_name;
-    std::string load_operator_name = "." + field.name_and_type.name;
     Signature load_signature;
     load_signature.parameter_names.push_back(MakeNode<Identifier>("o"));
     load_signature.parameter_types.types.push_back(class_type);
     load_signature.parameter_types.var_args = false;
     load_signature.return_type = field.name_and_type.type;
     Statement* load_body =
-        MakeNode<ReturnStatement>(MakeNode<LoadObjectFieldExpression>(
-            parameter, field.name_and_type.name));
+        MakeNode<ReturnStatement>(MakeNode<FieldAccessExpression>(
+            parameter, MakeNode<Identifier>(field.name_and_type.name)));
     Declarations::DeclareMacro(load_macro_name, base::nullopt, load_signature,
-                               false, load_body, load_operator_name);
+                               false, load_body);
 
     // Store accessor
     IdentifierExpression* value = MakeNode<IdentifierExpression>(
         std::vector<std::string>{}, MakeNode<Identifier>(std::string{"v"}));
     std::string store_macro_name =
         "Store" + class_type->name() + camel_field_name;
-    std::string store_operator_name = "." + field.name_and_type.name + "=";
     Signature store_signature;
     store_signature.parameter_names.push_back(MakeNode<Identifier>("o"));
     store_signature.parameter_names.push_back(MakeNode<Identifier>("v"));
@@ -694,10 +586,12 @@ void DeclarationVisitor::FinalizeClassFieldsAndMethods(
     // TODO(danno): Store macros probably should return their value argument
     store_signature.return_type = TypeOracle::GetVoidType();
     Statement* store_body =
-        MakeNode<ExpressionStatement>(MakeNode<StoreObjectFieldExpression>(
-            parameter, field.name_and_type.name, value));
+        MakeNode<ExpressionStatement>(MakeNode<AssignmentExpression>(
+            MakeNode<FieldAccessExpression>(
+                parameter, MakeNode<Identifier>(field.name_and_type.name)),
+            value));
     Declarations::DeclareMacro(store_macro_name, base::nullopt, store_signature,
-                               false, store_body, store_operator_name);
+                               false, store_body);
   }
 
   DeclareMethods(class_type, class_declaration->methods);
@@ -710,6 +604,7 @@ void DeclarationVisitor::FinalizeStructsAndClasses() {
     StructType* struct_type;
     std::tie(scope, struct_declaration, struct_type) = current_struct_info;
     CurrentScope::Scope scope_activator(scope);
+    CurrentSourcePosition::Scope position_activator(struct_declaration->pos);
     FinalizeStructFieldsAndMethods(struct_type, struct_declaration);
   }
 

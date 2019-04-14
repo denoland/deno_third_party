@@ -32,6 +32,9 @@ namespace module_decoder_unittest {
 #define WASM_INIT_EXPR_ANYREF WASM_REF_NULL, kExprEnd
 #define WASM_INIT_EXPR_GLOBAL(index) WASM_GET_GLOBAL(index), kExprEnd
 
+#define REF_NULL_ELEMENT kExprRefNull, kExprEnd
+#define REF_FUNC_ELEMENT(v) kExprRefFunc, U32V_1(v), kExprEnd
+
 #define EMPTY_BODY 0
 #define NOP_BODY 2, 0, kExprNop
 
@@ -70,6 +73,11 @@ struct CheckLEB1 : std::integral_constant<size_t, num> {
   SECTION(Unknown,                                                         \
           ADD_COUNT('s', 'o', 'u', 'r', 'c', 'e', 'M', 'a', 'p', 'p', 'i', \
                     'n', 'g', 'U', 'R', 'L'),                              \
+          ADD_COUNT(__VA_ARGS__))
+#define SECTION_COMPILATION_HINTS(...)                                     \
+  SECTION(Unknown,                                                         \
+          ADD_COUNT('c', 'o', 'm', 'p', 'i', 'l', 'a', 't', 'i', 'o', 'n', \
+                    'H', 'i', 'n', 't', 's'),                              \
           ADD_COUNT(__VA_ARGS__))
 
 #define FAIL_IF_NO_EXPERIMENTAL_EH(data)                                 \
@@ -178,7 +186,7 @@ class WasmModuleVerifyTest : public TestWithIsolateAndZone {
     }
     ModuleResult result = DecodeWasmModule(
         enabled_features_, temp, temp + total, false, kWasmOrigin,
-        isolate()->counters(), isolate()->allocator());
+        isolate()->counters(), isolate()->wasm_engine()->allocator());
     delete[] temp;
     return result;
   }
@@ -186,7 +194,7 @@ class WasmModuleVerifyTest : public TestWithIsolateAndZone {
                                     const byte* module_end) {
     return DecodeWasmModule(enabled_features_, module_start, module_end, false,
                             kWasmOrigin, isolate()->counters(),
-                            isolate()->allocator());
+                            isolate()->wasm_engine()->allocator());
   }
 };
 
@@ -281,7 +289,7 @@ TEST_F(WasmModuleVerifyTest, AnyRefGlobal) {
 
     EXPECT_EQ(kWasmAnyRef, global->type);
     EXPECT_FALSE(global->mutability);
-    EXPECT_EQ(WasmInitExpr::kAnyRefConst, global->init.kind);
+    EXPECT_EQ(WasmInitExpr::kRefNullConst, global->init.kind);
   }
 }
 
@@ -1304,6 +1312,42 @@ TEST_F(WasmModuleVerifyTest, MultipleTablesWithFlag) {
   EXPECT_EQ(kWasmAnyRef, result.value()->tables[1].type);
 }
 
+TEST_F(WasmModuleVerifyTest, TieringCompilationHints) {
+  WASM_FEATURE_SCOPE(compilation_hints);
+  static const byte data[] = {
+      SIGNATURES_SECTION(1, SIG_ENTRY_v_v),
+      FUNCTION_SIGNATURES_SECTION(3, 0, 0, 0),
+      SECTION_COMPILATION_HINTS(
+          BASELINE_TIER_INTERPRETER | TOP_TIER_BASELINE,
+          BASELINE_TIER_BASELINE | TOP_TIER_OPTIMIZED,
+          BASELINE_TIER_INTERPRETER | TOP_TIER_INTERPRETER),
+      SECTION(Code, ENTRY_COUNT(3), NOP_BODY, NOP_BODY, NOP_BODY),
+  };
+
+  ModuleResult result = DecodeModule(data, data + sizeof(data));
+  EXPECT_OK(result);
+
+  EXPECT_EQ(3u, result.value()->compilation_hints.size());
+  EXPECT_EQ(WasmCompilationHintStrategy::kDefault,
+            result.value()->compilation_hints[0].strategy);
+  EXPECT_EQ(WasmCompilationHintTier::kInterpreter,
+            result.value()->compilation_hints[0].baseline_tier);
+  EXPECT_EQ(WasmCompilationHintTier::kBaseline,
+            result.value()->compilation_hints[0].top_tier);
+  EXPECT_EQ(WasmCompilationHintStrategy::kDefault,
+            result.value()->compilation_hints[1].strategy);
+  EXPECT_EQ(WasmCompilationHintTier::kBaseline,
+            result.value()->compilation_hints[1].baseline_tier);
+  EXPECT_EQ(WasmCompilationHintTier::kOptimized,
+            result.value()->compilation_hints[1].top_tier);
+  EXPECT_EQ(WasmCompilationHintStrategy::kDefault,
+            result.value()->compilation_hints[2].strategy);
+  EXPECT_EQ(WasmCompilationHintTier::kInterpreter,
+            result.value()->compilation_hints[2].baseline_tier);
+  EXPECT_EQ(WasmCompilationHintTier::kInterpreter,
+            result.value()->compilation_hints[2].top_tier);
+}
+
 class WasmSignatureDecodeTest : public TestWithZone {
  public:
   WasmFeatures enabled_features_;
@@ -2116,7 +2160,7 @@ TEST_F(WasmInitExprDecodeTest, InitExpr_AnyRef) {
   WASM_FEATURE_SCOPE(anyref);
   static const byte data[] = {kExprRefNull, kExprEnd};
   WasmInitExpr expr = DecodeInitExpr(data, data + sizeof(data));
-  EXPECT_EQ(WasmInitExpr::kAnyRefConst, expr.kind);
+  EXPECT_EQ(WasmInitExpr::kRefNullConst, expr.kind);
 }
 
 TEST_F(WasmInitExprDecodeTest, InitExpr_illegal) {
@@ -2258,14 +2302,30 @@ TEST_F(WasmModuleVerifyTest, PassiveElementSegment) {
       // table declaration -----------------------------------------------------
       SECTION(Table, ENTRY_COUNT(1), kLocalAnyFunc, 0, 1),
       // element segments  -----------------------------------------------------
-      SECTION(Element, ENTRY_COUNT(1), PASSIVE,
-              ADD_COUNT(FUNC_INDEX(0), FUNC_INDEX(0))),
+      SECTION(Element, ENTRY_COUNT(1), PASSIVE, kLocalAnyFunc, U32V_1(3),
+              REF_FUNC_ELEMENT(0), REF_FUNC_ELEMENT(0), REF_NULL_ELEMENT),
       // code ------------------------------------------------------------------
       ONE_EMPTY_BODY};
   EXPECT_FAILURE(data);
   WASM_FEATURE_SCOPE(bulk_memory);
   EXPECT_VERIFIES(data);
   EXPECT_OFF_END_FAILURE(data, arraysize(data) - 5);
+}
+
+TEST_F(WasmModuleVerifyTest, PassiveElementSegmentAnyRef) {
+  static const byte data[] = {
+      // sig#0 -----------------------------------------------------------------
+      SIGNATURES_SECTION_VOID_VOID,
+      // funcs -----------------------------------------------------------------
+      ONE_EMPTY_FUNCTION(SIG_INDEX(0)),
+      // table declaration -----------------------------------------------------
+      SECTION(Table, ENTRY_COUNT(1), kLocalAnyFunc, 0, 1),
+      // element segments  -----------------------------------------------------
+      SECTION(Element, ENTRY_COUNT(1), PASSIVE, kLocalAnyRef, U32V_1(0)),
+      // code ------------------------------------------------------------------
+      ONE_EMPTY_BODY};
+  WASM_FEATURE_SCOPE(bulk_memory);
+  EXPECT_FAILURE(data);
 }
 
 TEST_F(WasmModuleVerifyTest, DataCountSectionCorrectPlacement) {
@@ -2375,6 +2435,8 @@ TEST_F(WasmModuleVerifyTest, DataCountSegmentCount_omitted) {
 #undef WASM_INIT_EXPR_F64
 #undef WASM_INIT_EXPR_ANYREF
 #undef WASM_INIT_EXPR_GLOBAL
+#undef REF_NULL_ELEMENT
+#undef REF_FUNC_ELEMENT
 #undef EMPTY_BODY
 #undef NOP_BODY
 #undef SIG_ENTRY_i_i
@@ -2393,6 +2455,7 @@ TEST_F(WasmModuleVerifyTest, DataCountSegmentCount_omitted) {
 #undef SECTION_NAMES
 #undef EMPTY_NAMES_SECTION
 #undef SECTION_SRC_MAP
+#undef SECTION_COMPILATION_HINTS
 #undef FAIL_IF_NO_EXPERIMENTAL_EH
 #undef X1
 #undef X2

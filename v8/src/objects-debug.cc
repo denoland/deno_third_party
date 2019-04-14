@@ -168,6 +168,7 @@ void HeapObject::HeapObjectVerify(Isolate* isolate) {
       EmbedderDataArray::cast(*this)->EmbedderDataArrayVerify(isolate);
       break;
     // FixedArray types
+    case CLOSURE_FEEDBACK_CELL_ARRAY_TYPE:
     case HASH_TABLE_TYPE:
     case ORDERED_HASH_MAP_TYPE:
     case ORDERED_HASH_SET_TYPE:
@@ -463,6 +464,7 @@ void HeapObject::HeapObjectVerify(Isolate* isolate) {
   }
 }
 
+// static
 void HeapObject::VerifyHeapPointer(Isolate* isolate, Object p) {
   CHECK(p->IsHeapObject());
   HeapObject ho = HeapObject::cast(p);
@@ -490,17 +492,22 @@ void BytecodeArray::BytecodeArrayVerify(Isolate* isolate) {
   VerifyHeapPointer(isolate, constant_pool());
 }
 
-void FreeSpace::FreeSpaceVerify(Isolate* isolate) { CHECK(IsFreeSpace()); }
+void FreeSpace::FreeSpaceVerify(Isolate* isolate) {
+  CHECK(IsFreeSpace());
+  VerifySmiField(kSizeOffset);
+}
 
 void FeedbackCell::FeedbackCellVerify(Isolate* isolate) {
   CHECK(IsFeedbackCell());
 
   VerifyHeapPointer(isolate, value());
-  CHECK(value()->IsUndefined(isolate) || value()->IsFeedbackVector());
+  CHECK(value()->IsUndefined(isolate) || value()->IsFeedbackVector() ||
+        value()->IsFixedArray());
 }
 
 void FeedbackVector::FeedbackVectorVerify(Isolate* isolate) {
   CHECK(IsFeedbackVector());
+  CHECK(closure_feedback_cell_array()->IsFixedArray());
   MaybeObject code = optimized_code_weak_or_smi();
   MaybeObject::VerifyMaybeObjectPointer(isolate, code);
   CHECK(code->IsSmi() || code->IsWeakOrCleared());
@@ -513,7 +520,8 @@ void FixedTypedArray<Traits>::FixedTypedArrayVerify(Isolate* isolate) {
     CHECK_EQ(reinterpret_cast<Address>(external_pointer()),
              FixedTypedArrayBase::kDataOffset - kHeapObjectTag);
   } else {
-    CHECK_EQ(base_pointer(), Smi::kZero);
+    CHECK_EQ(Smi::kZero, base_pointer());
+    CHECK_EQ(0, length());
   }
 }
 
@@ -629,6 +637,7 @@ void JSObject::JSObjectVerify(Isolate* isolate) {
   // pointer may point to a one pointer filler map.
   if (ElementsAreSafeToExamine()) {
     CHECK_EQ((map()->has_fast_smi_or_object_elements() ||
+              map()->is_frozen_or_sealed_elements() ||
               (elements() == GetReadOnlyRoots().empty_fixed_array()) ||
               HasFastStringWrapperElements()),
              (elements()->map() == GetReadOnlyRoots().fixed_array_map() ||
@@ -692,7 +701,7 @@ void Map::DictionaryMapVerify(Isolate* isolate) {
 }
 
 void AliasedArgumentsEntry::AliasedArgumentsEntryVerify(Isolate* isolate) {
-  VerifySmiField(kAliasedContextSlot);
+  VerifySmiField(kAliasedContextSlotOffset);
 }
 
 void EmbedderDataArray::EmbedderDataArrayVerify(Isolate* isolate) {
@@ -702,6 +711,7 @@ void EmbedderDataArray::EmbedderDataArrayVerify(Isolate* isolate) {
     Object e = slot.load_tagged();
     Object::VerifyPointer(isolate, e);
   }
+  VerifySmiField(kLengthOffset);
 }
 
 void FixedArray::FixedArrayVerify(Isolate* isolate) {
@@ -734,6 +744,7 @@ void PropertyArray::PropertyArrayVerify(Isolate* isolate) {
     Object e = get(i);
     Object::VerifyPointer(isolate, e);
   }
+  VerifySmiField(kLengthAndHashOffset);
 }
 
 void FixedDoubleArray::FixedDoubleArrayVerify(Isolate* isolate) {
@@ -769,7 +780,7 @@ void NativeContext::NativeContextVerify(Isolate* isolate) {
 }
 
 void FeedbackMetadata::FeedbackMetadataVerify(Isolate* isolate) {
-  if (slot_count() == 0) {
+  if (slot_count() == 0 && closure_feedback_cell_count() == 0) {
     CHECK_EQ(ReadOnlyRoots(isolate).empty_feedback_metadata(), *this);
   } else {
     FeedbackMetadataIterator iter(*this);
@@ -989,12 +1000,18 @@ void JSMessageObject::JSMessageObjectVerify(Isolate* isolate) {
   VerifyObjectField(isolate, kArgumentsOffset);
   VerifyObjectField(isolate, kScriptOffset);
   VerifyObjectField(isolate, kStackFramesOffset);
+  VerifySmiField(kMessageTypeOffset);
+  VerifySmiField(kStartPositionOffset);
+  VerifySmiField(kEndPositionOffset);
+  VerifySmiField(kErrorLevelOffset);
 }
 
 void String::StringVerify(Isolate* isolate) {
   CHECK(IsString());
   CHECK(length() >= 0 && length() <= Smi::kMaxValue);
   CHECK_IMPLIES(length() == 0, *this == ReadOnlyRoots(isolate).empty_string());
+  CHECK_EQ(*this == ReadOnlyRoots(isolate).empty_string(),
+           map() == ReadOnlyRoots(isolate).empty_string_map());
   if (IsInternalizedString()) {
     CHECK(!ObjectInYoungGeneration(*this));
   }
@@ -1009,8 +1026,8 @@ void String::StringVerify(Isolate* isolate) {
 
 void ConsString::ConsStringVerify(Isolate* isolate) {
   CHECK(this->first()->IsString());
-  CHECK(this->second() == ReadOnlyRoots(isolate).empty_string() ||
-        this->second()->IsString());
+  CHECK(this->second()->IsString());
+  CHECK_GT(this->first()->length(), 0);
   CHECK_GE(this->length(), ConsString::kMinLength);
   CHECK(this->length() == this->first()->length() + this->second()->length());
   if (this->IsFlat()) {
@@ -1194,6 +1211,8 @@ void Oddball::OddballVerify(Isolate* isolate) {
   } else {
     UNREACHABLE();
   }
+  CHECK(to_string()->IsString());
+  CHECK(type_of()->IsString());
 }
 
 void Cell::CellVerify(Isolate* isolate) {
@@ -1249,10 +1268,11 @@ void JSArray::JSArrayVerify(Isolate* isolate) {
   }
   if (!length()->IsNumber()) return;
   // Verify that the length and the elements backing store are in sync.
-  if (length()->IsSmi() && HasFastElements()) {
+  if (length()->IsSmi() && (HasFastElements() || HasFrozenOrSealedElements())) {
     if (elements()->length() > 0) {
       CHECK_IMPLIES(HasDoubleElements(), elements()->IsFixedDoubleArray());
-      CHECK_IMPLIES(HasSmiOrObjectElements(), elements()->IsFixedArray());
+      CHECK_IMPLIES(HasSmiOrObjectElements() || HasFrozenOrSealedElements(),
+                    elements()->IsFixedArray());
     }
     int size = Smi::ToInt(length());
     // Holey / Packed backing stores might have slack or might have not been
@@ -1598,6 +1618,8 @@ void SmallOrderedNameDictionary::SmallOrderedNameDictionaryVerify(
 void JSRegExp::JSRegExpVerify(Isolate* isolate) {
   JSObjectVerify(isolate);
   CHECK(data()->IsUndefined(isolate) || data()->IsFixedArray());
+  CHECK(source()->IsUndefined(isolate) || source()->IsString());
+  CHECK(flags()->IsUndefined() || flags()->IsSmi());
   switch (TypeTag()) {
     case JSRegExp::ATOM: {
       FixedArray arr = FixedArray::cast(data());
@@ -2038,6 +2060,12 @@ void Script::ScriptVerify(Isolate* isolate) {
           (maybe_object->GetHeapObjectIfStrong(&heap_object) &&
            heap_object->IsUndefined(isolate)));
   }
+  VerifySmiField(kIdOffset);
+  VerifySmiField(kLineOffsetOffset);
+  VerifySmiField(kColumnOffsetOffset);
+  VerifySmiField(kScriptTypeOffset);
+  VerifySmiField(kEvalFromPositionOffset);
+  VerifySmiField(kFlagsOffset);
 }
 
 void NormalizedMapCache::NormalizedMapCacheVerify(Isolate* isolate) {
@@ -2135,6 +2163,7 @@ void JSDateTimeFormat::JSDateTimeFormatVerify(Isolate* isolate) {
   JSObjectVerify(isolate);
   VerifyObjectField(isolate, kICULocaleOffset);
   VerifyObjectField(isolate, kICUSimpleDateFormatOffset);
+  VerifyObjectField(isolate, kICUDateIntervalFormatOffset);
   VerifyObjectField(isolate, kBoundFormatOffset);
   VerifyObjectField(isolate, kFlagsOffset);
 }
@@ -2222,6 +2251,8 @@ void JSObject::IncrementSpillStatistics(Isolate* isolate,
     case PACKED_DOUBLE_ELEMENTS:
     case HOLEY_ELEMENTS:
     case PACKED_ELEMENTS:
+    case PACKED_FROZEN_ELEMENTS:
+    case PACKED_SEALED_ELEMENTS:
     case FAST_STRING_WRAPPER_ELEMENTS: {
       info->number_of_objects_with_fast_elements_++;
       int holes = 0;

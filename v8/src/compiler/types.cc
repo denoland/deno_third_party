@@ -137,30 +137,30 @@ Type::bitset Type::BitsetLub() const {
 template <typename MapRefLike>
 Type::bitset BitsetType::Lub(const MapRefLike& map) {
   switch (map.instance_type()) {
+    case EMPTY_STRING_TYPE:
+      return kEmptyString;
     case CONS_STRING_TYPE:
-    case CONS_ONE_BYTE_STRING_TYPE:
-    case THIN_STRING_TYPE:
-    case THIN_ONE_BYTE_STRING_TYPE:
     case SLICED_STRING_TYPE:
-    case SLICED_ONE_BYTE_STRING_TYPE:
     case EXTERNAL_STRING_TYPE:
-    case EXTERNAL_ONE_BYTE_STRING_TYPE:
-    case EXTERNAL_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case UNCACHED_EXTERNAL_STRING_TYPE:
-    case UNCACHED_EXTERNAL_ONE_BYTE_STRING_TYPE:
-    case UNCACHED_EXTERNAL_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case STRING_TYPE:
+    case THIN_STRING_TYPE:
+      return kNonEmptyTwoByteString;
+    case CONS_ONE_BYTE_STRING_TYPE:
+    case SLICED_ONE_BYTE_STRING_TYPE:
+    case EXTERNAL_ONE_BYTE_STRING_TYPE:
+    case UNCACHED_EXTERNAL_ONE_BYTE_STRING_TYPE:
     case ONE_BYTE_STRING_TYPE:
-      return kString;
+    case THIN_ONE_BYTE_STRING_TYPE:
+      return kNonEmptyOneByteString;
     case EXTERNAL_INTERNALIZED_STRING_TYPE:
-    case EXTERNAL_ONE_BYTE_INTERNALIZED_STRING_TYPE:
-    case EXTERNAL_INTERNALIZED_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case UNCACHED_EXTERNAL_INTERNALIZED_STRING_TYPE:
-    case UNCACHED_EXTERNAL_ONE_BYTE_INTERNALIZED_STRING_TYPE:
-    case UNCACHED_EXTERNAL_INTERNALIZED_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case INTERNALIZED_STRING_TYPE:
+      return kNonEmptyInternalizedTwoByteString;
+    case EXTERNAL_ONE_BYTE_INTERNALIZED_STRING_TYPE:
+    case UNCACHED_EXTERNAL_ONE_BYTE_INTERNALIZED_STRING_TYPE:
     case ONE_BYTE_INTERNALIZED_STRING_TYPE:
-      return kInternalizedString;
+      return kNonEmptyInternalizedOneByteString;
     case SYMBOL_TYPE:
       return kSymbol;
     case BIGINT_TYPE:
@@ -297,6 +297,7 @@ Type::bitset BitsetType::Lub(const MapRefLike& map) {
     case DESCRIPTOR_ARRAY_TYPE:
     case TRANSITION_ARRAY_TYPE:
     case FEEDBACK_CELL_TYPE:
+    case CLOSURE_FEEDBACK_CELL_ARRAY_TYPE:
     case FEEDBACK_VECTOR_TYPE:
     case PROPERTY_ARRAY_TYPE:
     case FOREIGN_TYPE:
@@ -401,7 +402,10 @@ size_t BitsetType::BoundariesSize() {
 }
 
 Type::bitset BitsetType::ExpandInternals(Type::bitset bits) {
-  DCHECK_IMPLIES(bits & kOtherString, (bits & kString) == kString);
+  DCHECK_IMPLIES(bits & kOtherOneByteString,
+                 bits & kNonEmptyInternalizedOneByteString);
+  DCHECK_IMPLIES(bits & kOtherTwoByteString,
+                 bits & kNonEmptyInternalizedTwoByteString);
   DisallowHeapAllocation no_allocation;
   if (!(bits & kPlainNumber)) return bits;  // Shortcut.
   const Boundary* boundaries = Boundaries();
@@ -859,7 +863,7 @@ Type Type::NewConstant(JSHeapBroker* broker, Handle<i::Object> value,
     return NewConstant(ref.AsHeapNumber().value(), zone);
   }
   if (ref.IsString() && !ref.IsInternalizedString()) {
-    return Type::String();
+    return For(ref.AsString().map());
   }
   return HeapConstant(ref.AsHeapObject(), zone);
 }

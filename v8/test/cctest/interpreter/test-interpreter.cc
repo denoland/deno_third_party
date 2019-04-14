@@ -1528,17 +1528,18 @@ TEST(InterpreterJumps) {
       NewFeedbackMetadata(isolate, &feedback_spec);
 
   Register reg(0), scratch(1);
-  BytecodeLabel label[3];
+  BytecodeLoopHeader loop_header;
+  BytecodeLabel label[2];
 
   builder.LoadLiteral(Smi::zero())
       .StoreAccumulatorInRegister(reg)
-      .Jump(&label[1]);
-  SetRegister(builder, reg, 1024, scratch).Bind(&label[0]);
-  IncrementRegister(builder, reg, 1, scratch, GetIndex(slot)).Jump(&label[2]);
-  SetRegister(builder, reg, 2048, scratch).Bind(&label[1]);
+      .Jump(&label[0]);
+  SetRegister(builder, reg, 1024, scratch).Bind(&loop_header);
+  IncrementRegister(builder, reg, 1, scratch, GetIndex(slot)).Jump(&label[1]);
+  SetRegister(builder, reg, 2048, scratch).Bind(&label[0]);
   IncrementRegister(builder, reg, 2, scratch, GetIndex(slot1))
-      .JumpLoop(&label[0], 0);
-  SetRegister(builder, reg, 4096, scratch).Bind(&label[2]);
+      .JumpLoop(&loop_header, 0);
+  SetRegister(builder, reg, 4096, scratch).Bind(&label[1]);
   IncrementRegister(builder, reg, 4, scratch, GetIndex(slot2))
       .LoadAccumulatorWithRegister(reg)
       .Return();
@@ -1667,6 +1668,8 @@ TEST(InterpreterJumpConstantWith16BitOperand) {
 
   builder.LoadLiteral(Smi::zero());
   builder.StoreAccumulatorInRegister(reg);
+  // Conditional jump to the fake label, to force both basic blocks to be live.
+  builder.JumpIfTrue(ToBooleanMode::kConvertToBoolean, &fake);
   // Consume all 8-bit operands
   for (int i = 1; i <= 256; i++) {
     builder.LoadLiteral(i + 0.5);
@@ -2275,21 +2278,26 @@ TEST(InterpreterTestIn) {
   const char* properties[] = {"length", "fuzzle", "x", "0"};
   for (size_t i = 0; i < arraysize(properties); i++) {
     bool expected_value = (i == 0);
-    BytecodeArrayBuilder builder(zone, 1, 1);
+    FeedbackVectorSpec feedback_spec(zone);
+    BytecodeArrayBuilder builder(zone, 1, 1, &feedback_spec);
 
     Register r0(0);
     builder.LoadLiteral(ast_factory.GetOneByteString(properties[i]))
         .StoreAccumulatorInRegister(r0);
 
+    FeedbackSlot slot = feedback_spec.AddKeyedHasICSlot();
+    Handle<i::FeedbackMetadata> metadata =
+        NewFeedbackMetadata(isolate, &feedback_spec);
+
     size_t array_entry = builder.AllocateDeferredConstantPoolEntry();
     builder.SetDeferredConstantPoolEntry(array_entry, array);
     builder.LoadConstantPoolEntry(array_entry)
-        .CompareOperation(Token::Value::IN, r0)
+        .CompareOperation(Token::Value::IN, r0, GetIndex(slot))
         .Return();
 
     ast_factory.Internalize(isolate);
     Handle<BytecodeArray> bytecode_array = builder.ToBytecodeArray(isolate);
-    InterpreterTester tester(isolate, bytecode_array);
+    InterpreterTester tester(isolate, bytecode_array, metadata);
     auto callable = tester.GetCallable<>();
     Handle<Object> return_value = callable().ToHandleChecked();
     CHECK(return_value->IsBoolean());
@@ -5078,12 +5086,48 @@ TEST(InterpreterCollectSourcePositions) {
   Handle<SharedFunctionInfo> sfi = handle(function->shared(), isolate);
   Handle<BytecodeArray> bytecode_array =
       handle(sfi->GetBytecodeArray(), isolate);
-  ByteArray source_position_table = bytecode_array->SourcePositionTable();
-  CHECK_EQ(source_position_table->length(), 0);
+  CHECK(!bytecode_array->HasSourcePositionTable());
 
   Compiler::CollectSourcePositions(isolate, sfi);
 
+  ByteArray source_position_table = bytecode_array->SourcePositionTable();
+  CHECK(bytecode_array->HasSourcePositionTable());
+  CHECK_GT(source_position_table->length(), 0);
+}
+
+TEST(InterpreterCollectSourcePositions_StackOverflow) {
+  FLAG_enable_lazy_source_positions = true;
+  HandleAndZoneScope handles;
+  Isolate* isolate = handles.main_isolate();
+
+  const char* source =
+      "(function () {\n"
+      "  return 1;\n"
+      "})";
+
+  Handle<JSFunction> function = Handle<JSFunction>::cast(v8::Utils::OpenHandle(
+      *v8::Local<v8::Function>::Cast(CompileRun(source))));
+
+  Handle<SharedFunctionInfo> sfi = handle(function->shared(), isolate);
+  Handle<BytecodeArray> bytecode_array =
+      handle(sfi->GetBytecodeArray(), isolate);
+  CHECK(!bytecode_array->HasSourcePositionTable());
+
+  // Make the stack limit the same as the current position so recompilation
+  // overflows.
+  uint64_t previous_limit = isolate->stack_guard()->real_climit();
+  isolate->stack_guard()->SetStackLimit(GetCurrentStackPosition());
+  Compiler::CollectSourcePositions(isolate, sfi);
+  // Stack overflowed so source position table can be returned but is empty.
+  ByteArray source_position_table = bytecode_array->SourcePositionTable();
+  CHECK(!bytecode_array->HasSourcePositionTable());
+  CHECK_EQ(source_position_table->length(), 0);
+
+  // Reset the stack limit and try again.
+  isolate->stack_guard()->SetStackLimit(previous_limit);
+  Compiler::CollectSourcePositions(isolate, sfi);
   source_position_table = bytecode_array->SourcePositionTable();
+  CHECK(bytecode_array->HasSourcePositionTable());
   CHECK_GT(source_position_table->length(), 0);
 }
 
@@ -5122,8 +5166,7 @@ TEST(InterpreterCollectSourcePositions_GenerateStackTrace) {
   Handle<SharedFunctionInfo> sfi = handle(function->shared(), isolate);
   Handle<BytecodeArray> bytecode_array =
       handle(sfi->GetBytecodeArray(), isolate);
-  ByteArray source_position_table = bytecode_array->SourcePositionTable();
-  CHECK_EQ(source_position_table->length(), 0);
+  CHECK(!bytecode_array->HasSourcePositionTable());
 
   {
     Handle<Object> result =
@@ -5134,7 +5177,8 @@ TEST(InterpreterCollectSourcePositions_GenerateStackTrace) {
     CheckStringEqual("Error\n    at <anonymous>:4:17", result);
   }
 
-  source_position_table = bytecode_array->SourcePositionTable();
+  CHECK(bytecode_array->HasSourcePositionTable());
+  ByteArray source_position_table = bytecode_array->SourcePositionTable();
   CHECK_GT(source_position_table->length(), 0);
 }
 

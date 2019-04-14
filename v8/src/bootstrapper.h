@@ -8,7 +8,6 @@
 #include "src/heap/factory.h"
 #include "src/objects/fixed-array.h"
 #include "src/objects/shared-function-info.h"
-#include "src/objects/slots.h"
 #include "src/snapshot/natives.h"
 #include "src/visitors.h"
 
@@ -57,7 +56,8 @@ class Bootstrapper final {
       MaybeHandle<JSGlobalProxy> maybe_global_proxy,
       v8::Local<v8::ObjectTemplate> global_object_template,
       v8::ExtensionConfiguration* extensions, size_t context_snapshot_index,
-      v8::DeserializeEmbedderFieldsCallback embedder_fields_deserializer);
+      v8::DeserializeEmbedderFieldsCallback embedder_fields_deserializer,
+      v8::MicrotaskQueue* microtask_queue);
 
   Handle<JSGlobalProxy> NewRemoteContext(
       MaybeHandle<JSGlobalProxy> maybe_global_proxy,

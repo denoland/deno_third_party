@@ -56,7 +56,8 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I64Const, 0x42, _)           \
   V(F32Const, 0x43, _)           \
   V(F64Const, 0x44, _)           \
-  V(RefNull, 0xd0, _)
+  V(RefNull, 0xd0, _)            \
+  V(RefFunc, 0xd2, _)
 
 // Load memory expressions.
 #define FOREACH_LOAD_MEM_OPCODE(V) \
@@ -422,7 +423,7 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(TableCopy, 0xfc0e, v_iii)
 
 #define FOREACH_ATOMIC_OPCODE(V)                \
-  V(AtomicWake, 0xfe00, i_ii)                   \
+  V(AtomicNotify, 0xfe00, i_ii)                 \
   V(I32AtomicWait, 0xfe01, i_iil)               \
   V(I64AtomicWait, 0xfe02, i_ill)               \
   V(I32AtomicLoad, 0xfe10, i_i)                 \
@@ -608,7 +609,7 @@ struct WasmInitExpr {
     kI64Const,
     kF32Const,
     kF64Const,
-    kAnyRefConst,
+    kRefNullConst,
   } kind;
 
   union {

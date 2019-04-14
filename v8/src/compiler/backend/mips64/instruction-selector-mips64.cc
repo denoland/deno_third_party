@@ -201,6 +201,8 @@ struct ExtendingLoadMatcher {
     DCHECK(m.IsWord64Sar());
     if (m.left().IsLoad() && m.right().Is(32) &&
         selector_->CanCover(m.node(), m.left().node())) {
+      DCHECK_EQ(selector_->GetEffectiveLevel(node),
+                selector_->GetEffectiveLevel(m.left().node()));
       MachineRepresentation rep =
           LoadRepresentationOf(m.left().node()->op()).representation();
       DCHECK_EQ(3, ElementSizeLog2Of(rep));
@@ -388,6 +390,9 @@ void InstructionSelector::VisitLoad(Node* node) {
     case MachineRepresentation::kSimd128:
       opcode = kMips64MsaLd;
       break;
+    case MachineRepresentation::kCompressedSigned:   // Fall through.
+    case MachineRepresentation::kCompressedPointer:  // Fall through.
+    case MachineRepresentation::kCompressed:         // Fall through.
     case MachineRepresentation::kNone:
       UNREACHABLE();
       return;
@@ -425,21 +430,8 @@ void InstructionSelector::VisitStore(Node* node) {
     inputs[input_count++] = g.UseUniqueRegister(base);
     inputs[input_count++] = g.UseUniqueRegister(index);
     inputs[input_count++] = g.UseUniqueRegister(value);
-    RecordWriteMode record_write_mode = RecordWriteMode::kValueIsAny;
-    switch (write_barrier_kind) {
-      case kNoWriteBarrier:
-        UNREACHABLE();
-        break;
-      case kMapWriteBarrier:
-        record_write_mode = RecordWriteMode::kValueIsMap;
-        break;
-      case kPointerWriteBarrier:
-        record_write_mode = RecordWriteMode::kValueIsPointer;
-        break;
-      case kFullWriteBarrier:
-        record_write_mode = RecordWriteMode::kValueIsAny;
-        break;
-    }
+    RecordWriteMode record_write_mode =
+        WriteBarrierKindToRecordWriteMode(write_barrier_kind);
     InstructionOperand temps[] = {g.TempRegister(), g.TempRegister()};
     size_t const temp_count = arraysize(temps);
     InstructionCode code = kArchStoreWithWriteBarrier;
@@ -473,6 +465,9 @@ void InstructionSelector::VisitStore(Node* node) {
       case MachineRepresentation::kSimd128:
         opcode = kMips64MsaSt;
         break;
+      case MachineRepresentation::kCompressedSigned:   // Fall through.
+      case MachineRepresentation::kCompressedPointer:  // Fall through.
+      case MachineRepresentation::kCompressed:         // Fall through.
       case MachineRepresentation::kNone:
         UNREACHABLE();
         return;
@@ -1367,7 +1362,8 @@ void InstructionSelector::VisitTruncateInt64ToInt32(Node* node) {
   if (CanCover(node, value)) {
     switch (value->opcode()) {
       case IrOpcode::kWord64Sar: {
-        if (TryEmitExtendingLoad(this, value, node)) {
+        if (CanCoverTransitively(node, value, value->InputAt(0)) &&
+            TryEmitExtendingLoad(this, value, node)) {
           return;
         } else {
           Int64BinopMatcher m(value);
@@ -1693,6 +1689,9 @@ void InstructionSelector::VisitUnalignedLoad(Node* node) {
     case MachineRepresentation::kSimd128:
       opcode = kMips64MsaLd;
       break;
+    case MachineRepresentation::kCompressedSigned:   // Fall through.
+    case MachineRepresentation::kCompressedPointer:  // Fall through.
+    case MachineRepresentation::kCompressed:         // Fall through.
     case MachineRepresentation::kNone:
       UNREACHABLE();
       return;
@@ -1745,6 +1744,9 @@ void InstructionSelector::VisitUnalignedStore(Node* node) {
     case MachineRepresentation::kSimd128:
       opcode = kMips64MsaSt;
       break;
+    case MachineRepresentation::kCompressedSigned:   // Fall through.
+    case MachineRepresentation::kCompressedPointer:  // Fall through.
+    case MachineRepresentation::kCompressed:         // Fall through.
     case MachineRepresentation::kNone:
       UNREACHABLE();
       return;
@@ -2645,8 +2647,6 @@ void InstructionSelector::VisitInt32AbsWithOverflow(Node* node) {
 void InstructionSelector::VisitInt64AbsWithOverflow(Node* node) {
   UNREACHABLE();
 }
-
-void InstructionSelector::VisitSpeculationFence(Node* node) { UNREACHABLE(); }
 
 #define SIMD_TYPE_LIST(V) \
   V(F32x4)                \

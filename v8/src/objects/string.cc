@@ -23,36 +23,28 @@ namespace v8 {
 namespace internal {
 
 Handle<String> String::SlowFlatten(Isolate* isolate, Handle<ConsString> cons,
-                                   PretenureFlag pretenure) {
-  DCHECK_NE(cons->second()->length(), 0);
-
-  // TurboFan can create cons strings with empty first parts.
-  while (cons->first()->length() == 0) {
-    // We do not want to call this function recursively. Therefore we call
-    // String::Flatten only in those cases where String::SlowFlatten is not
-    // called again.
-    if (cons->second()->IsConsString() && !cons->second()->IsFlat()) {
-      cons = handle(ConsString::cast(cons->second()), isolate);
-    } else {
-      return String::Flatten(isolate, handle(cons->second(), isolate));
-    }
-  }
+                                   AllocationType allocation) {
+  DCHECK_GT(cons->first()->length(), 0);
+  DCHECK_GT(cons->second()->length(), 0);
 
   DCHECK(AllowHeapAllocation::IsAllowed());
   int length = cons->length();
-  PretenureFlag tenure = ObjectInYoungGeneration(*cons) ? pretenure : TENURED;
+  allocation =
+      ObjectInYoungGeneration(*cons) ? allocation : AllocationType::kOld;
   Handle<SeqString> result;
   if (cons->IsOneByteRepresentation()) {
-    Handle<SeqOneByteString> flat = isolate->factory()
-                                        ->NewRawOneByteString(length, tenure)
-                                        .ToHandleChecked();
+    Handle<SeqOneByteString> flat =
+        isolate->factory()
+            ->NewRawOneByteString(length, allocation)
+            .ToHandleChecked();
     DisallowHeapAllocation no_gc;
     WriteToFlat(*cons, flat->GetChars(no_gc), 0, length);
     result = flat;
   } else {
-    Handle<SeqTwoByteString> flat = isolate->factory()
-                                        ->NewRawTwoByteString(length, tenure)
-                                        .ToHandleChecked();
+    Handle<SeqTwoByteString> flat =
+        isolate->factory()
+            ->NewRawTwoByteString(length, allocation)
+            .ToHandleChecked();
     DisallowHeapAllocation no_gc;
     WriteToFlat(*cons, flat->GetChars(no_gc), 0, length);
     result = flat;
@@ -87,7 +79,6 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
   // string.
   if (!GetIsolateFromWritableObject(*this, &isolate)) return false;
   Heap* heap = isolate->heap();
-  bool is_one_byte = this->IsOneByteRepresentation();
   bool is_internalized = this->IsInternalizedString();
   bool has_pointers = StringShape(*this).IsIndirect();
   if (has_pointers) {
@@ -103,26 +94,13 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
   ReadOnlyRoots roots(heap);
   if (size < ExternalString::kSize) {
     if (is_internalized) {
-      if (is_one_byte) {
-        new_map =
-            roots
-                .uncached_external_internalized_string_with_one_byte_data_map();
-      } else {
-        new_map = roots.uncached_external_internalized_string_map();
-      }
+      new_map = roots.uncached_external_internalized_string_map();
     } else {
-      new_map = is_one_byte
-                    ? roots.uncached_external_string_with_one_byte_data_map()
-                    : roots.uncached_external_string_map();
+      new_map = roots.uncached_external_string_map();
     }
   } else {
-    new_map =
-        is_internalized
-            ? (is_one_byte
-                   ? roots.external_internalized_string_with_one_byte_data_map()
-                   : roots.external_internalized_string_map())
-            : (is_one_byte ? roots.external_string_with_one_byte_data_map()
-                           : roots.external_string_map());
+    new_map = is_internalized ? roots.external_internalized_string_map()
+                              : roots.external_string_map();
   }
 
   // Byte size of the external String object.
@@ -1011,7 +989,7 @@ MaybeHandle<String> String::GetSubstitution(Isolate* isolate, Match* match,
         break;
       }
       case '<': {  // $<name> - named capture
-        typedef String::Match::CaptureState CaptureState;
+        using CaptureState = String::Match::CaptureState;
 
         if (!match->HasNamedCaptures()) {
           builder.AppendCharacter('$');
@@ -1535,6 +1513,9 @@ String ConsStringIterator::NextLeaf(bool* blew_stack) {
   }
   UNREACHABLE();
 }
+
+template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE) void String::WriteToFlat(
+    String source, uint16_t* sink, int from, int to);
 
 }  // namespace internal
 }  // namespace v8

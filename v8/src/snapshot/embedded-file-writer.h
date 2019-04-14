@@ -12,6 +12,10 @@
 #include "src/snapshot/snapshot.h"
 #include "src/source-position-table.h"
 
+#if defined(V8_OS_WIN_X64)
+#include "src/unwinding-info-win64.h"
+#endif
+
 namespace v8 {
 namespace internal {
 
@@ -41,9 +45,21 @@ class PlatformDependentEmbeddedFileWriter final {
   void DeclareUint32(const char* name, uint32_t value);
   void DeclarePointerToSymbol(const char* name, const char* target);
 
+#if defined(V8_OS_WIN_X64)
+  void StartPdataSection();
+  void EndPdataSection();
+  void StartXdataSection();
+  void EndXdataSection();
+  void DeclareExternalFunction(const char* name);
+
+  // Emits an RVA (address relative to the module load address) specified as an
+  // offset from a given symbol.
+  void DeclareRvaToSymbol(const char* name, uint64_t offset = 0);
+#endif
+
   void DeclareLabel(const char* name);
 
-  void SourceInfo(int fileid, int line);
+  void SourceInfo(int fileid, const char* filename, int line);
   void DeclareFunctionBegin(const char* name);
   void DeclareFunctionEnd(const char* name);
 
@@ -81,6 +97,12 @@ class EmbeddedFileWriterInterface {
   // The isolate will call the method below just prior to replacing the
   // compiled builtin Code objects with trampolines.
   virtual void PrepareBuiltinSourcePositionMap(Builtins* builtins) = 0;
+
+#if defined(V8_OS_WIN_X64)
+  virtual void SetBuiltinUnwindData(
+      int builtin_index,
+      const win64_unwindinfo::BuiltinUnwindInfo& unwinding_info) = 0;
+#endif
 };
 
 // Generates the embedded.S file which is later compiled into the final v8
@@ -120,6 +142,12 @@ class EmbeddedFileWriter : public EmbeddedFileWriterInterface {
   }
 
   void PrepareBuiltinSourcePositionMap(Builtins* builtins) override;
+
+#if defined(V8_OS_WIN_X64)
+  void SetBuiltinUnwindData(
+      int builtin_index,
+      const win64_unwindinfo::BuiltinUnwindInfo& unwinding_info) override;
+#endif
 
   void SetEmbeddedFile(const char* embedded_src_path) {
     embedded_src_path_ = embedded_src_path;
@@ -183,17 +211,20 @@ class EmbeddedFileWriter : public EmbeddedFileWriterInterface {
   // Fairly arbitrary but should fit all symbol names.
   static constexpr int kTemporaryStringLength = 256;
 
-  void WriteMetadataSection(PlatformDependentEmbeddedFileWriter* w,
-                            const i::EmbeddedData* blob) const {
+  std::string EmbeddedBlobDataSymbol() const {
     char embedded_blob_data_symbol[kTemporaryStringLength];
     i::SNPrintF(i::Vector<char>(embedded_blob_data_symbol),
                 "v8_%s_embedded_blob_data_", embedded_variant_);
+    return embedded_blob_data_symbol;
+  }
 
+  void WriteMetadataSection(PlatformDependentEmbeddedFileWriter* w,
+                            const i::EmbeddedData* blob) const {
     w->Comment("The embedded blob starts here. Metadata comes first, followed");
     w->Comment("by builtin instruction streams.");
     w->SectionText();
     w->AlignToCodeAlignment();
-    w->DeclareLabel(embedded_blob_data_symbol);
+    w->DeclareLabel(EmbeddedBlobDataSymbol().c_str());
 
     WriteBinaryContentsAsInlineAssembly(w, blob->data(),
                                         i::EmbeddedData::RawDataOffset());
@@ -237,6 +268,8 @@ class EmbeddedFileWriter : public EmbeddedFileWriterInterface {
       if (i == next_offset) {
         // Write source directive.
         w->SourceInfo(positions.source_position().ExternalFileId(),
+                      GetExternallyCompiledFilename(
+                          positions.source_position().ExternalFileId()),
                       positions.source_position().ExternalLine());
         positions.Advance();
         next_offset = static_cast<uint32_t>(
@@ -263,10 +296,6 @@ class EmbeddedFileWriter : public EmbeddedFileWriterInterface {
   void WriteFileEpilogue(PlatformDependentEmbeddedFileWriter* w,
                          const i::EmbeddedData* blob) const {
     {
-      char embedded_blob_data_symbol[kTemporaryStringLength];
-      i::SNPrintF(i::Vector<char>(embedded_blob_data_symbol),
-                  "v8_%s_embedded_blob_data_", embedded_variant_);
-
       char embedded_blob_symbol[kTemporaryStringLength];
       i::SNPrintF(i::Vector<char>(embedded_blob_symbol), "v8_%s_embedded_blob_",
                   embedded_variant_);
@@ -275,7 +304,7 @@ class EmbeddedFileWriter : public EmbeddedFileWriterInterface {
       w->SectionData();
       w->AlignToDataAlignment();
       w->DeclarePointerToSymbol(embedded_blob_symbol,
-                                embedded_blob_data_symbol);
+                                EmbeddedBlobDataSymbol().c_str());
       w->Newline();
     }
 
@@ -291,23 +320,34 @@ class EmbeddedFileWriter : public EmbeddedFileWriterInterface {
       w->Newline();
     }
 
+#if defined(V8_OS_WIN_X64)
+    if (win64_unwindinfo::CanEmitUnwindInfoForBuiltins()) {
+      WriteUnwindInfo(w, blob);
+    }
+#endif
+
     w->FileEpilogue();
   }
+
+#if defined(V8_OS_WIN_X64)
+  std::string BuiltinsUnwindInfoLabel() const;
+  void WriteUnwindInfo(PlatformDependentEmbeddedFileWriter* w,
+                       const i::EmbeddedData* blob) const;
+  void WriteUnwindInfoEntry(PlatformDependentEmbeddedFileWriter* w,
+                            uint64_t rva_start, uint64_t rva_end) const;
+#endif
 
 #if defined(_MSC_VER) && !defined(__clang__)
 #define V8_COMPILER_IS_MSVC
 #endif
 
-#if defined(V8_COMPILER_IS_MSVC) || defined(V8_OS_AIX)
+#if defined(V8_COMPILER_IS_MSVC)
   // Windows MASM doesn't have an .octa directive, use QWORDs instead.
   // Note: MASM *really* does not like large data streams. It takes over 5
   // minutes to assemble the ~350K lines of embedded.S produced when using
   // BYTE directives in a debug build. QWORD produces roughly 120KLOC and
   // reduces assembly time to ~40 seconds. Still terrible, but much better
   // than before. See also: https://crbug.com/v8/8475.
-
-  // GCC MASM on Aix doesn't have an .octa directive, use .llong instead.
-
   static constexpr DataDirective kByteChunkDirective = kQuad;
   static constexpr int kByteChunkSize = 8;
 
@@ -316,6 +356,19 @@ class EmbeddedFileWriter : public EmbeddedFileWriterInterface {
     const uint64_t* quad_ptr = reinterpret_cast<const uint64_t*>(data);
     return current_line_length + w->HexLiteral(*quad_ptr);
   }
+
+#elif defined(V8_OS_AIX)
+  // PPC uses a fixed 4 byte instruction set, using .long
+  // to prevent any unnecessary padding.
+  static constexpr DataDirective kByteChunkDirective = kLong;
+  static constexpr int kByteChunkSize = 4;
+
+  static int WriteByteChunk(PlatformDependentEmbeddedFileWriter* w,
+                            int current_line_length, const uint8_t* data) {
+    const uint32_t* long_ptr = reinterpret_cast<const uint32_t*>(data);
+    return current_line_length + w->HexLiteral(*long_ptr);
+  }
+
 #else  // defined(V8_COMPILER_IS_MSVC) || defined(V8_OS_AIX)
   static constexpr DataDirective kByteChunkDirective = kOcta;
   static constexpr int kByteChunkSize = 16;
@@ -410,6 +463,10 @@ class EmbeddedFileWriter : public EmbeddedFileWriterInterface {
   }
 
   std::vector<byte> source_positions_[Builtins::builtin_count];
+
+#if defined(V8_OS_WIN_X64)
+  win64_unwindinfo::BuiltinUnwindInfo unwind_infos_[Builtins::builtin_count];
+#endif
 
   // In assembly directives, filename ids need to begin with 1.
   static const int kFirstExternalFilenameId = 1;
