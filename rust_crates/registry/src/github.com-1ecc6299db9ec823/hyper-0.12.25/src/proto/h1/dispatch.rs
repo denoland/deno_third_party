@@ -96,6 +96,7 @@ where
     fn poll_inner(&mut self, should_shutdown: bool) -> Poll<Dispatched, ::Error> {
         T::update_date();
 
+        let mut wants_read_again = false;
         for _ in 0..1 {
             self.poll_read()?;
             self.poll_write()?;
@@ -109,7 +110,8 @@ where
             //
             // Using this instead of task::current() and notify() inside
             // the Conn is noticeably faster in pipelined benchmarks.
-            if !self.conn.wants_read_again() {
+            wants_read_again = self.conn.wants_read_again();
+            if !wants_read_again {
                 break;
             }
         }
@@ -124,7 +126,7 @@ where
             self.conn.take_error()?;
             Ok(Async::Ready(Dispatched::Shutdown))
         } else {
-            if self.conn.wants_read_again() {
+            if wants_read_again {
                 task::current().notify();
             }
             Ok(Async::NotReady)
