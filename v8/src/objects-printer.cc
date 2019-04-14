@@ -197,6 +197,9 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
     case FEEDBACK_CELL_TYPE:
       FeedbackCell::cast(*this)->FeedbackCellPrint(os);
       break;
+    case CLOSURE_FEEDBACK_CELL_ARRAY_TYPE:
+      ClosureFeedbackCellArray::cast(*this)->ClosureFeedbackCellArrayPrint(os);
+      break;
     case FEEDBACK_VECTOR_TYPE:
       FeedbackVector::cast(*this)->FeedbackVectorPrint(os);
       break;
@@ -419,14 +422,13 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
     case WEAK_ARRAY_LIST_TYPE:
       WeakArrayList::cast(*this)->WeakArrayListPrint(os);
       break;
+    case EMPTY_STRING_TYPE:
     case INTERNALIZED_STRING_TYPE:
     case EXTERNAL_INTERNALIZED_STRING_TYPE:
     case ONE_BYTE_INTERNALIZED_STRING_TYPE:
     case EXTERNAL_ONE_BYTE_INTERNALIZED_STRING_TYPE:
-    case EXTERNAL_INTERNALIZED_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case UNCACHED_EXTERNAL_INTERNALIZED_STRING_TYPE:
     case UNCACHED_EXTERNAL_ONE_BYTE_INTERNALIZED_STRING_TYPE:
-    case UNCACHED_EXTERNAL_INTERNALIZED_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case STRING_TYPE:
     case CONS_STRING_TYPE:
     case EXTERNAL_STRING_TYPE:
@@ -437,10 +439,8 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
     case EXTERNAL_ONE_BYTE_STRING_TYPE:
     case SLICED_ONE_BYTE_STRING_TYPE:
     case THIN_ONE_BYTE_STRING_TYPE:
-    case EXTERNAL_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case UNCACHED_EXTERNAL_STRING_TYPE:
     case UNCACHED_EXTERNAL_ONE_BYTE_STRING_TYPE:
-    case UNCACHED_EXTERNAL_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case SMALL_ORDERED_HASH_MAP_TYPE:
     case SMALL_ORDERED_HASH_SET_TYPE:
     case SMALL_ORDERED_NAME_DICTIONARY_TYPE:
@@ -468,14 +468,21 @@ void BytecodeArray::BytecodeArrayPrint(std::ostream& os) {  // NOLINT
 
 
 void FreeSpace::FreeSpacePrint(std::ostream& os) {  // NOLINT
-  os << "free space, size " << Size();
+  os << "free space, size " << Size() << "\n";
 }
 
 
 template <class Traits>
 void FixedTypedArray<Traits>::FixedTypedArrayPrint(
     std::ostream& os) {  // NOLINT
-  os << "fixed " << Traits::Designator();
+  PrintHeader(os, Traits::ArrayTypeName());
+  os << "\n - length: " << length() << "\n - base_pointer: ";
+  if (base_pointer().ptr() == kNullAddress) {
+    os << "<nullptr>";
+  } else {
+    os << Brief(base_pointer());
+  }
+  os << "\n - external_pointer: " << external_pointer() << "\n";
 }
 
 bool JSObject::PrintProperties(std::ostream& os) {  // NOLINT
@@ -662,6 +669,8 @@ void JSObject::PrintElements(std::ostream& os) {  // NOLINT
     case PACKED_SMI_ELEMENTS:
     case HOLEY_ELEMENTS:
     case PACKED_ELEMENTS:
+    case PACKED_FROZEN_ELEMENTS:
+    case PACKED_SEALED_ELEMENTS:
     case FAST_STRING_WRAPPER_ELEMENTS: {
       PrintFixedArrayElements(os, FixedArray::cast(elements()));
       break;
@@ -1082,6 +1091,10 @@ void FeedbackMetadata::FeedbackMetadataPrint(std::ostream& os) {
   os << "\n";
 }
 
+void ClosureFeedbackCellArray::ClosureFeedbackCellArrayPrint(std::ostream& os) {
+  PrintFixedArrayWithHeader(os, *this, "ClosureFeedbackCellArray");
+}
+
 void FeedbackVector::FeedbackVectorPrint(std::ostream& os) {  // NOLINT
   PrintHeader(os, "FeedbackVector");
   os << "\n - length: " << length();
@@ -1128,21 +1141,22 @@ void FeedbackVector::FeedbackSlotPrint(std::ostream& os,
 void FeedbackNexus::Print(std::ostream& os) {  // NOLINT
   switch (kind()) {
     case FeedbackSlotKind::kCall:
-    case FeedbackSlotKind::kLoadProperty:
-    case FeedbackSlotKind::kLoadKeyed:
+    case FeedbackSlotKind::kCloneObject:
+    case FeedbackSlotKind::kHasKeyed:
+    case FeedbackSlotKind::kInstanceOf:
     case FeedbackSlotKind::kLoadGlobalInsideTypeof:
     case FeedbackSlotKind::kLoadGlobalNotInsideTypeof:
-    case FeedbackSlotKind::kStoreNamedSloppy:
-    case FeedbackSlotKind::kStoreNamedStrict:
-    case FeedbackSlotKind::kStoreOwnNamed:
+    case FeedbackSlotKind::kLoadKeyed:
+    case FeedbackSlotKind::kLoadProperty:
+    case FeedbackSlotKind::kStoreDataPropertyInLiteral:
     case FeedbackSlotKind::kStoreGlobalSloppy:
     case FeedbackSlotKind::kStoreGlobalStrict:
-    case FeedbackSlotKind::kStoreKeyedSloppy:
-    case FeedbackSlotKind::kInstanceOf:
-    case FeedbackSlotKind::kStoreDataPropertyInLiteral:
-    case FeedbackSlotKind::kStoreKeyedStrict:
     case FeedbackSlotKind::kStoreInArrayLiteral:
-    case FeedbackSlotKind::kCloneObject: {
+    case FeedbackSlotKind::kStoreKeyedSloppy:
+    case FeedbackSlotKind::kStoreKeyedStrict:
+    case FeedbackSlotKind::kStoreNamedSloppy:
+    case FeedbackSlotKind::kStoreNamedStrict:
+    case FeedbackSlotKind::kStoreOwnNamed: {
       os << InlineCacheState2String(ic_state());
       break;
     }
@@ -1158,7 +1172,6 @@ void FeedbackNexus::Print(std::ostream& os) {  // NOLINT
       os << "ForIn:" << GetForInFeedback();
       break;
     }
-    case FeedbackSlotKind::kCreateClosure:
     case FeedbackSlotKind::kLiteral:
     case FeedbackSlotKind::kTypeProfile:
       break;
@@ -1188,7 +1201,7 @@ void JSMessageObject::JSMessageObjectPrint(std::ostream& os) {  // NOLINT
 
 
 void String::StringPrint(std::ostream& os) {  // NOLINT
-  if (!HasOnlyOneByteChars()) {
+  if (!IsOneByteRepresentation()) {
     os << "u";
   }
   if (StringShape(*this).IsInternalized()) {
@@ -1353,7 +1366,6 @@ void JSArrayBuffer::JSArrayBufferPrint(std::ostream& os) {  // NOLINT
   if (was_detached()) os << "\n - detached";
   if (is_shared()) os << "\n - shared";
   if (is_wasm_memory()) os << "\n - is_wasm_memory";
-  if (is_growable()) os << "\n - growable";
   JSObjectPrintBody(os, *this, !was_detached());
 }
 
@@ -1362,7 +1374,11 @@ void JSTypedArray::JSTypedArrayPrint(std::ostream& os) {  // NOLINT
   os << "\n - buffer: " << Brief(buffer());
   os << "\n - byte_offset: " << byte_offset();
   os << "\n - byte_length: " << byte_length();
-  os << "\n - length: " << Brief(length());
+  os << "\n - length: " << length();
+  if (!buffer()->IsJSArrayBuffer()) {
+    os << "\n <invalid buffer>\n";
+    return;
+  }
   if (WasDetached()) os << "\n - detached";
   JSObjectPrintBody(os, *this, !WasDetached());
 }
@@ -1380,6 +1396,10 @@ void JSDataView::JSDataViewPrint(std::ostream& os) {  // NOLINT
   os << "\n - buffer =" << Brief(buffer());
   os << "\n - byte_offset: " << byte_offset();
   os << "\n - byte_length: " << byte_length();
+  if (!buffer()->IsJSArrayBuffer()) {
+    os << "\n <invalid buffer>";
+    return;
+  }
   if (WasDetached()) os << "\n - detached";
   JSObjectPrintBody(os, *this, !WasDetached());
 }
@@ -1608,7 +1628,8 @@ void CodeDataContainer::CodeDataContainerPrint(std::ostream& os) {  // NOLINT
 }
 
 void Foreign::ForeignPrint(std::ostream& os) {  // NOLINT
-  os << "foreign address : " << reinterpret_cast<void*>(foreign_address());
+  PrintHeader(os, "Foreign");
+  os << "\n - foreign address : " << reinterpret_cast<void*>(foreign_address());
   os << "\n";
 }
 
@@ -1747,21 +1768,6 @@ void PrototypeInfo::PrototypeInfoPrint(std::ostream& os) {  // NOLINT
   os << "\n";
 }
 
-void Tuple2::Tuple2Print(std::ostream& os) {  // NOLINT
-  PrintHeader(os, "Tuple2");
-  os << "\n - value1: " << Brief(value1());
-  os << "\n - value2: " << Brief(value2());
-  os << "\n";
-}
-
-void Tuple3::Tuple3Print(std::ostream& os) {  // NOLINT
-  PrintHeader(os, "Tuple3");
-  os << "\n - value1: " << Brief(value1());
-  os << "\n - value2: " << Brief(value2());
-  os << "\n - value3: " << Brief(value3());
-  os << "\n";
-}
-
 void ClassPositions::ClassPositionsPrint(std::ostream& os) {  // NOLINT
   PrintHeader(os, "ClassPositions");
   os << "\n - start position: " << start();
@@ -1799,7 +1805,7 @@ void WasmExceptionTag::WasmExceptionTagPrint(std::ostream& os) {  // NOLINT
 }
 
 void WasmInstanceObject::WasmInstanceObjectPrint(std::ostream& os) {  // NOLINT
-  PrintHeader(os, "WasmInstanceObject");
+  JSObjectPrintHeader(os, *this, "WasmInstanceObject");
   os << "\n - module_object: " << Brief(module_object());
   os << "\n - exports_object: " << Brief(exports_object());
   os << "\n - native_context: " << Brief(native_context());
@@ -1819,8 +1825,8 @@ void WasmInstanceObject::WasmInstanceObjectPrint(std::ostream& os) {  // NOLINT
   if (has_debug_info()) {
     os << "\n - debug_info: " << Brief(debug_info());
   }
-  if (has_table_object()) {
-    os << "\n - table_object: " << Brief(table_object());
+  for (int i = 0; i < tables()->length(); i++) {
+    os << "\n - table " << i << ": " << Brief(tables()->get(i));
   }
   os << "\n - imported_function_refs: " << Brief(imported_function_refs());
   if (has_indirect_function_table_refs()) {
@@ -1844,6 +1850,7 @@ void WasmInstanceObject::WasmInstanceObjectPrint(std::ostream& os) {  // NOLINT
      << static_cast<void*>(indirect_function_table_sig_ids());
   os << "\n - indirect_function_table_targets: "
      << static_cast<void*>(indirect_function_table_targets());
+  JSObjectPrintBody(os, *this);
   os << "\n";
 }
 
@@ -2076,6 +2083,7 @@ void JSDateTimeFormat::JSDateTimeFormatPrint(std::ostream& os) {  // NOLINT
   JSObjectPrintHeader(os, *this, "JSDateTimeFormat");
   os << "\n - icu locale: " << Brief(icu_locale());
   os << "\n - icu simple date format: " << Brief(icu_simple_date_format());
+  os << "\n - icu date interval format: " << Brief(icu_date_interval_format());
   os << "\n - bound format: " << Brief(bound_format());
   os << "\n - hour cycle: " << HourCycleAsString();
   JSObjectPrintBody(os, *this);
@@ -2658,11 +2666,33 @@ void JSObject::PrintTransitions(std::ostream& os) {  // NOLINT
 }  // namespace internal
 }  // namespace v8
 
+namespace {
+
+inline i::Object GetObjectFromRaw(void* object) {
+  i::Address object_ptr = reinterpret_cast<i::Address>(object);
+#ifdef V8_COMPRESS_POINTERS
+  if (RoundDown<i::kPtrComprIsolateRootAlignment>(object_ptr) ==
+      i::kNullAddress) {
+    // Try to decompress pointer.
+    i::Isolate* isolate = i::Isolate::Current();
+    object_ptr = i::DecompressTaggedAny(isolate->isolate_root(),
+                                        static_cast<i::Tagged_t>(object_ptr));
+  }
+#endif
+  return i::Object(object_ptr);
+}
+
+}  // namespace
+
 //
 // The following functions are used by our gdb macros.
 //
+V8_EXPORT_PRIVATE extern i::Object _v8_internal_Get_Object(void* object) {
+  return GetObjectFromRaw(object);
+}
+
 V8_EXPORT_PRIVATE extern void _v8_internal_Print_Object(void* object) {
-  i::Object(reinterpret_cast<i::Address>(object))->Print();
+  GetObjectFromRaw(object)->Print();
 }
 
 V8_EXPORT_PRIVATE extern void _v8_internal_Print_Code(void* object) {
@@ -2702,7 +2732,7 @@ V8_EXPORT_PRIVATE extern void _v8_internal_Print_Code(void* object) {
 
 V8_EXPORT_PRIVATE extern void _v8_internal_Print_LayoutDescriptor(
     void* object) {
-  i::Object o(reinterpret_cast<i::Address>(object));
+  i::Object o(GetObjectFromRaw(object));
   if (!o->IsLayoutDescriptor()) {
     printf("Please provide a layout descriptor\n");
   } else {
@@ -2716,7 +2746,7 @@ V8_EXPORT_PRIVATE extern void _v8_internal_Print_StackTrace() {
 }
 
 V8_EXPORT_PRIVATE extern void _v8_internal_Print_TransitionTree(void* object) {
-  i::Object o(reinterpret_cast<i::Address>(object));
+  i::Object o(GetObjectFromRaw(object));
   if (!o->IsMap()) {
     printf("Please provide a valid Map\n");
   } else {

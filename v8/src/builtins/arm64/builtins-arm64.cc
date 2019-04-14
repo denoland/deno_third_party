@@ -69,7 +69,6 @@ void Builtins::Generate_InternalArrayConstructor(MacroAssembler* masm) {
 static void GenerateTailCallToReturnedCode(MacroAssembler* masm,
                                            Runtime::FunctionId function_id) {
   // ----------- S t a t e -------------
-  //  -- x0 : argument count (preserved for callee)
   //  -- x1 : target function (preserved for callee)
   //  -- x3 : new target (preserved for callee)
   // -----------------------------------
@@ -77,16 +76,14 @@ static void GenerateTailCallToReturnedCode(MacroAssembler* masm,
     FrameScope scope(masm, StackFrame::INTERNAL);
     // Push a copy of the target function and the new target.
     // Push another copy as a parameter to the runtime call.
-    __ SmiTag(x0);
-    __ Push(x0, x1, x3, padreg);
+    __ Push(x1, x3);
     __ PushArgument(x1);
 
     __ CallRuntime(function_id, 1);
     __ Mov(x2, x0);
 
     // Restore target function and new target.
-    __ Pop(padreg, x3, x1, x0);
-    __ SmiUntag(x0);
+    __ Pop(x3, x1);
   }
 
   static_assert(kJavaScriptCallCodeStartRegister == x2, "ABI mismatch");
@@ -999,13 +996,11 @@ static void MaybeTailCallOptimizedCodeSlot(MacroAssembler* masm,
                                            Register scratch1, Register scratch2,
                                            Register scratch3) {
   // ----------- S t a t e -------------
-  //  -- x0 : argument count (preserved for callee if needed, and caller)
   //  -- x3 : new target (preserved for callee if needed, and caller)
   //  -- x1 : target function (preserved for callee if needed, and caller)
   //  -- feedback vector (preserved for caller if needed)
   // -----------------------------------
-  DCHECK(
-      !AreAliased(feedback_vector, x0, x1, x3, scratch1, scratch2, scratch3));
+  DCHECK(!AreAliased(feedback_vector, x1, x3, scratch1, scratch2, scratch3));
 
   Label optimized_code_slot_is_weak_ref, fallthrough;
 
@@ -1069,10 +1064,10 @@ static void MaybeTailCallOptimizedCodeSlot(MacroAssembler* masm,
         scratch2,
         FieldMemOperand(optimized_code_entry, Code::kCodeDataContainerOffset));
     __ Ldr(
-        scratch2,
+        scratch2.W(),
         FieldMemOperand(scratch2, CodeDataContainer::kKindSpecificFlagsOffset));
-    __ TestAndBranchIfAnySet(scratch2, 1 << Code::kMarkedForDeoptimizationBit,
-                             &found_deoptimized_code);
+    __ Tbnz(scratch2.W(), Code::kMarkedForDeoptimizationBit,
+            &found_deoptimized_code);
 
     // Optimized code is good, get it into the closure and link the closure into
     // the optimized functions list, then tail call the optimized code.
@@ -1193,8 +1188,11 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
   Label push_stack_frame;
   // Check if feedback vector is valid. If valid, check for optimized code
   // and update invocation count. Otherwise, setup the stack frame.
-  __ CompareRoot(feedback_vector, RootIndex::kUndefinedValue);
-  __ B(eq, &push_stack_frame);
+  __ LoadTaggedPointerField(
+      x7, FieldMemOperand(feedback_vector, HeapObject::kMapOffset));
+  __ Ldrh(x7, FieldMemOperand(x7, Map::kInstanceTypeOffset));
+  __ Cmp(x7, FEEDBACK_VECTOR_TYPE);
+  __ B(ne, &push_stack_frame);
 
   // Read off the optimized code slot in the feedback vector, and if there
   // is optimized code or an optimization marker, call that instead.
@@ -1217,9 +1215,14 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
   __ Add(fp, sp, StandardFrameConstants::kFixedFrameSizeFromFp);
 
   // Reset code age.
-  __ Mov(x10, Operand(BytecodeArray::kNoAgeBytecodeAge));
-  __ Strb(x10, FieldMemOperand(kInterpreterBytecodeArrayRegister,
-                               BytecodeArray::kBytecodeAgeOffset));
+  // Reset code age and the OSR arming. The OSR field and BytecodeAgeOffset are
+  // 8-bit fields next to each other, so we could just optimize by writing a
+  // 16-bit. These static asserts guard our assumption is valid.
+  STATIC_ASSERT(BytecodeArray::kBytecodeAgeOffset ==
+                BytecodeArray::kOSRNestingLevelOffset + kCharSize);
+  STATIC_ASSERT(BytecodeArray::kNoAgeBytecodeAge == 0);
+  __ Strh(wzr, FieldMemOperand(kInterpreterBytecodeArrayRegister,
+                               BytecodeArray::kOSRNestingLevelOffset));
 
   // Load the initial bytecode offset.
   __ Mov(kInterpreterBytecodeOffsetRegister,
@@ -2555,7 +2558,7 @@ void Generate_PushBoundArguments(MacroAssembler* masm) {
         __ SlotAddress(copy_to, argc);
         __ Add(argc, argc,
                bound_argc);  // Update argc to include bound arguments.
-        __ Lsl(counter, bound_argc, kSystemPointerSizeLog2);
+        __ Lsl(counter, bound_argc, kTaggedSizeLog2);
         __ Bind(&loop);
         __ Sub(counter, counter, kTaggedSize);
         __ LoadAnyTaggedField(scratch, MemOperand(bound_argv, counter));
@@ -2829,128 +2832,198 @@ void Builtins::Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm) {
   Register argc_actual = x0;    // Excluding the receiver.
   Register argc_expected = x2;  // Excluding the receiver.
   Register function = x1;
+  Register argc_actual_minus_expected = x5;
 
-  Label dont_adapt_arguments, stack_overflow;
+  Label create_adaptor_frame, dont_adapt_arguments, stack_overflow,
+      adapt_arguments_in_place;
 
-  Label enough_arguments;
   __ Cmp(argc_expected, SharedFunctionInfo::kDontAdaptArgumentsSentinel);
   __ B(eq, &dont_adapt_arguments);
 
-  EnterArgumentsAdaptorFrame(masm);
+  // When the difference between argc_actual and argc_expected is odd, we
+  // create an arguments adaptor frame.
+  __ Sub(argc_actual_minus_expected, argc_actual, argc_expected);
+  __ Tbnz(argc_actual_minus_expected, 0, &create_adaptor_frame);
 
-  Register copy_from = x10;
-  Register copy_end = x11;
-  Register copy_to = x12;
-  Register argc_to_copy = x13;
-  Register argc_unused_actual = x14;
-  Register scratch1 = x15, scratch2 = x16;
+  // When the difference is even, check if we are allowed to adjust the
+  // existing frame instead.
+  __ LoadTaggedPointerField(
+      x4, FieldMemOperand(x1, JSFunction::kSharedFunctionInfoOffset));
+  __ Ldr(w4, FieldMemOperand(x4, SharedFunctionInfo::kFlagsOffset));
+  __ TestAndBranchIfAnySet(
+      w4, SharedFunctionInfo::IsSafeToSkipArgumentsAdaptorBit::kMask,
+      &adapt_arguments_in_place);
 
-  // We need slots for the expected arguments, with one extra slot for the
-  // receiver.
-  __ RecordComment("-- Stack check --");
-  __ Add(scratch1, argc_expected, 1);
-  Generate_StackOverflowCheck(masm, scratch1, &stack_overflow);
+  // -------------------------------------------
+  // Create an arguments adaptor frame.
+  // -------------------------------------------
+  __ Bind(&create_adaptor_frame);
+  {
+    __ RecordComment("-- Adapt arguments --");
+    EnterArgumentsAdaptorFrame(masm);
 
-  // Round up number of slots to be even, to maintain stack alignment.
-  __ RecordComment("-- Allocate callee frame slots --");
-  __ Add(scratch1, scratch1, 1);
-  __ Bic(scratch1, scratch1, 1);
-  __ Claim(scratch1, kSystemPointerSize);
+    Register copy_from = x10;
+    Register copy_end = x11;
+    Register copy_to = x12;
+    Register argc_to_copy = x13;
+    Register argc_unused_actual = x14;
+    Register scratch1 = x15, scratch2 = x16;
 
-  __ Mov(copy_to, sp);
+    // We need slots for the expected arguments, with one extra slot for the
+    // receiver.
+    __ RecordComment("-- Stack check --");
+    __ Add(scratch1, argc_expected, 1);
+    Generate_StackOverflowCheck(masm, scratch1, &stack_overflow);
 
-  // Preparing the expected arguments is done in four steps, the order of
-  // which is chosen so we can use LDP/STP and avoid conditional branches as
-  // much as possible.
+    // Round up number of slots to be even, to maintain stack alignment.
+    __ RecordComment("-- Allocate callee frame slots --");
+    __ Add(scratch1, scratch1, 1);
+    __ Bic(scratch1, scratch1, 1);
+    __ Claim(scratch1, kSystemPointerSize);
 
-  // (1) If we don't have enough arguments, fill the remaining expected
-  // arguments with undefined, otherwise skip this step.
-  __ Subs(scratch1, argc_actual, argc_expected);
-  __ Csel(argc_unused_actual, xzr, scratch1, lt);
-  __ Csel(argc_to_copy, argc_expected, argc_actual, ge);
-  __ B(ge, &enough_arguments);
+    __ Mov(copy_to, sp);
 
-  // Fill the remaining expected arguments with undefined.
-  __ RecordComment("-- Fill slots with undefined --");
-  __ Sub(copy_end, copy_to, Operand(scratch1, LSL, kSystemPointerSizeLog2));
-  __ LoadRoot(scratch1, RootIndex::kUndefinedValue);
+    // Preparing the expected arguments is done in four steps, the order of
+    // which is chosen so we can use LDP/STP and avoid conditional branches as
+    // much as possible.
 
-  Label fill;
-  __ Bind(&fill);
-  __ Stp(scratch1, scratch1,
-         MemOperand(copy_to, 2 * kSystemPointerSize, PostIndex));
-  // We might write one slot extra, but that is ok because we'll overwrite it
-  // below.
-  __ Cmp(copy_end, copy_to);
-  __ B(hi, &fill);
+    // (1) If we don't have enough arguments, fill the remaining expected
+    // arguments with undefined, otherwise skip this step.
+    Label enough_arguments;
+    __ Subs(scratch1, argc_actual, argc_expected);
+    __ Csel(argc_unused_actual, xzr, scratch1, lt);
+    __ Csel(argc_to_copy, argc_expected, argc_actual, ge);
+    __ B(ge, &enough_arguments);
 
-  // Correct copy_to, for the case where we wrote one additional slot.
-  __ Mov(copy_to, copy_end);
+    // Fill the remaining expected arguments with undefined.
+    __ RecordComment("-- Fill slots with undefined --");
+    __ Sub(copy_end, copy_to, Operand(scratch1, LSL, kSystemPointerSizeLog2));
+    __ LoadRoot(scratch1, RootIndex::kUndefinedValue);
 
-  __ Bind(&enough_arguments);
-  // (2) Copy all of the actual arguments, or as many as we need.
-  Label skip_copy;
-  __ RecordComment("-- Copy actual arguments --");
-  __ Cbz(argc_to_copy, &skip_copy);
-  __ Add(copy_end, copy_to, Operand(argc_to_copy, LSL, kSystemPointerSizeLog2));
-  __ Add(copy_from, fp, 2 * kSystemPointerSize);
-  // Adjust for difference between actual and expected arguments.
-  __ Add(copy_from, copy_from,
-         Operand(argc_unused_actual, LSL, kSystemPointerSizeLog2));
+    Label fill;
+    __ Bind(&fill);
+    __ Stp(scratch1, scratch1,
+           MemOperand(copy_to, 2 * kSystemPointerSize, PostIndex));
+    // We might write one slot extra, but that is ok because we'll overwrite it
+    // below.
+    __ Cmp(copy_end, copy_to);
+    __ B(hi, &fill);
 
-  // Copy arguments. We use load/store pair instructions, so we might overshoot
-  // by one slot, but since we copy the arguments starting from the last one, if
-  // we do overshoot, the extra slot will be overwritten later by the receiver.
-  Label copy_2_by_2;
-  __ Bind(&copy_2_by_2);
-  __ Ldp(scratch1, scratch2,
-         MemOperand(copy_from, 2 * kSystemPointerSize, PostIndex));
-  __ Stp(scratch1, scratch2,
-         MemOperand(copy_to, 2 * kSystemPointerSize, PostIndex));
-  __ Cmp(copy_end, copy_to);
-  __ B(hi, &copy_2_by_2);
-  __ Bind(&skip_copy);
+    // Correct copy_to, for the case where we wrote one additional slot.
+    __ Mov(copy_to, copy_end);
 
-  // (3) Store padding, which might be overwritten by the receiver, if it is not
-  // necessary.
-  __ RecordComment("-- Store padding --");
-  __ Str(padreg, MemOperand(fp, -5 * kSystemPointerSize));
+    __ Bind(&enough_arguments);
+    // (2) Copy all of the actual arguments, or as many as we need.
+    Label skip_copy;
+    __ RecordComment("-- Copy actual arguments --");
+    __ Cbz(argc_to_copy, &skip_copy);
+    __ Add(copy_end, copy_to,
+           Operand(argc_to_copy, LSL, kSystemPointerSizeLog2));
+    __ Add(copy_from, fp, 2 * kSystemPointerSize);
+    // Adjust for difference between actual and expected arguments.
+    __ Add(copy_from, copy_from,
+           Operand(argc_unused_actual, LSL, kSystemPointerSizeLog2));
 
-  // (4) Store receiver. Calculate target address from the sp to avoid checking
-  // for padding. Storing the receiver will overwrite either the extra slot
-  // we copied with the actual arguments, if we did copy one, or the padding we
-  // stored above.
-  __ RecordComment("-- Store receiver --");
-  __ Add(copy_from, fp, 2 * kSystemPointerSize);
-  __ Ldr(scratch1,
-         MemOperand(copy_from, argc_actual, LSL, kSystemPointerSizeLog2));
-  __ Str(scratch1, MemOperand(sp, argc_expected, LSL, kSystemPointerSizeLog2));
+    // Copy arguments. We use load/store pair instructions, so we might
+    // overshoot by one slot, but since we copy the arguments starting from the
+    // last one, if we do overshoot, the extra slot will be overwritten later by
+    // the receiver.
+    Label copy_2_by_2;
+    __ Bind(&copy_2_by_2);
+    __ Ldp(scratch1, scratch2,
+           MemOperand(copy_from, 2 * kSystemPointerSize, PostIndex));
+    __ Stp(scratch1, scratch2,
+           MemOperand(copy_to, 2 * kSystemPointerSize, PostIndex));
+    __ Cmp(copy_end, copy_to);
+    __ B(hi, &copy_2_by_2);
+    __ Bind(&skip_copy);
 
-  // Arguments have been adapted. Now call the entry point.
-  __ RecordComment("-- Call entry point --");
-  __ Mov(argc_actual, argc_expected);
-  // x0 : expected number of arguments
-  // x1 : function (passed through to callee)
-  // x3 : new target (passed through to callee)
-  static_assert(kJavaScriptCallCodeStartRegister == x2, "ABI mismatch");
-  __ LoadTaggedPointerField(x2,
-                            FieldMemOperand(function, JSFunction::kCodeOffset));
-  __ CallCodeObject(x2);
+    // (3) Store padding, which might be overwritten by the receiver, if it is
+    // not necessary.
+    __ RecordComment("-- Store padding --");
+    __ Str(padreg, MemOperand(fp, -5 * kSystemPointerSize));
 
-  // Store offset of return address for deoptimizer.
-  masm->isolate()->heap()->SetArgumentsAdaptorDeoptPCOffset(masm->pc_offset());
+    // (4) Store receiver. Calculate target address from the sp to avoid
+    // checking for padding. Storing the receiver will overwrite either the
+    // extra slot we copied with the actual arguments, if we did copy one, or
+    // the padding we stored above.
+    __ RecordComment("-- Store receiver --");
+    __ Add(copy_from, fp, 2 * kSystemPointerSize);
+    __ Ldr(scratch1,
+           MemOperand(copy_from, argc_actual, LSL, kSystemPointerSizeLog2));
+    __ Str(scratch1,
+           MemOperand(sp, argc_expected, LSL, kSystemPointerSizeLog2));
 
-  // Exit frame and return.
-  LeaveArgumentsAdaptorFrame(masm);
-  __ Ret();
+    // Arguments have been adapted. Now call the entry point.
+    __ RecordComment("-- Call entry point --");
+    __ Mov(argc_actual, argc_expected);
+    // x0 : expected number of arguments
+    // x1 : function (passed through to callee)
+    // x3 : new target (passed through to callee)
+    static_assert(kJavaScriptCallCodeStartRegister == x2, "ABI mismatch");
+    __ LoadTaggedPointerField(
+        x2, FieldMemOperand(function, JSFunction::kCodeOffset));
+    __ CallCodeObject(x2);
 
-  // Call the entry point without adapting the arguments.
-  __ RecordComment("-- Call without adapting args --");
+    // Store offset of return address for deoptimizer.
+    masm->isolate()->heap()->SetArgumentsAdaptorDeoptPCOffset(
+        masm->pc_offset());
+
+    // Exit frame and return.
+    LeaveArgumentsAdaptorFrame(masm);
+    __ Ret();
+  }
+
+  // -----------------------------------------
+  // Adapt arguments in the existing frame.
+  // -----------------------------------------
+  __ Bind(&adapt_arguments_in_place);
+  {
+    __ RecordComment("-- Update arguments in place --");
+    // The callee cannot observe the actual arguments, so it's safe to just
+    // pass the expected arguments by massaging the stack appropriately. See
+    // http://bit.ly/v8-faster-calls-with-arguments-mismatch for details.
+    Label under_application, over_application;
+    __ Tbnz(argc_actual_minus_expected, kXSignBit, &under_application);
+
+    __ Bind(&over_application);
+    {
+      // Remove superfluous arguments from the stack. The number of superflous
+      // arguments is even.
+      __ RecordComment("-- Over-application --");
+      __ Mov(argc_actual, argc_expected);
+      __ Drop(argc_actual_minus_expected);
+      __ B(&dont_adapt_arguments);
+    }
+
+    __ Bind(&under_application);
+    {
+      // Fill remaining expected arguments with undefined values.
+      __ RecordComment("-- Under-application --");
+      Label fill;
+      Register undef_value = x16;
+      __ LoadRoot(undef_value, RootIndex::kUndefinedValue);
+      __ Bind(&fill);
+      __ Add(argc_actual, argc_actual, 2);
+      __ Push(undef_value, undef_value);
+      __ Cmp(argc_actual, argc_expected);
+      __ B(lt, &fill);
+      __ B(&dont_adapt_arguments);
+    }
+  }
+
+  // -------------------------------------------
+  // Dont adapt arguments.
+  // -------------------------------------------
   __ Bind(&dont_adapt_arguments);
-  static_assert(kJavaScriptCallCodeStartRegister == x2, "ABI mismatch");
-  __ LoadTaggedPointerField(x2,
-                            FieldMemOperand(function, JSFunction::kCodeOffset));
-  __ JumpCodeObject(x2);
+  {
+    // Call the entry point without adapting the arguments.
+    __ RecordComment("-- Call without adapting args --");
+    static_assert(kJavaScriptCallCodeStartRegister == x2, "ABI mismatch");
+    __ LoadTaggedPointerField(
+        x2, FieldMemOperand(function, JSFunction::kCodeOffset));
+    __ JumpCodeObject(x2);
+  }
 
   __ Bind(&stack_overflow);
   __ RecordComment("-- Stack overflow --");

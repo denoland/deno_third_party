@@ -41,6 +41,14 @@ class LocationReference {
     result.temporary_description_ = std::move(description);
     return result;
   }
+  // A heap reference, that is, a tagged value and an offset to encode an inner
+  // pointer.
+  static LocationReference HeapReference(VisitResult heap_reference) {
+    LocationReference result;
+    DCHECK(heap_reference.type()->IsReferenceType());
+    result.heap_reference_ = std::move(heap_reference);
+    return result;
+  }
   static LocationReference ArrayAccess(VisitResult base, VisitResult offset) {
     LocationReference result;
     result.eval_function_ = std::string{"[]"};
@@ -89,6 +97,18 @@ class LocationReference {
     DCHECK(IsTemporary());
     return *temporary_;
   }
+  bool IsHeapReference() const { return heap_reference_.has_value(); }
+  const VisitResult& heap_reference() const {
+    DCHECK(IsHeapReference());
+    return *heap_reference_;
+  }
+
+  const Type* ReferencedType() const {
+    if (IsHeapReference()) {
+      return ReferenceType::cast(heap_reference().type())->referenced_type();
+    }
+    return GetVisitResult().type();
+  }
 
   const VisitResult& GetVisitResult() const {
     if (IsVariableAccess()) return variable();
@@ -131,12 +151,18 @@ class LocationReference {
   base::Optional<VisitResult> variable_;
   base::Optional<VisitResult> temporary_;
   base::Optional<std::string> temporary_description_;
+  base::Optional<VisitResult> heap_reference_;
   base::Optional<std::string> eval_function_;
   base::Optional<std::string> assign_function_;
   VisitResultVector call_arguments_;
   base::Optional<std::string> index_field_;
 
   LocationReference() = default;
+};
+
+struct InitializerResults {
+  std::vector<Identifier*> names;
+  NameValueMap field_value_map;
 };
 
 template <class T>
@@ -252,9 +278,29 @@ class ImplementationVisitor : public FileVisitor {
  public:
   void GenerateBuiltinDefinitions(std::string& file_name);
   void GenerateClassDefinitions(std::string& file_name);
+  void GeneratePrintDefinitions(std::string& file_name);
 
   VisitResult Visit(Expression* expr);
   const Type* Visit(Statement* stmt);
+
+  InitializerResults VisitInitializerResults(
+      const AggregateType* aggregate,
+      const std::vector<NameAndExpression>& expressions);
+
+  void InitializeFieldFromSpread(VisitResult object, const Field& field,
+                                 const InitializerResults& initializer_results);
+
+  size_t InitializeAggregateHelper(
+      const AggregateType* aggregate_type, VisitResult allocate_result,
+      const InitializerResults& initializer_results);
+
+  VisitResult AddVariableObjectSize(
+      VisitResult object_size, const ClassType* current_class,
+      const InitializerResults& initializer_results);
+
+  void InitializeAggregate(const AggregateType* aggregate_type,
+                           VisitResult allocate_result,
+                           const InitializerResults& initializer_results);
 
   VisitResult TemporaryUninitializedStruct(const StructType* struct_type,
                                            const std::string& reason);
@@ -262,6 +308,7 @@ class ImplementationVisitor : public FileVisitor {
 
   LocationReference GetLocationReference(Expression* location);
   LocationReference GetLocationReference(IdentifierExpression* expr);
+  LocationReference GetLocationReference(DereferenceExpression* expr);
   LocationReference GetLocationReference(FieldAccessExpression* expr);
   LocationReference GetLocationReference(ElementAccessExpression* expr);
 
@@ -269,15 +316,7 @@ class ImplementationVisitor : public FileVisitor {
 
   VisitResult GetBuiltinCode(Builtin* builtin);
 
-  VisitResult Visit(IdentifierExpression* expr);
-  VisitResult Visit(FieldAccessExpression* expr) {
-    StackScope scope(this);
-    return scope.Yield(GenerateFetchFromLocation(GetLocationReference(expr)));
-  }
-  VisitResult Visit(ElementAccessExpression* expr) {
-    StackScope scope(this);
-    return scope.Yield(GenerateFetchFromLocation(GetLocationReference(expr)));
-  }
+  VisitResult Visit(LocationExpression* expr);
 
   void VisitAllDeclarables();
   void Visit(Declarable* delarable);
@@ -295,8 +334,6 @@ class ImplementationVisitor : public FileVisitor {
   VisitResult Visit(CallExpression* expr, bool is_tail = false);
   VisitResult Visit(CallMethodExpression* expr);
   VisitResult Visit(IntrinsicCallExpression* intrinsic);
-  VisitResult Visit(LoadObjectFieldExpression* expr);
-  VisitResult Visit(StoreObjectFieldExpression* expr);
   const Type* Visit(TailCallStatement* stmt);
 
   VisitResult Visit(ConditionalExpression* expr);
@@ -312,6 +349,7 @@ class ImplementationVisitor : public FileVisitor {
   VisitResult Visit(TryLabelExpression* expr);
   VisitResult Visit(StatementExpression* expr);
   VisitResult Visit(NewExpression* expr);
+  VisitResult Visit(SpreadExpression* expr);
 
   const Type* Visit(ReturnStatement* stmt);
   const Type* Visit(GotoStatement* stmt);
@@ -334,18 +372,12 @@ class ImplementationVisitor : public FileVisitor {
 
   void GenerateImplementation(const std::string& dir, Namespace* nspace);
 
-  struct ConstructorInfo {
-    int super_calls;
-  };
-
   DECLARE_CONTEXTUAL_VARIABLE(ValueBindingsManager,
                               BindingsManager<LocalValue>);
   DECLARE_CONTEXTUAL_VARIABLE(LabelBindingsManager,
                               BindingsManager<LocalLabel>);
   DECLARE_CONTEXTUAL_VARIABLE(CurrentCallable, Callable*);
   DECLARE_CONTEXTUAL_VARIABLE(CurrentReturnValue, base::Optional<VisitResult>);
-  DECLARE_CONTEXTUAL_VARIABLE(CurrentConstructorInfo,
-                              base::Optional<ConstructorInfo>);
 
   // A BindingsManagersScope has to be active for local bindings to be created.
   // Shadowing an existing BindingsManagersScope by creating a new one hides all
@@ -445,7 +477,10 @@ class ImplementationVisitor : public FileVisitor {
                            const Container& declaration_container,
                            const TypeVector& types,
                            const std::vector<Binding<LocalLabel>*>& labels,
-                           const TypeVector& specialization_types);
+                           const TypeVector& specialization_types,
+                           bool silence_errors = false);
+  bool TestLookupCallable(const QualifiedName& name,
+                          const TypeVector& parameter_types);
 
   template <class Container>
   Callable* LookupCallable(const QualifiedName& name,
@@ -456,13 +491,6 @@ class ImplementationVisitor : public FileVisitor {
   Method* LookupMethod(const std::string& name, LocationReference target,
                        const Arguments& arguments,
                        const TypeVector& specialization_types);
-
-  Method* LookupConstructor(LocationReference target,
-                            const Arguments& arguments,
-                            const TypeVector& specialization_types) {
-    return LookupMethod(kConstructMethodName, target, arguments,
-                        specialization_types);
-  }
 
   const Type* GetCommonType(const Type* left, const Type* right);
 
@@ -498,6 +526,9 @@ class ImplementationVisitor : public FileVisitor {
   void GenerateBranch(const VisitResult& condition, Block* true_block,
                       Block* false_block);
 
+  typedef std::function<VisitResult()> VisitResultGenerator;
+  void GenerateExpressionBranch(VisitResultGenerator, Block* true_block,
+                                Block* false_block);
   void GenerateExpressionBranch(Expression* expression, Block* true_block,
                                 Block* false_block);
 

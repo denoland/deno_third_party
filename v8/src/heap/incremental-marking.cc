@@ -58,7 +58,6 @@ IncrementalMarking::IncrementalMarking(
       scheduled_bytes_to_mark_(0),
       schedule_update_time_ms_(0),
       bytes_marked_concurrently_(0),
-      unscanned_bytes_of_large_object_(0),
       is_compacting_(false),
       should_hurry_(false),
       was_activated_(false),
@@ -355,12 +354,6 @@ void IncrementalMarking::StartMarking() {
 
   SetState(MARKING);
 
-  {
-    TRACE_GC(heap()->tracer(),
-             GCTracer::Scope::MC_INCREMENTAL_EMBEDDER_PROLOGUE);
-    heap_->local_embedder_heap_tracer()->TracePrologue();
-  }
-
   ActivateIncrementalWriteBarrier();
 
 // Marking bits are cleared by the sweeper.
@@ -385,6 +378,14 @@ void IncrementalMarking::StartMarking() {
   // Ready to start incremental marking.
   if (FLAG_trace_incremental_marking) {
     heap()->isolate()->PrintWithTimestamp("[IncrementalMarking] Running\n");
+  }
+
+  {
+    // TracePrologue may call back into V8 in corner cases, requiring that
+    // marking (including write barriers) is fully set up.
+    TRACE_GC(heap()->tracer(),
+             GCTracer::Scope::MC_INCREMENTAL_EMBEDDER_PROLOGUE);
+    heap_->local_embedder_heap_tracer()->TracePrologue();
   }
 }
 
@@ -608,22 +609,6 @@ void IncrementalMarking::UpdateMarkingWorklistAfterScavenge() {
   UpdateWeakReferencesAfterScavenge();
 }
 
-namespace {
-template <typename T>
-T ForwardingAddress(T heap_obj) {
-  MapWord map_word = heap_obj->map_word();
-
-  if (map_word.IsForwardingAddress()) {
-    return T::cast(map_word.ToForwardingAddress());
-  } else if (Heap::InFromPage(heap_obj)) {
-    return T();
-  } else {
-    // TODO(ulan): Support minor mark-compactor here.
-    return heap_obj;
-  }
-}
-}  // namespace
-
 void IncrementalMarking::UpdateWeakReferencesAfterScavenge() {
   weak_objects_->weak_references.Update(
       [](std::pair<HeapObject, HeapObjectSlot> slot_in,
@@ -750,7 +735,8 @@ void IncrementalMarking::RevisitObject(HeapObject obj) {
   DCHECK(IsMarking());
   DCHECK(marking_state()->IsBlack(obj));
   Page* page = Page::FromHeapObject(obj);
-  if (page->owner()->identity() == LO_SPACE) {
+  if (page->owner()->identity() == LO_SPACE ||
+      page->owner()->identity() == NEW_LO_SPACE) {
     page->ResetProgressBar();
   }
   Map map = obj->map();
@@ -778,15 +764,22 @@ intptr_t IncrementalMarking::ProcessMarkingWorklist(
   while (bytes_processed < bytes_to_process || completion == FORCE_COMPLETION) {
     HeapObject obj = marking_worklist()->Pop();
     if (obj.is_null()) break;
-    // Left trimming may result in white, grey, or black filler objects on the
-    // marking deque. Ignore these objects.
+    // Left trimming may result in grey or black filler objects on the marking
+    // worklist. Ignore these objects.
     if (obj->IsFiller()) {
-      DCHECK(!marking_state()->IsImpossible(obj));
+      // Due to copying mark bits and the fact that grey and black have their
+      // first bit set, one word fillers are always black.
+      DCHECK_IMPLIES(
+          obj->map() == ReadOnlyRoots(heap()).one_pointer_filler_map(),
+          marking_state()->IsBlack(obj));
+      // Other fillers may be black or grey depending on the color of the object
+      // that was trimmed.
+      DCHECK_IMPLIES(
+          obj->map() != ReadOnlyRoots(heap()).one_pointer_filler_map(),
+          marking_state()->IsBlackOrGrey(obj));
       continue;
     }
-    unscanned_bytes_of_large_object_ = 0;
-    int size = VisitObject(obj->map(), obj);
-    bytes_processed += size - unscanned_bytes_of_large_object_;
+    bytes_processed += VisitObject(obj->map(), obj);
   }
   return bytes_processed;
 }

@@ -381,6 +381,33 @@ void TurboAssembler::RestoreRegisters(RegList registers) {
   }
 }
 
+void TurboAssembler::CallEphemeronKeyBarrier(Register object, Register address,
+                                             SaveFPRegsMode fp_mode) {
+  EphemeronKeyBarrierDescriptor descriptor;
+  RegList registers = descriptor.allocatable_registers();
+
+  SaveRegisters(registers);
+
+  Register object_parameter(
+      descriptor.GetRegisterParameter(EphemeronKeyBarrierDescriptor::kObject));
+  Register slot_parameter(descriptor.GetRegisterParameter(
+      EphemeronKeyBarrierDescriptor::kSlotAddress));
+  Register fp_mode_parameter(
+      descriptor.GetRegisterParameter(EphemeronKeyBarrierDescriptor::kFPMode));
+
+  push(object);
+  push(address);
+
+  pop(slot_parameter);
+  pop(object_parameter);
+
+  Move(fp_mode_parameter, Smi::FromEnum(fp_mode));
+  Call(isolate()->builtins()->builtin_handle(Builtins::kEphemeronKeyBarrier),
+       RelocInfo::CODE_TARGET);
+
+  RestoreRegisters(registers);
+}
+
 void TurboAssembler::CallRecordWriteStub(
     Register object, Register address,
     RememberedSetAction remembered_set_action, SaveFPRegsMode fp_mode) {
@@ -485,10 +512,6 @@ void MacroAssembler::RecordWrite(Register object, Register address,
   CallRecordWriteStub(object, address, remembered_set_action, fp_mode);
 
   bind(&done);
-
-  // Count number of write barriers in generated code.
-  isolate()->counters()->write_barriers_static()->Increment();
-  IncrementCounter(isolate()->counters()->write_barriers_dynamic(), 1, value);
 
   // Clobber clobbered registers when running with the debug-code flag
   // turned on to provoke errors.
@@ -810,13 +833,10 @@ void MacroAssembler::EnterExitFramePrologue(StackFrame::Type frame_type,
   push(ebp);
   mov(ebp, esp);
 
-  // Reserve room for entry stack pointer and push the code object.
+  // Reserve room for entry stack pointer.
   push(Immediate(StackFrame::TypeToMarker(frame_type)));
   DCHECK_EQ(-2 * kSystemPointerSize, ExitFrameConstants::kSPOffset);
   push(Immediate(0));  // Saved entry sp, patched before call.
-  DCHECK_EQ(-3 * kSystemPointerSize, ExitFrameConstants::kCodeOffset);
-  Move(scratch, CodeObject());
-  push(scratch);  // Accessed from ExitFrame::code_slot.
 
   STATIC_ASSERT(edx == kRuntimeCallFunctionRegister);
   STATIC_ASSERT(esi == kContextRegister);
@@ -1905,24 +1925,24 @@ void TurboAssembler::LoadCodeObjectEntry(Register destination,
 
   if (options().isolate_independent_code) {
     DCHECK(root_array_available());
-    Label if_code_is_builtin, out;
+    Label if_code_is_off_heap, out;
 
-    // Check whether the Code object is a builtin. If so, call its (off-heap)
-    // entry point directly without going through the (on-heap) trampoline.
-    // Otherwise, just call the Code object as always.
-    cmp(FieldOperand(code_object, Code::kBuiltinIndexOffset),
-        Immediate(Builtins::kNoBuiltinId));
-    j(not_equal, &if_code_is_builtin);
+    // Check whether the Code object is an off-heap trampoline. If so, call its
+    // (off-heap) entry point directly without going through the (on-heap)
+    // trampoline.  Otherwise, just call the Code object as always.
+    test(FieldOperand(code_object, Code::kFlagsOffset),
+         Immediate(Code::IsOffHeapTrampoline::kMask));
+    j(not_equal, &if_code_is_off_heap);
 
-    // A non-builtin Code object, the entry point is at
+    // Not an off-heap trampoline, the entry point is at
     // Code::raw_instruction_start().
     Move(destination, code_object);
     add(destination, Immediate(Code::kHeaderSize - kHeapObjectTag));
     jmp(&out);
 
-    // A builtin Code object, the entry point is loaded from the builtin entry
+    // An off-heap trampoline, the entry point is loaded from the builtin entry
     // table.
-    bind(&if_code_is_builtin);
+    bind(&if_code_is_off_heap);
     mov(destination, FieldOperand(code_object, Code::kBuiltinIndexOffset));
     mov(destination,
         Operand(kRootRegister, destination, times_system_pointer_size,

@@ -9,6 +9,7 @@
 #include "src/accessors.h"
 #include "src/compiler/compilation-dependencies.h"
 #include "src/compiler/type-cache.h"
+#include "src/counters.h"
 #include "src/field-index-inl.h"
 #include "src/field-type.h"
 #include "src/ic/call-optimization.h"
@@ -48,6 +49,8 @@ std::ostream& operator<<(std::ostream& os, AccessMode access_mode) {
       return os << "Store";
     case AccessMode::kStoreInLiteral:
       return os << "StoreInLiteral";
+    case AccessMode::kHas:
+      return os << "Has";
   }
   UNREACHABLE();
 }
@@ -162,6 +165,7 @@ bool PropertyAccessInfo::Merge(PropertyAccessInfo const* that,
       if (this->field_index_.GetFieldAccessStubKey() ==
           that->field_index_.GetFieldAccessStubKey()) {
         switch (access_mode) {
+          case AccessMode::kHas:
           case AccessMode::kLoad: {
             if (this->field_representation_ != that->field_representation_) {
               if (!IsAnyTagged(this->field_representation_) ||
@@ -246,8 +250,9 @@ bool AccessInfoFactory::ComputeElementAccessInfo(
     Handle<Map> map, AccessMode access_mode,
     ElementAccessInfo* access_info) const {
   // Check if it is safe to inline element access for the {map}.
-  if (!CanInlineElementAccess(map)) return false;
-  ElementsKind const elements_kind = map->elements_kind();
+  MapRef map_ref(broker(), map);
+  if (!CanInlineElementAccess(map_ref)) return false;
+  ElementsKind const elements_kind = map_ref.elements_kind();
   *access_info = ElementAccessInfo(MapHandles{map}, elements_kind);
   return true;
 }
@@ -255,46 +260,25 @@ bool AccessInfoFactory::ComputeElementAccessInfo(
 bool AccessInfoFactory::ComputeElementAccessInfos(
     FeedbackNexus nexus, MapHandles const& maps, AccessMode access_mode,
     ZoneVector<ElementAccessInfo>* access_infos) const {
-  ProcessedFeedback processed(broker()->zone());
-  ProcessFeedbackMapsForElementAccess(isolate(), maps, &processed);
+  ElementAccessFeedback const* processed =
+      FLAG_concurrent_inlining
+          ? broker()->GetElementAccessFeedback(FeedbackSource(nexus))
+          : broker()->ProcessFeedbackMapsForElementAccess(maps);
+  if (processed == nullptr) return false;
 
-  if (FLAG_concurrent_inlining) {
-    if (broker()->HasFeedback(nexus)) {
-      // We have already processed the feedback for this nexus during
-      // serialization. Use that data instead of the data computed above.
-      ProcessedFeedback const& preprocessed =
-          broker()->GetOrCreateFeedback(nexus);
-      TRACE_BROKER(broker(),
-                   "ComputeElementAccessInfos: using preprocessed feedback "
-                       << "(slot " << nexus.slot() << " of "
-                       << Brief(*nexus.vector_handle()) << "; "
-                       << preprocessed.receiver_maps.size() << "/"
-                       << preprocessed.transitions.size() << " vs "
-                       << processed.receiver_maps.size() << "/"
-                       << processed.transitions.size() << ").\n");
-      processed.receiver_maps = preprocessed.receiver_maps;
-      processed.transitions = preprocessed.transitions;
-    } else {
-      TRACE_BROKER(broker(),
-                   "ComputeElementAccessInfos: missing preprocessed feedback "
-                       << "(slot " << nexus.slot() << " of "
-                       << Brief(*nexus.vector_handle()) << ").\n");
-    }
-  }
-
-  if (access_mode == AccessMode::kLoad) {
+  if (access_mode == AccessMode::kLoad || access_mode == AccessMode::kHas) {
     // For polymorphic loads of similar elements kinds (i.e. all tagged or all
     // double), always use the "worst case" code without a transition.  This is
     // much faster than transitioning the elements to the worst case, trading a
     // TransitionElementsKind for a CheckMaps, avoiding mutation of the array.
     ElementAccessInfo access_info;
-    if (ConsolidateElementLoad(processed, &access_info)) {
+    if (ConsolidateElementLoad(*processed, &access_info)) {
       access_infos->push_back(access_info);
       return true;
     }
   }
 
-  for (Handle<Map> receiver_map : processed.receiver_maps) {
+  for (Handle<Map> receiver_map : processed->receiver_maps) {
     // Compute the element access information.
     ElementAccessInfo access_info;
     if (!ComputeElementAccessInfo(receiver_map, access_mode, &access_info)) {
@@ -302,8 +286,8 @@ bool AccessInfoFactory::ComputeElementAccessInfos(
     }
 
     // Collect the possible transitions for the {receiver_map}.
-    for (auto transition : processed.transitions) {
-      if (transition.second.is_identical_to(receiver_map)) {
+    for (auto transition : processed->transitions) {
+      if (transition.second.equals(receiver_map)) {
         access_info.AddTransitionSource(transition.first);
       }
     }
@@ -322,14 +306,30 @@ bool AccessInfoFactory::ComputeDataFieldAccessInfo(
   PropertyDetails const details = descriptors->GetDetails(number);
   int index = descriptors->GetFieldIndex(number);
   Representation details_representation = details.representation();
+  if (details_representation.IsNone()) {
+    // The ICs collect feedback in PREMONOMORPHIC state already,
+    // but at this point the {receiver_map} might still contain
+    // fields for which the representation has not yet been
+    // determined by the runtime. So we need to catch this case
+    // here and fall back to use the regular IC logic instead.
+    return false;
+  }
   FieldIndex field_index =
       FieldIndex::ForPropertyIndex(*map, index, details_representation);
   Type field_type = Type::NonInternal();
+#ifdef V8_COMPRESS_POINTERS
+  MachineRepresentation field_representation =
+      MachineRepresentation::kCompressed;
+#else
   MachineRepresentation field_representation = MachineRepresentation::kTagged;
+#endif
   MaybeHandle<Map> field_map;
+  MapRef map_ref(broker(), map);
   if (details_representation.IsSmi()) {
     field_type = Type::SignedSmall();
     field_representation = MachineRepresentation::kTaggedSigned;
+    map_ref.SerializeOwnDescriptors();  // TODO(neis): Remove later.
+    dependencies()->DependOnFieldRepresentation(map_ref, number);
   } else if (details_representation.IsDouble()) {
     field_type = type_cache_->kFloat64;
     field_representation = MachineRepresentation::kFloat64;
@@ -345,9 +345,10 @@ bool AccessInfoFactory::ComputeDataFieldAccessInfo(
 
       // The field type was cleared by the GC, so we don't know anything
       // about the contents now.
-    } else if (descriptors_field_type->IsClass()) {
-      MapRef map_ref(broker(), map);
-      map_ref.SerializeOwnDescriptors();  // TODO(neis): Remove later.
+    }
+    map_ref.SerializeOwnDescriptors();  // TODO(neis): Remove later.
+    dependencies()->DependOnFieldRepresentation(map_ref, number);
+    if (descriptors_field_type->IsClass()) {
       dependencies()->DependOnFieldType(map_ref, number);
       // Remember the field map, and try to infer a useful type.
       Handle<Map> map(descriptors_field_type->AsClass(), isolate());
@@ -386,6 +387,12 @@ bool AccessInfoFactory::ComputeAccessorDescriptorAccessInfo(
         PropertyAccessInfo::ModuleExport(MapHandles{receiver_map}, cell);
     return true;
   }
+  if (access_mode == AccessMode::kHas) {
+    // HasProperty checks don't call getter/setters, existence is sufficient.
+    *access_info = PropertyAccessInfo::AccessorConstant(
+        MapHandles{receiver_map}, Handle<Object>(), holder);
+    return true;
+  }
   Handle<Object> accessors(descriptors->GetStrongValue(number), isolate());
   if (!accessors->IsAccessorPair()) return false;
   Handle<Object> accessor(access_mode == AccessMode::kLoad
@@ -406,7 +413,7 @@ bool AccessInfoFactory::ComputeAccessorDescriptorAccessInfo(
     DCHECK_IMPLIES(lookup == CallOptimization::kHolderIsReceiver,
                    holder.is_null());
     DCHECK_IMPLIES(lookup == CallOptimization::kHolderFound, !holder.is_null());
-    if (V8_UNLIKELY(FLAG_runtime_stats)) return false;
+    if (V8_UNLIKELY(TracingFlags::is_runtime_stats_enabled())) return false;
   }
   if (access_mode == AccessMode::kLoad) {
     Handle<Name> cached_property_name;
@@ -428,11 +435,13 @@ bool AccessInfoFactory::ComputePropertyAccessInfo(
     PropertyAccessInfo* access_info) const {
   CHECK(name->IsUniqueName());
 
+  if (access_mode == AccessMode::kHas && !map->IsJSReceiverMap()) return false;
+
   // Check if it is safe to inline property access for the {map}.
   if (!CanInlinePropertyAccess(map)) return false;
 
   // We support fast inline cases for certain JSObject getters.
-  if (access_mode == AccessMode::kLoad &&
+  if ((access_mode == AccessMode::kLoad || access_mode == AccessMode::kHas) &&
       LookupSpecialFieldAccessor(map, name, access_info)) {
     return true;
   }
@@ -440,7 +449,7 @@ bool AccessInfoFactory::ComputePropertyAccessInfo(
   // Remember the receiver map. We use {map} as loop variable.
   Handle<Map> receiver_map = map;
   MaybeHandle<JSObject> holder;
-  do {
+  while (true) {
     // Lookup the named property on the {map}.
     Handle<DescriptorArray> descriptors(map->instance_descriptors(), isolate());
     int const number = descriptors->Search(*name, *map);
@@ -538,8 +547,14 @@ bool AccessInfoFactory::ComputePropertyAccessInfo(
     }
     map = handle(map_prototype->map(), isolate());
     holder = map_prototype;
-  } while (CanInlinePropertyAccess(map));
-  return false;
+
+    if (!CanInlinePropertyAccess(map)) return false;
+
+    // Successful lookup on prototype chain needs to guarantee that all
+    // the prototypes up to the holder have stable maps. Let us make sure
+    // the prototype maps are stable here.
+    CHECK(map->is_stable());
+  }
 }
 
 bool AccessInfoFactory::ComputePropertyAccessInfo(
@@ -605,37 +620,24 @@ Maybe<ElementsKind> GeneralizeElementsKind(ElementsKind this_kind,
 }  // namespace
 
 bool AccessInfoFactory::ConsolidateElementLoad(
-    ProcessedFeedback const& processed, ElementAccessInfo* access_info) const {
-  CHECK(!processed.receiver_maps.empty());
-
-  // We want to look at each map but the maps are split across
-  // {processed.receiver_maps} and {processed.transitions}.
-
-  InstanceType instance_type = processed.receiver_maps.front()->instance_type();
-  ElementsKind elements_kind = processed.receiver_maps.front()->elements_kind();
-  auto processMap = [&](Handle<Map> map) {
-    if (!CanInlineElementAccess(map) || map->instance_type() != instance_type) {
+    ElementAccessFeedback const& processed,
+    ElementAccessInfo* access_info) const {
+  ElementAccessFeedback::MapIterator it = processed.all_maps(broker());
+  MapRef first_map = it.current();
+  InstanceType instance_type = first_map.instance_type();
+  ElementsKind elements_kind = first_map.elements_kind();
+  MapHandles maps;
+  for (; !it.done(); it.advance()) {
+    MapRef map = it.current();
+    if (map.instance_type() != instance_type || !CanInlineElementAccess(map)) {
       return false;
     }
-    if (!GeneralizeElementsKind(elements_kind, map->elements_kind())
+    if (!GeneralizeElementsKind(elements_kind, map.elements_kind())
              .To(&elements_kind)) {
       return false;
     }
-    return true;
-  };
-
-  for (Handle<Map> map : processed.receiver_maps) {
-    if (!processMap(map)) return false;
+    maps.push_back(map.object());
   }
-
-  MapHandles maps(processed.receiver_maps.begin(),
-                  processed.receiver_maps.end());
-  for (auto& pair : processed.transitions) {
-    if (!processMap(pair.first) || !processMap(pair.second)) return false;
-    maps.push_back(pair.first);
-    maps.push_back(pair.second);
-  }
-  // {maps} may now contain duplicate entries, but that shouldn't matter.
 
   *access_info = ElementAccessInfo(maps, elements_kind);
   return true;
@@ -706,9 +708,12 @@ bool AccessInfoFactory::LookupTransition(
   Type field_type = Type::NonInternal();
   MaybeHandle<Map> field_map;
   MachineRepresentation field_representation = MachineRepresentation::kTagged;
+  MapRef transition_map_ref(broker(), transition_map);
   if (details_representation.IsSmi()) {
     field_type = Type::SignedSmall();
     field_representation = MachineRepresentation::kTaggedSigned;
+    transition_map_ref.SerializeOwnDescriptors();  // TODO(neis): Remove later.
+    dependencies()->DependOnFieldRepresentation(transition_map_ref, number);
   } else if (details_representation.IsDouble()) {
     field_type = type_cache_->kFloat64;
     field_representation = MachineRepresentation::kFloat64;
@@ -722,10 +727,10 @@ bool AccessInfoFactory::LookupTransition(
     if (descriptors_field_type->IsNone()) {
       // Store is not safe if the field type was cleared.
       return false;
-    } else if (descriptors_field_type->IsClass()) {
-      MapRef transition_map_ref(broker(), transition_map);
-      transition_map_ref
-          .SerializeOwnDescriptors();  // TODO(neis): Remove later.
+    }
+    transition_map_ref.SerializeOwnDescriptors();  // TODO(neis): Remove later.
+    dependencies()->DependOnFieldRepresentation(transition_map_ref, number);
+    if (descriptors_field_type->IsClass()) {
       dependencies()->DependOnFieldType(transition_map_ref, number);
       // Remember the field map, and try to infer a useful type.
       Handle<Map> map(descriptors_field_type->AsClass(), isolate());

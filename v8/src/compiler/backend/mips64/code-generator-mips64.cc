@@ -453,6 +453,8 @@ void EmitWordLoadPoisoningIfNeeded(CodeGenerator* codegen,
     __ load_linked(i.TempRegister(2), MemOperand(i.TempRegister(0), 0));       \
     __ ExtractBits(i.OutputRegister(0), i.TempRegister(2), i.TempRegister(1),  \
                    size, sign_extend);                                         \
+    __ ExtractBits(i.InputRegister(2), i.InputRegister(2), i.TempRegister(1),  \
+                   size, sign_extend);                                         \
     __ BranchShort(&exit, ne, i.InputRegister(2),                              \
                    Operand(i.OutputRegister(0)));                              \
     __ InsertBits(i.TempRegister(2), i.InputRegister(3), i.TempRegister(1),    \
@@ -3318,11 +3320,9 @@ void CodeGenerator::AssembleArchTrap(Instruction* instr,
 void CodeGenerator::AssembleArchBoolean(Instruction* instr,
                                         FlagsCondition condition) {
   MipsOperandConverter i(this, instr);
-  Label done;
 
   // Materialize a full 32-bit 1 or 0 value. The result register is always the
   // last output of the instruction.
-  Label false_value;
   DCHECK_NE(0u, instr->OutputCount());
   Register result = i.OutputRegister(instr->OutputCount() - 1);
   Condition cc = kNoCondition;

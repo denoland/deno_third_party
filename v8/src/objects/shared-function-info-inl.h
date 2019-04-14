@@ -131,10 +131,8 @@ ACCESSORS(SharedFunctionInfo, script_or_debug_info, Object,
 UINT16_ACCESSORS(SharedFunctionInfo, length, kLengthOffset)
 UINT16_ACCESSORS(SharedFunctionInfo, internal_formal_parameter_count,
                  kFormalParameterCountOffset)
-UINT8_ACCESSORS(SharedFunctionInfo, expected_nof_properties,
-                kExpectedNofPropertiesOffset)
-UINT8_ACCESSORS(SharedFunctionInfo, raw_builtin_function_id,
-                kBuiltinFunctionIdOffset)
+UINT16_ACCESSORS(SharedFunctionInfo, expected_nof_properties,
+                 kExpectedNofPropertiesOffset)
 UINT16_ACCESSORS(SharedFunctionInfo, raw_function_token_offset,
                  kFunctionTokenOffsetOffset)
 RELAXED_INT32_ACCESSORS(SharedFunctionInfo, flags, kFlagsOffset)
@@ -429,16 +427,6 @@ IsCompiledScope::IsCompiledScope(const SharedFunctionInfo shared,
   DCHECK_IMPLIES(!retain_bytecode_.is_null(), is_compiled());
 }
 
-uint16_t SharedFunctionInfo::GetLength() const {
-  DCHECK(is_compiled());
-  DCHECK(HasLength());
-  return length();
-}
-
-bool SharedFunctionInfo::HasLength() const {
-  return length() != kInvalidLength;
-}
-
 bool SharedFunctionInfo::has_simple_parameters() {
   return scope_info()->HasSimpleParameters();
 }
@@ -496,8 +484,8 @@ void SharedFunctionInfo::set_bytecode_array(BytecodeArray bytecode) {
   set_function_data(bytecode);
 }
 
-bool SharedFunctionInfo::ShouldFlushBytecode() {
-  if (!FLAG_flush_bytecode) return false;
+bool SharedFunctionInfo::ShouldFlushBytecode(BytecodeFlushMode mode) {
+  if (mode == BytecodeFlushMode::kDoNotFlushBytecode) return false;
 
   // TODO(rmcilroy): Enable bytecode flushing for resumable functions.
   if (IsResumableFunction(kind()) || !allows_lazy_compilation()) {
@@ -510,7 +498,7 @@ bool SharedFunctionInfo::ShouldFlushBytecode() {
   Object data = function_data();
   if (!data->IsBytecodeArray()) return false;
 
-  if (FLAG_stress_flush_bytecode) return true;
+  if (mode == BytecodeFlushMode::kStressFlushBytecode) return true;
 
   BytecodeArray bytecode = BytecodeArray::cast(data);
 
@@ -706,18 +694,6 @@ void SharedFunctionInfo::SetDebugInfo(DebugInfo debug_info) {
   DCHECK(!HasDebugInfo());
   DCHECK_EQ(debug_info->script(), script_or_debug_info());
   set_script_or_debug_info(debug_info);
-}
-
-bool SharedFunctionInfo::HasBuiltinFunctionId() {
-  return builtin_function_id() != BuiltinFunctionId::kInvalidBuiltinFunctionId;
-}
-
-BuiltinFunctionId SharedFunctionInfo::builtin_function_id() {
-  return static_cast<BuiltinFunctionId>(raw_builtin_function_id());
-}
-
-void SharedFunctionInfo::set_builtin_function_id(BuiltinFunctionId id) {
-  set_raw_builtin_function_id(static_cast<uint8_t>(id));
 }
 
 bool SharedFunctionInfo::HasInferredName() {

@@ -65,12 +65,12 @@
 # endif  // GTEST_OS_QNX
 
 # if GTEST_OS_FUCHSIA
+#  include <lib/fdio/fd.h>
 #  include <lib/fdio/io.h>
 #  include <lib/fdio/spawn.h>
-#  include <lib/fdio/util.h>
-#  include <lib/zx/socket.h>
 #  include <lib/zx/port.h>
 #  include <lib/zx/process.h>
+#  include <lib/zx/socket.h>
 #  include <zircon/processargs.h>
 #  include <zircon/syscalls.h>
 #  include <zircon/syscalls/policy.h>
@@ -1006,10 +1006,8 @@ DeathTest::TestRole FuchsiaDeathTest::AssumeRole() {
       zx::socket::create(0, &stderr_producer_socket, &stderr_socket_);
   GTEST_DEATH_TEST_CHECK_(status >= 0);
   int stderr_producer_fd = -1;
-  zx_handle_t producer_handle[1] = { stderr_producer_socket.release() };
-  uint32_t producer_handle_type[1] = { PA_FDIO_SOCKET };
-  status = fdio_create_fd(
-      producer_handle, producer_handle_type, 1, &stderr_producer_fd);
+  status =
+      fdio_fd_create(stderr_producer_socket.release(), &stderr_producer_fd);
   GTEST_DEATH_TEST_CHECK_(status >= 0);
 
   // Make the stderr socket nonblocking.
@@ -1272,6 +1270,9 @@ static int ExecDeathTestChildMain(void* child_arg) {
 // correct answer.
 static void StackLowerThanAddress(const void* ptr,
                                   bool* result) GTEST_NO_INLINE_;
+// HWAddressSanitizer add a random tag to the MSB of the local variable address,
+// making comparison result unpredictable.
+GTEST_ATTRIBUTE_NO_SANITIZE_HWADDRESS_
 static void StackLowerThanAddress(const void* ptr, bool* result) {
   int dummy;
   *result = (&dummy < ptr);
@@ -1279,6 +1280,7 @@ static void StackLowerThanAddress(const void* ptr, bool* result) {
 
 // Make sure AddressSanitizer does not tamper with the stack here.
 GTEST_ATTRIBUTE_NO_SANITIZE_ADDRESS_
+GTEST_ATTRIBUTE_NO_SANITIZE_HWADDRESS_
 static bool StackGrowsDown() {
   int dummy;
   bool result;

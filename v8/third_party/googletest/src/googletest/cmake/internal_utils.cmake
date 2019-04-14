@@ -22,6 +22,8 @@ macro(fix_default_compiler_settings_)
     # This replacement code is taken from sample in the CMake Wiki at
     # https://gitlab.kitware.com/cmake/community/wikis/FAQ#dynamic-replace.
     foreach (flag_var
+             CMAKE_C_FLAGS CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE
+             CMAKE_C_FLAGS_MINSIZEREL CMAKE_C_FLAGS_RELWITHDEBINFO
              CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE
              CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO)
       if (NOT BUILD_SHARED_LIBS AND NOT gtest_force_shared_crt)
@@ -75,6 +77,11 @@ macro(config_compiler_and_linker)
     # Suppress "unreachable code" warning
     # http://stackoverflow.com/questions/3232669 explains the issue.
     set(cxx_base_flags "${cxx_base_flags} -wd4702")
+  elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    set(cxx_base_flags "-Wall -Wshadow -Werror -Wno-error=sign-conversion")
+    set(cxx_exception_flags "-fexceptions")
+    set(cxx_no_exception_flags "-fno-exceptions")
+    set(cxx_strict_flags "-W -Wpointer-arith -Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch -Wunused-parameter -Wcast-align -Wchar-subscripts -Winline -Wredundant-decls")
   elseif (CMAKE_COMPILER_IS_GNUCXX)
     set(cxx_base_flags "-Wall -Wshadow -Werror")
     if(NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.0.0)

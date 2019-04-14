@@ -183,10 +183,10 @@ const char* HeapEntry::TypeAsString() {
 HeapSnapshot::HeapSnapshot(HeapProfiler* profiler) : profiler_(profiler) {
   // It is very important to keep objects that form a heap snapshot
   // as small as possible. Check assumptions about data structure sizes.
-  STATIC_ASSERT((kTaggedSize == 4 && sizeof(HeapGraphEdge) == 12) ||
-                (kTaggedSize == 8 && sizeof(HeapGraphEdge) == 24));
-  STATIC_ASSERT((kTaggedSize == 4 && sizeof(HeapEntry) == 28) ||
-                (kTaggedSize == 8 && sizeof(HeapEntry) == 40));
+  STATIC_ASSERT((kSystemPointerSize == 4 && sizeof(HeapGraphEdge) == 12) ||
+                (kSystemPointerSize == 8 && sizeof(HeapGraphEdge) == 24));
+  STATIC_ASSERT((kSystemPointerSize == 4 && sizeof(HeapEntry) == 28) ||
+                (kSystemPointerSize == 8 && sizeof(HeapEntry) == 40));
   memset(&gc_subroot_entries_, 0, sizeof(gc_subroot_entries_));
 }
 
@@ -657,9 +657,8 @@ class IndexedReferencesExtractor : public ObjectVisitor {
                              HeapEntry* parent)
       : generator_(generator),
         parent_obj_(parent_obj),
-        parent_start_(HeapObject::RawMaybeWeakField(parent_obj_, 0)),
-        parent_end_(
-            HeapObject::RawMaybeWeakField(parent_obj_, parent_obj_->Size())),
+        parent_start_(parent_obj_.RawMaybeWeakField(0)),
+        parent_end_(parent_obj_.RawMaybeWeakField(parent_obj_->Size())),
         parent_(parent),
         next_index_(0) {}
   void VisitPointers(HeapObject host, ObjectSlot start,
@@ -1682,6 +1681,10 @@ void V8HeapExplorer::SetGcSubrootReference(Root root, const char* description,
         edge_type, description, child_entry, names_);
   }
 
+  // For full heap snapshots we do not emit user roots but rather rely on
+  // regular GC roots to retain objects.
+  if (FLAG_raw_heap_snapshots) return;
+
   // Add a shortcut to JS global object reference at snapshot root.
   // That allows the user to easily find global objects. They are
   // also used as starting points in distance calculations.
@@ -1838,7 +1841,7 @@ const char* EmbedderGraphNodeName(StringsStorage* names,
 }
 
 HeapEntry::Type EmbedderGraphNodeType(EmbedderGraphImpl::Node* node) {
-  return HeapEntry::kNative;
+  return node->IsRootNode() ? HeapEntry::kSynthetic : HeapEntry::kNative;
 }
 
 // Merges the names of an embedder node and its wrapper node.

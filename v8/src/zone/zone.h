@@ -7,11 +7,13 @@
 
 #include <algorithm>
 #include <limits>
+#include <vector>
 
 #include "src/base/hashmap.h"
 #include "src/base/logging.h"
 #include "src/globals.h"
 #include "src/zone/accounting-allocator.h"
+#include "src/zone/zone-segment.h"
 
 #ifndef ZONE_NAME
 #define STRINGIFY(x) #x
@@ -365,7 +367,9 @@ class ScopedPtrList final {
   Vector<T*> CopyTo(Zone* zone) {
     DCHECK_LE(end_, buffer_.size());
     T** data = zone->NewArray<T*>(length());
-    MemCopy(data, &buffer_[start_], length() * sizeof(T*));
+    if (length() != 0) {
+      MemCopy(data, &buffer_[start_], length() * sizeof(T*));
+    }
     return Vector<T*>(data, length());
   }
 
@@ -383,6 +387,12 @@ class ScopedPtrList final {
     }
     end_ += list.length();
   }
+
+  typedef T** iterator;
+  inline iterator begin() const {
+    return reinterpret_cast<T**>(&buffer_[start_]);
+  }
+  inline iterator end() const { return reinterpret_cast<T**>(&buffer_[end_]); }
 
  private:
   std::vector<void*>& buffer_;

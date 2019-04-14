@@ -34,6 +34,7 @@
 #include "src/objects/property-cell.h"
 #include "src/objects/scope-info.h"
 #include "src/objects/script-inl.h"
+#include "src/objects/slots-inl.h"
 #include "src/objects/struct-inl.h"
 #include "src/profiler/heap-profiler.h"
 #include "src/string-hasher.h"
@@ -118,6 +119,11 @@ void Heap::SetMessageListeners(TemplateList value) {
   roots_table()[RootIndex::kMessageListeners] = value->ptr();
 }
 
+void Heap::SetPendingOptimizeForTestBytecode(Object hash_table) {
+  DCHECK(hash_table->IsObjectHashTable() || hash_table->IsUndefined(isolate()));
+  roots_table()[RootIndex::kPendingOptimizeForTestBytecode] = hash_table->ptr();
+}
+
 PagedSpace* Heap::paged_space(int idx) {
   DCHECK_NE(idx, LO_SPACE);
   DCHECK_NE(idx, NEW_SPACE);
@@ -152,7 +158,7 @@ size_t Heap::NewSpaceAllocationCounter() {
   return new_space_allocation_counter_ + new_space()->AllocatedSinceLastGC();
 }
 
-AllocationResult Heap::AllocateRaw(int size_in_bytes, AllocationSpace space,
+AllocationResult Heap::AllocateRaw(int size_in_bytes, AllocationType type,
                                    AllocationAlignment alignment) {
   DCHECK(AllowHandleAllocation::IsAllowed());
   DCHECK(AllowHeapAllocation::IsAllowed());
@@ -160,7 +166,7 @@ AllocationResult Heap::AllocateRaw(int size_in_bytes, AllocationSpace space,
 #ifdef V8_ENABLE_ALLOCATION_TIMEOUT
   if (FLAG_random_gc_interval > 0 || FLAG_gc_interval >= 0) {
     if (!always_allocate() && Heap::allocation_timeout_-- <= 0) {
-      return AllocationResult::Retry(space);
+      return AllocationResult::Retry();
     }
   }
 #endif
@@ -172,44 +178,36 @@ AllocationResult Heap::AllocateRaw(int size_in_bytes, AllocationSpace space,
 
   HeapObject object;
   AllocationResult allocation;
-  if (NEW_SPACE == space) {
+
+  if (AllocationType::kYoung == type) {
     if (large_object) {
-      // TODO(hpayer): Implement a LO tenuring strategy.
-      space = FLAG_young_generation_large_objects ? NEW_LO_SPACE : LO_SPACE;
+      if (FLAG_young_generation_large_objects) {
+        allocation = new_lo_space_->AllocateRaw(size_in_bytes);
+      } else {
+        // If young generation large objects are disalbed we have to tenure the
+        // allocation and violate the given allocation type. This could be
+        // dangerous. We may want to remove FLAG_young_generation_large_objects
+        // and avoid patching.
+        allocation = lo_space_->AllocateRaw(size_in_bytes);
+      }
     } else {
       allocation = new_space_->AllocateRaw(size_in_bytes, alignment);
-      if (allocation.To(&object)) {
-        OnAllocationEvent(object, size_in_bytes);
-      }
-      return allocation;
     }
-  }
-
-  // Here we only allocate in the old generation.
-  if (OLD_SPACE == space) {
+  } else if (AllocationType::kOld == type) {
     if (large_object) {
       allocation = lo_space_->AllocateRaw(size_in_bytes);
     } else {
       allocation = old_space_->AllocateRaw(size_in_bytes, alignment);
     }
-  } else if (CODE_SPACE == space) {
+  } else if (AllocationType::kCode == type) {
     if (size_in_bytes <= code_space()->AreaSize() && !large_object) {
       allocation = code_space_->AllocateRawUnaligned(size_in_bytes);
     } else {
       allocation = code_lo_space_->AllocateRaw(size_in_bytes);
     }
-  } else if (LO_SPACE == space) {
-    DCHECK(large_object);
-    allocation = lo_space_->AllocateRaw(size_in_bytes);
-  } else if (NEW_LO_SPACE == space) {
-    DCHECK(FLAG_young_generation_large_objects);
-    allocation = new_lo_space_->AllocateRaw(size_in_bytes);
-  } else if (CODE_LO_SPACE == space) {
-    DCHECK(large_object);
-    allocation = code_lo_space_->AllocateRaw(size_in_bytes);
-  } else if (MAP_SPACE == space) {
+  } else if (AllocationType::kMap == type) {
     allocation = map_space_->AllocateRawUnaligned(size_in_bytes);
-  } else if (RO_SPACE == space) {
+  } else if (AllocationType::kReadOnly == type) {
 #ifdef V8_USE_SNAPSHOT
     DCHECK(isolate_->serializer_enabled());
 #endif
@@ -217,12 +215,11 @@ AllocationResult Heap::AllocateRaw(int size_in_bytes, AllocationSpace space,
     DCHECK(CanAllocateInReadOnlySpace());
     allocation = read_only_space_->AllocateRaw(size_in_bytes, alignment);
   } else {
-    // NEW_SPACE is not allowed here.
     UNREACHABLE();
   }
 
   if (allocation.To(&object)) {
-    if (space == CODE_SPACE) {
+    if (AllocationType::kCode == type) {
       // Unprotect the memory chunk of the object if it was not unprotected
       // already.
       UnprotectAndRegisterMemoryChunk(object);
@@ -303,15 +300,7 @@ void Heap::FinalizeExternalString(String string) {
       ExternalBackingStoreType::kExternalString,
       ext_string->ExternalPayloadSize());
 
-  v8::String::ExternalStringResourceBase** resource_addr =
-      reinterpret_cast<v8::String::ExternalStringResourceBase**>(
-          string->address() + ExternalString::kResourceOffset);
-
-  // Dispose of the C++ object if it has not already been disposed.
-  if (*resource_addr != nullptr) {
-    (*resource_addr)->Dispose();
-    *resource_addr = nullptr;
-  }
+  ext_string->DisposeResource();
 }
 
 Address Heap::NewSpaceTop() { return new_space_->top(); }
@@ -379,10 +368,6 @@ bool Heap::InToPage(HeapObject heap_object) {
 
 bool Heap::InOldSpace(Object object) { return old_space_->Contains(object); }
 
-bool Heap::InReadOnlySpace(Object object) {
-  return read_only_space_->Contains(object);
-}
-
 // static
 Heap* Heap::FromWritableHeapObject(const HeapObject obj) {
   MemoryChunk* chunk = MemoryChunk::FromHeapObject(obj);
@@ -405,8 +390,7 @@ bool Heap::ShouldBePromoted(Address old_address) {
 
 void Heap::CopyBlock(Address dst, Address src, int byte_size) {
   DCHECK(IsAligned(byte_size, kTaggedSize));
-  STATIC_ASSERT(kTaggedSize == kSystemPointerSize);
-  CopyWords(dst, src, static_cast<size_t>(byte_size / kTaggedSize));
+  CopyTagged(dst, src, static_cast<size_t>(byte_size / kTaggedSize));
 }
 
 template <Heap::FindMementoMode mode>
@@ -561,10 +545,12 @@ void Heap::DecrementExternalBackingStoreBytes(ExternalBackingStoreType type,
   base::CheckedDecrement(&backing_store_bytes_, amount);
 }
 
-AlwaysAllocateScope::AlwaysAllocateScope(Isolate* isolate)
-    : heap_(isolate->heap()) {
+AlwaysAllocateScope::AlwaysAllocateScope(Heap* heap) : heap_(heap) {
   heap_->always_allocate_scope_count_++;
 }
+
+AlwaysAllocateScope::AlwaysAllocateScope(Isolate* isolate)
+    : AlwaysAllocateScope(isolate->heap()) {}
 
 AlwaysAllocateScope::~AlwaysAllocateScope() {
   heap_->always_allocate_scope_count_--;

@@ -3107,8 +3107,7 @@ TEST(FuncNameInferrerBasic) {
   ExpectString("Ctor()", "Ctor.foo5");
   ExpectString("%FunctionGetInferredName(obj1.foo6)", "obj1.foo6");
   ExpectString("%FunctionGetInferredName(obj2.foo7)", "obj2.foo7");
-  ExpectString("%FunctionGetInferredName(obj3[1])",
-               "obj3.(anonymous function)");
+  ExpectString("%FunctionGetInferredName(obj3[1])", "obj3.<computed>");
   ExpectString("%FunctionGetInferredName(obj4[1])", "");
   ExpectString("%FunctionGetInferredName(obj5['foo9'])", "obj5.foo9");
   ExpectString("%FunctionGetInferredName(obj6.obj7.foo10)", "obj6.obj7.foo10");
@@ -6073,7 +6072,7 @@ TEST(PrivateStaticClassFieldsErrors) {
                     private_static_fields, arraysize(private_static_fields));
 }
 
-TEST(PrivateNameNoErrors) {
+TEST(PrivateNameResolutionErrors) {
   // clang-format off
   const char* context_data[][2] = {
       {"class X { bar() { ", " } }"},
@@ -6120,7 +6119,7 @@ TEST(PrivateNameNoErrors) {
   RunParserSyncTest(context_data, statement_data, kError);
 
   static const ParserFlag private_fields[] = {kAllowHarmonyPrivateFields};
-  RunParserSyncTest(context_data, statement_data, kSuccess, nullptr, 0,
+  RunParserSyncTest(context_data, statement_data, kError, nullptr, 0,
                     private_fields, arraysize(private_fields));
 }
 
@@ -7592,7 +7591,7 @@ TEST(ModuleParsingInternals) {
         i::VariableLocation::MODULE);
 
   CHECK(declarations->AtForTest(7)->var()->raw_name()->IsOneByteEqualTo(
-      "*default*"));
+      ".default"));
   CHECK(declarations->AtForTest(7)->var()->mode() == i::VariableMode::kConst);
   CHECK(declarations->AtForTest(7)->var()->binding_needs_init());
   CHECK(declarations->AtForTest(7)->var()->location() ==
@@ -7681,7 +7680,7 @@ TEST(ModuleParsingInternals) {
   entry = descriptor->regular_exports()
               .find(declarations->AtForTest(7)->var()->raw_name())
               ->second;
-  CheckEntry(entry, "default", "*default*", nullptr, -1);
+  CheckEntry(entry, "default", ".default", nullptr, -1);
   entry = descriptor->regular_exports()
               .find(declarations->AtForTest(12)->var()->raw_name())
               ->second;
@@ -11292,27 +11291,15 @@ TEST(LexicalLoopVariable) {
   }
 }
 
-TEST(PrivateNamesSyntaxErrorWithScopeAnalysis) {
+TEST(PrivateNamesSyntaxErrorEarly) {
   i::Isolate* isolate = CcTest::i_isolate();
   i::HandleScope scope(isolate);
   LocalContext env;
 
-  auto test = [isolate](const char* program, bool is_lazy) {
-    i::FLAG_harmony_private_fields = true;
-    i::Factory* const factory = isolate->factory();
-    i::Handle<i::String> source =
-        factory->NewStringFromUtf8(i::CStrVector(program)).ToHandleChecked();
-    i::Handle<i::Script> script = factory->NewScript(source);
-    i::ParseInfo info(isolate, script);
+  const char* context_data[][2] = {
+      {"", ""}, {"\"use strict\";", ""}, {nullptr, nullptr}};
 
-    info.set_allow_lazy_parsing(is_lazy);
-    CHECK(i::parsing::ParseProgram(&info, isolate));
-    CHECK(i::Rewriter::Rewrite(&info));
-    CHECK(!i::DeclarationScope::Analyze(&info));
-    return info.pending_error_handler()->has_pending_error();
-  };
-
-  const char* data[] = {
+  const char* statement_data[] = {
       "class A {"
       "  foo() { return this.#bar; }"
       "}",
@@ -11372,12 +11359,12 @@ TEST(PrivateNamesSyntaxErrorWithScopeAnalysis) {
       "function t(){"
       "  return class { getA() { return this.#foo; } }"
       "}",
-  };
 
-  for (const char* source : data) {
-    CHECK(test(source, true));
-    CHECK(test(source, false));
-  }
+      nullptr};
+
+  static const ParserFlag flags[] = {kAllowHarmonyPrivateFields};
+  RunParserSyncTest(context_data, statement_data, kError, nullptr, 0, flags, 1);
+  RunParserSyncTest(context_data, statement_data, kError);
 }
 
 TEST(HashbangSyntax) {

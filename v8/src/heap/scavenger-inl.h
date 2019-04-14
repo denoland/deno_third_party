@@ -462,7 +462,8 @@ void ScavengeVisitor::VisitEmbeddedPointer(Code host, RelocInfo* rinfo) {
 template <typename TSlot>
 void ScavengeVisitor::VisitHeapObjectImpl(TSlot slot, HeapObject heap_object) {
   if (Heap::InYoungGeneration(heap_object)) {
-    scavenger_->ScavengeObject(HeapObjectSlot(slot), heap_object);
+    using THeapObjectSlot = typename TSlot::THeapObjectSlot;
+    scavenger_->ScavengeObject(THeapObjectSlot(slot), heap_object);
   }
 }
 
@@ -477,6 +478,21 @@ void ScavengeVisitor::VisitPointersImpl(HeapObject host, TSlot start,
       VisitHeapObjectImpl(slot, heap_object);
     }
   }
+}
+
+int ScavengeVisitor::VisitEphemeronHashTable(Map map,
+                                             EphemeronHashTable table) {
+  // Register table with the scavenger, so it can take care of the weak keys
+  // later. This allows to only iterate the tables' values, which are treated
+  // as strong independetly of whether the key is live.
+  scavenger_->AddEphemeronHashTable(table);
+  for (int i = 0; i < table->Capacity(); i++) {
+    ObjectSlot value_slot =
+        table->RawFieldOfElementAt(EphemeronHashTable::EntryToValueIndex(i));
+    VisitPointer(table, value_slot);
+  }
+
+  return table->SizeFromMap(map);
 }
 
 }  // namespace internal

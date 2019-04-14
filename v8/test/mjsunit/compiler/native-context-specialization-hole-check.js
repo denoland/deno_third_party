@@ -29,7 +29,7 @@
 
 if (isNeverOptimizeLiteMode()) {
   print("Warning: skipping test that requires optimization in Lite mode.");
-  quit(0);
+  testRunner.quit(0);
 }
 
 function f() {
@@ -42,6 +42,7 @@ function f() {
 function g() {
   f();
 }
+%PrepareFunctionForOptimization(g);
 g();
 g();
 %OptimizeFunctionOnNextCall(g);

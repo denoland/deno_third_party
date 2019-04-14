@@ -32,7 +32,6 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
 
   TNode<BoolT> IsRegExp(TNode<Context> context, TNode<Object> maybe_receiver);
 
- protected:
   TNode<Smi> SmiZero();
   TNode<IntPtrT> IntPtrZero();
 
@@ -106,6 +105,9 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
   Node* FlagsGetter(Node* const context, Node* const regexp, bool is_fastpath);
 
   TNode<Int32T> FastFlagGetter(TNode<JSRegExp> regexp, JSRegExp::Flag flag);
+  TNode<BoolT> FastFlagGetterGlobal(TNode<JSRegExp> regexp) {
+    return ReinterpretCast<BoolT>(FastFlagGetter(regexp, JSRegExp::kGlobal));
+  }
   TNode<Int32T> SlowFlagGetter(TNode<Context> context, TNode<Object> regexp,
                                JSRegExp::Flag flag);
   TNode<Int32T> FlagGetter(TNode<Context> context, TNode<Object> regexp,

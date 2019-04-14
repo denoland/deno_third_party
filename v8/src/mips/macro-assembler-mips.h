@@ -91,9 +91,7 @@ inline MemOperand CFunctionArgumentOperand(int index) {
 
 class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
  public:
-  template <typename... Args>
-  explicit TurboAssembler(Args&&... args)
-      : TurboAssemblerBase(std::forward<Args>(args)...) {}
+  using TurboAssemblerBase::TurboAssemblerBase;
 
   // Activation support.
   void EnterFrame(StackFrame::Type type);
@@ -413,41 +411,41 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
     instr(rd_hi, rd_lo, rs, Operand(j));                                       \
   }
 
-  DEFINE_INSTRUCTION(Addu);
-  DEFINE_INSTRUCTION(Subu);
-  DEFINE_INSTRUCTION(Mul);
-  DEFINE_INSTRUCTION(Div);
-  DEFINE_INSTRUCTION(Divu);
-  DEFINE_INSTRUCTION(Mod);
-  DEFINE_INSTRUCTION(Modu);
-  DEFINE_INSTRUCTION(Mulh);
-  DEFINE_INSTRUCTION2(Mult);
-  DEFINE_INSTRUCTION(Mulhu);
-  DEFINE_INSTRUCTION2(Multu);
-  DEFINE_INSTRUCTION2(Div);
-  DEFINE_INSTRUCTION2(Divu);
+  DEFINE_INSTRUCTION(Addu)
+  DEFINE_INSTRUCTION(Subu)
+  DEFINE_INSTRUCTION(Mul)
+  DEFINE_INSTRUCTION(Div)
+  DEFINE_INSTRUCTION(Divu)
+  DEFINE_INSTRUCTION(Mod)
+  DEFINE_INSTRUCTION(Modu)
+  DEFINE_INSTRUCTION(Mulh)
+  DEFINE_INSTRUCTION2(Mult)
+  DEFINE_INSTRUCTION(Mulhu)
+  DEFINE_INSTRUCTION2(Multu)
+  DEFINE_INSTRUCTION2(Div)
+  DEFINE_INSTRUCTION2(Divu)
 
-  DEFINE_INSTRUCTION3(Div);
-  DEFINE_INSTRUCTION3(Mul);
-  DEFINE_INSTRUCTION3(Mulu);
+  DEFINE_INSTRUCTION3(Div)
+  DEFINE_INSTRUCTION3(Mul)
+  DEFINE_INSTRUCTION3(Mulu)
 
-  DEFINE_INSTRUCTION(And);
-  DEFINE_INSTRUCTION(Or);
-  DEFINE_INSTRUCTION(Xor);
-  DEFINE_INSTRUCTION(Nor);
-  DEFINE_INSTRUCTION2(Neg);
+  DEFINE_INSTRUCTION(And)
+  DEFINE_INSTRUCTION(Or)
+  DEFINE_INSTRUCTION(Xor)
+  DEFINE_INSTRUCTION(Nor)
+  DEFINE_INSTRUCTION2(Neg)
 
-  DEFINE_INSTRUCTION(Slt);
-  DEFINE_INSTRUCTION(Sltu);
-  DEFINE_INSTRUCTION(Sle);
-  DEFINE_INSTRUCTION(Sleu);
-  DEFINE_INSTRUCTION(Sgt);
-  DEFINE_INSTRUCTION(Sgtu);
-  DEFINE_INSTRUCTION(Sge);
-  DEFINE_INSTRUCTION(Sgeu);
+  DEFINE_INSTRUCTION(Slt)
+  DEFINE_INSTRUCTION(Sltu)
+  DEFINE_INSTRUCTION(Sle)
+  DEFINE_INSTRUCTION(Sleu)
+  DEFINE_INSTRUCTION(Sgt)
+  DEFINE_INSTRUCTION(Sgtu)
+  DEFINE_INSTRUCTION(Sge)
+  DEFINE_INSTRUCTION(Sgeu)
 
   // MIPS32 R2 instruction macro.
-  DEFINE_INSTRUCTION(Ror);
+  DEFINE_INSTRUCTION(Ror)
 
 #undef DEFINE_INSTRUCTION
 #undef DEFINE_INSTRUCTION2
@@ -900,9 +898,7 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
 // MacroAssembler implements a collection of frequently used macros.
 class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
  public:
-  template <typename... Args>
-  explicit MacroAssembler(Args&&... args)
-      : TurboAssembler(std::forward<Args>(args)...) {}
+  using TurboAssembler::TurboAssembler;
 
   // Swap two registers.  If the scratch register is omitted then a slightly
   // less efficient form using xor instead of mov is emitted.
@@ -930,6 +926,11 @@ class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
     LoadRoot(scratch, index);
     Branch(if_not_equal, ne, with, Operand(scratch));
   }
+
+  // Checks if value is in range [lower_limit, higher_limit] using a single
+  // comparison.
+  void JumpIfIsInRange(Register value, unsigned lower_limit,
+                       unsigned higher_limit, Label* on_in_range);
 
   // ---------------------------------------------------------------------------
   // GC Support

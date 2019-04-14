@@ -187,7 +187,7 @@ class CompactProgressIndicator(ProgressIndicator):
         print(self._templates['stdout'] % stdout)
       if len(stderr):
         print(self._templates['stderr'] % stderr)
-      print("Command: %s" % result.cmd)
+      print("Command: %s" % result.cmd.to_string(relative=True))
       if output.HasCrashed():
         print("exit code: %d" % output.exit_code)
         print("--- CRASHED ---")
@@ -215,7 +215,7 @@ class CompactProgressIndicator(ProgressIndicator):
     }
     status = self._truncate(status, 78)
     self._last_status_length = len(status)
-    print(status, end=' ')
+    print(status, end='')
     sys.stdout.flush()
 
   def _truncate(self, string, length):
@@ -241,7 +241,7 @@ class ColorProgressIndicator(CompactProgressIndicator):
     super(ColorProgressIndicator, self).__init__(templates)
 
   def _clear_line(self, last_length):
-    print("\033[1K\r", end=' ')
+    print("\033[1K\r", end='')
 
 
 class MonochromeProgressIndicator(CompactProgressIndicator):
@@ -255,11 +255,11 @@ class MonochromeProgressIndicator(CompactProgressIndicator):
     super(MonochromeProgressIndicator, self).__init__(templates)
 
   def _clear_line(self, last_length):
-    print(("\r" + (" " * last_length) + "\r"), end=' ')
+    print(("\r" + (" " * last_length) + "\r"), end='')
 
 
 class JsonTestProgressIndicator(ProgressIndicator):
-  def __init__(self, json_test_results, arch, mode):
+  def __init__(self, framework_name, json_test_results, arch, mode):
     super(JsonTestProgressIndicator, self).__init__()
     # We want to drop stdout/err for all passed tests on the first try, but we
     # need to get outputs for all runs after the first one. To accommodate that,
@@ -267,6 +267,7 @@ class JsonTestProgressIndicator(ProgressIndicator):
     # keep_output set to True in the RerunProc.
     self._requirement = base.DROP_PASS_STDOUT
 
+    self.framework_name = framework_name
     self.json_test_results = json_test_results
     self.arch = arch
     self.mode = mode
@@ -307,6 +308,8 @@ class JsonTestProgressIndicator(ProgressIndicator):
         "random_seed": test.random_seed,
         "target_name": test.get_shell(),
         "variant": test.variant,
+        "variant_flags": test.variant_flags,
+        "framework_name": self.framework_name,
       })
 
   def finished(self):

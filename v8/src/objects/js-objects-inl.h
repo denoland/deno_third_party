@@ -80,14 +80,14 @@ Handle<Object> JSReceiver::GetDataProperty(Handle<JSReceiver> object,
   return GetDataProperty(&it);
 }
 
-MaybeHandle<Object> JSReceiver::GetPrototype(Isolate* isolate,
-                                             Handle<JSReceiver> receiver) {
+MaybeHandle<HeapObject> JSReceiver::GetPrototype(Isolate* isolate,
+                                                 Handle<JSReceiver> receiver) {
   // We don't expect access checks to be needed on JSProxy objects.
   DCHECK(!receiver->IsAccessCheckNeeded() || receiver->IsJSObject());
   PrototypeIterator iter(isolate, receiver, kStartAtReceiver,
                          PrototypeIterator::END_AT_NON_HIDDEN);
   do {
-    if (!iter.AdvanceFollowingProxies()) return MaybeHandle<Object>();
+    if (!iter.AdvanceFollowingProxies()) return MaybeHandle<HeapObject>();
   } while (!iter.IsAtEnd());
   return PrototypeIterator::GetCurrent(iter);
 }
@@ -269,16 +269,8 @@ int JSObject::GetHeaderSize(const Map map) {
 
 // static
 int JSObject::GetEmbedderFieldsStartOffset(const Map map) {
-  // Embedder fields are located after the header size rounded up to the
-  // kSystemPointerSize, whereas in-object properties are at the end of the
-  // object.
-  int header_size = GetHeaderSize(map);
-  if (kTaggedSize == kSystemPointerSize) {
-    DCHECK(IsAligned(header_size, kSystemPointerSize));
-    return header_size;
-  } else {
-    return RoundUp(header_size, kSystemPointerSize);
-  }
+  // Embedder fields are located after the object header.
+  return GetHeaderSize(map);
 }
 
 int JSObject::GetEmbedderFieldsStartOffset() {
@@ -289,12 +281,13 @@ int JSObject::GetEmbedderFieldsStartOffset() {
 int JSObject::GetEmbedderFieldCount(const Map map) {
   int instance_size = map->instance_size();
   if (instance_size == kVariableSizeSentinel) return 0;
-  // Embedder fields are located after the header size rounded up to the
-  // kSystemPointerSize, whereas in-object properties are at the end of the
-  // object. We don't have to round up the header size here because division by
-  // kEmbedderDataSlotSizeInTaggedSlots will swallow potential padding in case
-  // of (kTaggedSize != kSystemPointerSize) anyway.
-  return (((instance_size - GetHeaderSize(map)) >> kTaggedSizeLog2) -
+  // Embedder fields are located after the object header, whereas in-object
+  // properties are located at the end of the object. We don't have to round up
+  // the header size here because division by kEmbedderDataSlotSizeInTaggedSlots
+  // will swallow potential padding in case of (kTaggedSize !=
+  // kSystemPointerSize) anyway.
+  return (((instance_size - GetEmbedderFieldsStartOffset(map)) >>
+           kTaggedSizeLog2) -
           map->GetInObjectProperties()) /
          kEmbedderDataSlotSizeInTaggedSlots;
 }
@@ -465,13 +458,18 @@ ACCESSORS(JSBoundFunction, bound_arguments, FixedArray, kBoundArgumentsOffset)
 ACCESSORS(JSFunction, raw_feedback_cell, FeedbackCell, kFeedbackCellOffset)
 
 ACCESSORS(JSGlobalObject, native_context, NativeContext, kNativeContextOffset)
-ACCESSORS(JSGlobalObject, global_proxy, JSObject, kGlobalProxyOffset)
+ACCESSORS(JSGlobalObject, global_proxy, JSGlobalProxy, kGlobalProxyOffset)
 
 ACCESSORS(JSGlobalProxy, native_context, Object, kNativeContextOffset)
 
 FeedbackVector JSFunction::feedback_vector() const {
   DCHECK(has_feedback_vector());
   return FeedbackVector::cast(raw_feedback_cell()->value());
+}
+
+ClosureFeedbackCellArray JSFunction::closure_feedback_cell_array() const {
+  DCHECK(has_closure_feedback_cell_array());
+  return ClosureFeedbackCellArray::cast(raw_feedback_cell()->value());
 }
 
 // Code objects that are marked for deoptimization are not considered to be
@@ -543,6 +541,8 @@ AbstractCode JSFunction::abstract_code() {
   }
 }
 
+int JSFunction::length() { return shared()->length(); }
+
 Code JSFunction::code() const {
   return Code::cast(RELAXED_READ_FIELD(*this, kCodeOffset));
 }
@@ -591,7 +591,12 @@ void JSFunction::SetOptimizationMarker(OptimizationMarker marker) {
 
 bool JSFunction::has_feedback_vector() const {
   return shared()->is_compiled() &&
-         !raw_feedback_cell()->value()->IsUndefined();
+         raw_feedback_cell()->value()->IsFeedbackVector();
+}
+
+bool JSFunction::has_closure_feedback_cell_array() const {
+  return shared()->is_compiled() &&
+         raw_feedback_cell()->value()->IsClosureFeedbackCellArray();
 }
 
 Context JSFunction::context() {
@@ -647,12 +652,12 @@ bool JSFunction::PrototypeRequiresRuntimeLookup() {
   return !has_prototype_property() || map()->has_non_instance_prototype();
 }
 
-Object JSFunction::instance_prototype() {
+HeapObject JSFunction::instance_prototype() {
   DCHECK(has_instance_prototype());
   if (has_initial_map()) return initial_map()->prototype();
   // When there is no initial map and the prototype is a JSReceiver, the
   // initial map field is used for the prototype field.
-  return prototype_or_initial_map();
+  return HeapObject::cast(prototype_or_initial_map());
 }
 
 Object JSFunction::prototype() {
@@ -675,8 +680,6 @@ bool JSFunction::is_compiled() const {
 }
 
 bool JSFunction::NeedsResetDueToFlushedBytecode() {
-  if (!FLAG_flush_bytecode) return false;
-
   // Do a raw read for shared and code fields here since this function may be
   // called on a concurrent thread and the JSFunction might not be fully
   // initialized yet.
@@ -694,7 +697,7 @@ bool JSFunction::NeedsResetDueToFlushedBytecode() {
 }
 
 void JSFunction::ResetIfBytecodeFlushed() {
-  if (NeedsResetDueToFlushedBytecode()) {
+  if (FLAG_flush_bytecode && NeedsResetDueToFlushedBytecode()) {
     // Bytecode was flushed and function is now uncompiled, reset JSFunction
     // by setting code to CompileLazy and clearing the feedback vector.
     set_code(GetIsolate()->builtins()->builtin(i::Builtins::kCompileLazy));
@@ -716,11 +719,11 @@ ACCESSORS(JSDate, min, Object, kMinOffset)
 ACCESSORS(JSDate, sec, Object, kSecOffset)
 
 MessageTemplate JSMessageObject::type() const {
-  Object value = READ_FIELD(*this, kTypeOffset);
+  Object value = READ_FIELD(*this, kMessageTypeOffset);
   return MessageTemplateFromInt(Smi::ToInt(value));
 }
 void JSMessageObject::set_type(MessageTemplate value) {
-  WRITE_FIELD(*this, kTypeOffset, Smi::FromInt(static_cast<int>(value)));
+  WRITE_FIELD(*this, kMessageTypeOffset, Smi::FromInt(static_cast<int>(value)));
 }
 ACCESSORS(JSMessageObject, argument, Object, kArgumentsOffset)
 ACCESSORS(JSMessageObject, script, Script, kScriptOffset)
@@ -749,7 +752,7 @@ ElementsKind JSObject::GetElementsKind() const {
       DCHECK(fixed_array->IsFixedArray());
       DCHECK(fixed_array->IsDictionary());
     } else {
-      DCHECK(kind > DICTIONARY_ELEMENTS);
+      DCHECK(kind > DICTIONARY_ELEMENTS || IsFrozenOrSealedElementsKind(kind));
     }
     DCHECK(!IsSloppyArgumentsElementsKind(kind) ||
            (elements()->IsFixedArray() && elements()->length() >= 2));
@@ -790,6 +793,10 @@ bool JSObject::HasDictionaryElements() {
 
 bool JSObject::HasPackedElements() {
   return GetElementsKind() == PACKED_ELEMENTS;
+}
+
+bool JSObject::HasFrozenOrSealedElements() {
+  return IsFrozenOrSealedElementsKind(GetElementsKind());
 }
 
 bool JSObject::HasFastArgumentsElements() {
@@ -961,7 +968,7 @@ Maybe<PropertyAttributes> JSReceiver::GetOwnElementAttributes(
 }
 
 bool JSGlobalObject::IsDetached() {
-  return JSGlobalProxy::cast(global_proxy())->IsDetachedFrom(*this);
+  return global_proxy()->IsDetachedFrom(*this);
 }
 
 bool JSGlobalProxy::IsDetachedFrom(JSGlobalObject global) const {

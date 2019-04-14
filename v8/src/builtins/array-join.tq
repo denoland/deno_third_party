@@ -152,17 +152,6 @@ namespace array_join {
   // The buffer is maintained and updated by Buffer.constructor, Buffer.Add(),
   // Buffer.AddSeparators().
   struct Buffer {
-    constructor(len: uintptr, sep: String) {
-      const cappedBufferSize: intptr = len > kMaxNewSpaceFixedArrayElements ?
-          kMaxNewSpaceFixedArrayElements :
-          Signed(len);
-      assert(cappedBufferSize > 0);
-      this.fixedArray = AllocateZeroedFixedArray(cappedBufferSize);
-      this.isOneByte = HasOnlyOneByteChars(sep.instanceType);
-      this.index = 0;
-      this.totalStringLength = 0;
-    }
-
     Add(implicit context: Context)(
         str: String, nofSeparators: intptr, separatorLength: intptr) {
       // Add separators if necessary (at the beginning or more than one)
@@ -170,10 +159,11 @@ namespace array_join {
       this.AddSeparators(nofSeparators, separatorLength, writeSeparators);
 
       this.totalStringLength =
-          AddStringLength(this.totalStringLength, str.length);
+          AddStringLength(this.totalStringLength, str.length_intptr);
       this.fixedArray =
           StoreAndGrowFixedArray(this.fixedArray, this.index++, str);
-      this.isOneByte = HasOnlyOneByteChars(str.instanceType) & this.isOneByte;
+      this.isOneByte =
+          IsOneByteStringInstanceType(str.instanceType) & this.isOneByte;
     }
 
     AddSeparators(implicit context: Context)(
@@ -223,6 +213,19 @@ namespace array_join {
     isOneByte: bool;
   }
 
+  macro NewBuffer(len: uintptr, sep: String): Buffer {
+    const cappedBufferSize: intptr = len > kMaxNewSpaceFixedArrayElements ?
+        kMaxNewSpaceFixedArrayElements :
+        Signed(len);
+    assert(cappedBufferSize > 0);
+    return Buffer{
+      fixedArray: AllocateZeroedFixedArray(cappedBufferSize),
+      index: 0,
+      totalStringLength: 0,
+      isOneByte: IsOneByteStringInstanceType(sep.instanceType)
+    };
+  }
+
   macro BufferJoin(implicit context: Context)(buffer: Buffer, sep: String):
       String {
     assert(IsValidPositiveSmi(buffer.totalStringLength));
@@ -262,10 +265,10 @@ namespace array_join {
       initialLoadFn: LoadJoinElementFn): String {
     const initialMap: Map = receiver.map;
     const len: uintptr = Convert<uintptr>(lengthNumber);
-    const separatorLength: intptr = sep.length;
+    const separatorLength: intptr = sep.length_intptr;
     let nofSeparators: intptr = 0;
     let loadFn: LoadJoinElementFn = initialLoadFn;
-    let buffer: Buffer = Buffer{len, sep};
+    let buffer: Buffer = NewBuffer(len, sep);
 
     // 6. Let k be 0.
     let k: uintptr = 0;

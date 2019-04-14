@@ -538,10 +538,12 @@ TNode<HeapObject> RegExpBuiltinsAssembler::RegExpExecInternal(
         IntPtrAdd(BitcastTaggedToWord(code),
                   IntPtrConstant(Code::kHeaderSize - kHeapObjectTag)));
 
-    TNode<Int32T> result = UncheckedCast<Int32T>(CallCFunction9(
-        retval_type, arg0_type, arg1_type, arg2_type, arg3_type, arg4_type,
-        arg5_type, arg6_type, arg7_type, arg8_type, code_entry, arg0, arg1,
-        arg2, arg3, arg4, arg5, arg6, arg7, arg8));
+    TNode<Int32T> result = UncheckedCast<Int32T>(CallCFunction(
+        code_entry, retval_type, std::make_pair(arg0_type, arg0),
+        std::make_pair(arg1_type, arg1), std::make_pair(arg2_type, arg2),
+        std::make_pair(arg3_type, arg3), std::make_pair(arg4_type, arg4),
+        std::make_pair(arg5_type, arg5), std::make_pair(arg6_type, arg6),
+        std::make_pair(arg7_type, arg7), std::make_pair(arg8_type, arg8)));
 
     // Check the result.
     // We expect exactly one result since we force the called regexp to behave
@@ -2967,128 +2969,6 @@ Node* RegExpBuiltinsAssembler::ReplaceSimpleStringFastPath(
 
   BIND(&out);
   return var_result.value();
-}
-
-// Helper that skips a few initial checks.
-TF_BUILTIN(RegExpReplace, RegExpBuiltinsAssembler) {
-  TNode<JSRegExp> regexp = CAST(Parameter(Descriptor::kRegExp));
-  TNode<String> string = CAST(Parameter(Descriptor::kString));
-  TNode<Object> replace_value = CAST(Parameter(Descriptor::kReplaceValue));
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-
-  CSA_ASSERT(this, IsFastRegExp(context, regexp));
-
-  Label checkreplacestring(this), if_iscallable(this),
-      runtime(this, Label::kDeferred);
-
-  // 2. Is {replace_value} callable?
-  GotoIf(TaggedIsSmi(replace_value), &checkreplacestring);
-  Branch(IsCallableMap(LoadMap(CAST(replace_value))), &if_iscallable,
-         &checkreplacestring);
-
-  // 3. Does ToString({replace_value}) contain '$'?
-  BIND(&checkreplacestring);
-  {
-    TNode<String> const replace_string =
-        ToString_Inline(context, replace_value);
-
-    // ToString(replaceValue) could potentially change the shape of the RegExp
-    // object. Recheck that we are still on the fast path and bail to runtime
-    // otherwise.
-    {
-      Label next(this);
-      BranchIfFastRegExp(context, regexp, &next, &runtime);
-      BIND(&next);
-    }
-
-    TNode<String> const dollar_string = HeapConstant(
-        isolate()->factory()->LookupSingleCharacterStringFromCode('$'));
-    TNode<Smi> const dollar_ix =
-        CAST(CallBuiltin(Builtins::kStringIndexOf, context, replace_string,
-                         dollar_string, SmiZero()));
-    GotoIfNot(SmiEqual(dollar_ix, SmiConstant(-1)), &runtime);
-
-    Return(
-        ReplaceSimpleStringFastPath(context, regexp, string, replace_string));
-  }
-
-  // {regexp} is unmodified and {replace_value} is callable.
-  BIND(&if_iscallable);
-  {
-    Node* const replace_fn = replace_value;
-
-    // Check if the {regexp} is global.
-    Label if_isglobal(this), if_isnotglobal(this);
-
-    Node* const is_global = FastFlagGetter(regexp, JSRegExp::kGlobal);
-    Branch(is_global, &if_isglobal, &if_isnotglobal);
-
-    BIND(&if_isglobal);
-    Return(ReplaceGlobalCallableFastPath(context, regexp, string, replace_fn));
-
-    BIND(&if_isnotglobal);
-    Return(CallRuntime(Runtime::kStringReplaceNonGlobalRegExpWithFunction,
-                       context, string, regexp, replace_fn));
-  }
-
-  BIND(&runtime);
-  Return(CallRuntime(Runtime::kRegExpReplace, context, regexp, string,
-                     replace_value));
-}
-
-// ES#sec-regexp.prototype-@@replace
-// RegExp.prototype [ @@replace ] ( string, replaceValue )
-TF_BUILTIN(RegExpPrototypeReplace, RegExpBuiltinsAssembler) {
-  const int kStringArg = 0;
-  const int kReplaceValueArg = 1;
-
-  TNode<IntPtrT> argc =
-      ChangeInt32ToIntPtr(Parameter(Descriptor::kJSActualArgumentsCount));
-  CodeStubArguments args(this, argc);
-
-  TNode<Object> maybe_receiver = args.GetReceiver();
-  TNode<Object> maybe_string = args.GetOptionalArgumentValue(kStringArg);
-  TNode<Object> replace_value = args.GetOptionalArgumentValue(kReplaceValueArg);
-  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-
-  // RegExpPrototypeReplace is a bit of a beast - a summary of dispatch logic:
-  //
-  // if (!IsFastRegExp(receiver)) CallRuntime(RegExpReplace)
-  // if (IsCallable(replace)) {
-  //   if (IsGlobal(receiver)) {
-  //     // Called 'fast-path' but contains several runtime calls.
-  //     ReplaceGlobalCallableFastPath()
-  //   } else {
-  //     CallRuntime(StringReplaceNonGlobalRegExpWithFunction)
-  //   }
-  // } else {
-  //   if (replace.contains("$")) {
-  //     CallRuntime(RegExpReplace)
-  //   } else {
-  //     ReplaceSimpleStringFastPath()
-  //   }
-  // }
-
-  // Ensure {maybe_receiver} is a JSReceiver.
-  ThrowIfNotJSReceiver(context, maybe_receiver,
-                       MessageTemplate::kIncompatibleMethodReceiver,
-                       "RegExp.prototype.@@replace");
-  Node* const receiver = maybe_receiver;
-
-  // Convert {maybe_string} to a String.
-  TNode<String> const string = ToString_Inline(context, maybe_string);
-
-  // Fast-path checks: 1. Is the {receiver} an unmodified JSRegExp instance?
-  Label stub(this), runtime(this, Label::kDeferred);
-  BranchIfFastRegExp(context, receiver, &stub, &runtime);
-
-  BIND(&stub);
-  args.PopAndReturn(CallBuiltin(Builtins::kRegExpReplace, context, receiver,
-                                string, replace_value));
-
-  BIND(&runtime);
-  args.PopAndReturn(CallRuntime(Runtime::kRegExpReplace, context, receiver,
-                                string, replace_value));
 }
 
 class RegExpStringIteratorAssembler : public RegExpBuiltinsAssembler {
