@@ -3,7 +3,7 @@
 # When uploading crates to the registry Cargo will automatically
 # "normalize" Cargo.toml files for maximal compatibility
 # with all versions of Cargo and also rewrite `path` dependencies
-# to registry (e.g. crates.io) dependencies
+# to registry (e.g., crates.io) dependencies
 #
 # If you believe there's an error in this file please file an
 # issue against the rust-lang/cargo repository. If you're
@@ -12,7 +12,7 @@
 
 [package]
 name = "tokio-rustls"
-version = "0.9.1"
+version = "0.9.2"
 authors = ["quininer kel <quininer@live.com>"]
 description = "Asynchronous TLS/SSL streams for Tokio using Rustls."
 homepage = "https://github.com/quininer/tokio-rustls"
