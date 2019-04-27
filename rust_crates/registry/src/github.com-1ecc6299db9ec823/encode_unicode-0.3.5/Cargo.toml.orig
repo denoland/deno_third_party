@@ -1,0 +1,28 @@
+[package]
+name = "encode_unicode"
+keywords = ["unicode","UTF-8","UTF-16"]
+categories = ["encoding","no-std"]
+description = """
+UTF-8 and UTF-16 character types, iterators and related methods for char, u8 and u16.
+"""
+readme = "README.md"
+version = "0.3.5"
+license = "MIT/Apache-2.0"
+repository = "https://github.com/tormol/encode_unicode"
+documentation = "https://docs.rs/encode_unicode/"
+authors = ["Torbjørn Birch Moltu <t.b.moltu@lyse.net>"]
+
+[dependencies]
+ascii = {optional=true, version=">=0.8, <=0.10", default-features=false}# disable std
+clippy = {optional=true, version="0.*"}# wildest wildcard crates.io will allow.
+
+[target.'cfg(unix)'.dev-dependencies]
+# 1.1 doesn't compile on Rust 1.15, and tests doesn't compile if unused dev-dependencies doesn't
+lazy_static = {version="1.0.*"}
+
+[features]
+std = []
+default = ["std"]
+
+[package.metadata.docs.rs]
+features = ["ascii/std"]
