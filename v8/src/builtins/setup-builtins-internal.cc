@@ -41,6 +41,7 @@ AssemblerOptions BuiltinAssemblerOptions(Isolate* isolate,
   AssemblerOptions options = AssemblerOptions::Default(isolate);
   CHECK(!options.isolate_independent_code);
   CHECK(!options.use_pc_relative_calls_and_jumps);
+  CHECK(!options.collect_win64_unwind_info);
 
   if (!isolate->IsGeneratingEmbeddedBuiltins() ||
       !Builtins::IsIsolateIndependent(builtin_index)) {
@@ -56,6 +57,7 @@ AssemblerOptions BuiltinAssemblerOptions(Isolate* isolate,
 
   options.isolate_independent_code = true;
   options.use_pc_relative_calls_and_jumps = pc_relative_calls_fit_in_code_range;
+  options.collect_win64_unwind_info = true;
 
   return options;
 }
@@ -108,9 +110,7 @@ Code BuildWithMacroAssembler(Isolate* isolate, int32_t builtin_index,
   DCHECK_EQ(Builtins::KindOf(Builtins::kJSConstructEntry), Builtins::ASM);
   DCHECK_EQ(Builtins::KindOf(Builtins::kJSRunMicrotasksEntry), Builtins::ASM);
   if (Builtins::IsJSEntryVariant(builtin_index)) {
-    static constexpr int kJSEntryHandlerCount = 1;
-    handler_table_offset =
-        HandlerTable::EmitReturnTableStart(&masm, kJSEntryHandlerCount);
+    handler_table_offset = HandlerTable::EmitReturnTableStart(&masm);
     HandlerTable::EmitReturnEntry(
         &masm, 0, isolate->builtins()->js_entry_handler_offset());
   }
@@ -126,6 +126,9 @@ Code BuildWithMacroAssembler(Isolate* isolate, int32_t builtin_index,
       desc, Code::BUILTIN, masm.CodeObject(), builtin_index,
       MaybeHandle<ByteArray>(), DeoptimizationData::Empty(isolate), kMovable,
       kIsNotTurbofanned, kStackSlots);
+#if defined(V8_OS_WIN_X64)
+  isolate->SetBuiltinUnwindData(builtin_index, masm.GetUnwindInfo());
+#endif
   PostBuildProfileAndTracing(isolate, *code, s_name);
   return *code;
 }
@@ -182,7 +185,7 @@ Code BuildWithCodeStubAssemblerJS(Isolate* isolate, int32_t builtin_index,
 Code BuildWithCodeStubAssemblerCS(Isolate* isolate, int32_t builtin_index,
                                   CodeAssemblerGenerator generator,
                                   CallDescriptors::Key interface_descriptor,
-                                  const char* name, int result_size) {
+                                  const char* name) {
   HandleScope scope(isolate);
   // Canonicalize handles, so that we can share constant pool entries pointing
   // to code targets without dereferencing their handles.
@@ -195,7 +198,6 @@ Code BuildWithCodeStubAssemblerCS(Isolate* isolate, int32_t builtin_index,
   // and this construction just queries the details from the descriptors table.
   CallInterfaceDescriptor descriptor(interface_descriptor);
   // Ensure descriptor is already initialized.
-  DCHECK_EQ(result_size, descriptor.GetReturnCount());
   DCHECK_LE(0, descriptor.GetRegisterParameterCount());
   compiler::CodeAssemblerState state(
       isolate, &zone, descriptor, Code::BUILTIN, name,
@@ -317,22 +319,23 @@ void SetupIsolateDelegate::SetupBuiltinsInternal(Isolate* isolate) {
   code = BuildWithCodeStubAssemblerJS(                          \
       isolate, index, &Builtins::Generate_##Name, Argc, #Name); \
   AddBuiltin(builtins, index++, code);
-#define BUILD_TFC(Name, InterfaceDescriptor, result_size)        \
-  code = BuildWithCodeStubAssemblerCS(                           \
-      isolate, index, &Builtins::Generate_##Name,                \
-      CallDescriptors::InterfaceDescriptor, #Name, result_size); \
+#define BUILD_TFC(Name, InterfaceDescriptor)                      \
+  /* Return size is from the provided CallInterfaceDescriptor. */ \
+  code = BuildWithCodeStubAssemblerCS(                            \
+      isolate, index, &Builtins::Generate_##Name,                 \
+      CallDescriptors::InterfaceDescriptor, #Name);               \
   AddBuiltin(builtins, index++, code);
 #define BUILD_TFS(Name, ...)                                                   \
   /* Return size for generic TF builtins (stub linkage) is always 1. */        \
   code =                                                                       \
       BuildWithCodeStubAssemblerCS(isolate, index, &Builtins::Generate_##Name, \
-                                   CallDescriptors::Name, #Name, 1);           \
+                                   CallDescriptors::Name, #Name);              \
   AddBuiltin(builtins, index++, code);
-#define BUILD_TFH(Name, InterfaceDescriptor)               \
-  /* Return size for IC builtins/handlers is always 1. */  \
-  code = BuildWithCodeStubAssemblerCS(                     \
-      isolate, index, &Builtins::Generate_##Name,          \
-      CallDescriptors::InterfaceDescriptor, #Name, 1);     \
+#define BUILD_TFH(Name, InterfaceDescriptor)              \
+  /* Return size for IC builtins/handlers is always 1. */ \
+  code = BuildWithCodeStubAssemblerCS(                    \
+      isolate, index, &Builtins::Generate_##Name,         \
+      CallDescriptors::InterfaceDescriptor, #Name);       \
   AddBuiltin(builtins, index++, code);
 
 #define BUILD_BCH(Name, OperandScale, Bytecode)                         \

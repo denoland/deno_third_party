@@ -12,6 +12,7 @@
 #include "src/allocation.h"
 #include "src/base/functional.h"
 #include "src/base/platform/platform.h"
+#include "src/counters.h"
 #include "src/cpu-features.h"
 #include "src/memcopy.h"
 #include "src/ostreams.h"
@@ -307,11 +308,7 @@ static void SplitArgument(const char* arg, char* buffer, int buffer_size,
     arg++;  // remove 1st '-'
     if (*arg == '-') {
       arg++;  // remove 2nd '-'
-      if (arg[0] == '\0') {
-        const char* kJSArgumentsFlagName = "js_arguments";
-        *name = kJSArgumentsFlagName;
-        return;
-      }
+      DCHECK_NE('\0', arg[0]);  // '--' arguments are handled in the caller.
     }
     if (arg[0] == 'n' && arg[1] == 'o') {
       arg += 2;  // remove "no"
@@ -529,14 +526,14 @@ static char* SkipBlackSpace(char* p) {
 
 
 // static
-int FlagList::SetFlagsFromString(const char* str, int len) {
+int FlagList::SetFlagsFromString(const char* str, size_t len) {
   // make a 0-terminated copy of str
-  ScopedVector<char> copy0(len + 1);
-  MemCopy(copy0.start(), str, len);
+  std::unique_ptr<char[]> copy0{NewArray<char>(len + 1)};
+  MemCopy(copy0.get(), str, len);
   copy0[len] = '\0';
 
   // strip leading white space
-  char* copy = SkipWhiteSpace(copy0.start());
+  char* copy = SkipWhiteSpace(copy0.get());
 
   // count the number of 'arguments'
   int argc = 1;  // be compatible with SetFlagsFromCommandLine()
@@ -560,7 +557,6 @@ int FlagList::SetFlagsFromString(const char* str, int len) {
   return SetFlagsFromCommandLine(&argc, argv.start(), false);
 }
 
-
 // static
 void FlagList::ResetAllFlags() {
   for (size_t i = 0; i < num_flags; ++i) {
@@ -583,6 +579,13 @@ void FlagList::PrintHelp() {
         "  --shell   run an interactive JavaScript shell\n"
         "  --module  execute a file as a JavaScript module\n\n"
         "Note: the --module option is implicitly enabled for *.mjs files.\n\n"
+        "The following syntax for options is accepted (both '-' and '--' are "
+        "ok):\n"
+        "  --flag        (bool flags only)\n"
+        "  --no-flag     (bool flags only)\n"
+        "  --flag=value  (non-bool flags only, no spaces around '=')\n"
+        "  --flag value  (non-bool flags only)\n"
+        "  --            (captures all remaining args in JavaScript)\n\n"
         "Options:\n";
 
   for (const Flag& f : flags) {

@@ -25,6 +25,7 @@ typedef unsigned char byte;
  */
 const int kMaxMappingSize = 4;
 
+#ifndef V8_INTL_SUPPORT
 template <class T, int size = 256>
 class Predicate {
  public:
@@ -87,7 +88,6 @@ class Mapping {
   CacheEntry entries_[kSize];
 };
 
-
 class UnicodeData {
  private:
   friend class Test;
@@ -95,6 +95,7 @@ class UnicodeData {
   static const uchar kMaxCodePoint;
 };
 
+#endif  // !V8_INTL_SUPPORT
 
 class Utf16 {
  public:
@@ -127,6 +128,25 @@ class Utf16 {
   }
   static inline uint16_t TrailSurrogate(uint32_t char_code) {
     return 0xdc00 + (char_code & 0x3ff);
+  }
+};
+
+class Latin1 {
+ public:
+  static const unsigned kMaxChar = 0xff;
+  // Convert the character to Latin-1 case equivalent if possible.
+  static inline uint16_t TryConvertToLatin1(uint16_t c) {
+    switch (c) {
+      // This are equivalent characters in unicode.
+      case 0x39c:
+      case 0x3bc:
+        return 0xb5;
+      // This is an uppercase of a Latin-1 character
+      // outside of Latin-1.
+      case 0x178:
+        return 0xff;
+    }
+    return c;
   }
 };
 
@@ -227,28 +247,28 @@ struct ToUppercase {
                      uchar* result,
                      bool* allow_caching_ptr);
 };
-#endif
-struct Ecma262Canonicalize {
+struct V8_EXPORT_PRIVATE Ecma262Canonicalize {
   static const int kMaxWidth = 1;
   static int Convert(uchar c,
                      uchar n,
                      uchar* result,
                      bool* allow_caching_ptr);
 };
-struct Ecma262UnCanonicalize {
+struct V8_EXPORT_PRIVATE Ecma262UnCanonicalize {
   static const int kMaxWidth = 4;
   static int Convert(uchar c,
                      uchar n,
                      uchar* result,
                      bool* allow_caching_ptr);
 };
-struct CanonicalizationRange {
+struct V8_EXPORT_PRIVATE CanonicalizationRange {
   static const int kMaxWidth = 1;
   static int Convert(uchar c,
                      uchar n,
                      uchar* result,
                      bool* allow_caching_ptr);
 };
+#endif  // !V8_INTL_SUPPORT
 
 }  // namespace unibrow
 

@@ -109,14 +109,9 @@ CPURegList CPURegList::GetCalleeSavedV(int size) {
 
 
 CPURegList CPURegList::GetCallerSaved(int size) {
-#if defined(V8_OS_WIN)
-  // x18 is reserved as platform register on Windows arm64.
+  // x18 is the platform register and is reserved for the use of platform ABIs.
   // Registers x0-x17 and lr (x30) are caller-saved.
   CPURegList list = CPURegList(CPURegister::kRegister, size, 0, 17);
-#else
-  // Registers x0-x18 and lr (x30) are caller-saved.
-  CPURegList list = CPURegList(CPURegister::kRegister, size, 0, 18);
-#endif
   list.Combine(lr);
   return list;
 }
@@ -149,13 +144,7 @@ CPURegList CPURegList::GetSafepointSavedRegisters() {
   list.Remove(16);
   list.Remove(17);
 
-// Don't add x18 to safepoint list on Windows arm64 because it is reserved
-// as platform register.
-#if !defined(V8_OS_WIN)
-  // Add x18 to the safepoint list, as although it's not in kJSCallerSaved, it
-  // is a caller-saved register according to the procedure call standard.
-  list.Combine(18);
-#endif
+  // x18 is the platform register and is reserved for the use of platform ABIs.
 
   // Add the link register (x30) to the safepoint list.
   list.Combine(30);
@@ -549,6 +538,7 @@ Assembler::~Assembler() {
   DCHECK_EQ(veneer_pool_blocked_nesting_, 0);
 }
 
+void Assembler::AbortedCodeGeneration() { constpool_.Clear(); }
 
 void Assembler::Reset() {
 #ifdef DEBUG
@@ -559,7 +549,6 @@ void Assembler::Reset() {
   memset(buffer_start_, 0, pc_ - buffer_start_);
 #endif
   pc_ = buffer_start_;
-  ReserveCodeTargetSpace(64);
   reloc_info_writer.Reposition(buffer_start_ + buffer_->size(), pc_);
   constpool_.Clear();
   next_constant_pool_check_ = 0;
@@ -573,8 +562,8 @@ void Assembler::AllocateAndInstallRequestedHeapObjects(Isolate* isolate) {
     Address pc = reinterpret_cast<Address>(buffer_start_) + request.offset();
     switch (request.kind()) {
       case HeapObjectRequest::kHeapNumber: {
-        Handle<HeapObject> object =
-            isolate->factory()->NewHeapNumber(request.heap_number(), TENURED);
+        Handle<HeapObject> object = isolate->factory()->NewHeapNumber(
+            request.heap_number(), AllocationType::kOld);
         set_target_address_at(pc, 0 /* unused */, object.address());
         break;
       }

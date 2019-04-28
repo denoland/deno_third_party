@@ -25,7 +25,7 @@ namespace v8 {
 namespace internal {
 
 OBJECT_CONSTRUCTORS_IMPL(DescriptorArray, HeapObject)
-OBJECT_CONSTRUCTORS_IMPL(EnumCache, Tuple2)
+OBJECT_CONSTRUCTORS_IMPL(EnumCache, Struct)
 
 CAST_ACCESSOR(DescriptorArray)
 CAST_ACCESSOR(EnumCache)
@@ -92,7 +92,7 @@ int DescriptorArray::SearchWithCache(Isolate* isolate, Name name, Map map) {
 }
 
 ObjectSlot DescriptorArray::GetFirstPointerSlot() {
-  return RawField(DescriptorArray::kPointersStartOffset);
+  return RawField(DescriptorArray::kStartOfPointerFieldsOffset);
 }
 
 ObjectSlot DescriptorArray::GetDescriptorSlot(int descriptor) {

@@ -15,6 +15,8 @@ namespace v8 {
 namespace internal {
 namespace torque {
 
+DEFINE_CONTEXTUAL_VARIABLE(LintErrors)
+
 std::string StringLiteralUnquote(const std::string& s) {
   DCHECK(('"' == s.front() && '"' == s.back()) ||
          ('\'' == s.front() && '\'' == s.back()));
@@ -73,28 +75,72 @@ std::string StringLiteralQuote(const std::string& s) {
   return result.str();
 }
 
+#ifdef V8_OS_WIN
+static const char kFileUriPrefix[] = "file:///";
+#else
+static const char kFileUriPrefix[] = "file://";
+#endif
+static const int kFileUriPrefixLength = sizeof(kFileUriPrefix) - 1;
+
+static int HexCharToInt(unsigned char c) {
+  if (isdigit(c)) return c - '0';
+  if (isupper(c)) return c - 'A' + 10;
+  DCHECK(islower(c));
+  return c - 'a' + 10;
+}
+
+base::Optional<std::string> FileUriDecode(const std::string& uri) {
+  // Abort decoding of URIs that don't start with "file://".
+  if (uri.rfind(kFileUriPrefix) != 0) return base::nullopt;
+
+  const std::string path = uri.substr(kFileUriPrefixLength);
+  std::ostringstream decoded;
+
+  for (auto iter = path.begin(), end = path.end(); iter != end; ++iter) {
+    std::string::value_type c = (*iter);
+
+    // Normal characters are appended.
+    if (c != '%') {
+      decoded << c;
+      continue;
+    }
+
+    // If '%' is not followed by at least two hex digits, we abort.
+    if (std::distance(iter, end) <= 2) return base::nullopt;
+
+    unsigned char first = (*++iter);
+    unsigned char second = (*++iter);
+    if (!isxdigit(first) || !isxdigit(second)) return base::nullopt;
+
+    // An escaped hex value needs converting.
+    unsigned char value = HexCharToInt(first) * 16 + HexCharToInt(second);
+    decoded << value;
+  }
+
+  return decoded.str();
+}
+
 std::string CurrentPositionAsString() {
   return PositionAsString(CurrentSourcePosition::Get());
 }
 
-DEFINE_CONTEXTUAL_VARIABLE(LintErrorStatus)
-
-[[noreturn]] void ReportErrorString(const std::string& error) {
-  std::cerr << CurrentPositionAsString() << ": Torque error: " << error << "\n";
-  v8::base::OS::Abort();
+[[noreturn]] void ThrowTorqueError(const std::string& message,
+                                   bool include_position) {
+  TorqueError error(message);
+  if (include_position) error.position = CurrentSourcePosition::Get();
+  throw error;
 }
 
-void LintError(const std::string& error) {
-  LintErrorStatus::SetLintError();
-  std::cerr << CurrentPositionAsString() << ": Lint error: " << error << "\n";
+void ReportLintError(const std::string& error) {
+  LintErrors::Get().push_back({error, CurrentSourcePosition::Get()});
 }
 
 void NamingConventionError(const std::string& type, const std::string& name,
                            const std::string& convention) {
   std::stringstream sstream;
-  sstream << type << " \"" << name << "\" doesn't follow \"" << convention
+  sstream << type << " \"" << name << "\" does not follow \"" << convention
           << "\" naming convention.";
-  LintError(sstream.str());
+  ReportLintError(sstream.str());
 }
 
 namespace {

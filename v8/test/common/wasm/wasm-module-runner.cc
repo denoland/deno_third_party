@@ -26,14 +26,21 @@ uint32_t GetInitialMemSize(const WasmModule* module) {
   return kWasmPageSize * module->initial_pages;
 }
 
-MaybeHandle<WasmInstanceObject> CompileAndInstantiateForTesting(
-    Isolate* isolate, ErrorThrower* thrower, const ModuleWireBytes& bytes) {
+MaybeHandle<WasmModuleObject> CompileForTesting(Isolate* isolate,
+                                                ErrorThrower* thrower,
+                                                const ModuleWireBytes& bytes) {
   auto enabled_features = WasmFeaturesFromIsolate(isolate);
   MaybeHandle<WasmModuleObject> module = isolate->wasm_engine()->SyncCompile(
       isolate, enabled_features, thrower, bytes);
   DCHECK_EQ(thrower->error(), module.is_null());
-  if (module.is_null()) return {};
+  return module;
+}
 
+MaybeHandle<WasmInstanceObject> CompileAndInstantiateForTesting(
+    Isolate* isolate, ErrorThrower* thrower, const ModuleWireBytes& bytes) {
+  MaybeHandle<WasmModuleObject> module =
+      CompileForTesting(isolate, thrower, bytes);
+  if (module.is_null()) return {};
   return isolate->wasm_engine()->SyncInstantiate(
       isolate, thrower, module.ToHandleChecked(), {}, {});
 }
@@ -46,7 +53,7 @@ std::shared_ptr<WasmModule> DecodeWasmModuleForTesting(
   auto enabled_features = WasmFeaturesFromIsolate(isolate);
   ModuleResult decoding_result = DecodeWasmModule(
       enabled_features, module_start, module_end, verify_functions, origin,
-      isolate->counters(), isolate->allocator());
+      isolate->counters(), isolate->wasm_engine()->allocator());
 
   if (decoding_result.failed()) {
     // Module verification failed. throw.
@@ -61,6 +68,8 @@ bool InterpretWasmModuleForTesting(Isolate* isolate,
                                    Handle<WasmInstanceObject> instance,
                                    const char* name, size_t argc,
                                    WasmValue* args) {
+  HandleScope handle_scope(isolate);  // Avoid leaking handles.
+  WasmCodeRefScope code_ref_scope;
   MaybeHandle<WasmExportedFunction> maybe_function =
       GetExportedFunction(isolate, instance, "main");
   Handle<WasmExportedFunction> function;

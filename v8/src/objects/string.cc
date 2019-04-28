@@ -23,7 +23,7 @@ namespace v8 {
 namespace internal {
 
 Handle<String> String::SlowFlatten(Isolate* isolate, Handle<ConsString> cons,
-                                   PretenureFlag pretenure) {
+                                   AllocationType allocation) {
   DCHECK_NE(cons->second()->length(), 0);
 
   // TurboFan can create cons strings with empty first parts.
@@ -40,19 +40,22 @@ Handle<String> String::SlowFlatten(Isolate* isolate, Handle<ConsString> cons,
 
   DCHECK(AllowHeapAllocation::IsAllowed());
   int length = cons->length();
-  PretenureFlag tenure = ObjectInYoungGeneration(*cons) ? pretenure : TENURED;
+  allocation =
+      ObjectInYoungGeneration(*cons) ? allocation : AllocationType::kOld;
   Handle<SeqString> result;
   if (cons->IsOneByteRepresentation()) {
-    Handle<SeqOneByteString> flat = isolate->factory()
-                                        ->NewRawOneByteString(length, tenure)
-                                        .ToHandleChecked();
+    Handle<SeqOneByteString> flat =
+        isolate->factory()
+            ->NewRawOneByteString(length, allocation)
+            .ToHandleChecked();
     DisallowHeapAllocation no_gc;
     WriteToFlat(*cons, flat->GetChars(no_gc), 0, length);
     result = flat;
   } else {
-    Handle<SeqTwoByteString> flat = isolate->factory()
-                                        ->NewRawTwoByteString(length, tenure)
-                                        .ToHandleChecked();
+    Handle<SeqTwoByteString> flat =
+        isolate->factory()
+            ->NewRawTwoByteString(length, allocation)
+            .ToHandleChecked();
     DisallowHeapAllocation no_gc;
     WriteToFlat(*cons, flat->GetChars(no_gc), 0, length);
     result = flat;
@@ -87,7 +90,6 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
   // string.
   if (!GetIsolateFromWritableObject(*this, &isolate)) return false;
   Heap* heap = isolate->heap();
-  bool is_one_byte = this->IsOneByteRepresentation();
   bool is_internalized = this->IsInternalizedString();
   bool has_pointers = StringShape(*this).IsIndirect();
   if (has_pointers) {
@@ -103,26 +105,13 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
   ReadOnlyRoots roots(heap);
   if (size < ExternalString::kSize) {
     if (is_internalized) {
-      if (is_one_byte) {
-        new_map =
-            roots
-                .uncached_external_internalized_string_with_one_byte_data_map();
-      } else {
-        new_map = roots.uncached_external_internalized_string_map();
-      }
+      new_map = roots.uncached_external_internalized_string_map();
     } else {
-      new_map = is_one_byte
-                    ? roots.uncached_external_string_with_one_byte_data_map()
-                    : roots.uncached_external_string_map();
+      new_map = roots.uncached_external_string_map();
     }
   } else {
-    new_map =
-        is_internalized
-            ? (is_one_byte
-                   ? roots.external_internalized_string_with_one_byte_data_map()
-                   : roots.external_internalized_string_map())
-            : (is_one_byte ? roots.external_string_with_one_byte_data_map()
-                           : roots.external_string_map());
+    new_map = is_internalized ? roots.external_internalized_string_map()
+                              : roots.external_string_map();
   }
 
   // Byte size of the external String object.
@@ -1011,7 +1000,7 @@ MaybeHandle<String> String::GetSubstitution(Isolate* isolate, Match* match,
         break;
       }
       case '<': {  // $<name> - named capture
-        typedef String::Match::CaptureState CaptureState;
+        using CaptureState = String::Match::CaptureState;
 
         if (!match->HasNamedCaptures()) {
           builder.AppendCharacter('$');
@@ -1191,26 +1180,6 @@ Object String::LastIndexOf(Isolate* isolate, Handle<Object> receiver,
   return Smi::FromInt(last_index);
 }
 
-bool String::IsUtf8EqualTo(Vector<const char> str, bool allow_prefix_match) {
-  int slen = length();
-  // Can't check exact length equality, but we can check bounds.
-  int str_len = str.length();
-  if (!allow_prefix_match &&
-      (str_len < slen ||
-       str_len > slen * static_cast<int>(unibrow::Utf8::kMaxEncodedSize))) {
-    return false;
-  }
-
-  int i = 0;
-  unibrow::Utf8Iterator it = unibrow::Utf8Iterator(str);
-  while (i < slen && !it.Done()) {
-    if (Get(i++) != *it) return false;
-    ++it;
-  }
-
-  return (allow_prefix_match || i == slen) && it.Done();
-}
-
 template <>
 bool String::IsEqualTo(Vector<const uint8_t> str) {
   return IsOneByteEqualTo(str);
@@ -1219,6 +1188,18 @@ bool String::IsEqualTo(Vector<const uint8_t> str) {
 template <>
 bool String::IsEqualTo(Vector<const uc16> str) {
   return IsTwoByteEqualTo(str);
+}
+
+bool String::HasOneBytePrefix(Vector<const char> str) {
+  int slen = str.length();
+  if (slen > length()) return false;
+  DisallowHeapAllocation no_gc;
+  FlatContent content = GetFlatContent(no_gc);
+  if (content.IsOneByte()) {
+    return CompareChars(content.ToOneByteVector().start(), str.start(), slen) ==
+           0;
+  }
+  return CompareChars(content.ToUC16Vector().start(), str.start(), slen) == 0;
 }
 
 bool String::IsOneByteEqualTo(Vector<const uint8_t> str) {
@@ -1336,7 +1317,7 @@ void SeqTwoByteString::clear_padding() {
          SizeFor(length()) - data_size);
 }
 
-uint16_t ConsString::ConsStringGet(int index) {
+uint16_t ConsString::Get(int index) {
   DCHECK(index >= 0 && index < this->length());
 
   // Check for a flattened cons string
@@ -1365,9 +1346,9 @@ uint16_t ConsString::ConsStringGet(int index) {
   UNREACHABLE();
 }
 
-uint16_t ThinString::ThinStringGet(int index) { return actual()->Get(index); }
+uint16_t ThinString::Get(int index) { return actual()->Get(index); }
 
-uint16_t SlicedString::SlicedStringGet(int index) {
+uint16_t SlicedString::Get(int index) {
   return parent()->Get(offset() + index);
 }
 
@@ -1535,6 +1516,9 @@ String ConsStringIterator::NextLeaf(bool* blew_stack) {
   }
   UNREACHABLE();
 }
+
+template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE) void String::WriteToFlat(
+    String source, uint16_t* sink, int from, int to);
 
 }  // namespace internal
 }  // namespace v8

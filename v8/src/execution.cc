@@ -11,6 +11,7 @@
 #include "src/isolate-inl.h"
 #include "src/runtime-profiler.h"
 #include "src/vm-state-inl.h"
+#include "src/wasm/wasm-engine.h"
 
 namespace v8 {
 namespace internal {
@@ -616,67 +617,52 @@ void StackGuard::InitThread(const ExecutionAccess& lock) {
 // --- C a l l s   t o   n a t i v e s ---
 
 Object StackGuard::HandleInterrupts() {
+  TRACE_EVENT0("v8.execute", "V8.HandleInterrupts");
+
   if (FLAG_verify_predictable) {
     // Advance synthetic time by making a time request.
     isolate_->heap()->MonotonicallyIncreasingTimeInMs();
   }
 
-  bool any_interrupt_handled = false;
-  if (FLAG_trace_interrupts) {
-    PrintF("[Handling interrupts: ");
-  }
-
   if (CheckAndClearInterrupt(GC_REQUEST)) {
-    if (FLAG_trace_interrupts) {
-      PrintF("GC_REQUEST");
-      any_interrupt_handled = true;
-    }
+    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.gc"), "V8.GCHandleGCRequest");
     isolate_->heap()->HandleGCRequest();
   }
 
+  if (CheckAndClearInterrupt(GROW_SHARED_MEMORY)) {
+    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.wasm"),
+                 "V8.WasmGrowSharedMemory");
+    isolate_->wasm_engine()->memory_tracker()->UpdateSharedMemoryInstances(
+        isolate_);
+  }
+
   if (CheckAndClearInterrupt(TERMINATE_EXECUTION)) {
-    if (FLAG_trace_interrupts) {
-      if (any_interrupt_handled) PrintF(", ");
-      PrintF("TERMINATE_EXECUTION");
-      any_interrupt_handled = true;
-    }
+    TRACE_EVENT0("v8.execute", "V8.TerminateExecution");
     return isolate_->TerminateExecution();
   }
 
   if (CheckAndClearInterrupt(DEOPT_MARKED_ALLOCATION_SITES)) {
-    if (FLAG_trace_interrupts) {
-      if (any_interrupt_handled) PrintF(", ");
-      PrintF("DEOPT_MARKED_ALLOCATION_SITES");
-      any_interrupt_handled = true;
-    }
+    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.gc"),
+                 "V8.GCDeoptMarkedAllocationSites");
     isolate_->heap()->DeoptMarkedAllocationSites();
   }
 
   if (CheckAndClearInterrupt(INSTALL_CODE)) {
-    if (FLAG_trace_interrupts) {
-      if (any_interrupt_handled) PrintF(", ");
-      PrintF("INSTALL_CODE");
-      any_interrupt_handled = true;
-    }
+    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.compile"),
+                 "V8.InstallOptimizedFunctions");
     DCHECK(isolate_->concurrent_recompilation_enabled());
     isolate_->optimizing_compile_dispatcher()->InstallOptimizedFunctions();
   }
 
   if (CheckAndClearInterrupt(API_INTERRUPT)) {
-    if (FLAG_trace_interrupts) {
-      if (any_interrupt_handled) PrintF(", ");
-      PrintF("API_INTERRUPT");
-      any_interrupt_handled = true;
-    }
-    // Callbacks must be invoked outside of ExecusionAccess lock.
+    TRACE_EVENT0("v8.execute", "V8.InvokeApiInterruptCallbacks");
+    // Callbacks must be invoked outside of ExecutionAccess lock.
     isolate_->InvokeApiInterruptCallbacks();
   }
 
-  if (FLAG_trace_interrupts) {
-    if (!any_interrupt_handled) {
-      PrintF("No interrupt flags set");
-    }
-    PrintF("]\n");
+  if (CheckAndClearInterrupt(LOG_WASM_CODE)) {
+    TRACE_EVENT0("v8.wasm", "LogCode");
+    isolate_->wasm_engine()->LogOutstandingCodesForIsolate(isolate_);
   }
 
   isolate_->counters()->stack_interrupts()->Increment();

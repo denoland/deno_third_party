@@ -240,8 +240,8 @@ extras_accessors = [
     'JSObject, elements, Object, kElementsOffset',
     'JSObject, internal_fields, uintptr_t, kHeaderSize',
     'FixedArray, data, uintptr_t, kHeaderSize',
-    'FixedTypedArrayBase, external_pointer, Object, kExternalPointerOffset',
-    'JSArrayBuffer, backing_store, Object, kBackingStoreOffset',
+    'FixedTypedArrayBase, external_pointer, uintptr_t, kExternalPointerOffset',
+    'JSArrayBuffer, backing_store, uintptr_t, kBackingStoreOffset',
     'JSArrayBuffer, byte_length, size_t, kByteLengthOffset',
     'JSArrayBufferView, byte_length, size_t, kByteLengthOffset',
     'JSArrayBufferView, byte_offset, size_t, kByteOffsetOffset',
@@ -393,12 +393,14 @@ def load_objects_from_file(objfilename, checktypes):
                         typestr += line;
                         continue;
 
-                match = re.match('class (\w[^:]*)(: public (\w[^{]*))?\s*{\s*',
-                    line);
+                match = re.match(r'class(?:\s+V8_EXPORT(?:_PRIVATE)?)?'
+                                 r'\s+(\w[^:]*)'
+                                 r'(?:: public (\w[^{]*))?\s*{\s*',
+                                 line);
 
                 if (match):
                         klass = match.group(1).strip();
-                        pklass = match.group(3);
+                        pklass = match.group(2);
                         if (pklass):
                                 pklass = pklass.strip();
                         klasses[klass] = { 'parent': pklass };

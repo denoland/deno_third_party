@@ -129,10 +129,32 @@ class CodeEventsContainer {
   };
 };
 
+// Maintains the number of active CPU profilers in an isolate.
+class ProfilingScope {
+ public:
+  explicit ProfilingScope(Isolate* isolate) : isolate_(isolate) {
+    size_t profiler_count = isolate_->num_cpu_profilers();
+    profiler_count++;
+    isolate_->set_num_cpu_profilers(profiler_count);
+    isolate_->set_is_profiling(true);
+  }
+
+  ~ProfilingScope() {
+    size_t profiler_count = isolate_->num_cpu_profilers();
+    DCHECK_GT(profiler_count, 0);
+    profiler_count--;
+    isolate_->set_num_cpu_profilers(profiler_count);
+    if (profiler_count == 0) isolate_->set_is_profiling(false);
+  }
+
+ private:
+  Isolate* const isolate_;
+};
 
 // This class implements both the profile events processor thread and
 // methods called by event producers: VM and stack sampler threads.
-class ProfilerEventsProcessor : public base::Thread, public CodeEventObserver {
+class V8_EXPORT_PRIVATE ProfilerEventsProcessor : public base::Thread,
+                                                  public CodeEventObserver {
  public:
   virtual ~ProfilerEventsProcessor();
 
@@ -172,12 +194,14 @@ class ProfilerEventsProcessor : public base::Thread, public CodeEventObserver {
   std::atomic<unsigned> last_code_event_id_;
   unsigned last_processed_code_event_id_;
   Isolate* isolate_;
+  ProfilingScope profiling_scope_;
 };
 
-class SamplingEventsProcessor : public ProfilerEventsProcessor {
+class V8_EXPORT_PRIVATE SamplingEventsProcessor
+    : public ProfilerEventsProcessor {
  public:
   SamplingEventsProcessor(Isolate* isolate, ProfileGenerator* generator,
-                          base::TimeDelta period);
+                          base::TimeDelta period, bool use_precise_sampling);
   ~SamplingEventsProcessor() override;
 
   // SamplingCircularQueue has stricter alignment requirements than a normal new
@@ -208,14 +232,16 @@ class SamplingEventsProcessor : public ProfilerEventsProcessor {
                         kTickSampleQueueLength> ticks_buffer_;
   std::unique_ptr<sampler::Sampler> sampler_;
   const base::TimeDelta period_;  // Samples & code events processing period.
+  const bool use_precise_sampling_;  // Whether or not busy-waiting is used for
+                                     // low sampling intervals on Windows.
 };
 
-class CpuProfiler {
+class V8_EXPORT_PRIVATE CpuProfiler {
  public:
-  explicit CpuProfiler(Isolate* isolate);
+  explicit CpuProfiler(Isolate* isolate, CpuProfilingNamingMode = kDebugNaming);
 
-  CpuProfiler(Isolate* isolate, CpuProfilesCollection* profiles,
-              ProfileGenerator* test_generator,
+  CpuProfiler(Isolate* isolate, CpuProfilingNamingMode naming_mode,
+              CpuProfilesCollection* profiles, ProfileGenerator* test_generator,
               ProfilerEventsProcessor* test_processor);
 
   ~CpuProfiler();
@@ -223,8 +249,10 @@ class CpuProfiler {
   static void CollectSample(Isolate* isolate);
 
   typedef v8::CpuProfilingMode ProfilingMode;
+  typedef v8::CpuProfilingNamingMode NamingMode;
 
   void set_sampling_interval(base::TimeDelta value);
+  void set_use_precise_sampling(bool);
   void CollectSample();
   void StartProfiling(const char* title, bool record_samples = false,
                       ProfilingMode mode = ProfilingMode::kLeafNodeLineNumbers);
@@ -255,12 +283,13 @@ class CpuProfiler {
   void CreateEntriesForRuntimeCallStats();
 
   Isolate* const isolate_;
+  const NamingMode naming_mode_;
   base::TimeDelta sampling_interval_;
+  bool use_precise_sampling_ = true;
   std::unique_ptr<CpuProfilesCollection> profiles_;
   std::unique_ptr<ProfileGenerator> generator_;
   std::unique_ptr<ProfilerEventsProcessor> processor_;
   std::unique_ptr<ProfilerListener> profiler_listener_;
-  bool saved_is_logging_;
   bool is_profiling_;
 
   DISALLOW_COPY_AND_ASSIGN(CpuProfiler);

@@ -18,7 +18,9 @@ class StartupDeserializer;
 
 class DeserializerAllocator final {
  public:
-  explicit DeserializerAllocator(Deserializer* deserializer);
+  DeserializerAllocator() = default;
+
+  void Initialize(Heap* heap) { heap_ = heap; }
 
   // ------- Allocation Methods -------
   // Methods related to memory allocation during deserialization.
@@ -55,7 +57,8 @@ class DeserializerAllocator final {
   // ------- Reservation Methods -------
   // Methods related to memory reservations (prior to deserialization).
 
-  void DecodeReservation(const std::vector<SerializedData::Reservation>& res);
+  V8_EXPORT_PRIVATE void DecodeReservation(
+      const std::vector<SerializedData::Reservation>& res);
   bool ReserveSpace();
 
   bool ReservationsAreFullyUsed() const;
@@ -65,8 +68,6 @@ class DeserializerAllocator final {
   void RegisterDeserializedObjectsForBlackAllocation();
 
  private:
-  Isolate* isolate() const;
-
   // Raw allocation without considering alignment.
   Address AllocateRaw(AllocationSpace space, int size);
 
@@ -97,8 +98,7 @@ class DeserializerAllocator final {
   // back-references.
   std::vector<HeapObject> deserialized_large_objects_;
 
-  // The current deserializer.
-  Deserializer* const deserializer_;
+  Heap* heap_;
 
   DISALLOW_COPY_AND_ASSIGN(DeserializerAllocator);
 };

@@ -1167,11 +1167,27 @@ TEST(BreakPointApiAccessor) {
   CompileRun("set_loop();");
   CHECK_EQ(42, break_point_hit_count);
 
+  // Test that the break point also works when we install the function
+  // template on a new property (with a fresh AccessorPair instance).
+  v8::Local<v8::ObjectTemplate> baz_template =
+      v8::ObjectTemplate::New(env->GetIsolate());
+  baz_template->SetAccessorProperty(v8_str("g"), accessor_template,
+                                    accessor_template);
+  v8::Local<v8::Object> baz =
+      baz_template->NewInstance(env.local()).ToLocalChecked();
+  env->Global()->Set(env.local(), v8_str("b"), baz).ToChecked();
+
+  CompileRun("b.g = 4");
+  CHECK_EQ(43, break_point_hit_count);
+
+  CompileRun("b.g");
+  CHECK_EQ(44, break_point_hit_count);
+
   // Run without breakpoints.
   ClearBreakPoint(bp);
   CompileRun("o.f = 3");
   CompileRun("o.f");
-  CHECK_EQ(42, break_point_hit_count);
+  CHECK_EQ(44, break_point_hit_count);
 
   v8::debug::SetDebugDelegate(env->GetIsolate(), nullptr);
   CheckDebuggerUnloaded();
@@ -4023,7 +4039,7 @@ UNINITIALIZED_TEST(DebugSetOutOfMemoryListener) {
     // The following allocation fails unless the out-of-memory callback
     // increases the heap limit.
     int length = 10 * i::MB / i::kTaggedSize;
-    i_isolate->factory()->NewFixedArray(length, i::TENURED);
+    i_isolate->factory()->NewFixedArray(length, i::AllocationType::kOld);
     CHECK(near_heap_limit_callback_called);
     isolate->RemoveNearHeapLimitCallback(NearHeapLimitCallback, 0);
   }
@@ -4283,7 +4299,8 @@ UNINITIALIZED_TEST(LoadedAtStartupScripts) {
     LocalContext context(isolate);
 
     std::vector<i::Handle<i::Script>> scripts;
-    CompileWithOrigin(v8_str("function foo(){}"), v8_str("normal.js"));
+    CompileWithOrigin(v8_str("function foo(){}"), v8_str("normal.js"),
+                      v8_bool(false));
     std::unordered_map<int, int> count_by_type;
     {
       i::DisallowHeapAllocation no_gc;
@@ -4502,4 +4519,100 @@ TEST(Regress517592) {
   CompileRun(v8_str("foo()"));
   CHECK_EQ(delegate.break_count(), 1);
   v8::debug::SetDebugDelegate(env->GetIsolate(), nullptr);
+}
+
+TEST(GetPrivateFields) {
+  LocalContext env;
+  v8::Isolate* v8_isolate = CcTest::isolate();
+  v8::internal::Isolate* isolate = CcTest::i_isolate();
+  v8::HandleScope scope(v8_isolate);
+  v8::Local<v8::Context> context = env.local();
+  v8::internal::FLAG_harmony_class_fields = true;
+  v8::internal::FLAG_harmony_private_fields = true;
+  v8::Local<v8::String> source = v8_str(
+      "var X = class {\n"
+      "  #foo = 1;\n"
+      "  #bar = function() {};\n"
+      "}\n"
+      "var x = new X()");
+  CompileRun(source);
+  v8::Local<v8::Object> object = v8::Local<v8::Object>::Cast(
+      env->Global()
+          ->Get(context, v8_str(env->GetIsolate(), "x"))
+          .ToLocalChecked());
+  v8::Local<v8::Array> private_names =
+      v8::debug::GetPrivateFields(context, object).ToLocalChecked();
+
+  for (int i = 0; i < 4; i = i + 2) {
+    Handle<v8::internal::JSReceiver> private_name =
+        v8::Utils::OpenHandle(*private_names->Get(context, i)
+                                   .ToLocalChecked()
+                                   ->ToObject(context)
+                                   .ToLocalChecked());
+    Handle<v8::internal::JSValue> private_value =
+        Handle<v8::internal::JSValue>::cast(private_name);
+    Handle<v8::internal::Symbol> priv_symbol(
+        v8::internal::Symbol::cast(private_value->value()), isolate);
+    CHECK(priv_symbol->is_private_name());
+  }
+
+  source = v8_str(
+      "var Y = class {\n"
+      "  #baz = 2;\n"
+      "}\n"
+      "var X = class extends Y{\n"
+      "  #foo = 1;\n"
+      "  #bar = function() {};\n"
+      "}\n"
+      "var x = new X()");
+  CompileRun(source);
+  object = v8::Local<v8::Object>::Cast(
+      env->Global()
+          ->Get(context, v8_str(env->GetIsolate(), "x"))
+          .ToLocalChecked());
+  private_names = v8::debug::GetPrivateFields(context, object).ToLocalChecked();
+
+  for (int i = 0; i < 6; i = i + 2) {
+    Handle<v8::internal::JSReceiver> private_name =
+        v8::Utils::OpenHandle(*private_names->Get(context, i)
+                                   .ToLocalChecked()
+                                   ->ToObject(context)
+                                   .ToLocalChecked());
+    Handle<v8::internal::JSValue> private_value =
+        Handle<v8::internal::JSValue>::cast(private_name);
+    Handle<v8::internal::Symbol> priv_symbol(
+        v8::internal::Symbol::cast(private_value->value()), isolate);
+    CHECK(priv_symbol->is_private_name());
+  }
+
+  source = v8_str(
+      "var Y = class {\n"
+      "  constructor() {"
+      "    return new Proxy({}, {});"
+      "  }"
+      "}\n"
+      "var X = class extends Y{\n"
+      "  #foo = 1;\n"
+      "  #bar = function() {};\n"
+      "}\n"
+      "var x = new X()");
+  CompileRun(source);
+  object = v8::Local<v8::Object>::Cast(
+      env->Global()
+          ->Get(context, v8_str(env->GetIsolate(), "x"))
+          .ToLocalChecked());
+  private_names = v8::debug::GetPrivateFields(context, object).ToLocalChecked();
+
+  for (int i = 0; i < 4; i = i + 2) {
+    Handle<v8::internal::JSReceiver> private_name =
+        v8::Utils::OpenHandle(*private_names->Get(context, i)
+                                   .ToLocalChecked()
+                                   ->ToObject(context)
+                                   .ToLocalChecked());
+    Handle<v8::internal::JSValue> private_value =
+        Handle<v8::internal::JSValue>::cast(private_name);
+    Handle<v8::internal::Symbol> priv_symbol(
+        v8::internal::Symbol::cast(private_value->value()), isolate);
+    CHECK(priv_symbol->is_private_name());
+  }
 }

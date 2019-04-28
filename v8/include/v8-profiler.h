@@ -48,7 +48,7 @@ template class V8_EXPORT std::vector<v8::CpuProfileDeoptInfo>;
 namespace v8 {
 
 // TickSample captures the information collected for each sample.
-struct TickSample {
+struct V8_EXPORT TickSample {
   // Internal profiling (with --prof + tools/$OS-tick-processor) wants to
   // include the runtime function we're calling. Externally exposed tick
   // samples don't care.
@@ -129,6 +129,20 @@ class V8_EXPORT CpuProfileNode {
     unsigned int hit_count;
   };
 
+  // An annotation hinting at the source of a CpuProfileNode.
+  enum SourceType {
+    // User-supplied script with associated resource information.
+    kScript = 0,
+    // Native scripts and provided builtins.
+    kBuiltin = 1,
+    // Callbacks into native code.
+    kCallback = 2,
+    // VM-internal functions or state.
+    kInternal = 3,
+    // A node that failed to symbolize.
+    kUnresolved = 4,
+  };
+
   /** Returns function name (empty string for anonymous functions.) */
   Local<String> GetFunctionName() const;
 
@@ -151,6 +165,12 @@ class V8_EXPORT CpuProfileNode {
    * profile is deleted. The function is thread safe.
    */
   const char* GetScriptResourceNameStr() const;
+
+  /**
+   * Return true if the script from where the function originates is flagged as
+   * being shared cross-origin.
+   */
+  bool IsScriptSharedCrossOrigin() const;
 
   /**
    * Returns the number, 1-based, of the line where the function originates.
@@ -194,11 +214,19 @@ class V8_EXPORT CpuProfileNode {
   /** Returns id of the node. The id is unique within the tree */
   unsigned GetNodeId() const;
 
+  /**
+   * Gets the type of the source which the node was captured from.
+   */
+  SourceType GetSourceType() const;
+
   /** Returns child nodes count of the node. */
   int GetChildrenCount() const;
 
   /** Retrieves a child node by index. */
   const CpuProfileNode* GetChild(int index) const;
+
+  /** Retrieves the ancestor node, or null if the root. */
+  const CpuProfileNode* GetParent() const;
 
   /** Retrieves deopt infos for the node. */
   const std::vector<CpuProfileDeoptInfo>& GetDeoptInfos() const;
@@ -269,6 +297,15 @@ enum CpuProfilingMode {
   kCallerLineNumbers,
 };
 
+// Determines how names are derived for functions sampled.
+enum CpuProfilingNamingMode {
+  // Use the immediate name of functions at compilation time.
+  kStandardNaming,
+  // Use more verbose naming for functions without names, inferred from scope
+  // where possible.
+  kDebugNaming,
+};
+
 /**
  * Interface for controlling CPU profiling. Instance of the
  * profiler can be created using v8::CpuProfiler::New method.
@@ -280,7 +317,8 @@ class V8_EXPORT CpuProfiler {
    * initialized. The profiler object must be disposed after use by calling
    * |Dispose| method.
    */
-  static CpuProfiler* New(Isolate* isolate);
+  static CpuProfiler* New(Isolate* isolate,
+                          CpuProfilingNamingMode = kDebugNaming);
 
   /**
    * Synchronously collect current stack sample in all profilers attached to
@@ -300,6 +338,15 @@ class V8_EXPORT CpuProfiler {
    * when there are no profiles being recorded.
    */
   void SetSamplingInterval(int us);
+
+  /**
+   * Sets whether or not the profiler should prioritize consistency of sample
+   * periodicity on Windows. Disabling this can greatly reduce CPU usage, but
+   * may result in greater variance in sample timings from the platform's
+   * scheduler. Defaults to enabled. This method must be called when there are
+   * no profiles being recorded.
+   */
+  void SetUsePreciseSampling(bool);
 
   /**
    * Starts collecting CPU profile. Title may be an empty string. It
@@ -756,10 +803,6 @@ class V8_EXPORT HeapProfiler {
                                              v8::EmbedderGraph* graph,
                                              void* data);
 
-  /** TODO(addaleax): Remove */
-  typedef void (*LegacyBuildEmbedderGraphCallback)(v8::Isolate* isolate,
-                                                   v8::EmbedderGraph* graph);
-
   /** Returns the number of snapshots taken. */
   int GetSnapshotCount();
 
@@ -898,10 +941,6 @@ class V8_EXPORT HeapProfiler {
    */
   void DeleteAllHeapSnapshots();
 
-  V8_DEPRECATED(
-      "Use AddBuildEmbedderGraphCallback to provide info about embedder nodes",
-      void SetBuildEmbedderGraphCallback(
-          LegacyBuildEmbedderGraphCallback callback));
   void AddBuildEmbedderGraphCallback(BuildEmbedderGraphCallback callback,
                                      void* data);
   void RemoveBuildEmbedderGraphCallback(BuildEmbedderGraphCallback callback,

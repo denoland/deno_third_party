@@ -46,6 +46,13 @@ bool Type::IsSubtypeOf(const Type* supertype) const {
   return false;
 }
 
+base::Optional<const ClassType*> Type::ClassSupertype() const {
+  for (const Type* t = this; t != nullptr; t = t->parent()) {
+    if (auto* class_type = ClassType::DynamicCast(t)) return class_type;
+  }
+  return base::nullopt;
+}
+
 // static
 const Type* Type::CommonSupertype(const Type* a, const Type* b) {
   int diff = a->Depth() - b->Depth();
@@ -158,19 +165,6 @@ std::string UnionType::GetGeneratedTNodeTypeNameImpl() const {
   return parent()->GetGeneratedTNodeTypeName();
 }
 
-const Type* UnionType::NonConstexprVersion() const {
-  if (IsConstexpr()) {
-    auto it = types_.begin();
-    UnionType result((*it)->NonConstexprVersion());
-    ++it;
-    for (; it != types_.end(); ++it) {
-      result.Extend((*it)->NonConstexprVersion());
-    }
-    return TypeOracle::GetUnionType(std::move(result));
-  }
-  return this;
-}
-
 void UnionType::RecomputeParent() {
   const Type* parent = nullptr;
   for (const Type* t : types_) {
@@ -279,10 +273,6 @@ std::vector<Method*> AggregateType::Methods(const std::string& name) const {
   return result;
 }
 
-std::vector<Method*> AggregateType::Constructors() const {
-  return Methods(kConstructMethodName);
-}
-
 std::string StructType::ToExplicitString() const {
   std::stringstream result;
   result << "struct " << name() << "{";
@@ -292,11 +282,12 @@ std::string StructType::ToExplicitString() const {
 }
 
 ClassType::ClassType(const Type* parent, Namespace* nspace,
-                     const std::string& name, bool is_extern, bool transient,
+                     const std::string& name, bool is_extern,
+                     bool generate_print, bool transient,
                      const std::string& generates)
     : AggregateType(Kind::kClassType, parent, nspace, name),
-      this_struct_(nullptr),
       is_extern_(is_extern),
+      generate_print_(generate_print),
       transient_(transient),
       size_(0),
       has_indexed_field_(false),
@@ -445,8 +436,7 @@ bool operator<(const Type& a, const Type& b) {
   return a.MangledName() < b.MangledName();
 }
 
-VisitResult ProjectStructField(const StructType* original_struct,
-                               VisitResult structure,
+VisitResult ProjectStructField(VisitResult structure,
                                const std::string& fieldname) {
   BottomOffset begin = structure.stack_range().begin();
 
@@ -461,38 +451,8 @@ VisitResult ProjectStructField(const StructType* original_struct,
     begin = end;
   }
 
-  if (fields.size() > 0 &&
-      fields[0].name_and_type.name == kConstructorStructSuperFieldName) {
-    structure = ProjectStructField(original_struct, structure,
-                                   kConstructorStructSuperFieldName);
-    return ProjectStructField(original_struct, structure, fieldname);
-  } else {
-    base::Optional<const ClassType*> class_type =
-        original_struct->GetDerivedFrom();
-    if (original_struct == type) {
-      if (class_type) {
-        ReportError("class '", (*class_type)->name(),
-                    "' doesn't contain a field '", fieldname, "'");
-      } else {
-        ReportError("struct '", original_struct->name(),
-                    "' doesn't contain a field '", fieldname, "'");
-      }
-    } else {
-      DCHECK(class_type);
-      ReportError(
-          "class '", (*class_type)->name(),
-          "' or one of its derived-from classes doesn't contain a field '",
-          fieldname, "'");
-    }
-  }
-}
-
-VisitResult ProjectStructField(VisitResult structure,
-                               const std::string& fieldname) {
-  DCHECK(structure.IsOnStack());
-  DCHECK(structure.type()->IsStructType());
-  const StructType* type = StructType::cast(structure.type());
-  return ProjectStructField(type, structure, fieldname);
+  ReportError("struct '", type->name(), "' doesn't contain a field '",
+              fieldname, "'");
 }
 
 namespace {
@@ -504,6 +464,9 @@ void AppendLoweredTypes(const Type* type, std::vector<const Type*>* result) {
     for (const Field& field : s->fields()) {
       AppendLoweredTypes(field.name_and_type.type, result);
     }
+  } else if (type->IsReferenceType()) {
+    result->push_back(TypeOracle::GetHeapObjectType());
+    result->push_back(TypeOracle::GetIntPtrType());
   } else {
     result->push_back(type);
   }

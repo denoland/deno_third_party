@@ -184,7 +184,7 @@ inline Namespace* CurrentNamespace() {
 class Value : public Declarable {
  public:
   DECLARE_DECLARABLE_BOILERPLATE(Value, value)
-  const std::string& name() const { return name_; }
+  const Identifier* name() const { return name_; }
   virtual bool IsConst() const { return true; }
   VisitResult value() const { return *value_; }
   const Type* type() const { return type_; }
@@ -195,12 +195,12 @@ class Value : public Declarable {
   }
 
  protected:
-  Value(Kind kind, const Type* type, const std::string& name)
+  Value(Kind kind, const Type* type, Identifier* name)
       : Declarable(kind), type_(type), name_(name) {}
 
  private:
   const Type* type_;
-  std::string name_;
+  Identifier* name_;
   base::Optional<VisitResult> value_;
 };
 
@@ -208,7 +208,6 @@ class NamespaceConstant : public Value {
  public:
   DECLARE_DECLARABLE_BOILERPLATE(NamespaceConstant, constant)
 
-  const std::string& constant_name() const { return constant_name_; }
   Expression* body() { return body_; }
   std::string ExternalAssemblerName() const {
     return Namespace::cast(ParentScope())->ExternalName();
@@ -216,13 +215,11 @@ class NamespaceConstant : public Value {
 
  private:
   friend class Declarations;
-  explicit NamespaceConstant(std::string constant_name, const Type* type,
+  explicit NamespaceConstant(Identifier* constant_name, const Type* type,
                              Expression* body)
       : Value(Declarable::kNamespaceConstant, type, constant_name),
-        constant_name_(std::move(constant_name)),
         body_(body) {}
 
-  std::string constant_name_;
   Expression* body_;
 };
 
@@ -232,8 +229,8 @@ class ExternConstant : public Value {
 
  private:
   friend class Declarations;
-  explicit ExternConstant(std::string name, const Type* type, std::string value)
-      : Value(Declarable::kExternConstant, type, std::move(name)) {
+  explicit ExternConstant(Identifier* name, const Type* type, std::string value)
+      : Value(Declarable::kExternConstant, type, name) {
     set_value(VisitResult(type, std::move(value)));
   }
 };
@@ -257,7 +254,6 @@ class Callable : public Scope {
   bool IsExternal() const { return !body_.has_value(); }
   virtual bool ShouldBeInlined() const { return false; }
   virtual bool ShouldGenerateExternalCode() const { return !ShouldBeInlined(); }
-  bool IsConstructor() const { return readable_name_ == kConstructMethodName; }
 
  protected:
   Callable(Declarable::Kind kind, std::string external_name,
@@ -400,7 +396,7 @@ class Generic : public Declarable {
   DECLARE_DECLARABLE_BOILERPLATE(Generic, generic)
 
   GenericDeclaration* declaration() const { return declaration_; }
-  const std::vector<std::string> generic_parameters() const {
+  const std::vector<Identifier*> generic_parameters() const {
     return declaration()->generic_parameters;
   }
   const std::string& name() const { return name_; }
@@ -425,8 +421,6 @@ class Generic : public Declarable {
       : Declarable(Declarable::kGeneric),
         name_(name),
         declaration_(declaration) {}
-  base::Optional<const Type*> InferTypeArgument(size_t i,
-                                                const TypeVector& arguments);
 
   std::string name_;
   std::unordered_map<TypeVector, Callable*, base::hash<TypeVector>>
@@ -445,16 +439,23 @@ class TypeAlias : public Declarable {
 
   const Type* type() const { return type_; }
   bool IsRedeclaration() const { return redeclaration_; }
+  SourcePosition GetDeclarationPosition() const {
+    return declaration_position_;
+  }
 
  private:
   friend class Declarations;
-  explicit TypeAlias(const Type* type, bool redeclaration)
+  explicit TypeAlias(
+      const Type* type, bool redeclaration,
+      SourcePosition declaration_position = SourcePosition::Invalid())
       : Declarable(Declarable::kTypeAlias),
         type_(type),
-        redeclaration_(redeclaration) {}
+        redeclaration_(redeclaration),
+        declaration_position_(declaration_position) {}
 
   const Type* type_;
   bool redeclaration_;
+  const SourcePosition declaration_position_;
 };
 
 std::ostream& operator<<(std::ostream& os, const Callable& m);

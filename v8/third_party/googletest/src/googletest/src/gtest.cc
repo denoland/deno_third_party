@@ -446,7 +446,8 @@ std::string UnitTestOptions::GetOutputFormat() {
   const char* const colon = strchr(gtest_output_flag, ':');
   return (colon == nullptr)
              ? std::string(gtest_output_flag)
-             : std::string(gtest_output_flag, colon - gtest_output_flag);
+             : std::string(gtest_output_flag,
+                           static_cast<size_t>(colon - gtest_output_flag));
 }
 
 // Returns the name of the requested output file, or the default if none
@@ -922,7 +923,7 @@ bool String::CStringEquals(const char * lhs, const char * rhs) {
   return strcmp(lhs, rhs) == 0;
 }
 
-#if GTEST_HAS_STD_WSTRING || GTEST_HAS_GLOBAL_WSTRING
+#if GTEST_HAS_STD_WSTRING
 
 // Converts an array of wide chars to a narrow string using the UTF-8
 // encoding, and streams the result to the given Message object.
@@ -940,7 +941,7 @@ static void StreamWideCharsToMessage(const wchar_t* wstr, size_t length,
   }
 }
 
-#endif  // GTEST_HAS_STD_WSTRING || GTEST_HAS_GLOBAL_WSTRING
+#endif  // GTEST_HAS_STD_WSTRING
 
 void SplitString(const ::std::string& str, char delimiter,
                  ::std::vector< ::std::string>* dest) {
@@ -989,15 +990,6 @@ Message& Message::operator <<(const ::std::wstring& wstr) {
   return *this;
 }
 #endif  // GTEST_HAS_STD_WSTRING
-
-#if GTEST_HAS_GLOBAL_WSTRING
-// Converts the given wide string to a narrow string using the UTF-8
-// encoding, and streams the result to this Message object.
-Message& Message::operator <<(const ::wstring& wstr) {
-  internal::StreamWideCharsToMessage(wstr.c_str(), wstr.length(), this);
-  return *this;
-}
-#endif  // GTEST_HAS_GLOBAL_WSTRING
 
 // Gets the text streamed to this object so far as an std::string.
 // Each '\0' character in the buffer is replaced with "\\0".
@@ -1249,9 +1241,10 @@ std::string CreateUnifiedDiff(const std::vector<std::string>& left,
     for (; edit_i < edits.size(); ++edit_i) {
       if (n_suffix >= context) {
         // Continue only if the next hunk is very close.
-        std::vector<EditType>::const_iterator it = edits.begin() + edit_i;
+        auto it = edits.begin() + static_cast<int>(edit_i);
         while (it != edits.end() && *it == kMatch) ++it;
-        if (it == edits.end() || (it - edits.begin()) - edit_i >= context) {
+        if (it == edits.end() ||
+            static_cast<size_t>(it - edits.begin()) - edit_i >= context) {
           // There is no next edit or it is too far away.
           break;
         }
@@ -1776,7 +1769,7 @@ inline UInt32 ChopLowBits(UInt32* bits, int n) {
 // to "(Invalid Unicode 0xXXXXXXXX)".
 std::string CodePointToUtf8(UInt32 code_point) {
   if (code_point > kMaxCodePoint4) {
-    return "(Invalid Unicode 0x" + String::FormatHexInt(code_point) + ")";
+    return "(Invalid Unicode 0x" + String::FormatHexUInt32(code_point) + ")";
   }
 
   char str[5];  // Big enough for the largest valid code point.
@@ -1817,12 +1810,15 @@ inline bool IsUtf16SurrogatePair(wchar_t first, wchar_t second) {
 // Creates a Unicode code point from UTF16 surrogate pair.
 inline UInt32 CreateCodePointFromUtf16SurrogatePair(wchar_t first,
                                                     wchar_t second) {
+  const auto first_u = static_cast<UInt32>(first);
+  const auto second_u = static_cast<UInt32>(second);
   const UInt32 mask = (1 << 10) - 1;
-  return (sizeof(wchar_t) == 2) ?
-      (((first & mask) << 10) | (second & mask)) + 0x10000 :
-      // This function should not be called when the condition is
-      // false, but we provide a sensible default in case it is.
-      static_cast<UInt32>(first);
+  return (sizeof(wchar_t) == 2)
+             ? (((first_u & mask) << 10) | (second_u & mask)) + 0x10000
+             :
+             // This function should not be called when the condition is
+             // false, but we provide a sensible default in case it is.
+             first_u;
 }
 
 // Converts a wide string to a narrow string in UTF-8 encoding.
@@ -1979,10 +1975,15 @@ std::string String::FormatIntWidth2(int value) {
 }
 
 // Formats an int value as "%X".
-std::string String::FormatHexInt(int value) {
+std::string String::FormatHexUInt32(UInt32 value) {
   std::stringstream ss;
   ss << std::hex << std::uppercase << value;
   return ss.str();
+}
+
+// Formats an int value as "%X".
+std::string String::FormatHexInt(int value) {
+  return FormatHexUInt32(static_cast<UInt32>(value));
 }
 
 // Formats a byte as "%02X".
@@ -2001,7 +2002,7 @@ std::string StringStreamToString(::std::stringstream* ss) {
   const char* const end = start + str.length();
 
   std::string result;
-  result.reserve(2 * (end - start));
+  result.reserve(static_cast<size_t>(2 * (end - start)));
   for (const char* ch = start; ch != end; ++ch) {
     if (*ch == '\0') {
       result += "\\0";  // Replaces NUL with "\\0";
@@ -2045,7 +2046,7 @@ TestResult::~TestResult() {
 const TestPartResult& TestResult::GetTestPartResult(int i) const {
   if (i < 0 || i >= total_part_count())
     internal::posix::Abort();
-  return test_part_results_.at(i);
+  return test_part_results_.at(static_cast<size_t>(i));
 }
 
 // Returns the i-th test property. i can range from 0 to
@@ -2054,7 +2055,7 @@ const TestPartResult& TestResult::GetTestPartResult(int i) const {
 const TestProperty& TestResult::GetTestProperty(int i) const {
   if (i < 0 || i >= test_property_count())
     internal::posix::Abort();
-  return test_properties_.at(i);
+  return test_properties_.at(static_cast<size_t>(i));
 }
 
 // Clears the test part results.
@@ -2112,8 +2113,14 @@ static const char* const kReservedTestSuiteAttributes[] = {
 
 // The list of reserved attributes used in the <testcase> element of XML output.
 static const char* const kReservedTestCaseAttributes[] = {
-    "classname",  "name",        "status", "time",
-    "type_param", "value_param", "file",   "line"};
+    "classname",   "name", "status", "time",  "type_param",
+    "value_param", "file", "line"};
+
+// Use a slightly different set for allowed output to ensure existing tests can
+// still RecordProperty("result")
+static const char* const kReservedOutputTestCaseAttributes[] = {
+    "classname",   "name", "status", "time",  "type_param",
+    "value_param", "file", "line", "result"};
 
 template <int kSize>
 std::vector<std::string> ArrayAsVector(const char* const (&array)[kSize]) {
@@ -2128,6 +2135,22 @@ static std::vector<std::string> GetReservedAttributesForElement(
     return ArrayAsVector(kReservedTestSuiteAttributes);
   } else if (xml_element == "testcase") {
     return ArrayAsVector(kReservedTestCaseAttributes);
+  } else {
+    GTEST_CHECK_(false) << "Unrecognized xml_element provided: " << xml_element;
+  }
+  // This code is unreachable but some compilers may not realizes that.
+  return std::vector<std::string>();
+}
+
+// TODO(jdesprez): Merge the two getReserved attributes once skip is improved
+static std::vector<std::string> GetReservedOutputAttributesForElement(
+    const std::string& xml_element) {
+  if (xml_element == "testsuites") {
+    return ArrayAsVector(kReservedTestSuitesAttributes);
+  } else if (xml_element == "testsuite") {
+    return ArrayAsVector(kReservedTestSuiteAttributes);
+  } else if (xml_element == "testcase") {
+    return ArrayAsVector(kReservedOutputTestCaseAttributes);
   } else {
     GTEST_CHECK_(false) << "Unrecognized xml_element provided: " << xml_element;
   }
@@ -2675,10 +2698,12 @@ void TestInfo::Run() {
     test->Run();
   }
 
+  if (test != nullptr) {
     // Deletes the test object.
     impl->os_stack_trace_getter()->UponLeavingGTest();
     internal::HandleExceptionsInMethodIfSupported(
         test, &Test::DeleteSelf_, "the test fixture's destructor");
+  }
 
   result_.set_elapsed_time(internal::GetTimeInMillis() - start);
 
@@ -2761,14 +2786,14 @@ TestSuite::~TestSuite() {
 // total_test_count() - 1. If i is not in that range, returns NULL.
 const TestInfo* TestSuite::GetTestInfo(int i) const {
   const int index = GetElementOr(test_indices_, i, -1);
-  return index < 0 ? nullptr : test_info_list_[index];
+  return index < 0 ? nullptr : test_info_list_[static_cast<size_t>(index)];
 }
 
 // Returns the i-th test among all the tests. i can range from 0 to
 // total_test_count() - 1. If i is not in that range, returns NULL.
 TestInfo* TestSuite::GetMutableTestInfo(int i) {
   const int index = GetElementOr(test_indices_, i, -1);
-  return index < 0 ? nullptr : test_info_list_[index];
+  return index < 0 ? nullptr : test_info_list_[static_cast<size_t>(index)];
 }
 
 // Adds a test to this test suite.  Will delete the test upon
@@ -2968,7 +2993,7 @@ static const char* GetAnsiColorCode(GTestColor color) {
     case COLOR_YELLOW:  return "3";
     default:
       return nullptr;
-  };
+  }
 }
 
 #endif  // GTEST_OS_WINDOWS && !GTEST_OS_WINDOWS_MOBILE
@@ -3386,7 +3411,7 @@ void TestEventRepeater::Append(TestEventListener *listener) {
 TestEventListener* TestEventRepeater::Release(TestEventListener *listener) {
   for (size_t i = 0; i < listeners_.size(); ++i) {
     if (listeners_[i] == listener) {
-      listeners_.erase(listeners_.begin() + i);
+      listeners_.erase(listeners_.begin() + static_cast<int>(i));
       return listener;
     }
   }
@@ -3406,14 +3431,14 @@ void TestEventRepeater::Name(const Type& parameter) { \
 }
 // This defines a member that forwards the call to all listeners in reverse
 // order.
-#define GTEST_REVERSE_REPEATER_METHOD_(Name, Type) \
-void TestEventRepeater::Name(const Type& parameter) { \
-  if (forwarding_enabled_) { \
-    for (int i = static_cast<int>(listeners_.size()) - 1; i >= 0; i--) { \
-      listeners_[i]->Name(parameter); \
-    } \
-  } \
-}
+#define GTEST_REVERSE_REPEATER_METHOD_(Name, Type)      \
+  void TestEventRepeater::Name(const Type& parameter) { \
+    if (forwarding_enabled_) {                          \
+      for (size_t i = listeners_.size(); i != 0; i--) { \
+        listeners_[i - 1]->Name(parameter);             \
+      }                                                 \
+    }                                                   \
+  }
 
 GTEST_REPEATER_METHOD_(OnTestProgramStart, UnitTest)
 GTEST_REPEATER_METHOD_(OnEnvironmentsSetUpStart, UnitTest)
@@ -3450,8 +3475,8 @@ void TestEventRepeater::OnTestIterationStart(const UnitTest& unit_test,
 void TestEventRepeater::OnTestIterationEnd(const UnitTest& unit_test,
                                            int iteration) {
   if (forwarding_enabled_) {
-    for (int i = static_cast<int>(listeners_.size()) - 1; i >= 0; i--) {
-      listeners_[i]->OnTestIterationEnd(unit_test, iteration);
+    for (size_t i = listeners_.size(); i > 0; i--) {
+      listeners_[i - 1]->OnTestIterationEnd(unit_test, iteration);
     }
   }
 }
@@ -3715,7 +3740,7 @@ void XmlUnitTestResultPrinter::OutputXmlAttribute(
     const std::string& name,
     const std::string& value) {
   const std::vector<std::string>& allowed_names =
-      GetReservedAttributesForElement(element_name);
+      GetReservedOutputAttributesForElement(element_name);
 
   GTEST_CHECK_(std::find(allowed_names.begin(), allowed_names.end(), name) !=
                    allowed_names.end())
@@ -3755,9 +3780,12 @@ void XmlUnitTestResultPrinter::OutputXmlTestInfo(::std::ostream* stream,
     return;
   }
 
-  OutputXmlAttribute(
-      stream, kTestsuite, "status",
-      result.Skipped() ? "skipped" : test_info.should_run() ? "run" : "notrun");
+  OutputXmlAttribute(stream, kTestsuite, "status",
+                     test_info.should_run() ? "run" : "notrun");
+  OutputXmlAttribute(stream, kTestsuite, "result",
+                     test_info.should_run()
+                         ? (result.Skipped() ? "skipped" : "completed")
+                         : "suppressed");
   OutputXmlAttribute(stream, kTestsuite, "time",
                      FormatTimeInMillisAsSeconds(result.elapsed_time()));
   OutputXmlAttribute(stream, kTestsuite, "classname", test_suite_name);
@@ -4051,7 +4079,7 @@ static std::string FormatEpochTimeInMillisAsRFC3339(TimeInMillis ms) {
       String::FormatIntWidth2(time_struct.tm_sec) + "Z";
 }
 
-static inline std::string Indent(int width) {
+static inline std::string Indent(size_t width) {
   return std::string(width, ' ');
 }
 
@@ -4063,7 +4091,7 @@ void JsonUnitTestResultPrinter::OutputJsonKey(
     const std::string& indent,
     bool comma) {
   const std::vector<std::string>& allowed_names =
-      GetReservedAttributesForElement(element_name);
+      GetReservedOutputAttributesForElement(element_name);
 
   GTEST_CHECK_(std::find(allowed_names.begin(), allowed_names.end(), name) !=
                    allowed_names.end())
@@ -4083,7 +4111,7 @@ void JsonUnitTestResultPrinter::OutputJsonKey(
     const std::string& indent,
     bool comma) {
   const std::vector<std::string>& allowed_names =
-      GetReservedAttributesForElement(element_name);
+      GetReservedOutputAttributesForElement(element_name);
 
   GTEST_CHECK_(std::find(allowed_names.begin(), allowed_names.end(), name) !=
                    allowed_names.end())
@@ -4121,10 +4149,13 @@ void JsonUnitTestResultPrinter::OutputJsonTestInfo(::std::ostream* stream,
     return;
   }
 
-  OutputJsonKey(
-      stream, kTestsuite, "status",
-      result.Skipped() ? "SKIPPED" : test_info.should_run() ? "RUN" : "NOTRUN",
-      kIndent);
+  OutputJsonKey(stream, kTestsuite, "status",
+                test_info.should_run() ? "RUN" : "NOTRUN", kIndent);
+  OutputJsonKey(stream, kTestsuite, "result",
+                test_info.should_run()
+                    ? (result.Skipped() ? "SKIPPED" : "COMPLETED")
+                    : "SUPPRESSED",
+                kIndent);
   OutputJsonKey(stream, kTestsuite, "time",
                 FormatTimeInMillisAsDuration(result.elapsed_time()), kIndent);
   OutputJsonKey(stream, kTestsuite, "classname", test_suite_name, kIndent,
@@ -4705,8 +4736,7 @@ void UnitTest::AddTestPartResult(
   if (impl_->gtest_trace_stack().size() > 0) {
     msg << "\n" << GTEST_NAME_ << " trace:";
 
-    for (int i = static_cast<int>(impl_->gtest_trace_stack().size());
-         i > 0; --i) {
+    for (size_t i = impl_->gtest_trace_stack().size(); i > 0; --i) {
       const internal::TraceInfo& trace = impl_->gtest_trace_stack()[i - 1];
       msg << "\n" << internal::FormatFileLocation(trace.file, trace.line)
           << " " << trace.message;
@@ -5206,8 +5236,8 @@ bool UnitTestImpl::RunAllTests() {
   // when we are inside the subprocess of a death test.
   const int repeat = in_subprocess_for_death_test ? 1 : GTEST_FLAG(repeat);
   // Repeats forever if the repeat count is negative.
-  const bool forever = repeat < 0;
-  for (int i = 0; forever || i != repeat; i++) {
+  const bool gtest_repeat_forever = repeat < 0;
+  for (int i = 0; gtest_repeat_forever || i != repeat; i++) {
     // We want to preserve failures generated by ad-hoc test
     // assertions executed before RUN_ALL_TESTS().
     ClearNonAdHocTestResult();
@@ -5216,7 +5246,7 @@ bool UnitTestImpl::RunAllTests() {
 
     // Shuffles test suites and tests if requested.
     if (has_tests_to_run && GTEST_FLAG(shuffle)) {
-      random()->Reseed(random_seed_);
+      random()->Reseed(static_cast<UInt32>(random_seed_));
       // This should be done before calling OnTestIterationStart(),
       // such that a test event listener can see the actual test order
       // in the event.
@@ -5233,9 +5263,23 @@ bool UnitTestImpl::RunAllTests() {
       ForEach(environments_, SetUpEnvironment);
       repeater->OnEnvironmentsSetUpEnd(*parent_);
 
-      // Runs the tests only if there was no fatal failure during global
-      // set-up.
-      if (!Test::HasFatalFailure()) {
+      // Runs the tests only if there was no fatal failure or skip triggered
+      // during global set-up.
+      if (Test::IsSkipped()) {
+        // Emit diagnostics when global set-up calls skip, as it will not be
+        // emitted by default.
+        TestResult& test_result =
+            *internal::GetUnitTestImpl()->current_test_result();
+        for (int j = 0; j < test_result.total_part_count(); ++j) {
+          const TestPartResult& test_part_result =
+              test_result.GetTestPartResult(j);
+          if (test_part_result.type() == TestPartResult::kSkip) {
+            const std::string& result = test_part_result.message();
+            printf("%s\n", result.c_str());
+          }
+        }
+        fflush(stdout);
+      } else if (!Test::HasFatalFailure()) {
         for (int test_index = 0; test_index < total_test_suite_count();
              test_index++) {
           GetMutableSuiteCase(test_index)->Run();

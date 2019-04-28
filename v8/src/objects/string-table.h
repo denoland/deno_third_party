@@ -78,8 +78,8 @@ class StringTable : public HashTable<StringTable, StringTableShape> {
   // {raw_string} must be a tagged String pointer.
   // Returns a tagged pointer: either an internalized string, or a Smi
   // sentinel.
-  static Address LookupStringIfExists_NoAllocate(Isolate* isolate,
-                                                 Address raw_string);
+  V8_EXPORT_PRIVATE static Address LookupStringIfExists_NoAllocate(
+      Isolate* isolate, Address raw_string);
 
   static void EnsureCapacityForDeserialization(Isolate* isolate, int expected);
 
@@ -90,7 +90,7 @@ class StringTable : public HashTable<StringTable, StringTableShape> {
   static const int kMinShrinkCapacity = kMinCapacity;
 
  private:
-  template <bool seq_one_byte>
+  template <typename char_type>
   friend class JsonParser;
 
   OBJECT_CONSTRUCTORS(StringTable, HashTable<StringTable, StringTableShape>);

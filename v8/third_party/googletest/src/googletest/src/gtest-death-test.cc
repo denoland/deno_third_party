@@ -65,12 +65,12 @@
 # endif  // GTEST_OS_QNX
 
 # if GTEST_OS_FUCHSIA
+#  include <lib/fdio/fd.h>
 #  include <lib/fdio/io.h>
 #  include <lib/fdio/spawn.h>
-#  include <lib/fdio/util.h>
-#  include <lib/zx/socket.h>
 #  include <lib/zx/port.h>
 #  include <lib/zx/process.h>
+#  include <lib/zx/socket.h>
 #  include <zircon/processargs.h>
 #  include <zircon/syscalls.h>
 #  include <zircon/syscalls/policy.h>
@@ -888,7 +888,7 @@ int FuchsiaDeathTest::Wait() {
   // Register to wait for the socket to be readable or closed.
   status_zx = stderr_socket_.wait_async(
       port_, kSocketKey, ZX_SOCKET_READABLE | ZX_SOCKET_PEER_CLOSED,
-      ZX_WAIT_ASYNC_REPEATING);
+      ZX_WAIT_ASYNC_ONCE);
   GTEST_DEATH_TEST_CHECK_(status_zx == ZX_OK);
 
   bool process_terminated = false;
@@ -912,7 +912,7 @@ int FuchsiaDeathTest::Wait() {
         process_terminated = true;
       }
     } else if (packet.key == kSocketKey) {
-      GTEST_DEATH_TEST_CHECK_(ZX_PKT_IS_SIGNAL_REP(packet.type));
+      GTEST_DEATH_TEST_CHECK_(ZX_PKT_IS_SIGNAL_ONE(packet.type));
       if (packet.signal.observed & ZX_SOCKET_READABLE) {
         // Read data from the socket.
         constexpr size_t kBufferSize = 1024;
@@ -929,6 +929,10 @@ int FuchsiaDeathTest::Wait() {
           socket_closed = true;
         } else {
           GTEST_DEATH_TEST_CHECK_(status_zx == ZX_ERR_SHOULD_WAIT);
+          status_zx = stderr_socket_.wait_async(
+              port_, kSocketKey, ZX_SOCKET_READABLE | ZX_SOCKET_PEER_CLOSED,
+              ZX_WAIT_ASYNC_ONCE);
+          GTEST_DEATH_TEST_CHECK_(status_zx == ZX_OK);
         }
       } else {
         GTEST_DEATH_TEST_CHECK_(packet.signal.observed & ZX_SOCKET_PEER_CLOSED);
@@ -988,16 +992,16 @@ DeathTest::TestRole FuchsiaDeathTest::AssumeRole() {
   // Build the pipe for communication with the child.
   zx_status_t status;
   zx_handle_t child_pipe_handle;
-  uint32_t type;
-  status = fdio_pipe_half(&child_pipe_handle, &type);
-  GTEST_DEATH_TEST_CHECK_(status >= 0);
-  set_read_fd(status);
+  int child_pipe_fd;
+  status = fdio_pipe_half2(&child_pipe_fd, &child_pipe_handle);
+  GTEST_DEATH_TEST_CHECK_(status == ZX_OK);
+  set_read_fd(child_pipe_fd);
 
   // Set the pipe handle for the child.
   fdio_spawn_action_t spawn_actions[2] = {};
   fdio_spawn_action_t* add_handle_action = &spawn_actions[0];
   add_handle_action->action = FDIO_SPAWN_ACTION_ADD_HANDLE;
-  add_handle_action->h.id = PA_HND(type, kFuchsiaReadPipeFd);
+  add_handle_action->h.id = PA_HND(PA_FD, kFuchsiaReadPipeFd);
   add_handle_action->h.handle = child_pipe_handle;
 
   // Create a socket pair will be used to receive the child process' stderr.
@@ -1006,10 +1010,8 @@ DeathTest::TestRole FuchsiaDeathTest::AssumeRole() {
       zx::socket::create(0, &stderr_producer_socket, &stderr_socket_);
   GTEST_DEATH_TEST_CHECK_(status >= 0);
   int stderr_producer_fd = -1;
-  zx_handle_t producer_handle[1] = { stderr_producer_socket.release() };
-  uint32_t producer_handle_type[1] = { PA_FDIO_SOCKET };
-  status = fdio_create_fd(
-      producer_handle, producer_handle_type, 1, &stderr_producer_fd);
+  status =
+      fdio_fd_create(stderr_producer_socket.release(), &stderr_producer_fd);
   GTEST_DEATH_TEST_CHECK_(status >= 0);
 
   // Make the stderr socket nonblocking.
@@ -1272,6 +1274,9 @@ static int ExecDeathTestChildMain(void* child_arg) {
 // correct answer.
 static void StackLowerThanAddress(const void* ptr,
                                   bool* result) GTEST_NO_INLINE_;
+// HWAddressSanitizer add a random tag to the MSB of the local variable address,
+// making comparison result unpredictable.
+GTEST_ATTRIBUTE_NO_SANITIZE_HWADDRESS_
 static void StackLowerThanAddress(const void* ptr, bool* result) {
   int dummy;
   *result = (&dummy < ptr);
@@ -1279,6 +1284,7 @@ static void StackLowerThanAddress(const void* ptr, bool* result) {
 
 // Make sure AddressSanitizer does not tamper with the stack here.
 GTEST_ATTRIBUTE_NO_SANITIZE_ADDRESS_
+GTEST_ATTRIBUTE_NO_SANITIZE_HWADDRESS_
 static bool StackGrowsDown() {
   int dummy;
   bool result;
@@ -1348,7 +1354,7 @@ static pid_t ExecDeathTestSpawnChild(char* const* argv, int close_fd) {
 
   if (!use_fork) {
     static const bool stack_grows_down = StackGrowsDown();
-    const size_t stack_size = getpagesize();
+    const auto stack_size = static_cast<size_t>(getpagesize());
     // MMAP_ANONYMOUS is not defined on Mac, so we use MAP_ANON instead.
     void* const stack = mmap(nullptr, stack_size, PROT_READ | PROT_WRITE,
                              MAP_ANON | MAP_PRIVATE, -1, 0);
@@ -1364,8 +1370,9 @@ static pid_t ExecDeathTestSpawnChild(char* const* argv, int close_fd) {
     void* const stack_top =
         static_cast<char*>(stack) +
             (stack_grows_down ? stack_size - kMaxStackAlignment : 0);
-    GTEST_DEATH_TEST_CHECK_(stack_size > kMaxStackAlignment &&
-        reinterpret_cast<intptr_t>(stack_top) % kMaxStackAlignment == 0);
+    GTEST_DEATH_TEST_CHECK_(
+        static_cast<size_t>(stack_size) > kMaxStackAlignment &&
+        reinterpret_cast<uintptr_t>(stack_top) % kMaxStackAlignment == 0);
 
     child_pid = clone(&ExecDeathTestChildMain, stack_top, SIGCHLD, &args);
 

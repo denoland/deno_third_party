@@ -53,6 +53,30 @@ MaybeHandle<Object> Runtime::GetObjectProperty(Isolate* isolate,
   return result;
 }
 
+MaybeHandle<Object> Runtime::HasProperty(Isolate* isolate,
+                                         Handle<Object> object,
+                                         Handle<Object> key) {
+  // Check that {object} is actually a receiver.
+  if (!object->IsJSReceiver()) {
+    THROW_NEW_ERROR(
+        isolate,
+        NewTypeError(MessageTemplate::kInvalidInOperatorUse, key, object),
+        Object);
+  }
+  Handle<JSReceiver> receiver = Handle<JSReceiver>::cast(object);
+
+  // Convert the {key} to a name.
+  Handle<Name> name;
+  ASSIGN_RETURN_ON_EXCEPTION(isolate, name, Object::ToName(isolate, key),
+                             Object);
+
+  // Lookup the {name} on {receiver}.
+  Maybe<bool> maybe = JSReceiver::HasProperty(receiver, name);
+  if (maybe.IsNothing()) return MaybeHandle<Object>();
+  return maybe.FromJust() ? ReadOnlyRoots(isolate).true_value_handle()
+                          : ReadOnlyRoots(isolate).false_value_handle();
+}
+
 namespace {
 
 bool DeleteObjectPropertyFast(Isolate* isolate, Handle<JSReceiver> receiver,
@@ -104,8 +128,8 @@ bool DeleteObjectPropertyFast(Isolate* isolate, Handle<JSReceiver> receiver,
       // Slot clearing is the reason why this entire function cannot currently
       // be implemented in the DeleteProperty stub.
       if (index.is_inobject() && !map->IsUnboxedDoubleField(index)) {
-        isolate->heap()->ClearRecordedSlot(
-            *receiver, HeapObject::RawField(*receiver, index.offset()));
+        isolate->heap()->ClearRecordedSlot(*receiver,
+                                           receiver->RawField(index.offset()));
       }
     }
   }
@@ -970,64 +994,6 @@ RUNTIME_FUNCTION(Runtime_CopyDataPropertiesWithExcludedProperties) {
   return *target;
 }
 
-namespace {
-
-inline void TrySetNative(Handle<Object> maybe_func) {
-  if (!maybe_func->IsJSFunction()) return;
-  JSFunction::cast(*maybe_func)->shared()->set_native(true);
-}
-
-inline void TrySetNativeAndLength(Handle<Object> maybe_func, int length) {
-  if (!maybe_func->IsJSFunction()) return;
-  SharedFunctionInfo shared = JSFunction::cast(*maybe_func)->shared();
-  shared->set_native(true);
-  if (length >= 0) {
-    shared->set_length(length);
-  }
-}
-
-}  // namespace
-
-RUNTIME_FUNCTION(Runtime_DefineMethodsInternal) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(3, args.length());
-  CHECK(isolate->bootstrapper()->IsActive());
-  CONVERT_ARG_HANDLE_CHECKED(JSObject, target, 0);
-  CONVERT_ARG_HANDLE_CHECKED(JSFunction, source_class, 1);
-  CONVERT_SMI_ARG_CHECKED(length, 2);
-
-  DCHECK(source_class->prototype()->IsJSObject());
-  Handle<JSObject> source(JSObject::cast(source_class->prototype()), isolate);
-
-  Handle<FixedArray> keys;
-  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, keys,
-      KeyAccumulator::GetKeys(source, KeyCollectionMode::kOwnOnly,
-                              ALL_PROPERTIES,
-                              GetKeysConversion::kConvertToString));
-
-  for (int i = 0; i < keys->length(); ++i) {
-    Handle<Name> key = Handle<Name>::cast(FixedArray::get(*keys, i, isolate));
-    if (*key == ReadOnlyRoots(isolate).constructor_string()) continue;
-
-    PropertyDescriptor descriptor;
-    Maybe<bool> did_get_descriptor =
-        JSReceiver::GetOwnPropertyDescriptor(isolate, source, key, &descriptor);
-    CHECK(did_get_descriptor.FromJust());
-    if (descriptor.has_value()) {
-      TrySetNativeAndLength(descriptor.value(), length);
-    } else {
-      if (descriptor.has_get()) TrySetNative(descriptor.get());
-      if (descriptor.has_set()) TrySetNative(descriptor.set());
-    }
-
-    Maybe<bool> success = JSReceiver::DefineOwnProperty(
-        isolate, target, key, &descriptor, Just(kDontThrow));
-    CHECK(success.FromJust());
-  }
-  return ReadOnlyRoots(isolate).undefined_value();
-}
-
 RUNTIME_FUNCTION(Runtime_DefineSetterPropertyUnchecked) {
   HandleScope scope(isolate);
   DCHECK_EQ(4, args.length());
@@ -1079,14 +1045,12 @@ RUNTIME_FUNCTION(Runtime_ToLength) {
   RETURN_RESULT_OR_FAILURE(isolate, Object::ToLength(isolate, input));
 }
 
-
-RUNTIME_FUNCTION(Runtime_ToString) {
+RUNTIME_FUNCTION(Runtime_ToStringRT) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_HANDLE_CHECKED(Object, input, 0);
   RETURN_RESULT_OR_FAILURE(isolate, Object::ToString(isolate, input));
 }
-
 
 RUNTIME_FUNCTION(Runtime_ToName) {
   HandleScope scope(isolate);

@@ -27,21 +27,18 @@ BUILTIN(TypedArrayPrototypeBuffer) {
 namespace {
 
 int64_t CapRelativeIndex(Handle<Object> num, int64_t minimum, int64_t maximum) {
-  int64_t relative;
   if (V8_LIKELY(num->IsSmi())) {
-    relative = Smi::ToInt(*num);
+    int64_t relative = Smi::ToInt(*num);
+    return relative < 0 ? std::max<int64_t>(relative + maximum, minimum)
+                        : std::min<int64_t>(relative, maximum);
   } else {
     DCHECK(num->IsHeapNumber());
-    double fp = HeapNumber::cast(*num)->value();
-    if (V8_UNLIKELY(!std::isfinite(fp))) {
-      // +Infinity / -Infinity
-      DCHECK(!std::isnan(fp));
-      return fp < 0 ? minimum : maximum;
-    }
-    relative = static_cast<int64_t>(fp);
+    double relative = HeapNumber::cast(*num)->value();
+    DCHECK(!std::isnan(relative));
+    return static_cast<int64_t>(
+        relative < 0 ? std::max<double>(relative + maximum, minimum)
+                     : std::min<double>(relative, maximum));
   }
-  return relative < 0 ? std::max<int64_t>(relative + maximum, minimum)
-                      : std::min<int64_t>(relative, maximum);
 }
 
 }  // namespace
@@ -54,7 +51,7 @@ BUILTIN(TypedArrayPrototypeCopyWithin) {
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, array, JSTypedArray::Validate(isolate, args.receiver(), method));
 
-  int64_t len = array->length_value();
+  int64_t len = array->length();
   int64_t to = 0;
   int64_t from = 0;
   int64_t final = len;
@@ -127,7 +124,7 @@ BUILTIN(TypedArrayPrototypeFill) {
                                        Object::ToNumber(isolate, obj_value));
   }
 
-  int64_t len = array->length_value();
+  int64_t len = array->length();
   int64_t start = 0;
   int64_t end = len;
 
@@ -174,7 +171,7 @@ BUILTIN(TypedArrayPrototypeIncludes) {
 
   if (args.length() < 2) return ReadOnlyRoots(isolate).false_value();
 
-  int64_t len = array->length_value();
+  int64_t len = array->length();
   if (len == 0) return ReadOnlyRoots(isolate).false_value();
 
   int64_t index = 0;
@@ -206,7 +203,7 @@ BUILTIN(TypedArrayPrototypeIndexOf) {
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, array, JSTypedArray::Validate(isolate, args.receiver(), method));
 
-  int64_t len = array->length_value();
+  int64_t len = array->length();
   if (len == 0) return Smi::FromInt(-1);
 
   int64_t index = 0;
@@ -237,7 +234,7 @@ BUILTIN(TypedArrayPrototypeLastIndexOf) {
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, array, JSTypedArray::Validate(isolate, args.receiver(), method));
 
-  int64_t len = array->length_value();
+  int64_t len = array->length();
   if (len == 0) return Smi::FromInt(-1);
 
   int64_t index = len - 1;

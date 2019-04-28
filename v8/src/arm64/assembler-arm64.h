@@ -49,7 +49,7 @@ class Immediate {
   RelocInfo::Mode rmode() const { return rmode_; }
 
  private:
-  void InitializeHandle(Handle<HeapObject> value);
+  V8_EXPORT_PRIVATE void InitializeHandle(Handle<HeapObject> value);
 
   int64_t value_;
   RelocInfo::Mode rmode_;
@@ -262,9 +262,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
 
   virtual ~Assembler();
 
-  virtual void AbortedCodeGeneration() {
-    constpool_.Clear();
-  }
+  virtual void AbortedCodeGeneration();
 
   // System functions ---------------------------------------------------------
   // Start generating code from the beginning of the buffer, discarding any code

@@ -585,6 +585,10 @@ void LiftoffAssembler::FillI64Half(Register reg, uint32_t index,
   lw(reg, liftoff::GetHalfStackSlot(index, half));
 }
 
+void LiftoffAssembler::emit_i32_add(Register dst, Register lhs, int32_t imm) {
+  Addu(dst, lhs, imm);
+}
+
 void LiftoffAssembler::emit_i32_mul(Register dst, Register lhs, Register rhs) {
   TurboAssembler::Mul(dst, lhs, rhs);
 }
@@ -674,6 +678,13 @@ I32_SHIFTOP_I(shr, srl)
 
 #undef I32_SHIFTOP
 #undef I32_SHIFTOP_I
+
+void LiftoffAssembler::emit_i64_add(LiftoffRegister dst, LiftoffRegister lhs,
+                                    int32_t imm) {
+  TurboAssembler::AddPair(dst.low_gp(), dst.high_gp(), lhs.low_gp(),
+                          lhs.high_gp(), imm,
+                          kScratchReg, kScratchReg2);
+}
 
 void LiftoffAssembler::emit_i64_mul(LiftoffRegister dst, LiftoffRegister lhs,
                                     LiftoffRegister rhs) {
@@ -1245,7 +1256,7 @@ inline FPUCondition ConditionToConditionCmpFPU(bool& predicate,
   UNREACHABLE();
 }
 
-};  // namespace liftoff
+}  // namespace liftoff
 
 void LiftoffAssembler::emit_f32_set_cond(Condition cond, Register dst,
                                          DoubleRegister lhs,

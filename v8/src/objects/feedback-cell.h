@@ -20,8 +20,16 @@ namespace internal {
 // a native context.
 class FeedbackCell : public Struct {
  public:
+  static int GetInitialInterruptBudget() {
+    if (FLAG_lazy_feedback_allocation) {
+      return FLAG_budget_for_feedback_vector_allocation;
+    }
+    return FLAG_interrupt_budget;
+  }
+
   // [value]: value of the cell.
   DECL_ACCESSORS(value, HeapObject)
+  DECL_INT32_ACCESSORS(interrupt_budget)
 
   DECL_CAST(FeedbackCell)
 
@@ -29,16 +37,17 @@ class FeedbackCell : public Struct {
   DECL_PRINTER(FeedbackCell)
   DECL_VERIFIER(FeedbackCell)
 
-// Layout description.
-#define FEEDBACK_CELL_FIELDS(V) \
-  V(kValueOffset, kTaggedSize)  \
-  /* Total size. */             \
-  V(kSize, 0)
+  // Layout description.
+  DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize,
+                                TORQUE_GENERATED_FEEDBACK_CELL_FIELDS)
 
-  DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize, FEEDBACK_CELL_FIELDS)
-#undef FEEDBACK_CELL_FIELDS
+  static const int kUnalignedSize = kSize;
+  static const int kAlignedSize = RoundUp<kObjectAlignment>(int{kSize});
 
-  typedef FixedBodyDescriptor<kValueOffset, kSize, kSize> BodyDescriptor;
+  inline void clear_padding();
+
+  using BodyDescriptor =
+      FixedBodyDescriptor<kValueOffset, kInterruptBudgetOffset, kAlignedSize>;
 
   OBJECT_CONSTRUCTORS(FeedbackCell, Struct);
 };

@@ -227,8 +227,8 @@ void Assembler::AllocateAndInstallRequestedHeapObjects(Isolate* isolate) {
     Handle<HeapObject> object;
     switch (request.kind()) {
       case HeapObjectRequest::kHeapNumber:
-        object =
-            isolate->factory()->NewHeapNumber(request.heap_number(), TENURED);
+        object = isolate->factory()->NewHeapNumber(request.heap_number(),
+                                                   AllocationType::kOld);
         break;
       case HeapObjectRequest::kStringConstant:
         const StringConstantBase* str = request.string();
@@ -4300,14 +4300,6 @@ Address Assembler::target_address_at(Address pc) {
   UNREACHABLE();
 }
 
-
-// MIPS and ia32 use opposite encoding for qNaN and sNaN, such that ia32
-// qNaN is a MIPS sNaN, and ia32 sNaN is MIPS qNaN. If running from a heap
-// snapshot generated on ia32, the resulting MIPS sNaN must be quieted.
-// OS::nan_value() returns a qNaN.
-void Assembler::QuietNaN(HeapObject object) {
-  HeapNumber::cast(object)->set_value(std::numeric_limits<double>::quiet_NaN());
-}
 
 // On Mips64, a target address is stored in a 4-instruction sequence:
 //    0: lui(rd, (j.imm64_ >> 32) & kImm16Mask);

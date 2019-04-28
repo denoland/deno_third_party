@@ -86,12 +86,11 @@ int MarkingVisitor<fixed_array_mode, retaining_path_mode, MarkingState>::
 
   // If the SharedFunctionInfo has old bytecode, mark it as flushable,
   // otherwise visit the function data field strongly.
-  if (shared_info->ShouldFlushBytecode()) {
+  if (shared_info->ShouldFlushBytecode(Heap::GetBytecodeFlushMode())) {
     collector_->AddBytecodeFlushingCandidate(shared_info);
   } else {
     VisitPointer(shared_info,
-                 HeapObject::RawField(shared_info,
-                                      SharedFunctionInfo::kFunctionDataOffset));
+                 shared_info.RawField(SharedFunctionInfo::kFunctionDataOffset));
   }
   return size;
 }
@@ -249,8 +248,7 @@ int MarkingVisitor<fixed_array_mode, retaining_path_mode,
     if (marking_state()->IsBlackOrGrey(target)) {
       // Record the slot inside the JSWeakRef, since the IterateBody below
       // won't visit it.
-      ObjectSlot slot =
-          HeapObject::RawField(weak_ref, JSWeakRef::kTargetOffset);
+      ObjectSlot slot = weak_ref.RawField(JSWeakRef::kTargetOffset);
       collector_->RecordSlot(weak_ref, slot, target);
     } else {
       // JSWeakRef points to a potentially dead object. We have to process
@@ -272,8 +270,7 @@ int MarkingVisitor<fixed_array_mode, retaining_path_mode,
     if (marking_state()->IsBlackOrGrey(target)) {
       // Record the slot inside the WeakCell, since the IterateBody below
       // won't visit it.
-      ObjectSlot slot =
-          HeapObject::RawField(weak_cell, WeakCell::kTargetOffset);
+      ObjectSlot slot = weak_cell.RawField(WeakCell::kTargetOffset);
       collector_->RecordSlot(weak_cell, slot, target);
     } else {
       // WeakCell points to a potentially dead object. We have to process
@@ -400,25 +397,36 @@ int MarkingVisitor<fixed_array_mode, retaining_path_mode, MarkingState>::
   if (chunk->IsFlagSet(MemoryChunk::HAS_PROGRESS_BAR)) {
     DCHECK(FLAG_use_marking_progress_bar);
     DCHECK(heap_->IsLargeObject(object));
-    int start =
-        Max(FixedArray::BodyDescriptor::kStartOffset, chunk->progress_bar());
+    size_t current_progress_bar = chunk->ProgressBar();
+    if (current_progress_bar == 0) {
+      // Try to move the progress bar forward to start offset. This solves the
+      // problem of not being able to observe a progress bar reset when
+      // processing the first kProgressBarScanningChunk.
+      if (!chunk->TrySetProgressBar(0,
+                                    FixedArray::BodyDescriptor::kStartOffset))
+        return 0;
+      current_progress_bar = FixedArray::BodyDescriptor::kStartOffset;
+    }
+    int start = static_cast<int>(current_progress_bar);
     int end = Min(size, start + kProgressBarScanningChunk);
     if (start < end) {
-      VisitPointers(object, HeapObject::RawField(object, start),
-                    HeapObject::RawField(object, end));
-      chunk->set_progress_bar(end);
-      if (end < size) {
+      VisitPointers(object, object.RawField(start), object.RawField(end));
+      // Setting the progress bar can fail if the object that is currently
+      // scanned is also revisited. In this case, there may be two tasks racing
+      // on the progress counter. The looser can bail out because the progress
+      // bar is reset before the tasks race on the object.
+      if (chunk->TrySetProgressBar(current_progress_bar, end) && (end < size)) {
         DCHECK(marking_state()->IsBlack(object));
         // The object can be pushed back onto the marking worklist only after
         // progress bar was updated.
         marking_worklist()->Push(object);
-        heap_->incremental_marking()->NotifyIncompleteScanOfObject(
-            size - (end - start));
       }
     }
-  } else {
-    FixedArray::BodyDescriptor::IterateBody(map, object, size, this);
+    return end - start;
   }
+
+  // Non-batched processing.
+  FixedArray::BodyDescriptor::IterateBody(map, object, size, this);
   return size;
 }
 

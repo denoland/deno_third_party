@@ -12,7 +12,9 @@
 #include <vector>
 
 #include "src/base/functional.h"
+#include "src/base/optional.h"
 #include "src/torque/contextual.h"
+#include "src/torque/source-positions.h"
 
 namespace v8 {
 namespace internal {
@@ -21,18 +23,18 @@ namespace torque {
 std::string StringLiteralUnquote(const std::string& s);
 std::string StringLiteralQuote(const std::string& s);
 
-class LintErrorStatus : public ContextualClass<LintErrorStatus> {
- public:
-  LintErrorStatus() : has_lint_errors_(false) {}
+// Decodes "file://" URIs into file paths which can then be used
+// with the standard stream API.
+V8_EXPORT_PRIVATE base::Optional<std::string> FileUriDecode(
+    const std::string& s);
 
-  static bool HasLintErrors() { return Get().has_lint_errors_; }
-  static void SetLintError() { Get().has_lint_errors_ = true; }
-
- private:
-  bool has_lint_errors_;
+struct LintError {
+  std::string message;
+  SourcePosition position;
 };
+DECLARE_CONTEXTUAL_VARIABLE(LintErrors, std::vector<LintError>);
 
-void LintError(const std::string& error);
+void ReportLintError(const std::string& error);
 
 // Prints a LintError with the format "{type} '{name}' doesn't follow
 // '{convention}' naming convention".
@@ -45,12 +47,26 @@ bool IsSnakeCase(const std::string& s);
 bool IsValidNamespaceConstName(const std::string& s);
 bool IsValidTypeName(const std::string& s);
 
-[[noreturn]] void ReportErrorString(const std::string& error);
+struct TorqueError {
+  explicit TorqueError(const std::string& message) : message(message) {}
+
+  std::string message;
+  base::Optional<SourcePosition> position;
+};
+
+[[noreturn]] void ThrowTorqueError(const std::string& error,
+                                   bool include_position);
 template <class... Args>
 [[noreturn]] void ReportError(Args&&... args) {
   std::stringstream s;
   USE((s << std::forward<Args>(args))...);
-  ReportErrorString(s.str());
+  ThrowTorqueError(s.str(), true);
+}
+template <class... Args>
+[[noreturn]] void ReportErrorWithoutPosition(Args&&... args) {
+  std::stringstream s;
+  USE((s << std::forward<Args>(args))...);
+  ThrowTorqueError(s.str(), false);
 }
 
 std::string CapifyStringWithUnderscores(const std::string& camellified_string);
@@ -270,10 +286,6 @@ class ToString {
 
 static const char* const kBaseNamespaceName = "base";
 static const char* const kTestNamespaceName = "test";
-static const char* const kConstructMethodName = "constructor";
-static const char* const kSuperMethodName = "super";
-static const char* const kConstructorStructSuperFieldName = "_super";
-static const char* const kClassConstructorThisStructPrefix = "_ThisStruct";
 
 // Erase elements of a container that has a constant-time erase function, like
 // std::set or std::list. Calling this on std::vector would have quadratic

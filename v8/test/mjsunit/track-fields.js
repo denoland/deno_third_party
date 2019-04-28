@@ -26,6 +26,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Flags: --track-fields --track-double-fields --allow-natives-syntax
+// Flags: --modify-field-representation-inplace
 
 // Test transitions caused by changes to field representations.
 
@@ -95,7 +96,7 @@ o6.b = 1.5;
 assertFalse(%HaveSameMap(o6, o7));
 // Smi, double, object.
 o7.c = {};
-assertFalse(%HaveSameMap(o6, o7));
+assertTrue(%HaveSameMap(o6, o7));
 // Smi, double, object.
 o6.c = {};
 assertTrue(%HaveSameMap(o6, o7));
@@ -264,7 +265,6 @@ assertEquals(100, o20.dbl);
 function attr_mismatch_obj(v, writable) {
   var o = {};
   // Assign twice to make the field non-constant.
-  // TODO(ishell): update test once constant field tracking is done.
   o.some_value = 0;
   o.some_value = v;
   Object.defineProperty(o, "second_value", {value:10, writable:writable});

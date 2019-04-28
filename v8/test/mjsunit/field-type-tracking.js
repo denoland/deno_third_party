@@ -9,7 +9,6 @@
   var o = { text: "Hello World!" };
   function A() {
     // Assign twice to make the field non-constant.
-    // TODO(ishell): update test once constant field tracking is done.
     this.a = {text: 'foo'};
     this.a = o;
   }
@@ -111,7 +110,6 @@
 
 (function() {
   function Foo(x) { this.x = x; }
-  // TODO(ishell): update test once constant field tracking is done.
   var f0 = new Foo({x: 0});
   f0.x = {x: 0};  // make Foo.x non-constant here.
   var f1 = new Foo({x: 1});
@@ -148,11 +146,11 @@
   var f2 = new Narf(2);
   var f3 = new Narf(3);
   function baz(f, y) { f.y = y; }
-  baz(f1, {y: 9});
-  baz(f2, {y: 9});
-  baz(f2, {y: 9});
+  baz(f1, {b: 9});
+  baz(f2, {b: 9});
+  baz(f2, {b: 9});
   %OptimizeFunctionOnNextCall(baz);
-  baz(f2, {y: 9});
+  baz(f2, {b: 9});
   baz(f3, {a: -1});
   assertUnoptimized(baz);
 })();

@@ -5,6 +5,7 @@
 #include "src/torque/declarations.h"
 #include "src/torque/declarable.h"
 #include "src/torque/global-context.h"
+#include "src/torque/server-data.h"
 #include "src/torque/type-oracle.h"
 
 namespace v8 {
@@ -59,10 +60,14 @@ std::vector<Declarable*> Declarations::LookupGlobalScope(
   return d;
 }
 
-const Type* Declarations::LookupType(const QualifiedName& name) {
+const TypeAlias* Declarations::LookupTypeAlias(const QualifiedName& name) {
   TypeAlias* declaration =
       EnsureUnique(FilterDeclarables<TypeAlias>(Lookup(name)), name, "type");
-  return declaration->type();
+  return declaration;
+}
+
+const Type* Declarations::LookupType(const QualifiedName& name) {
+  return LookupTypeAlias(name)->type();
 }
 
 const Type* Declarations::LookupType(std::string name) {
@@ -79,10 +84,21 @@ const Type* Declarations::GetType(TypeExpression* type_expression) {
   if (auto* basic = BasicTypeExpression::DynamicCast(type_expression)) {
     std::string name =
         (basic->is_constexpr ? CONSTEXPR_TYPE_PREFIX : "") + basic->name;
-    return LookupType(QualifiedName{basic->namespace_qualification, name});
-  } else if (auto* union_type = UnionTypeExpression::cast(type_expression)) {
+    const TypeAlias* alias =
+        LookupTypeAlias(QualifiedName{basic->namespace_qualification, name});
+    if (GlobalContext::collect_language_server_data()) {
+      LanguageServerData::AddDefinition(type_expression->pos,
+                                        alias->GetDeclarationPosition());
+    }
+    return alias->type();
+  } else if (auto* union_type =
+                 UnionTypeExpression::DynamicCast(type_expression)) {
     return TypeOracle::GetUnionType(GetType(union_type->a),
                                     GetType(union_type->b));
+  } else if (auto* reference_type =
+                 ReferenceTypeExpression::DynamicCast(type_expression)) {
+    return TypeOracle::GetReferenceType(
+        GetType(reference_type->referenced_type));
   } else {
     auto* function_type_exp = FunctionTypeExpression::cast(type_expression);
     TypeVector argument_types;
@@ -147,41 +163,47 @@ Namespace* Declarations::DeclareNamespace(const std::string& name) {
 }
 
 const AbstractType* Declarations::DeclareAbstractType(
-    const std::string& name, bool transient, std::string generated,
+    const Identifier* name, bool transient, std::string generated,
     base::Optional<const AbstractType*> non_constexpr_version,
-    const base::Optional<std::string>& parent) {
-  CheckAlreadyDeclared<TypeAlias>(name, "type");
+    const base::Optional<Identifier*>& parent) {
+  CheckAlreadyDeclared<TypeAlias>(name->value, "type");
   const Type* parent_type = nullptr;
   if (parent) {
-    parent_type = LookupType(QualifiedName{*parent});
+    auto parent_type_alias = LookupTypeAlias(QualifiedName{(*parent)->value});
+    parent_type = parent_type_alias->type();
+    if (GlobalContext::collect_language_server_data()) {
+      LanguageServerData::AddDefinition(
+          (*parent)->pos, parent_type_alias->GetDeclarationPosition());
+    }
   }
   if (generated == "" && parent) {
     generated = parent_type->GetGeneratedTNodeTypeName();
   }
   const AbstractType* type = TypeOracle::GetAbstractType(
-      parent_type, name, transient, generated, non_constexpr_version);
+      parent_type, name->value, transient, generated, non_constexpr_version);
   DeclareType(name, type, false);
   return type;
 }
 
-void Declarations::DeclareType(const std::string& name, const Type* type,
+void Declarations::DeclareType(const Identifier* name, const Type* type,
                                bool redeclaration) {
-  CheckAlreadyDeclared<TypeAlias>(name, "type");
-  Declare(name, std::unique_ptr<TypeAlias>(new TypeAlias(type, redeclaration)));
+  CheckAlreadyDeclared<TypeAlias>(name->value, "type");
+  Declare(name->value, std::unique_ptr<TypeAlias>(
+                           new TypeAlias(type, redeclaration, name->pos)));
 }
 
-StructType* Declarations::DeclareStruct(const std::string& name) {
-  StructType* new_type = TypeOracle::GetStructType(name);
+StructType* Declarations::DeclareStruct(const Identifier* name) {
+  StructType* new_type = TypeOracle::GetStructType(name->value);
   DeclareType(name, new_type, false);
   return new_type;
 }
 
 ClassType* Declarations::DeclareClass(const Type* super_type,
-                                      const std::string& name, bool is_extern,
-                                      bool transient,
+                                      const Identifier* name, bool is_extern,
+                                      bool generate_print, bool transient,
                                       const std::string& generates) {
-  ClassType* new_type = TypeOracle::GetClassType(super_type, name, is_extern,
-                                                 transient, generates);
+  ClassType* new_type = TypeOracle::GetClassType(
+      super_type, name->value, is_extern, generate_print, transient, generates);
   DeclareType(name, new_type, false);
   return new_type;
 }
@@ -275,18 +297,19 @@ RuntimeFunction* Declarations::DeclareRuntimeFunction(
                      new RuntimeFunction(name, signature, transitioning))));
 }
 
-void Declarations::DeclareExternConstant(const std::string& name,
-                                         const Type* type, std::string value) {
-  CheckAlreadyDeclared<Value>(name, "constant");
+void Declarations::DeclareExternConstant(Identifier* name, const Type* type,
+                                         std::string value) {
+  CheckAlreadyDeclared<Value>(name->value, "constant");
   ExternConstant* result = new ExternConstant(name, type, value);
-  Declare(name, std::unique_ptr<Declarable>(result));
+  Declare(name->value, std::unique_ptr<Declarable>(result));
 }
 
-NamespaceConstant* Declarations::DeclareNamespaceConstant(
-    const std::string& name, const Type* type, Expression* body) {
-  CheckAlreadyDeclared<Value>(name, "constant");
+NamespaceConstant* Declarations::DeclareNamespaceConstant(Identifier* name,
+                                                          const Type* type,
+                                                          Expression* body) {
+  CheckAlreadyDeclared<Value>(name->value, "constant");
   NamespaceConstant* result = new NamespaceConstant(name, type, body);
-  Declare(name, std::unique_ptr<Declarable>(result));
+  Declare(name->value, std::unique_ptr<Declarable>(result));
   return result;
 }
 

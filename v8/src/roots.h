@@ -60,6 +60,8 @@ class RootVisitor;
   V(Map, foreign_map, ForeignMap)                                              \
   V(Map, heap_number_map, HeapNumberMap)                                       \
   V(Map, transition_array_map, TransitionArrayMap)                             \
+  /* TODO(mythria): Once lazy feedback lands, check if feedback vector map */  \
+  /* is still a popular map */                                                 \
   V(Map, feedback_vector_map, FeedbackVectorMap)                               \
   V(ScopeInfo, empty_scope_info, EmptyScopeInfo)                               \
   V(FixedArray, empty_fixed_array, EmptyFixedArray)                            \
@@ -83,6 +85,7 @@ class RootVisitor;
   V(Map, debug_evaluate_context_map, DebugEvaluateContextMap)                  \
   V(Map, script_context_table_map, ScriptContextTableMap)                      \
   /* Maps */                                                                   \
+  V(Map, closure_feedback_cell_array_map, ClosureFeedbackCellArrayMap)         \
   V(Map, feedback_metadata_map, FeedbackMetadataArrayMap)                      \
   V(Map, array_list_map, ArrayListMap)                                         \
   V(Map, bigint_map, BigIntMap)                                                \
@@ -97,7 +100,6 @@ class RootVisitor;
   V(Map, mutable_heap_number_map, MutableHeapNumberMap)                        \
   V(Map, name_dictionary_map, NameDictionaryMap)                               \
   V(Map, no_closures_cell_map, NoClosuresCellMap)                              \
-  V(Map, no_feedback_cell_map, NoFeedbackCellMap)                              \
   V(Map, number_dictionary_map, NumberDictionaryMap)                           \
   V(Map, one_closure_cell_map, OneClosureCellMap)                              \
   V(Map, ordered_hash_map_map, OrderedHashMapMap)                              \
@@ -135,22 +137,14 @@ class RootVisitor;
   V(Map, sliced_string_map, SlicedStringMap)                                   \
   V(Map, sliced_one_byte_string_map, SlicedOneByteStringMap)                   \
   V(Map, external_string_map, ExternalStringMap)                               \
-  V(Map, external_string_with_one_byte_data_map,                               \
-    ExternalStringWithOneByteDataMap)                                          \
   V(Map, external_one_byte_string_map, ExternalOneByteStringMap)               \
   V(Map, uncached_external_string_map, UncachedExternalStringMap)              \
-  V(Map, uncached_external_string_with_one_byte_data_map,                      \
-    UncachedExternalStringWithOneByteDataMap)                                  \
   V(Map, internalized_string_map, InternalizedStringMap)                       \
   V(Map, external_internalized_string_map, ExternalInternalizedStringMap)      \
-  V(Map, external_internalized_string_with_one_byte_data_map,                  \
-    ExternalInternalizedStringWithOneByteDataMap)                              \
   V(Map, external_one_byte_internalized_string_map,                            \
     ExternalOneByteInternalizedStringMap)                                      \
   V(Map, uncached_external_internalized_string_map,                            \
     UncachedExternalInternalizedStringMap)                                     \
-  V(Map, uncached_external_internalized_string_with_one_byte_data_map,         \
-    UncachedExternalInternalizedStringWithOneByteDataMap)                      \
   V(Map, uncached_external_one_byte_internalized_string_map,                   \
     UncachedExternalOneByteInternalizedStringMap)                              \
   V(Map, uncached_external_one_byte_string_map,                                \
@@ -187,6 +181,8 @@ class RootVisitor;
     EmptyObjectBoilerplateDescription)                                         \
   V(ArrayBoilerplateDescription, empty_array_boilerplate_description,          \
     EmptyArrayBoilerplateDescription)                                          \
+  V(ClosureFeedbackCellArray, empty_closure_feedback_cell_array,               \
+    EmptyClosureFeedbackCellArray)                                             \
   V(FixedTypedArrayBase, empty_fixed_uint8_array, EmptyFixedUint8Array)        \
   V(FixedTypedArrayBase, empty_fixed_int8_array, EmptyFixedInt8Array)          \
   V(FixedTypedArrayBase, empty_fixed_uint16_array, EmptyFixedUint16Array)      \
@@ -235,7 +231,6 @@ class RootVisitor;
   /* Canonical empty values */                                               \
   V(Script, empty_script, EmptyScript)                                       \
   V(FeedbackCell, many_closures_cell, ManyClosuresCell)                      \
-  V(FeedbackCell, no_feedback_cell, NoFeedbackCell)                          \
   V(Cell, invalid_prototype_validity_cell, InvalidPrototypeValidityCell)     \
   /* Protectors */                                                           \
   V(Cell, array_constructor_protector, ArrayConstructorProtector)            \
@@ -290,7 +285,8 @@ class RootVisitor;
   /* KeepDuringJob set for JS WeakRefs */                                  \
   V(HeapObject, weak_refs_keep_during_job, WeakRefsKeepDuringJob)          \
   V(HeapObject, interpreter_entry_trampoline_for_profiling,                \
-    InterpreterEntryTrampolineForProfiling)
+    InterpreterEntryTrampolineForProfiling)                                \
+  V(Object, pending_optimize_for_test_bytecode, PendingOptimizeForTestBytecode)
 
 // Entries in this list are limited to Smis and are not visited during GC.
 #define SMI_ROOT_LIST(V)                                                       \
@@ -506,6 +502,7 @@ class RootsTable {
   friend class Isolate;
   friend class Heap;
   friend class Factory;
+  friend class ReadOnlyHeap;
   friend class ReadOnlyRoots;
   friend class RootsSerializer;
 };

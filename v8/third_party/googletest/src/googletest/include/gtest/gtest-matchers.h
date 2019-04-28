@@ -47,9 +47,16 @@
 #include "gtest/internal/gtest-internal.h"
 #include "gtest/internal/gtest-port.h"
 
+// MSVC warning C5046 is new as of VS2017 version 15.8.
+#if defined(_MSC_VER) && _MSC_VER >= 1915
+#define GTEST_MAYBE_5046_ 5046
+#else
+#define GTEST_MAYBE_5046_
+#endif
+
 GTEST_DISABLE_MSC_WARNINGS_PUSH_(
-    4251 5046 /* class A needs to have dll-interface to be used by clients of
-                 class B */
+    4251 GTEST_MAYBE_5046_ /* class A needs to have dll-interface to be used by
+                              clients of class B */
     /* Symbol involving type with internal linkage not defined */)
 
 namespace testing {
@@ -352,12 +359,6 @@ class GTEST_API_ Matcher<const std::string&>
   // str is a std::string object.
   Matcher(const std::string& s);  // NOLINT
 
-#if GTEST_HAS_GLOBAL_STRING
-  // Allows the user to write str instead of Eq(str) sometimes, where
-  // str is a ::string object.
-  Matcher(const ::string& s);  // NOLINT
-#endif                         // GTEST_HAS_GLOBAL_STRING
-
   // Allows the user to write "foo" instead of Eq("foo") sometimes.
   Matcher(const char* s);  // NOLINT
 };
@@ -377,64 +378,9 @@ class GTEST_API_ Matcher<std::string>
   // str is a string object.
   Matcher(const std::string& s);  // NOLINT
 
-#if GTEST_HAS_GLOBAL_STRING
-  // Allows the user to write str instead of Eq(str) sometimes, where
-  // str is a ::string object.
-  Matcher(const ::string& s);  // NOLINT
-#endif                         // GTEST_HAS_GLOBAL_STRING
-
   // Allows the user to write "foo" instead of Eq("foo") sometimes.
   Matcher(const char* s);  // NOLINT
 };
-
-#if GTEST_HAS_GLOBAL_STRING
-// The following two specializations allow the user to write str
-// instead of Eq(str) and "foo" instead of Eq("foo") when a ::string
-// matcher is expected.
-template <>
-class GTEST_API_ Matcher<const ::string&>
-    : public internal::MatcherBase<const ::string&> {
- public:
-  Matcher() {}
-
-  explicit Matcher(const MatcherInterface<const ::string&>* impl)
-      : internal::MatcherBase<const ::string&>(impl) {}
-
-  // Allows the user to write str instead of Eq(str) sometimes, where
-  // str is a std::string object.
-  Matcher(const std::string& s);  // NOLINT
-
-  // Allows the user to write str instead of Eq(str) sometimes, where
-  // str is a ::string object.
-  Matcher(const ::string& s);  // NOLINT
-
-  // Allows the user to write "foo" instead of Eq("foo") sometimes.
-  Matcher(const char* s);  // NOLINT
-};
-
-template <>
-class GTEST_API_ Matcher< ::string>
-    : public internal::MatcherBase< ::string> {
- public:
-  Matcher() {}
-
-  explicit Matcher(const MatcherInterface<const ::string&>* impl)
-      : internal::MatcherBase< ::string>(impl) {}
-  explicit Matcher(const MatcherInterface< ::string>* impl)
-      : internal::MatcherBase< ::string>(impl) {}
-
-  // Allows the user to write str instead of Eq(str) sometimes, where
-  // str is a std::string object.
-  Matcher(const std::string& s);  // NOLINT
-
-  // Allows the user to write str instead of Eq(str) sometimes, where
-  // str is a ::string object.
-  Matcher(const ::string& s);  // NOLINT
-
-  // Allows the user to write "foo" instead of Eq("foo") sometimes.
-  Matcher(const char* s);  // NOLINT
-};
-#endif  // GTEST_HAS_GLOBAL_STRING
 
 #if GTEST_HAS_ABSL
 // The following two specializations allow the user to write str
@@ -452,12 +398,6 @@ class GTEST_API_ Matcher<const absl::string_view&>
   // Allows the user to write str instead of Eq(str) sometimes, where
   // str is a std::string object.
   Matcher(const std::string& s);  // NOLINT
-
-#if GTEST_HAS_GLOBAL_STRING
-  // Allows the user to write str instead of Eq(str) sometimes, where
-  // str is a ::string object.
-  Matcher(const ::string& s);  // NOLINT
-#endif                         // GTEST_HAS_GLOBAL_STRING
 
   // Allows the user to write "foo" instead of Eq("foo") sometimes.
   Matcher(const char* s);  // NOLINT
@@ -480,12 +420,6 @@ class GTEST_API_ Matcher<absl::string_view>
   // Allows the user to write str instead of Eq(str) sometimes, where
   // str is a std::string object.
   Matcher(const std::string& s);  // NOLINT
-
-#if GTEST_HAS_GLOBAL_STRING
-  // Allows the user to write str instead of Eq(str) sometimes, where
-  // str is a ::string object.
-  Matcher(const ::string& s);  // NOLINT
-#endif                         // GTEST_HAS_GLOBAL_STRING
 
   // Allows the user to write "foo" instead of Eq("foo") sometimes.
   Matcher(const char* s);  // NOLINT
@@ -599,21 +533,26 @@ class ComparisonBase {
   }
 
  private:
-  template <typename Lhs>
+  template <typename T>
+  static const T& Unwrap(const T& v) { return v; }
+  template <typename T>
+  static const T& Unwrap(std::reference_wrapper<T> v) { return v; }
+
+  template <typename Lhs, typename = Rhs>
   class Impl : public MatcherInterface<Lhs> {
    public:
     explicit Impl(const Rhs& rhs) : rhs_(rhs) {}
     bool MatchAndExplain(Lhs lhs,
                          MatchResultListener* /* listener */) const override {
-      return Op()(lhs, rhs_);
+      return Op()(lhs, Unwrap(rhs_));
     }
     void DescribeTo(::std::ostream* os) const override {
       *os << D::Desc() << " ";
-      UniversalPrint(rhs_, os);
+      UniversalPrint(Unwrap(rhs_), os);
     }
     void DescribeNegationTo(::std::ostream* os) const override {
       *os << D::NegatedDesc() <<  " ";
-      UniversalPrint(rhs_, os);
+      UniversalPrint(Unwrap(rhs_), os);
     }
 
    private:
@@ -682,7 +621,7 @@ class MatchesRegexMatcher {
 #if GTEST_HAS_ABSL
   bool MatchAndExplain(const absl::string_view& s,
                        MatchResultListener* listener) const {
-    return MatchAndExplain(string(s), listener);
+    return MatchAndExplain(std::string(s), listener);
   }
 #endif  // GTEST_HAS_ABSL
 

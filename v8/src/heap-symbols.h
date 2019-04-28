@@ -7,15 +7,22 @@
 
 #ifdef V8_INTL_SUPPORT
 #define INTERNALIZED_STRING_LIST_GENERATOR_INTL(V, _)               \
+  V(_, adoptText_string, "adoptText")                               \
+  V(_, baseName_string, "baseName")                                 \
   V(_, breakType_string, "breakType")                               \
   V(_, calendar_string, "calendar")                                 \
   V(_, cardinal_string, "cardinal")                                 \
   V(_, caseFirst_string, "caseFirst")                               \
+  V(_, compare_string, "compare")                                   \
+  V(_, current_string, "current")                                   \
   V(_, dateStyle_string, "dateStyle")                               \
   V(_, day_string, "day")                                           \
   V(_, dayPeriod_string, "dayPeriod")                               \
   V(_, decimal_string, "decimal")                                   \
+  V(_, endRange_string, "endRange")                                 \
   V(_, era_string, "era")                                           \
+  V(_, first_string, "first")                                       \
+  V(_, format_string, "format")                                     \
   V(_, fraction_string, "fraction")                                 \
   V(_, full_string, "full")                                         \
   V(_, granularity_string, "granularity")                           \
@@ -36,6 +43,7 @@
   V(_, Invalid_Date_string, "Invalid Date")                         \
   V(_, integer_string, "integer")                                   \
   V(_, kana_string, "kana")                                         \
+  V(_, language_string, "language")                                 \
   V(_, letter_string, "letter")                                     \
   V(_, list_string, "list")                                         \
   V(_, literal_string, "literal")                                   \
@@ -44,13 +52,13 @@
   V(_, lower_string, "lower")                                       \
   V(_, maximumFractionDigits_string, "maximumFractionDigits")       \
   V(_, maximumSignificantDigits_string, "maximumSignificantDigits") \
-  V(_, nan_string, "nan")                                           \
   V(_, minimumFractionDigits_string, "minimumFractionDigits")       \
   V(_, minimumIntegerDigits_string, "minimumIntegerDigits")         \
   V(_, minimumSignificantDigits_string, "minimumSignificantDigits") \
   V(_, minusSign_string, "minusSign")                               \
   V(_, minute_string, "minute")                                     \
   V(_, month_string, "month")                                       \
+  V(_, nan_string, "nan")                                           \
   V(_, none_string, "none")                                         \
   V(_, normal_string, "normal")                                     \
   V(_, numberingSystem_string, "numberingSystem")                   \
@@ -59,11 +67,14 @@
   V(_, percentSign_string, "percentSign")                           \
   V(_, plusSign_string, "plusSign")                                 \
   V(_, quarter_string, "quarter")                                   \
+  V(_, region_string, "region")                                     \
   V(_, second_string, "second")                                     \
   V(_, segment_string, "segment")                                   \
   V(_, SegmentIterator_string, "Segment Iterator")                  \
   V(_, sensitivity_string, "sensitivity")                           \
   V(_, sep_string, "sep")                                           \
+  V(_, shared_string, "shared")                                     \
+  V(_, startRange_string, "startRange")                             \
   V(_, strict_string, "strict")                                     \
   V(_, style_string, "style")                                       \
   V(_, term_string, "term")                                         \
@@ -114,6 +125,7 @@
   V(_, buffer_string, "buffer")                                       \
   V(_, byte_length_string, "byteLength")                              \
   V(_, byte_offset_string, "byteOffset")                              \
+  V(_, CompileError_string, "CompileError")                           \
   V(_, call_string, "call")                                           \
   V(_, callee_string, "callee")                                       \
   V(_, caller_string, "caller")                                       \
@@ -121,11 +133,11 @@
   V(_, closure_string, "(closure)")                                   \
   V(_, code_string, "code")                                           \
   V(_, column_string, "column")                                       \
-  V(_, CompileError_string, "CompileError")                           \
+  V(_, computed_string, "<computed>")                                 \
   V(_, configurable_string, "configurable")                           \
+  V(_, conjunction_string, "conjunction")                             \
   V(_, construct_string, "construct")                                 \
   V(_, constructor_string, "constructor")                             \
-  V(_, conjunction_string, "conjunction")                             \
   V(_, create_string, "create")                                       \
   V(_, Date_string, "Date")                                           \
   V(_, date_to_string, "[object Date]")                               \
@@ -136,6 +148,7 @@
   V(_, display_name_string, "displayName")                            \
   V(_, done_string, "done")                                           \
   V(_, dot_catch_string, ".catch")                                    \
+  V(_, dot_default_string, ".default")                                \
   V(_, dot_for_string, ".for")                                        \
   V(_, dot_generator_object_string, ".generator_object")              \
   V(_, dot_iterator_string, ".iterator")                              \
@@ -257,7 +270,6 @@
   V(_, sourceText_string, "sourceText")                               \
   V(_, stack_string, "stack")                                         \
   V(_, stackTraceLimit_string, "stackTraceLimit")                     \
-  V(_, star_default_star_string, "*default*")                         \
   V(_, sticky_string, "sticky")                                       \
   V(_, String_string, "String")                                       \
   V(_, string_string, "string")                                       \
