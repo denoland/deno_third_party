@@ -22,6 +22,14 @@ OBJECT_CONSTRUCTORS_IMPL(FeedbackCell, Struct)
 CAST_ACCESSOR(FeedbackCell)
 
 ACCESSORS(FeedbackCell, value, HeapObject, kValueOffset)
+INT32_ACCESSORS(FeedbackCell, interrupt_budget, kInterruptBudgetOffset)
+
+void FeedbackCell::clear_padding() {
+  if (FeedbackCell::kAlignedSize == FeedbackCell::kUnalignedSize) return;
+  DCHECK_GE(FeedbackCell::kAlignedSize, FeedbackCell::kUnalignedSize);
+  memset(reinterpret_cast<byte*>(address() + FeedbackCell::kUnalignedSize), 0,
+         FeedbackCell::kAlignedSize - FeedbackCell::kUnalignedSize);
+}
 
 }  // namespace internal
 }  // namespace v8

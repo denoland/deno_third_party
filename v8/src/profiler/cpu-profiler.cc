@@ -10,7 +10,6 @@
 #include "src/base/lazy-instance.h"
 #include "src/base/template-utils.h"
 #include "src/debug/debug.h"
-#include "src/deoptimizer.h"
 #include "src/frames-inl.h"
 #include "src/locked-queue-inl.h"
 #include "src/log.h"
@@ -52,14 +51,17 @@ ProfilerEventsProcessor::ProfilerEventsProcessor(Isolate* isolate,
       running_(1),
       last_code_event_id_(0),
       last_processed_code_event_id_(0),
-      isolate_(isolate) {}
+      isolate_(isolate),
+      profiling_scope_(isolate) {}
 
 SamplingEventsProcessor::SamplingEventsProcessor(Isolate* isolate,
                                                  ProfileGenerator* generator,
-                                                 base::TimeDelta period)
+                                                 base::TimeDelta period,
+                                                 bool use_precise_sampling)
     : ProfilerEventsProcessor(isolate, generator),
       sampler_(new CpuSampler(isolate, this)),
-      period_(period) {
+      period_(period),
+      use_precise_sampling_(use_precise_sampling) {
   sampler_->Start();
 }
 
@@ -202,13 +204,16 @@ void SamplingEventsProcessor::Run() {
 
     if (nextSampleTime > now) {
 #if V8_OS_WIN
-      if (nextSampleTime - now < base::TimeDelta::FromMilliseconds(100)) {
+      if (use_precise_sampling_ &&
+          nextSampleTime - now < base::TimeDelta::FromMilliseconds(100)) {
         // Do not use Sleep on Windows as it is very imprecise, with up to 16ms
         // jitter, which is unacceptable for short profile intervals.
         while (base::TimeTicks::HighResolutionNow() < nextSampleTime) {
         }
       } else  // NOLINT
-#endif
+#else
+      USE(use_precise_sampling_);
+#endif  // V8_OS_WIN
       {
         // Allow another thread to interrupt the delay between samples in the
         // event of profiler shutdown.
@@ -306,14 +311,16 @@ DEFINE_LAZY_LEAKY_OBJECT_GETTER(CpuProfilersManager, GetProfilersManager)
 
 }  // namespace
 
-CpuProfiler::CpuProfiler(Isolate* isolate)
-    : CpuProfiler(isolate, new CpuProfilesCollection(isolate), nullptr,
-                  nullptr) {}
+CpuProfiler::CpuProfiler(Isolate* isolate, CpuProfilingNamingMode naming_mode)
+    : CpuProfiler(isolate, naming_mode, new CpuProfilesCollection(isolate),
+                  nullptr, nullptr) {}
 
-CpuProfiler::CpuProfiler(Isolate* isolate, CpuProfilesCollection* test_profiles,
+CpuProfiler::CpuProfiler(Isolate* isolate, CpuProfilingNamingMode naming_mode,
+                         CpuProfilesCollection* test_profiles,
                          ProfileGenerator* test_generator,
                          ProfilerEventsProcessor* test_processor)
     : isolate_(isolate),
+      naming_mode_(naming_mode),
       sampling_interval_(base::TimeDelta::FromMicroseconds(
           FLAG_cpu_profiler_sampling_interval)),
       profiles_(test_profiles),
@@ -332,6 +339,11 @@ CpuProfiler::~CpuProfiler() {
 void CpuProfiler::set_sampling_interval(base::TimeDelta value) {
   DCHECK(!is_profiling_);
   sampling_interval_ = value;
+}
+
+void CpuProfiler::set_use_precise_sampling(bool value) {
+  DCHECK(!is_profiling_);
+  use_precise_sampling_ = value;
 }
 
 void CpuProfiler::ResetProfiles() {
@@ -385,9 +397,6 @@ void CpuProfiler::StartProcessorIfNotStarted() {
   }
   isolate_->wasm_engine()->EnableCodeLogging(isolate_);
   Logger* logger = isolate_->logger();
-  // Disable logging when using the new implementation.
-  saved_is_logging_ = logger->is_logging();
-  logger->set_is_logging(false);
 
   bool codemap_needs_initialization = false;
   if (!generator_) {
@@ -395,16 +404,16 @@ void CpuProfiler::StartProcessorIfNotStarted() {
     codemap_needs_initialization = true;
     CreateEntriesForRuntimeCallStats();
   }
-  processor_.reset(new SamplingEventsProcessor(isolate_, generator_.get(),
-                                               sampling_interval_));
+  processor_.reset(new SamplingEventsProcessor(
+      isolate_, generator_.get(), sampling_interval_, use_precise_sampling_));
   if (profiler_listener_) {
     profiler_listener_->set_observer(processor_.get());
   } else {
-    profiler_listener_.reset(new ProfilerListener(isolate_, processor_.get()));
+    profiler_listener_.reset(
+        new ProfilerListener(isolate_, processor_.get(), naming_mode_));
   }
   logger->AddCodeEventListener(profiler_listener_.get());
   is_profiling_ = true;
-  isolate_->set_is_profiling(true);
   // Enumerate stuff we already have in the heap.
   DCHECK(isolate_->heap()->HasBeenSetUp());
   if (codemap_needs_initialization) {
@@ -438,11 +447,9 @@ void CpuProfiler::StopProcessorIfLastProfile(const char* title) {
 void CpuProfiler::StopProcessor() {
   Logger* logger = isolate_->logger();
   is_profiling_ = false;
-  isolate_->set_is_profiling(false);
   logger->RemoveCodeEventListener(profiler_listener_.get());
   processor_->StopSynchronously();
   processor_.reset();
-  logger->set_is_logging(saved_is_logging_);
 }
 
 

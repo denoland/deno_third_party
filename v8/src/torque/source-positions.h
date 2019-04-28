@@ -13,14 +13,19 @@ namespace v8 {
 namespace internal {
 namespace torque {
 
+struct SourcePosition;
+
 class SourceId {
  public:
   static SourceId Invalid() { return SourceId(-1); }
+  bool IsValid() const { return id_ != -1; }
   int operator==(const SourceId& s) const { return id_ == s.id_; }
+  bool operator<(const SourceId& s) const { return id_ < s.id_; }
 
  private:
   explicit SourceId(int id) : id_(id) {}
   int id_;
+  friend struct SourcePosition;
   friend class SourceFileMap;
 };
 
@@ -29,6 +34,10 @@ struct LineAndColumn {
   int column;
 
   static LineAndColumn Invalid() { return {-1, -1}; }
+
+  bool operator==(const LineAndColumn& other) const {
+    return line == other.line && column == other.column;
+  }
 };
 
 struct SourcePosition {
@@ -45,6 +54,18 @@ struct SourcePosition {
   bool CompareStartIgnoreColumn(const SourcePosition& pos) const {
     return start.line == pos.start.line && source == pos.source;
   }
+
+  bool Contains(LineAndColumn pos) const {
+    if (pos.line < start.line || pos.line > end.line) return false;
+
+    if (pos.line == start.line && pos.column < start.column) return false;
+    if (pos.line == end.line && pos.column >= end.column) return false;
+    return true;
+  }
+
+  bool operator==(const SourcePosition& pos) const {
+    return source == pos.source && start == pos.start && end == pos.end;
+  }
 };
 
 DECLARE_CONTEXTUAL_VARIABLE(CurrentSourceFile, SourceId);
@@ -54,12 +75,22 @@ class SourceFileMap : public ContextualClass<SourceFileMap> {
  public:
   SourceFileMap() = default;
   static const std::string& GetSource(SourceId source) {
+    CHECK(source.IsValid());
     return Get().sources_[source.id_];
   }
 
   static SourceId AddSource(std::string path) {
     Get().sources_.push_back(std::move(path));
     return SourceId(static_cast<int>(Get().sources_.size()) - 1);
+  }
+
+  static SourceId GetSourceId(const std::string& path) {
+    for (size_t i = 0; i < Get().sources_.size(); ++i) {
+      if (Get().sources_[i] == path) {
+        return SourceId(static_cast<int>(i));
+      }
+    }
+    return SourceId::Invalid();
   }
 
  private:

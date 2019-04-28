@@ -262,6 +262,7 @@ TF_BUILTIN(ElementsTransitionAndStore_NoTransitionHandleCOW,
   V(PACKED_SMI_ELEMENTS)    \
   V(HOLEY_SMI_ELEMENTS)     \
   V(PACKED_ELEMENTS)        \
+  V(PACKED_SEALED_ELEMENTS) \
   V(HOLEY_ELEMENTS)         \
   V(PACKED_DOUBLE_ELEMENTS) \
   V(HOLEY_DOUBLE_ELEMENTS)  \
@@ -491,6 +492,51 @@ TF_BUILTIN(LoadIndexedInterceptorIC, CodeStubAssembler) {
   BIND(&if_keyisinvalid);
   TailCallRuntime(Runtime::kKeyedLoadIC_Miss, context, receiver, key, slot,
                   vector);
+}
+
+TF_BUILTIN(KeyedHasIC_SloppyArguments, CodeStubAssembler) {
+  Node* receiver = Parameter(Descriptor::kReceiver);
+  Node* key = Parameter(Descriptor::kName);
+  Node* slot = Parameter(Descriptor::kSlot);
+  Node* vector = Parameter(Descriptor::kVector);
+  Node* context = Parameter(Descriptor::kContext);
+
+  Label miss(this);
+
+  Node* result = HasKeyedSloppyArguments(receiver, key, &miss);
+  Return(result);
+
+  BIND(&miss);
+  {
+    Comment("Miss");
+    TailCallRuntime(Runtime::kKeyedHasIC_Miss, context, receiver, key, slot,
+                    vector);
+  }
+}
+
+TF_BUILTIN(HasIndexedInterceptorIC, CodeStubAssembler) {
+  Node* receiver = Parameter(Descriptor::kReceiver);
+  Node* key = Parameter(Descriptor::kName);
+  Node* slot = Parameter(Descriptor::kSlot);
+  Node* vector = Parameter(Descriptor::kVector);
+  Node* context = Parameter(Descriptor::kContext);
+
+  Label if_keyispositivesmi(this), if_keyisinvalid(this);
+  Branch(TaggedIsPositiveSmi(key), &if_keyispositivesmi, &if_keyisinvalid);
+  BIND(&if_keyispositivesmi);
+  TailCallRuntime(Runtime::kHasElementWithInterceptor, context, receiver, key);
+
+  BIND(&if_keyisinvalid);
+  TailCallRuntime(Runtime::kKeyedHasIC_Miss, context, receiver, key, slot,
+                  vector);
+}
+
+TF_BUILTIN(HasIC_Slow, CodeStubAssembler) {
+  Node* receiver = Parameter(Descriptor::kReceiver);
+  Node* name = Parameter(Descriptor::kName);
+  Node* context = Parameter(Descriptor::kContext);
+
+  TailCallRuntime(Runtime::kHasProperty, context, receiver, name);
 }
 
 }  // namespace internal

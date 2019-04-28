@@ -129,8 +129,12 @@ class BaseCommand(object):
   def _abort(self, process, abort_called):
     abort_called[0] = True
     try:
+      print('Attempting to kill process %s' % process.pid)
+      sys.stdout.flush()
       self._kill_process(process)
-    except OSError:
+    except OSError as e:
+      print(e)
+      sys.stdout.flush()
       pass
 
   def __str__(self):
@@ -155,6 +159,25 @@ class BaseCommand(object):
 
 
 class PosixCommand(BaseCommand):
+  # TODO(machenbach): Use base process start without shell once
+  # https://crbug.com/v8/8889 is resolved.
+  def _start_process(self):
+    def wrapped(arg):
+      if set('() \'"') & set(arg):
+        return "'%s'" % arg.replace("'", "'\"'\"'")
+      return arg
+    try:
+      return subprocess.Popen(
+        args=' '.join(map(wrapped, self._get_popen_args())),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=self._get_env(),
+        shell=True,
+      )
+    except Exception as e:
+      sys.stderr.write('Error executing: %s\n' % self)
+      raise e
+
   def _kill_process(self, process):
     process.kill()
 
@@ -188,9 +211,6 @@ class WindowsCommand(BaseCommand):
     return subprocess.list2cmdline(self._to_args_list())
 
   def _kill_process(self, process):
-    if self.verbose:
-      print('Attempting to kill process %d' % process.pid)
-      sys.stdout.flush()
     tk = subprocess.Popen(
         'taskkill /T /F /PID %d' % process.pid,
         stdout=subprocess.PIPE,

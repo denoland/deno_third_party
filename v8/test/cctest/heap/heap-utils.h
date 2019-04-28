@@ -12,6 +12,22 @@ namespace v8 {
 namespace internal {
 namespace heap {
 
+class TemporaryEmbedderHeapTracerScope {
+ public:
+  TemporaryEmbedderHeapTracerScope(v8::Isolate* isolate,
+                                   v8::EmbedderHeapTracer* tracer)
+      : isolate_(isolate) {
+    isolate_->SetEmbedderHeapTracer(tracer);
+  }
+
+  ~TemporaryEmbedderHeapTracerScope() {
+    isolate_->SetEmbedderHeapTracer(nullptr);
+  }
+
+ private:
+  v8::Isolate* const isolate_;
+};
+
 void SealCurrentObjects(Heap* heap);
 
 int FixedArrayLenFromSize(int size);
@@ -23,7 +39,7 @@ std::vector<Handle<FixedArray>> FillOldSpacePageWithFixedArrays(Heap* heap,
                                                                 int remainder);
 
 std::vector<Handle<FixedArray>> CreatePadding(
-    Heap* heap, int padding_size, PretenureFlag tenure,
+    Heap* heap, int padding_size, AllocationType allocation,
     int object_size = kMaxRegularHeapObjectSize);
 
 void AllocateAllButNBytes(

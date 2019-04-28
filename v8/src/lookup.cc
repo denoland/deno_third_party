@@ -218,7 +218,7 @@ Handle<JSReceiver> LookupIterator::GetRootForNonJSReceiver(
     Isolate* isolate, Handle<Object> receiver, uint32_t index) {
   // Strings are the only objects with properties (only elements) directly on
   // the wrapper. Hence we can skip generating the wrapper for all other cases.
-  if (index != kMaxUInt32 && receiver->IsString() &&
+  if (receiver->IsString() &&
       index < static_cast<uint32_t>(String::cast(*receiver)->length())) {
     // TODO(verwaest): Speed this up. Perhaps use a cached wrapper on the native
     // context, ensuring that we don't leak it into JS?
@@ -459,7 +459,7 @@ void LookupIterator::PrepareForDataProperty(Handle<Object> value) {
     }
 
     // Copy the backing store if it is copy-on-write.
-    if (IsSmiOrObjectElementsKind(to)) {
+    if (IsSmiOrObjectElementsKind(to) || IsSealedElementsKind(to)) {
       JSObject::EnsureWritableFastElements(holder_obj);
     }
     return;
@@ -478,16 +478,12 @@ void LookupIterator::PrepareForDataProperty(Handle<Object> value) {
   if (!holder_obj->HasFastProperties()) return;
 
   PropertyConstness new_constness = PropertyConstness::kConst;
-  if (FLAG_track_constant_fields) {
-    if (constness() == PropertyConstness::kConst) {
-      DCHECK_EQ(kData, property_details_.kind());
-      // Check that current value matches new value otherwise we should make
-      // the property mutable.
-      if (!IsConstFieldValueEqualTo(*value))
-        new_constness = PropertyConstness::kMutable;
-    }
-  } else {
-    new_constness = PropertyConstness::kMutable;
+  if (constness() == PropertyConstness::kConst) {
+    DCHECK_EQ(kData, property_details_.kind());
+    // Check that current value matches new value otherwise we should make
+    // the property mutable.
+    if (!IsConstFieldValueEqualTo(*value))
+      new_constness = PropertyConstness::kMutable;
   }
 
   Handle<Map> old_map(holder_obj->map(), isolate_);
@@ -642,7 +638,7 @@ void LookupIterator::PrepareTransitionToDataProperty(
 
   Handle<Map> transition =
       Map::TransitionToDataProperty(isolate_, map, name_, value, attributes,
-                                    kDefaultFieldConstness, store_origin);
+                                    PropertyConstness::kConst, store_origin);
   state_ = TRANSITION;
   transition_ = transition;
 
@@ -934,10 +930,14 @@ bool LookupIterator::IsConstFieldValueEqualTo(Object value) const {
       // Uninitialized double field.
       return true;
     }
-    return bit_cast<double>(bits) == value->Number();
+    return Object::SameNumberValue(bit_cast<double>(bits), value->Number());
   } else {
     Object current_value = holder->RawFastPropertyAt(field_index);
-    return current_value->IsUninitialized(isolate()) || current_value == value;
+    if (current_value->IsUninitialized(isolate()) || current_value == value) {
+      return true;
+    }
+    return current_value->IsNumber() && value->IsNumber() &&
+           Object::SameNumberValue(current_value->Number(), value->Number());
   }
 }
 
@@ -954,17 +954,6 @@ int LookupIterator::GetAccessorIndex() const {
   DCHECK(holder_->HasFastProperties());
   DCHECK_EQ(kDescriptor, property_details_.location());
   DCHECK_EQ(kAccessor, property_details_.kind());
-  return descriptor_number();
-}
-
-
-int LookupIterator::GetConstantIndex() const {
-  DCHECK(has_property_);
-  DCHECK(holder_->HasFastProperties());
-  DCHECK_EQ(kDescriptor, property_details_.location());
-  DCHECK_EQ(kData, property_details_.kind());
-  DCHECK(!FLAG_track_constant_fields);
-  DCHECK(!IsElement());
   return descriptor_number();
 }
 
@@ -1163,6 +1152,10 @@ LookupIterator::State LookupIterator::LookupInRegularHolder(
       return holder->IsJSTypedArray() ? INTEGER_INDEXED_EXOTIC : NOT_FOUND;
     }
     property_details_ = accessor->GetDetails(js_object, number_);
+    if (map->has_frozen_or_sealed_elements()) {
+      PropertyAttributes attrs = map->has_sealed_elements() ? SEALED : FROZEN;
+      property_details_ = property_details_.CopyAddAttributes(attrs);
+    }
   } else if (!map->is_dictionary_map()) {
     DescriptorArray descriptors = map->instance_descriptors();
     int number = descriptors->SearchWithCache(isolate_, *name_, map);

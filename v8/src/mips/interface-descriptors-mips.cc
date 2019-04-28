@@ -61,6 +61,18 @@ void RecordWriteDescriptor::InitializePlatformSpecific(
   data->InitializePlatformSpecific(kParameterCount, default_stub_registers);
 }
 
+void EphemeronKeyBarrierDescriptor::InitializePlatformSpecific(
+    CallInterfaceDescriptorData* data) {
+  const Register default_stub_registers[] = {a0, a1, a2, a3, kReturnRegister0};
+
+  data->RestrictAllocatableRegisters(default_stub_registers,
+                                     arraysize(default_stub_registers));
+
+  CHECK_LE(static_cast<size_t>(kParameterCount),
+           arraysize(default_stub_registers));
+  data->InitializePlatformSpecific(kParameterCount, default_stub_registers);
+}
+
 const Register FastNewFunctionContextDescriptor::ScopeInfoRegister() {
   return a1;
 }
@@ -123,6 +135,14 @@ void CallForwardVarargsDescriptor::InitializePlatformSpecific(
   // a0: number of arguments
   // a2: start index (to support rest parameters)
   Register registers[] = {a1, a0, a2};
+  data->InitializePlatformSpecific(arraysize(registers), registers);
+}
+
+void CallFunctionTemplateDescriptor::InitializePlatformSpecific(
+    CallInterfaceDescriptorData* data) {
+  // a1 : function template info
+  // a0 : number of arguments (on the stack, not including receiver)
+  Register registers[] = {a1, a0};
   data->InitializePlatformSpecific(arraysize(registers), registers);
 }
 
@@ -231,9 +251,10 @@ void ArgumentsAdaptorDescriptor::InitializePlatformSpecific(
 void ApiCallbackDescriptor::InitializePlatformSpecific(
     CallInterfaceDescriptorData* data) {
   Register registers[] = {
-      JavaScriptFrame::context_register(),  // kTargetContext
       a1,                                   // kApiFunctionAddress
       a2,                                   // kArgc
+      a3,                                   // kCallData
+      a0,                                   // kHolder
   };
   data->InitializePlatformSpecific(arraysize(registers), registers);
 }

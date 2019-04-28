@@ -48,6 +48,7 @@ enum CpuFeature {
   GENERAL_INSTR_EXT,
   FLOATING_POINT_EXT,
   VECTOR_FACILITY,
+  VECTOR_ENHANCE_FACILITY_1,
   MISC_INSTR_EXT2,
 
   NUMBER_OF_CPU_FEATURES,
@@ -68,7 +69,7 @@ enum CpuFeature {
 //   } else {
 //     // Generate alternative code.
 //   }
-class CpuFeatures : public AllStatic {
+class V8_EXPORT_PRIVATE CpuFeatures : public AllStatic {
  public:
   static void Probe(bool cross_compile) {
     STATIC_ASSERT(NUMBER_OF_CPU_FEATURES <= kBitsPerInt);

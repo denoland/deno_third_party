@@ -247,6 +247,9 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
     if (mode_ > RecordWriteMode::kValueIsPointer) {
       __ JumpIfSmi(value_, exit());
     }
+    if (COMPRESS_POINTERS_BOOL) {
+      __ DecompressTaggedPointer(value_, value_);
+    }
     __ CheckPageFlag(value_, scratch0_,
                      MemoryChunk::kPointersToHereAreInterestingMask, zero,
                      exit());
@@ -258,7 +261,9 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
     SaveFPRegsMode const save_fp_mode =
         frame()->DidAllocateDoubleRegisters() ? kSaveFPRegs : kDontSaveFPRegs;
 
-    if (stub_mode_ == StubCallMode::kCallWasmRuntimeStub) {
+    if (mode_ == RecordWriteMode::kValueIsEphemeronKey) {
+      __ CallEphemeronKeyBarrier(object_, scratch1_, save_fp_mode);
+    } else if (stub_mode_ == StubCallMode::kCallWasmRuntimeStub) {
       // A direct call to a wasm runtime stub defined in this module.
       // Just encode the stub index. This will be patched when the code
       // is added to the native module and copied into wasm code space.
@@ -1016,6 +1021,9 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
           OutOfLineRecordWrite(this, object, operand, value, scratch0, scratch1,
                                mode, DetermineStubCallMode());
       __ StoreTaggedField(operand, value);
+      if (COMPRESS_POINTERS_BOOL) {
+        __ DecompressTaggedPointer(object, object);
+      }
       __ CheckPageFlag(object, scratch0,
                        MemoryChunk::kPointersFromHereAreInterestingMask,
                        not_zero, ool->entry());
@@ -1937,8 +1945,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     }
     case kX64MovqDecompressAnyTagged: {
       CHECK(instr->HasOutput());
-      __ DecompressAnyTagged(i.OutputRegister(), i.MemoryOperand(),
-                             i.TempRegister(0));
+      __ DecompressAnyTagged(i.OutputRegister(), i.MemoryOperand());
       break;
     }
     case kX64MovqCompressTagged: {
@@ -1950,6 +1957,36 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       } else {
         __ StoreTaggedField(operand, i.InputRegister(index));
       }
+      break;
+    }
+    case kX64DecompressSigned: {
+      CHECK(instr->HasOutput());
+      ASSEMBLE_MOVX(DecompressTaggedSigned);
+      break;
+    }
+    case kX64DecompressPointer: {
+      CHECK(instr->HasOutput());
+      ASSEMBLE_MOVX(DecompressTaggedPointer);
+      break;
+    }
+    case kX64DecompressAny: {
+      CHECK(instr->HasOutput());
+      ASSEMBLE_MOVX(DecompressAnyTagged);
+      break;
+    }
+    // TODO(solanes): Combine into one Compress? They seem to be identical.
+    // TODO(solanes): We might get away with doing a no-op in these three cases.
+    // The movl instruction is the conservative way for the moment.
+    case kX64CompressSigned: {
+      ASSEMBLE_MOVX(movl);
+      break;
+    }
+    case kX64CompressPointer: {
+      ASSEMBLE_MOVX(movl);
+      break;
+    }
+    case kX64CompressAny: {
+      ASSEMBLE_MOVX(movl);
       break;
     }
     case kX64Movq:
@@ -2221,7 +2258,12 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       // The insertps instruction uses imm8[5:4] to indicate the lane
       // that needs to be replaced.
       byte select = i.InputInt8(1) << 4 & 0x30;
-      __ insertps(i.OutputSimd128Register(), i.InputDoubleRegister(2), select);
+      if (instr->InputAt(2)->IsFPRegister()) {
+        __ insertps(i.OutputSimd128Register(), i.InputDoubleRegister(2),
+                    select);
+      } else {
+        __ insertps(i.OutputSimd128Register(), i.InputOperand(2), select);
+      }
       break;
     }
     case kX64F32x4SConvertI32x4: {
@@ -2301,13 +2343,42 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       break;
     }
     case kX64F32x4Min: {
-      DCHECK_EQ(i.OutputSimd128Register(), i.InputSimd128Register(0));
-      __ minps(i.OutputSimd128Register(), i.InputSimd128Register(1));
+      XMMRegister src1 = i.InputSimd128Register(1),
+                  dst = i.OutputSimd128Register();
+      DCHECK_EQ(dst, i.InputSimd128Register(0));
+      // The minps instruction doesn't propagate NaNs and +0's in its first
+      // operand. Perform minps in both orders, merge the resuls, and adjust.
+      __ movaps(kScratchDoubleReg, src1);
+      __ minps(kScratchDoubleReg, dst);
+      __ minps(dst, src1);
+      // propagate -0's and NaNs, which may be non-canonical.
+      __ orps(kScratchDoubleReg, dst);
+      // Canonicalize NaNs by quieting and clearing the payload.
+      __ cmpps(dst, kScratchDoubleReg, 3);
+      __ orps(kScratchDoubleReg, dst);
+      __ psrld(dst, 10);
+      __ andnps(dst, kScratchDoubleReg);
       break;
     }
     case kX64F32x4Max: {
-      DCHECK_EQ(i.OutputSimd128Register(), i.InputSimd128Register(0));
-      __ maxps(i.OutputSimd128Register(), i.InputSimd128Register(1));
+      XMMRegister src1 = i.InputSimd128Register(1),
+                  dst = i.OutputSimd128Register();
+      DCHECK_EQ(dst, i.InputSimd128Register(0));
+      // The maxps instruction doesn't propagate NaNs and +0's in its first
+      // operand. Perform maxps in both orders, merge the resuls, and adjust.
+      __ movaps(kScratchDoubleReg, src1);
+      __ maxps(kScratchDoubleReg, dst);
+      __ maxps(dst, src1);
+      // Find discrepancies.
+      __ xorps(dst, kScratchDoubleReg);
+      // Propagate NaNs, which may be non-canonical.
+      __ orps(kScratchDoubleReg, dst);
+      // Propagate sign discrepancy and (subtle) quiet NaNs.
+      __ subps(kScratchDoubleReg, dst);
+      // Canonicalize NaNs by clearing the payload. Sign is non-deterministic.
+      __ cmpps(dst, kScratchDoubleReg, 3);
+      __ psrld(dst, 10);
+      __ andnps(dst, kScratchDoubleReg);
       break;
     }
     case kX64F32x4Eq: {
@@ -2332,7 +2403,11 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     }
     case kX64I32x4Splat: {
       XMMRegister dst = i.OutputSimd128Register();
-      __ movd(dst, i.InputRegister(0));
+      if (instr->InputAt(0)->IsRegister()) {
+        __ movd(dst, i.InputRegister(0));
+      } else {
+        __ movd(dst, i.InputOperand(0));
+      }
       __ pshufd(dst, dst, 0x0);
       break;
     }
@@ -2531,7 +2606,11 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     }
     case kX64I16x8Splat: {
       XMMRegister dst = i.OutputSimd128Register();
-      __ movd(dst, i.InputRegister(0));
+      if (instr->InputAt(0)->IsRegister()) {
+        __ movd(dst, i.InputRegister(0));
+      } else {
+        __ movd(dst, i.InputOperand(0));
+      }
       __ pshuflw(dst, dst, 0x0);
       __ pshufd(dst, dst, 0x0);
       break;
@@ -2716,7 +2795,11 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kX64I8x16Splat: {
       CpuFeatureScope sse_scope(tasm(), SSSE3);
       XMMRegister dst = i.OutputSimd128Register();
-      __ movd(dst, i.InputRegister(0));
+      if (instr->InputAt(0)->IsRegister()) {
+        __ movd(dst, i.InputRegister(0));
+      } else {
+        __ movd(dst, i.InputOperand(0));
+      }
       __ xorps(kScratchDoubleReg, kScratchDoubleReg);
       __ pshufb(dst, kScratchDoubleReg);
       break;

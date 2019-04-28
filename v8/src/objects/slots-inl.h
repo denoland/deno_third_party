@@ -12,10 +12,7 @@
 #include "src/objects.h"
 #include "src/objects/heap-object-inl.h"
 #include "src/objects/maybe-object.h"
-
-#ifdef V8_COMPRESS_POINTERS
 #include "src/ptr-compr-inl.h"
-#endif
 
 namespace v8 {
 namespace internal {
@@ -70,16 +67,17 @@ void FullMaybeObjectSlot::store(MaybeObject value) const {
 }
 
 MaybeObject FullMaybeObjectSlot::Relaxed_Load() const {
-  return MaybeObject(AsAtomicTagged::Relaxed_Load(location()));
+  return MaybeObject(base::AsAtomicPointer::Relaxed_Load(location()));
 }
 
 void FullMaybeObjectSlot::Relaxed_Store(MaybeObject value) const {
-  AsAtomicTagged::Relaxed_Store(location(), value->ptr());
+  base::AsAtomicPointer::Relaxed_Store(location(), value->ptr());
 }
 
 void FullMaybeObjectSlot::Release_CompareAndSwap(MaybeObject old,
                                                  MaybeObject target) const {
-  AsAtomicTagged::Release_CompareAndSwap(location(), old.ptr(), target.ptr());
+  base::AsAtomicPointer::Release_CompareAndSwap(location(), old.ptr(),
+                                                target.ptr());
 }
 
 //
@@ -107,15 +105,24 @@ void FullHeapObjectSlot::StoreHeapObject(HeapObject value) const {
 // Utils.
 //
 
+// Copies tagged words from |src| to |dst|. The data spans must not overlap.
+// |src| and |dst| must be kTaggedSize-aligned.
+inline void CopyTagged(Address dst, const Address src, size_t num_tagged) {
+  static const size_t kBlockCopyLimit = 16;
+  CopyImpl<kBlockCopyLimit>(reinterpret_cast<Tagged_t*>(dst),
+                            reinterpret_cast<const Tagged_t*>(src), num_tagged);
+}
+
 // Sets |counter| number of kTaggedSize-sized values starting at |start| slot.
 inline void MemsetTagged(ObjectSlot start, Object value, size_t counter) {
-  // TODO(ishell): revisit this implementation, maybe use "rep stosl"
-  STATIC_ASSERT(kTaggedSize == kSystemPointerSize);
-  Address raw_value = value.ptr();
 #ifdef V8_COMPRESS_POINTERS
-  raw_value = CompressTagged(raw_value);
-#endif
+  Tagged_t raw_value = CompressTagged(value.ptr());
+  STATIC_ASSERT(kTaggedSize == kInt32Size);
+  MemsetInt32(start.location(), raw_value, counter);
+#else
+  Address raw_value = value.ptr();
   MemsetPointer(start.location(), raw_value, counter);
+#endif
 }
 
 // Sets |counter| number of kSystemPointerSize-sized values starting at |start|

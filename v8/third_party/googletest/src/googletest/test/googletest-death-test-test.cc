@@ -493,17 +493,6 @@ TEST_F(TestForDeathTest, AcceptsAnythingConvertibleToRE) {
   const testing::internal::RE regex(regex_c_str);
   EXPECT_DEATH(GlobalFunction(), regex);
 
-# if GTEST_HAS_GLOBAL_STRING
-
-  const ::string regex_str(regex_c_str);
-  EXPECT_DEATH(GlobalFunction(), regex_str);
-
-  // This one is tricky; a temporary pointer into another temporary.  Reference
-  // lifetime extension of the pointer is not sufficient.
-  EXPECT_DEATH(GlobalFunction(), ::string(regex_c_str).c_str());
-
-# endif  // GTEST_HAS_GLOBAL_STRING
-
 # if !GTEST_USES_PCRE
 
   const ::std::string regex_std_str(regex_c_str);
@@ -895,10 +884,12 @@ class MockDeathTestFactory : public DeathTestFactory {
   int AssumeRoleCalls() const { return assume_role_calls_; }
   int WaitCalls() const { return wait_calls_; }
   size_t PassedCalls() const { return passed_args_.size(); }
-  bool PassedArgument(int n) const { return passed_args_[n]; }
+  bool PassedArgument(int n) const {
+    return passed_args_[static_cast<size_t>(n)];
+  }
   size_t AbortCalls() const { return abort_args_.size(); }
   DeathTest::AbortReason AbortArgument(int n) const {
-    return abort_args_[n];
+    return abort_args_[static_cast<size_t>(n)];
   }
   bool TestDeleted() const { return test_deleted_; }
 

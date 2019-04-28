@@ -76,19 +76,9 @@ class AccessorInfo : public Struct {
   static int AppendUnique(Isolate* isolate, Handle<Object> descriptors,
                           Handle<FixedArray> array, int valid_descriptors);
 
-// Layout description.
-#define ACCESSOR_INFO_FIELDS(V)               \
-  V(kNameOffset, kTaggedSize)                 \
-  V(kFlagsOffset, kTaggedSize)                \
-  V(kExpectedReceiverTypeOffset, kTaggedSize) \
-  V(kSetterOffset, kTaggedSize)               \
-  V(kGetterOffset, kTaggedSize)               \
-  V(kJsGetterOffset, kTaggedSize)             \
-  V(kDataOffset, kTaggedSize)                 \
-  V(kSize, 0)
-
-  DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize, ACCESSOR_INFO_FIELDS)
-#undef ACCESSOR_INFO_FIELDS
+  // Layout description.
+  DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize,
+                                TORQUE_GENERATED_ACCESSOR_INFO_FIELDS)
 
  private:
   inline bool HasExpectedReceiverType();
@@ -126,17 +116,8 @@ class AccessCheckInfo : public Struct {
 
   static AccessCheckInfo Get(Isolate* isolate, Handle<JSObject> receiver);
 
-// Layout description.
-#define ACCESS_CHECK_INFO_FIELDS(V)         \
-  V(kCallbackOffset, kTaggedSize)           \
-  V(kNamedInterceptorOffset, kTaggedSize)   \
-  V(kIndexedInterceptorOffset, kTaggedSize) \
-  V(kDataOffset, kTaggedSize)               \
-  V(kSize, 0)
-
   DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize,
-                                ACCESS_CHECK_INFO_FIELDS)
-#undef ACCESS_CHECK_INFO_FIELDS
+                                TORQUE_GENERATED_ACCESS_CHECK_INFO_FIELDS)
 
   OBJECT_CONSTRUCTORS(AccessCheckInfo, Struct);
 };
@@ -166,22 +147,8 @@ class InterceptorInfo : public Struct {
   DECL_PRINTER(InterceptorInfo)
   DECL_VERIFIER(InterceptorInfo)
 
-// Layout description.
-#define INTERCEPTOR_INFO_FIELDS(V)  \
-  V(kGetterOffset, kTaggedSize)     \
-  V(kSetterOffset, kTaggedSize)     \
-  V(kQueryOffset, kTaggedSize)      \
-  V(kDescriptorOffset, kTaggedSize) \
-  V(kDeleterOffset, kTaggedSize)    \
-  V(kEnumeratorOffset, kTaggedSize) \
-  V(kDefinerOffset, kTaggedSize)    \
-  V(kDataOffset, kTaggedSize)       \
-  V(kFlagsOffset, kTaggedSize)      \
-  V(kSize, 0)
-
   DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize,
-                                INTERCEPTOR_INFO_FIELDS)
-#undef INTERCEPTOR_INFO_FIELDS
+                                TORQUE_GENERATED_INTERCEPTOR_INFO_FIELDS)
 
   static const int kCanInterceptSymbolsBit = 0;
   static const int kAllCanReadBit = 1;

@@ -40,9 +40,14 @@ v8::Local<v8::Object> ConstructTraceableJSApiObject(
   return scope.Escape(instance);
 }
 
+enum class TracePrologueBehavior { kNoop, kCallV8WriteBarrier };
+
 class TestEmbedderHeapTracer final : public v8::EmbedderHeapTracer {
  public:
   TestEmbedderHeapTracer() = default;
+  TestEmbedderHeapTracer(TracePrologueBehavior prologue_behavior,
+                         v8::Global<v8::Array> array)
+      : prologue_behavior_(prologue_behavior), array_(std::move(array)) {}
 
   void RegisterV8References(
       const std::vector<std::pair<void*, void*>>& embedder_fields) final {
@@ -64,7 +69,14 @@ class TestEmbedderHeapTracer final : public v8::EmbedderHeapTracer {
 
   bool IsTracingDone() final { return to_register_with_v8_.empty(); }
 
-  void TracePrologue() final {}
+  void TracePrologue() final {
+    if (prologue_behavior_ == TracePrologueBehavior::kCallV8WriteBarrier) {
+      auto local = array_.Get(isolate());
+      local->Set(local->CreationContext(), 0, v8::Object::New(isolate()))
+          .Check();
+    }
+  }
+
   void TraceEpilogue() final {}
   void EnterFinalPause(EmbedderStackState) final {}
 
@@ -87,22 +99,8 @@ class TestEmbedderHeapTracer final : public v8::EmbedderHeapTracer {
   std::vector<std::pair<void*, void*>> registered_from_v8_;
   std::vector<v8::TracedGlobal<v8::Object>*> to_register_with_v8_;
   bool consider_traced_global_as_root_ = true;
-};
-
-class TemporaryEmbedderHeapTracerScope {
- public:
-  TemporaryEmbedderHeapTracerScope(v8::Isolate* isolate,
-                                   EmbedderHeapTracer* tracer)
-      : isolate_(isolate) {
-    isolate_->SetEmbedderHeapTracer(tracer);
-  }
-
-  ~TemporaryEmbedderHeapTracerScope() {
-    isolate_->SetEmbedderHeapTracer(nullptr);
-  }
-
- private:
-  v8::Isolate* const isolate_;
+  TracePrologueBehavior prologue_behavior_ = TracePrologueBehavior::kNoop;
+  v8::Global<v8::Array> array_;
 };
 
 }  // namespace
@@ -114,7 +112,7 @@ TEST(V8RegisteringEmbedderReference) {
   CcTest::InitializeVM();
   v8::Isolate* isolate = CcTest::isolate();
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
   v8::HandleScope scope(isolate);
   v8::Local<v8::Context> context = v8::Context::New(isolate);
   v8::Context::Scope context_scope(context);
@@ -134,7 +132,7 @@ TEST(EmbedderRegisteringV8Reference) {
   CcTest::InitializeVM();
   v8::Isolate* isolate = CcTest::isolate();
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
   v8::HandleScope scope(isolate);
   v8::Local<v8::Context> context = v8::Context::New(isolate);
   v8::Context::Scope context_scope(context);
@@ -167,7 +165,7 @@ TEST(TracingInRevivedSubgraph) {
   CcTest::InitializeVM();
   v8::Isolate* isolate = CcTest::isolate();
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
   v8::HandleScope scope(isolate);
   v8::Local<v8::Context> context = v8::Context::New(isolate);
   v8::Context::Scope context_scope(context);
@@ -195,7 +193,7 @@ TEST(TracingInEphemerons) {
   CcTest::InitializeVM();
   v8::Isolate* isolate = CcTest::isolate();
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
   v8::HandleScope scope(isolate);
   v8::Local<v8::Context> context = v8::Context::New(isolate);
   v8::Context::Scope context_scope(context);
@@ -226,7 +224,7 @@ TEST(FinalizeTracingIsNoopWhenNotMarking) {
   v8::Isolate* isolate = CcTest::isolate();
   Isolate* i_isolate = CcTest::i_isolate();
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
 
   // Finalize a potentially running garbage collection.
   i_isolate->heap()->CollectGarbage(OLD_SPACE,
@@ -245,7 +243,7 @@ TEST(FinalizeTracingWhenMarking) {
   v8::Isolate* isolate = CcTest::isolate();
   Isolate* i_isolate = CcTest::i_isolate();
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
 
   // Finalize a potentially running garbage collection.
   i_isolate->heap()->CollectGarbage(OLD_SPACE,
@@ -270,7 +268,7 @@ TEST(GarbageCollectionForTesting) {
   v8::Isolate* isolate = CcTest::isolate();
   Isolate* i_isolate = CcTest::i_isolate();
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
 
   int saved_gc_counter = i_isolate->heap()->gc_count();
   tracer.GarbageCollectionForTesting(EmbedderHeapTracer::kUnknown);
@@ -400,7 +398,7 @@ TEST(TracedGlobalToUnmodifiedJSObjectSurvivesScavengeWhenExcludedFromRoots) {
   CcTest::InitializeVM();
   v8::Isolate* isolate = CcTest::isolate();
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
   tracer.ConsiderTracedGlobalAsRoot(false);
   TracedGlobalTest(
       CcTest::isolate(), ConstructJSObject,
@@ -413,7 +411,7 @@ TEST(TracedGlobalToUnmodifiedJSApiObjectSurvivesScavengePerDefault) {
   CcTest::InitializeVM();
   v8::Isolate* isolate = CcTest::isolate();
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
   tracer.ConsiderTracedGlobalAsRoot(true);
   TracedGlobalTest(
       CcTest::isolate(), ConstructJSApiObject,
@@ -426,7 +424,7 @@ TEST(TracedGlobalToUnmodifiedJSApiObjectDiesOnScavengeWhenExcludedFromRoots) {
   CcTest::InitializeVM();
   v8::Isolate* isolate = CcTest::isolate();
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
   tracer.ConsiderTracedGlobalAsRoot(false);
   TracedGlobalTest(
       CcTest::isolate(), ConstructJSApiObject,
@@ -440,7 +438,7 @@ TEST(TracedGlobalWrapperClassId) {
   v8::Isolate* isolate = CcTest::isolate();
   v8::HandleScope scope(isolate);
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
 
   v8::TracedGlobal<v8::Object> traced;
   ConstructJSObject(isolate, isolate->GetCurrentContext(), &traced);
@@ -475,7 +473,7 @@ TEST(TracedGlobalIteration) {
   v8::Isolate* isolate = CcTest::isolate();
   v8::HandleScope scope(isolate);
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
 
   v8::TracedGlobal<v8::Object> traced;
   ConstructJSObject(isolate, isolate->GetCurrentContext(), &traced);
@@ -508,7 +506,7 @@ TEST(TracedGlobalSetFinalizationCallbackScavenge) {
   v8::HandleScope scope(isolate);
   TestEmbedderHeapTracer tracer;
   tracer.ConsiderTracedGlobalAsRoot(false);
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
 
   v8::TracedGlobal<v8::Object> traced;
   ConstructJSApiObject(isolate, isolate->GetCurrentContext(), &traced);
@@ -530,7 +528,7 @@ TEST(TracedGlobalSetFinalizationCallbackMarkSweep) {
   v8::Isolate* isolate = CcTest::isolate();
   v8::HandleScope scope(isolate);
   TestEmbedderHeapTracer tracer;
-  TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
 
   v8::TracedGlobal<v8::Object> traced;
   ConstructJSApiObject(isolate, isolate->GetCurrentContext(), &traced);
@@ -544,6 +542,24 @@ TEST(TracedGlobalSetFinalizationCallbackMarkSweep) {
   traced.SetFinalizationCallback(&traced, FinalizationCallback);
   heap::InvokeMarkSweep();
   CHECK(traced.IsEmpty());
+}
+
+TEST(TracePrologueCallingIntoV8WriteBarrier) {
+  // Regression test: https://crbug.com/940003
+  ManualGCScope manual_gc;
+  CcTest::InitializeVM();
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
+  v8::Global<v8::Array> global;
+  {
+    v8::HandleScope scope(isolate);
+    auto local = v8::Array::New(isolate, 10);
+    global.Reset(isolate, local);
+  }
+  TestEmbedderHeapTracer tracer(TracePrologueBehavior::kCallV8WriteBarrier,
+                                std::move(global));
+  heap::TemporaryEmbedderHeapTracerScope tracer_scope(isolate, &tracer);
+  SimulateIncrementalMarking(CcTest::i_isolate()->heap());
 }
 
 }  // namespace heap

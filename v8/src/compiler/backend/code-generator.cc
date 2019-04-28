@@ -305,8 +305,7 @@ void CodeGenerator::AssembleCode() {
 
   // Emit the exception handler table.
   if (!handlers_.empty()) {
-    handler_table_offset_ = HandlerTable::EmitReturnTableStart(
-        tasm(), static_cast<int>(handlers_.size()));
+    handler_table_offset_ = HandlerTable::EmitReturnTableStart(tasm());
     for (size_t i = 0; i < handlers_.size(); ++i) {
       HandlerTable::EmitReturnEntry(tasm(), handlers_[i].pc_offset,
                                     handlers_[i].handler->pos());
@@ -396,6 +395,14 @@ MaybeHandle<Code> CodeGenerator::FinalizeCode() {
   // Allocate and install the code.
   CodeDesc desc;
   tasm()->GetCode(isolate(), &desc, safepoints(), handler_table_offset_);
+
+#if defined(V8_OS_WIN_X64)
+  if (Builtins::IsBuiltinId(info_->builtin_index())) {
+    isolate_->SetBuiltinUnwindData(info_->builtin_index(),
+                                   tasm()->GetUnwindInfo());
+  }
+#endif
+
   if (unwinding_info_writer_.eh_frame_writer()) {
     unwinding_info_writer_.eh_frame_writer()->GetEhFrame(&desc);
   }
@@ -781,7 +788,8 @@ Handle<PodArray<InliningPosition>> CreateInliningPositions(
   }
   Handle<PodArray<InliningPosition>> inl_positions =
       PodArray<InliningPosition>::New(
-          isolate, static_cast<int>(inlined_functions.size()), TENURED);
+          isolate, static_cast<int>(inlined_functions.size()),
+          AllocationType::kOld);
   for (size_t i = 0; i < inlined_functions.size(); ++i) {
     inl_positions->set(static_cast<int>(i), inlined_functions[i].position);
   }
@@ -797,7 +805,7 @@ Handle<DeoptimizationData> CodeGenerator::GenerateDeoptimizationData() {
     return DeoptimizationData::Empty(isolate());
   }
   Handle<DeoptimizationData> data =
-      DeoptimizationData::New(isolate(), deopt_count, TENURED);
+      DeoptimizationData::New(isolate(), deopt_count, AllocationType::kOld);
 
   Handle<ByteArray> translation_array =
       translations_.CreateByteArray(isolate()->factory());
@@ -814,7 +822,7 @@ Handle<DeoptimizationData> CodeGenerator::GenerateDeoptimizationData() {
   }
 
   Handle<FixedArray> literals = isolate()->factory()->NewFixedArray(
-      static_cast<int>(deoptimization_literals_.size()), TENURED);
+      static_cast<int>(deoptimization_literals_.size()), AllocationType::kOld);
   for (unsigned i = 0; i < deoptimization_literals_.size(); i++) {
     Handle<Object> object = deoptimization_literals_[i].Reify(isolate());
     literals->set(i, *object);
@@ -1092,7 +1100,12 @@ void CodeGenerator::AddTranslationForOperand(Translation* translation,
     } else if (type == MachineType::Int64()) {
       translation->StoreInt64StackSlot(LocationOperand::cast(op)->index());
     } else {
-      CHECK_EQ(MachineRepresentation::kTagged, type.representation());
+#if defined(V8_COMPRESS_POINTERS)
+      CHECK(MachineRepresentation::kTagged == type.representation() ||
+            MachineRepresentation::kCompressed == type.representation());
+#else
+      CHECK(MachineRepresentation::kTagged == type.representation());
+#endif
       translation->StoreStackSlot(LocationOperand::cast(op)->index());
     }
   } else if (op->IsFPStackSlot()) {
@@ -1115,7 +1128,12 @@ void CodeGenerator::AddTranslationForOperand(Translation* translation,
     } else if (type == MachineType::Int64()) {
       translation->StoreInt64Register(converter.ToRegister(op));
     } else {
-      CHECK_EQ(MachineRepresentation::kTagged, type.representation());
+#if defined(V8_COMPRESS_POINTERS)
+      CHECK(MachineRepresentation::kTagged == type.representation() ||
+            MachineRepresentation::kCompressed == type.representation());
+#else
+      CHECK(MachineRepresentation::kTagged == type.representation());
+#endif
       translation->StoreRegister(converter.ToRegister(op));
     }
   } else if (op->IsFPRegister()) {

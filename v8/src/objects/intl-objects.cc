@@ -31,6 +31,7 @@
 #include "unicode/coll.h"
 #include "unicode/datefmt.h"
 #include "unicode/decimfmt.h"
+#include "unicode/formattedvalue.h"
 #include "unicode/locid.h"
 #include "unicode/normalizer2.h"
 #include "unicode/numfmt.h"
@@ -255,7 +256,7 @@ MaybeHandle<String> LocaleConvertCase(Isolate* isolate, Handle<String> s,
 // Called from TF builtins.
 String Intl::ConvertOneByteToLower(String src, String dst) {
   DCHECK_EQ(src->length(), dst->length());
-  DCHECK(src->HasOnlyOneByteChars());
+  DCHECK(src->IsOneByteRepresentation());
   DCHECK(src->IsFlat());
   DCHECK(dst->IsSeqOneByteString());
 
@@ -299,7 +300,7 @@ String Intl::ConvertOneByteToLower(String src, String dst) {
 }
 
 MaybeHandle<String> Intl::ConvertToLower(Isolate* isolate, Handle<String> s) {
-  if (!s->HasOnlyOneByteChars()) {
+  if (!s->IsOneByteRepresentation()) {
     // Use a slower implementation for strings with characters beyond U+00FF.
     return LocaleConvertCase(isolate, s, false, "");
   }
@@ -331,7 +332,7 @@ MaybeHandle<String> Intl::ConvertToLower(Isolate* isolate, Handle<String> s) {
 
 MaybeHandle<String> Intl::ConvertToUpper(Isolate* isolate, Handle<String> s) {
   int32_t length = s->length();
-  if (s->HasOnlyOneByteChars() && length > 0) {
+  if (s->IsOneByteRepresentation() && length > 0) {
     Handle<SeqOneByteString> result =
         isolate->factory()->NewRawOneByteString(length).ToHandleChecked();
 
@@ -553,7 +554,8 @@ std::string DefaultLocale(Isolate* isolate) {
   if (isolate->default_locale().empty()) {
     icu::Locale default_locale;
     // Translate ICU's fallback locale to a well-known locale.
-    if (strcmp(default_locale.getName(), "en_US_POSIX") == 0) {
+    if (strcmp(default_locale.getName(), "en_US_POSIX") == 0 ||
+        strcmp(default_locale.getName(), "c") == 0) {
       isolate->set_default_locale("en-US");
     } else {
       // Set the locale
@@ -690,7 +692,8 @@ bool IsTwoLetterLanguage(const std::string& locale) {
 
 bool IsDeprecatedLanguage(const std::string& locale) {
   //  Check if locale is one of the deprecated language tags:
-  return locale == "in" || locale == "iw" || locale == "ji" || locale == "jw";
+  return locale == "in" || locale == "iw" || locale == "ji" || locale == "jw" ||
+         locale == "mo";
 }
 
 // Reference:
@@ -1554,7 +1557,8 @@ std::map<std::string, std::string> LookupAndValidateUnicodeExtensions(
       }
     }
     status = U_ZERO_ERROR;
-    icu_locale->setKeywordValue(keyword, nullptr, status);
+    icu_locale->setUnicodeKeywordValue(
+        bcp47_key == nullptr ? keyword : bcp47_key, nullptr, status);
     CHECK(U_SUCCESS(status));
   }
 
@@ -1873,6 +1877,73 @@ const std::set<std::string>& Intl::GetAvailableLocalesForDateFormat() {
   static base::LazyInstance<Intl::AvailableLocales<icu::DateFormat>>::type
       available_locales = LAZY_INSTANCE_INITIALIZER;
   return available_locales.Pointer()->Get();
+}
+
+Handle<String> Intl::NumberFieldToType(Isolate* isolate,
+                                       Handle<Object> numeric_obj,
+                                       int32_t field_id) {
+  DCHECK(numeric_obj->IsNumeric());
+  switch (static_cast<UNumberFormatFields>(field_id)) {
+    case UNUM_INTEGER_FIELD:
+      if (numeric_obj->IsBigInt()) {
+        // Neither NaN nor Infinite could be stored into BigInt
+        // so just return integer.
+        return isolate->factory()->integer_string();
+      } else {
+        double number = numeric_obj->Number();
+        if (std::isfinite(number)) return isolate->factory()->integer_string();
+        if (std::isnan(number)) return isolate->factory()->nan_string();
+        return isolate->factory()->infinity_string();
+      }
+    case UNUM_FRACTION_FIELD:
+      return isolate->factory()->fraction_string();
+    case UNUM_DECIMAL_SEPARATOR_FIELD:
+      return isolate->factory()->decimal_string();
+    case UNUM_GROUPING_SEPARATOR_FIELD:
+      return isolate->factory()->group_string();
+    case UNUM_CURRENCY_FIELD:
+      return isolate->factory()->currency_string();
+    case UNUM_PERCENT_FIELD:
+      return isolate->factory()->percentSign_string();
+    case UNUM_SIGN_FIELD:
+      if (numeric_obj->IsBigInt()) {
+        Handle<BigInt> big_int = Handle<BigInt>::cast(numeric_obj);
+        return big_int->IsNegative() ? isolate->factory()->minusSign_string()
+                                     : isolate->factory()->plusSign_string();
+      } else {
+        double number = numeric_obj->Number();
+        return number < 0 ? isolate->factory()->minusSign_string()
+                          : isolate->factory()->plusSign_string();
+      }
+    case UNUM_EXPONENT_SYMBOL_FIELD:
+    case UNUM_EXPONENT_SIGN_FIELD:
+    case UNUM_EXPONENT_FIELD:
+      // We should never get these because we're not using any scientific
+      // formatter.
+      UNREACHABLE();
+      return Handle<String>();
+
+    case UNUM_PERMILL_FIELD:
+      // We're not creating any permill formatter, and it's not even clear how
+      // that would be possible with the ICU API.
+      UNREACHABLE();
+      return Handle<String>();
+
+    default:
+      UNREACHABLE();
+      return Handle<String>();
+  }
+}
+
+// A helper function to convert the FormattedValue for several Intl objects.
+MaybeHandle<String> Intl::FormattedToString(
+    Isolate* isolate, const icu::FormattedValue& formatted) {
+  UErrorCode status = U_ZERO_ERROR;
+  icu::UnicodeString result = formatted.toString(status);
+  if (U_FAILURE(status)) {
+    THROW_NEW_ERROR(isolate, NewTypeError(MessageTemplate::kIcuError), String);
+  }
+  return Intl::ToString(isolate, result);
 }
 
 }  // namespace internal

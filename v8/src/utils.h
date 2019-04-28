@@ -74,6 +74,21 @@ inline constexpr bool IsInBounds(size_t index, size_t length, size_t max) {
   return length <= max && index <= (max - length);
 }
 
+// Checks if [index, index+length) is in range [0, max). If not, {length} is
+// clamped to its valid range. Note that this check works even if
+// {index+length} would wrap around.
+template <typename T>
+inline bool ClampToBounds(T index, T* length, T max) {
+  if (index > max) {
+    *length = 0;
+    return false;
+  }
+  T avail = max - index;
+  bool oob = *length > avail;
+  if (oob) *length = avail;
+  return !oob;
+}
+
 // X must be a power of 2.  Returns the number of trailing zeros.
 template <typename T,
           typename = typename std::enable_if<std::is_integral<T>::value>::type>
@@ -286,23 +301,27 @@ T SaturateSub(T a, T b) {
 // BitField is a help template for encoding and decode bitfield with
 // unsigned content.
 
-template<class T, int shift, int size, class U>
-class BitFieldBase {
+template <class T, int shift, int size, class U = uint32_t>
+class BitField {
  public:
-  typedef T FieldType;
+  STATIC_ASSERT(std::is_unsigned<U>::value);
+  STATIC_ASSERT(shift < 8 * sizeof(U));  // Otherwise shifts by {shift} are UB.
+  STATIC_ASSERT(size < 8 * sizeof(U));   // Otherwise shifts by {size} are UB.
+  STATIC_ASSERT(shift + size <= 8 * sizeof(U));
+
+  using FieldType = T;
 
   // A type U mask of bit field.  To use all bits of a type U of x bits
   // in a bitfield without compiler warnings we have to compute 2^x
   // without using a shift count of x in the computation.
-  static const U kOne = static_cast<U>(1U);
-  static const U kMask = ((kOne << shift) << size) - (kOne << shift);
-  static const U kShift = shift;
-  static const U kSize = size;
-  static const U kNext = kShift + kSize;
-  static const U kNumValues = kOne << size;
+  static constexpr U kShift = shift;
+  static constexpr U kSize = size;
+  static constexpr U kMask = ((U{1} << kShift) << kSize) - (U{1} << kShift);
+  static constexpr U kNext = kShift + kSize;
+  static constexpr U kNumValues = U{1} << kSize;
 
   // Value for the field with all bits set.
-  static const T kMax = static_cast<T>(kNumValues - 1);
+  static constexpr T kMax = static_cast<T>(kNumValues - 1);
 
   // Tells whether the provided value fits into the bit field.
   static constexpr bool is_valid(T value) {
@@ -314,7 +333,7 @@ class BitFieldBase {
 #if V8_CAN_HAVE_DCHECK_IN_CONSTEXPR
     DCHECK(is_valid(value));
 #endif
-    return static_cast<U>(value) << shift;
+    return static_cast<U>(value) << kShift;
   }
 
   // Returns a type U with the bit field value updated.
@@ -324,26 +343,18 @@ class BitFieldBase {
 
   // Extracts the bit field from the value.
   static constexpr T decode(U value) {
-    return static_cast<T>((value & kMask) >> shift);
+    return static_cast<T>((value & kMask) >> kShift);
   }
-
-  STATIC_ASSERT((kNext - 1) / 8 < sizeof(U));
 };
 
 template <class T, int shift, int size>
-class BitField8 : public BitFieldBase<T, shift, size, uint8_t> {};
-
+using BitField8 = BitField<T, shift, size, uint8_t>;
 
 template <class T, int shift, int size>
-class BitField16 : public BitFieldBase<T, shift, size, uint16_t> {};
+using BitField16 = BitField<T, shift, size, uint16_t>;
 
-
-template<class T, int shift, int size>
-class BitField : public BitFieldBase<T, shift, size, uint32_t> { };
-
-
-template<class T, int shift, int size>
-class BitField64 : public BitFieldBase<T, shift, size, uint64_t> { };
+template <class T, int shift, int size>
+using BitField64 = BitField<T, shift, size, uint64_t>;
 
 // Helper macros for defining a contiguous sequence of bit fields. Example:
 // (backslashes at the ends of respective lines of this multi-line macro
@@ -444,6 +455,9 @@ class BitSetComputer {
 // Size of the field defined by DEFINE_FIELD_OFFSET_CONSTANTS
 #define FIELD_SIZE(Name) (Name##End + 1 - Name)
 
+// Compare two offsets with static cast
+#define STATIC_ASSERT_FIELD_OFFSETS_EQUAL(Offset1, Offset2) \
+  STATIC_ASSERT(static_cast<int>(Offset1) == Offset2)
 // ----------------------------------------------------------------------------
 // Hash function.
 
@@ -822,7 +836,8 @@ class FeedbackSlot {
   bool operator!=(FeedbackSlot that) const { return !(*this == that); }
 
   friend size_t hash_value(FeedbackSlot slot) { return slot.ToInt(); }
-  friend std::ostream& operator<<(std::ostream& os, FeedbackSlot);
+  V8_EXPORT_PRIVATE friend std::ostream& operator<<(std::ostream& os,
+                                                    FeedbackSlot);
 
  private:
   static const int kInvalidSlot = -1;
@@ -830,6 +845,7 @@ class FeedbackSlot {
   int id_;
 };
 
+V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os, FeedbackSlot);
 
 class BailoutId {
  public:
@@ -906,7 +922,8 @@ void PRINTF_FORMAT(2, 3) PrintIsolate(void* isolate, const char* format, ...);
 
 // Safe formatting print. Ensures that str is always null-terminated.
 // Returns the number of chars written, or -1 if output was truncated.
-int PRINTF_FORMAT(2, 3) SNPrintF(Vector<char> str, const char* format, ...);
+V8_EXPORT_PRIVATE int PRINTF_FORMAT(2, 3)
+    SNPrintF(Vector<char> str, const char* format, ...);
 V8_EXPORT_PRIVATE int PRINTF_FORMAT(2, 0)
     VSNPrintF(Vector<char> str, const char* format, va_list args);
 
@@ -961,7 +978,8 @@ int WriteAsCFile(const char* filename, const char* varname,
 // On return, *exits tells whether the file existed.
 V8_EXPORT_PRIVATE std::string ReadFile(const char* filename, bool* exists,
                                        bool verbose = true);
-std::string ReadFile(FILE* file, bool* exists, bool verbose = true);
+V8_EXPORT_PRIVATE std::string ReadFile(FILE* file, bool* exists,
+                                       bool verbose = true);
 
 class StringBuilder : public SimpleStringBuilder {
  public:
@@ -991,7 +1009,7 @@ bool StringToArrayIndex(Stream* stream, uint32_t* index);
 // GetCurrentStackPosition() should not be inlined, because it works on stack
 // frames if it were inlined into a function with a huge stack frame it would
 // return an address significantly above the actual current stack position.
-V8_NOINLINE uintptr_t GetCurrentStackPosition();
+V8_EXPORT_PRIVATE V8_NOINLINE uintptr_t GetCurrentStackPosition();
 
 static inline uint16_t ByteReverse16(uint16_t value) {
 #if V8_HAS_BUILTIN_BSWAP16

@@ -69,11 +69,7 @@ void JSArrayBuffer::FreeBackingStore(Isolate* isolate, Allocation allocation) {
   if (allocation.is_wasm_memory) {
     wasm::WasmMemoryTracker* memory_tracker =
         isolate->wasm_engine()->memory_tracker();
-    if (!memory_tracker->FreeMemoryIfIsWasmMemory(isolate,
-                                                  allocation.backing_store)) {
-      CHECK(FreePages(GetPlatformPageAllocator(), allocation.allocation_base,
-                      allocation.length));
-    }
+    memory_tracker->FreeMemoryIfIsWasmMemory(isolate, allocation.backing_store);
   } else {
     isolate->array_buffer_allocator()->Free(allocation.allocation_base,
                                             allocation.length);
@@ -185,8 +181,7 @@ Handle<JSArrayBuffer> JSTypedArray::MaterializeArrayBuffer(
          fixed_typed_array->DataSize());
   Handle<FixedTypedArrayBase> new_elements =
       isolate->factory()->NewFixedTypedArrayWithExternalPointer(
-          fixed_typed_array->length(), typed_array->type(),
-          static_cast<uint8_t*>(buffer->backing_store()));
+          typed_array->type(), static_cast<uint8_t*>(buffer->backing_store()));
 
   typed_array->set_elements(*new_elements);
   DCHECK(!typed_array->is_on_heap());
@@ -230,7 +225,7 @@ Maybe<bool> JSTypedArray::DefineOwnProperty(Isolate* isolate,
                        NewTypeError(MessageTemplate::kInvalidTypedArrayIndex));
       }
       // 3b iv. Let length be O.[[ArrayLength]].
-      size_t length = o->length_value();
+      size_t length = o->length();
       // 3b v. If numericIndex ≥ length, return false.
       if (o->WasDetached() || index >= length) {
         RETURN_FAILURE(isolate, GetShouldThrow(isolate, should_throw),

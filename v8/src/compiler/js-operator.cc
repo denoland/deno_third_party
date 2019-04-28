@@ -282,7 +282,8 @@ bool operator!=(PropertyAccess const& lhs, PropertyAccess const& rhs) {
 
 
 PropertyAccess const& PropertyAccessOf(const Operator* op) {
-  DCHECK(op->opcode() == IrOpcode::kJSLoadProperty ||
+  DCHECK(op->opcode() == IrOpcode::kJSHasProperty ||
+         op->opcode() == IrOpcode::kJSLoadProperty ||
          op->opcode() == IrOpcode::kJSStoreProperty);
   return OpParameter<PropertyAccess>(op);
 }
@@ -472,7 +473,7 @@ const CreateBoundFunctionParameters& CreateBoundFunctionParametersOf(
 
 bool operator==(CreateClosureParameters const& lhs,
                 CreateClosureParameters const& rhs) {
-  return lhs.pretenure() == rhs.pretenure() &&
+  return lhs.allocation() == rhs.allocation() &&
          lhs.code().location() == rhs.code().location() &&
          lhs.feedback_cell().location() == rhs.feedback_cell().location() &&
          lhs.shared_info().location() == rhs.shared_info().location();
@@ -486,13 +487,13 @@ bool operator!=(CreateClosureParameters const& lhs,
 
 
 size_t hash_value(CreateClosureParameters const& p) {
-  return base::hash_combine(p.pretenure(), p.shared_info().location(),
+  return base::hash_combine(p.allocation(), p.shared_info().location(),
                             p.feedback_cell().location());
 }
 
 
 std::ostream& operator<<(std::ostream& os, CreateClosureParameters const& p) {
-  return os << p.pretenure() << ", " << Brief(*p.shared_info()) << ", "
+  return os << p.allocation() << ", " << Brief(*p.shared_info()) << ", "
             << Brief(*p.feedback_cell()) << ", " << Brief(*p.code());
 }
 
@@ -624,7 +625,6 @@ CompareOperationHint CompareOperationHintOf(const Operator* op) {
   V(CreateTypedArray, Operator::kNoProperties, 5, 1)                     \
   V(CreateObject, Operator::kNoProperties, 1, 1)                         \
   V(ObjectIsArray, Operator::kNoProperties, 1, 1)                        \
-  V(HasProperty, Operator::kNoProperties, 2, 1)                          \
   V(HasInPrototypeChain, Operator::kNoProperties, 2, 1)                  \
   V(OrdinaryHasInstance, Operator::kNoProperties, 2, 1)                  \
   V(ForInEnumerate, Operator::kNoProperties, 1, 1)                       \
@@ -813,7 +813,7 @@ const Operator* JSOperatorBuilder::StoreInArrayLiteral(
       IrOpcode::kJSStoreInArrayLiteral,
       Operator::kNoThrow,       // opcode
       "JSStoreInArrayLiteral",  // name
-      3, 1, 1, 0, 1, 0,         // counts
+      3, 1, 1, 0, 1, 1,         // counts
       parameters);              // parameter
 }
 
@@ -948,6 +948,15 @@ const Operator* JSOperatorBuilder::LoadProperty(
       "JSLoadProperty",                                    // name
       2, 1, 1, 1, 1, 2,                                    // counts
       access);                                             // parameter
+}
+
+const Operator* JSOperatorBuilder::HasProperty(VectorSlotPair const& feedback) {
+  PropertyAccess access(LanguageMode::kSloppy, feedback);
+  return new (zone()) Operator1<PropertyAccess>(          // --
+      IrOpcode::kJSHasProperty, Operator::kNoProperties,  // opcode
+      "JSHasProperty",                                    // name
+      2, 1, 1, 1, 1, 2,                                   // counts
+      access);                                            // parameter
 }
 
 const Operator* JSOperatorBuilder::InstanceOf(VectorSlotPair const& feedback) {
@@ -1179,9 +1188,9 @@ const Operator* JSOperatorBuilder::CreateBoundFunction(size_t arity,
 
 const Operator* JSOperatorBuilder::CreateClosure(
     Handle<SharedFunctionInfo> shared_info, Handle<FeedbackCell> feedback_cell,
-    Handle<Code> code, PretenureFlag pretenure) {
+    Handle<Code> code, AllocationType allocation) {
   CreateClosureParameters parameters(shared_info, feedback_cell, code,
-                                     pretenure);
+                                     allocation);
   return new (zone()) Operator1<CreateClosureParameters>(   // --
       IrOpcode::kJSCreateClosure, Operator::kEliminatable,  // opcode
       "JSCreateClosure",                                    // name
