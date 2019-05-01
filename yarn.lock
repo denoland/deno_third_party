@@ -20,6 +20,10 @@
   version "1.1.2"
   resolved "https://registry.yarnpkg.com/@nodelib/fs.stat/-/fs.stat-1.1.2.tgz#54c5a964462be3d4d78af631363c18d6fa91ac26"
 
+"@stardazed/streams@3.0.0":
+  version "3.0.0"
+  resolved "https://registry.yarnpkg.com/@stardazed/streams/-/streams-3.0.0.tgz#1212895c2f9a5fddff936092527e6a5c241d481e"
+
 "@types/base64-js@^1.2.5":
   version "1.2.5"
   resolved "https://registry.yarnpkg.com/@types/base64-js/-/base64-js-1.2.5.tgz#582b2476169a6cba460a214d476c744441d873d5"
