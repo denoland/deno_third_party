@@ -1,0 +1,24 @@
+[package]
+name = "wincolor"
+version = "1.0.1"  #:version
+authors = ["Andrew Gallant <jamslam@gmail.com>"]
+description = """
+A simple Windows specific API for controlling text color in a Windows console.
+"""
+documentation = "https://docs.rs/wincolor"
+homepage = "https://github.com/BurntSushi/termcolor/tree/master/wincolor"
+repository = "https://github.com/BurntSushi/termcolor/tree/master/wincolor"
+readme = "README.md"
+keywords = ["windows", "win", "color", "ansi", "console"]
+license = "Unlicense/MIT"
+
+[lib]
+name = "wincolor"
+bench = false
+
+[dependencies]
+winapi-util = "0.1.1"
+
+[dependencies.winapi]
+version = "0.3"
+features = ["minwindef", "wincon"]
