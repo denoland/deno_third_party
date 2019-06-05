@@ -1,0 +1,1 @@
+Original code in [this repo](https://github.com/PLSysSec/node) and [this file](https://github.com/PLSysSec/node/blob/safev8/src/safe_v8.h). Adapted for our use case.
