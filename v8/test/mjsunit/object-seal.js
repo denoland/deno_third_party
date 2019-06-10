@@ -220,9 +220,11 @@ assertDoesNotThrow(function() { objControl.splice(0, 0, 100, 101, 102); });
 // Verify that crankshaft still does the right thing.
 obj = [1, 2, 3];
 
-push_call = function(a) { a.push(1000); return a; }
+push_call = function(a) { a.push(1000); return a; };
+%PrepareFunctionForOptimization(push_call);
 // Include a call site that doesn't have a custom built-in.
-var shift_call = function(a) { a.shift(1000); return a; }
+var shift_call = function(a) { a.shift(1000); return a; };
+%PrepareFunctionForOptimization(shift_call);
 for (var i = 0; i < 3; i++) {
   push_call(obj);
   shift_call(obj);
@@ -715,3 +717,51 @@ arr[3] = 'c';
 assertEquals(arr[3], undefined);
 arr.length = 2;
 assertEquals(arr.length, 3);
+
+// Change length with holey entries at the end
+var arr = ['a', ,];
+Object.seal(arr);
+assertEquals(arr.length, 2);
+arr.length = 0;
+assertEquals(arr.length, 1);
+arr.length = 3;
+assertEquals(arr.length, 3);
+arr.length = 0;
+assertEquals(arr.length, 1);
+
+// Spread with array
+var arr = ['a', 'b', 'c'];
+Object.seal(arr);
+var arrSpread = [...arr];
+assertEquals(arrSpread.length, arr.length);
+assertEquals(arrSpread[0], 'a');
+assertEquals(arrSpread[1], 'b');
+assertEquals(arrSpread[2], 'c');
+
+// Spread with array-like
+function returnArgs() {
+  return Object.seal(arguments);
+}
+var arrLike = returnArgs('a', 'b', 'c');
+assertTrue(Object.isSealed(arrLike));
+var arrSpread = [...arrLike];
+assertEquals(arrSpread.length, arrLike.length);
+assertEquals(arrSpread[0], 'a');
+assertEquals(arrSpread[1], 'b');
+assertEquals(arrSpread[2], 'c');
+
+// Spread with holey
+function countArgs() {
+  return arguments.length;
+}
+var arr = [, 'b','c'];
+Object.seal(arr);
+assertEquals(countArgs(...arr), 3);
+assertEquals(countArgs(...[...arr]), 3);
+assertEquals(countArgs.apply(this, [...arr]), 3);
+function checkUndefined() {
+  return arguments[0] === undefined;
+}
+assertTrue(checkUndefined(...arr));
+assertTrue(checkUndefined(...[...arr]));
+assertTrue(checkUndefined.apply(this, [...arr]));

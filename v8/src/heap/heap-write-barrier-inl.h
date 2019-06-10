@@ -10,16 +10,16 @@
 
 #include "src/heap/heap-write-barrier.h"
 
-#include "src/globals.h"
+#include "src/common/globals.h"
 // TODO(jkummerow): Get rid of this by moving GetIsolateFromWritableObject
 // elsewhere.
-#include "src/isolate.h"
+#include "src/execution/isolate.h"
 #include "src/objects/code.h"
 #include "src/objects/compressed-slots-inl.h"
 #include "src/objects/fixed-array.h"
 #include "src/objects/heap-object.h"
 #include "src/objects/maybe-object-inl.h"
-#include "src/objects/slots.h"
+#include "src/objects/slots-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -38,12 +38,6 @@ V8_EXPORT_PRIVATE void Heap_GenerationalBarrierForCodeSlow(Code host,
 V8_EXPORT_PRIVATE void Heap_MarkingBarrierForCodeSlow(Code host,
                                                       RelocInfo* rinfo,
                                                       HeapObject object);
-V8_EXPORT_PRIVATE void Heap_GenerationalBarrierForElementsSlow(Heap* heap,
-                                                               FixedArray array,
-                                                               int offset,
-                                                               int length);
-V8_EXPORT_PRIVATE void Heap_MarkingBarrierForElementsSlow(Heap* heap,
-                                                          HeapObject object);
 V8_EXPORT_PRIVATE void Heap_MarkingBarrierForDescriptorArraySlow(
     Heap* heap, HeapObject host, HeapObject descriptor_array,
     int number_of_own_descriptors);
@@ -52,27 +46,18 @@ V8_EXPORT_PRIVATE void Heap_MarkingBarrierForDescriptorArraySlow(
 // internals are only intended to shortcut write barrier checks.
 namespace heap_internals {
 
-struct Space {
-  static constexpr uintptr_t kIdOffset = 9 * kSystemPointerSize;
-  V8_INLINE AllocationSpace identity() {
-    return *reinterpret_cast<AllocationSpace*>(reinterpret_cast<Address>(this) +
-                                               kIdOffset);
-  }
-};
-
 struct MemoryChunk {
   static constexpr uintptr_t kFlagsOffset = sizeof(size_t);
   static constexpr uintptr_t kHeapOffset =
       kFlagsOffset + kUIntptrSize + 4 * kSystemPointerSize;
-  static constexpr uintptr_t kOwnerOffset =
-      kHeapOffset + 2 * kSystemPointerSize;
   static constexpr uintptr_t kMarkingBit = uintptr_t{1} << 18;
   static constexpr uintptr_t kFromPageBit = uintptr_t{1} << 3;
   static constexpr uintptr_t kToPageBit = uintptr_t{1} << 4;
+  static constexpr uintptr_t kReadOnlySpaceBit = uintptr_t{1} << 21;
 
   V8_INLINE static heap_internals::MemoryChunk* FromHeapObject(
       HeapObject object) {
-    return reinterpret_cast<MemoryChunk*>(object->ptr() & ~kPageAlignmentMask);
+    return reinterpret_cast<MemoryChunk*>(object.ptr() & ~kPageAlignmentMask);
   }
 
   V8_INLINE bool IsMarking() const { return GetFlags() & kMarkingBit; }
@@ -90,13 +75,12 @@ struct MemoryChunk {
   V8_INLINE Heap* GetHeap() {
     Heap* heap = *reinterpret_cast<Heap**>(reinterpret_cast<Address>(this) +
                                            kHeapOffset);
-    SLOW_DCHECK(heap != nullptr);
+    DCHECK_NOT_NULL(heap);
     return heap;
   }
 
-  V8_INLINE Space* GetOwner() {
-    return *reinterpret_cast<Space**>(reinterpret_cast<Address>(this) +
-                                      kOwnerOffset);
+  V8_INLINE bool InReadOnlySpace() const {
+    return GetFlags() & kReadOnlySpaceBit;
   }
 };
 
@@ -147,7 +131,7 @@ inline void MarkingBarrierInternal(HeapObject object, Address slot,
 
 inline void WriteBarrierForCode(Code host, RelocInfo* rinfo, Object value) {
   DCHECK(!HasWeakHeapObjectTag(value));
-  if (!value->IsHeapObject()) return;
+  if (!value.IsHeapObject()) return;
   HeapObject object = HeapObject::cast(value);
   GenerationalBarrierForCode(host, rinfo, object);
   MarkingBarrierForCode(host, rinfo, object);
@@ -161,7 +145,7 @@ inline void GenerationalBarrier(HeapObject object, ObjectSlot slot,
                                 Object value) {
   DCHECK(!HasWeakHeapObjectTag(*slot));
   DCHECK(!HasWeakHeapObjectTag(value));
-  if (!value->IsHeapObject()) return;
+  if (!value.IsHeapObject()) return;
   heap_internals::GenerationalBarrierInternal(object, slot.address(),
                                               HeapObject::cast(value));
 }
@@ -170,7 +154,7 @@ inline void GenerationalEphemeronKeyBarrier(EphemeronHashTable table,
                                             ObjectSlot slot, Object value) {
   DCHECK(!HasWeakHeapObjectTag(*slot));
   DCHECK(!HasWeakHeapObjectTag(value));
-  DCHECK(value->IsHeapObject());
+  DCHECK(value.IsHeapObject());
   heap_internals::GenerationalEphemeronKeyBarrierInternal(
       table, slot.address(), HeapObject::cast(value));
 }
@@ -181,15 +165,6 @@ inline void GenerationalBarrier(HeapObject object, MaybeObjectSlot slot,
   if (!value->GetHeapObject(&value_heap_object)) return;
   heap_internals::GenerationalBarrierInternal(object, slot.address(),
                                               value_heap_object);
-}
-
-inline void GenerationalBarrierForElements(Heap* heap, FixedArray array,
-                                           int offset, int length) {
-  heap_internals::MemoryChunk* array_chunk =
-      heap_internals::MemoryChunk::FromHeapObject(array);
-  if (array_chunk->InYoungGeneration()) return;
-
-  Heap_GenerationalBarrierForElementsSlow(heap, array, offset, length);
 }
 
 inline void GenerationalBarrierForCode(Code host, RelocInfo* rinfo,
@@ -203,7 +178,7 @@ inline void GenerationalBarrierForCode(Code host, RelocInfo* rinfo,
 inline void MarkingBarrier(HeapObject object, ObjectSlot slot, Object value) {
   DCHECK_IMPLIES(slot.address() != kNullAddress, !HasWeakHeapObjectTag(*slot));
   DCHECK(!HasWeakHeapObjectTag(value));
-  if (!value->IsHeapObject()) return;
+  if (!value.IsHeapObject()) return;
   heap_internals::MarkingBarrierInternal(object, slot.address(),
                                          HeapObject::cast(value));
 }
@@ -216,17 +191,9 @@ inline void MarkingBarrier(HeapObject object, MaybeObjectSlot slot,
                                          value_heap_object);
 }
 
-inline void MarkingBarrierForElements(Heap* heap, HeapObject object) {
-  heap_internals::MemoryChunk* object_chunk =
-      heap_internals::MemoryChunk::FromHeapObject(object);
-  if (!object_chunk->IsMarking()) return;
-
-  Heap_MarkingBarrierForElementsSlow(heap, object);
-}
-
 inline void MarkingBarrierForCode(Code host, RelocInfo* rinfo,
                                   HeapObject object) {
-  DCHECK(!HasWeakHeapObjectTag(object.ptr()));
+  DCHECK(!HasWeakHeapObjectTag(object));
   heap_internals::MemoryChunk* object_chunk =
       heap_internals::MemoryChunk::FromHeapObject(object);
   if (!object_chunk->IsMarking()) return;
@@ -254,27 +221,44 @@ inline WriteBarrierMode GetWriteBarrierModeForObject(
   return UPDATE_WRITE_BARRIER;
 }
 
-inline bool ObjectInYoungGeneration(const Object object) {
+inline bool ObjectInYoungGeneration(Object object) {
   if (object.IsSmi()) return false;
   return heap_internals::MemoryChunk::FromHeapObject(HeapObject::cast(object))
       ->InYoungGeneration();
 }
 
-inline Heap* GetHeapFromWritableObject(const HeapObject object) {
+inline Heap* GetHeapFromWritableObject(HeapObject object) {
+#ifdef V8_COMPRESS_POINTERS
+  return GetIsolateFromWritableObject(object)->heap();
+#else
   heap_internals::MemoryChunk* chunk =
       heap_internals::MemoryChunk::FromHeapObject(object);
   return chunk->GetHeap();
+#endif  // V8_COMPRESS_POINTERS
+}
+
+inline Isolate* GetIsolateFromWritableObject(HeapObject object) {
+#ifdef V8_COMPRESS_POINTERS
+  return Isolate::FromRoot(GetIsolateRoot(object.ptr()));
+#else
+  return Isolate::FromHeap(GetHeapFromWritableObject(object));
+#endif  // V8_COMPRESS_POINTERS
 }
 
 inline bool GetIsolateFromWritableObject(HeapObject obj, Isolate** isolate) {
+#ifdef V8_COMPRESS_POINTERS
+  *isolate = GetIsolateFromWritableObject(obj);
+  return true;
+#else
   heap_internals::MemoryChunk* chunk =
       heap_internals::MemoryChunk::FromHeapObject(obj);
-  if (chunk->GetOwner()->identity() == RO_SPACE) {
+  if (chunk->InReadOnlySpace()) {
     *isolate = nullptr;
     return false;
   }
   *isolate = Isolate::FromHeap(chunk->GetHeap());
   return true;
+#endif  // V8_COMPRESS_POINTERS
 }
 
 }  // namespace internal

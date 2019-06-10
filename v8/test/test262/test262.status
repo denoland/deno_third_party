@@ -75,6 +75,14 @@
   'intl402/DateTimeFormat/prototype/format/format-function-name': [FAIL],
   'intl402/Collator/prototype/compare/compare-function-name': [FAIL],
 
+  # Intl tests which require flags.
+  # https://bugs.chromium.org/p/v8/issues/detail?id=9154
+  'intl402/NumberFormat/numbering-system-options': ['--harmony-intl-add-calendar-numbering-system'],
+  'intl402/DateTimeFormat/numbering-system-calendar-options': ['--harmony-intl-add-calendar-numbering-system'],
+
+  # https://bugs.chromium.org/p/v8/issues/detail?id=9319
+  'intl402/NumberFormat/prototype/resolvedOptions/order': ['--noharmony-intl-numberformat-unified'],
+
   # https://bugs.chromium.org/p/v8/issues/detail?id=9084
   'intl402/supportedLocalesOf-consistent-with-resolvedOptions': [FAIL],
   'intl402/fallback-locales-are-supported': [FAIL],
@@ -148,17 +156,6 @@
   'built-ins/DataView/detached-buffer': [FAIL],
   'built-ins/DataView/prototype/byteLength/detached-buffer': [FAIL],
   'built-ins/DataView/prototype/byteOffset/detached-buffer': [FAIL],
-
-  # https://crbug.com/v8/9131
-  'built-ins/RegExp/property-escapes/generated/Assigned': [SKIP],
-  'built-ins/RegExp/property-escapes/generated/Changes_When_NFKC_Casefolded': [SKIP],
-  'built-ins/RegExp/property-escapes/generated/General_Category_-_Other': [SKIP],
-  'built-ins/RegExp/property-escapes/generated/General_Category_-_Other_Symbol': [SKIP],
-  'built-ins/RegExp/property-escapes/generated/General_Category_-_Symbol': [SKIP],
-  'built-ins/RegExp/property-escapes/generated/General_Category_-_Unassigned': [SKIP],
-  'built-ins/RegExp/property-escapes/generated/Grapheme_Base': [SKIP],
-  'built-ins/RegExp/property-escapes/generated/Script_-_Common': [SKIP],
-  'built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Han': [SKIP],
 
   # https://bugs.chromium.org/p/v8/issues/detail?id=4951
   'language/expressions/assignment/destructuring/iterator-destructuring-property-reference-target-evaluation-order': [FAIL],
@@ -521,32 +518,18 @@
   # https://bugs.chromium.org/p/v8/issues/detail?id=9047
   'annexB/built-ins/Function/createdynfn-no-line-terminator-html-close-comment-body': [FAIL],
 
-  # https://bugs.chromium.org/p/v8/issues/detail?id=9048
-  'built-ins/JSON/stringify/bigint-tojson-receiver': [FAIL],
-
   # https://bugs.chromium.org/p/v8/issues/detail?id=9049
   'language/comments/hashbang/use-strict': [SKIP],
 
-  # https://bugs.chromium.org/p/v8/issues/detail?id=9050
-  'language/statements/async-generator/return-undefined-implicit-and-explicit': [FAIL],
-
-  # https://bugs.chromium.org/p/v8/issues/detail?id=9051
-  'language/statements/async-generator/yield-star-return-then-getter-ticks': [FAIL],
-
-  # https://bugs.chromium.org/p/v8/issues/detail?id=9152
-  'built-ins/Promise/all/capability-executor-called-twice': [FAIL],
-  'built-ins/Promise/all/capability-resolve-throws-no-close': [FAIL],
-  'built-ins/Promise/all/capability-resolve-throws-reject': [FAIL],
-  'built-ins/Promise/all/invoke-resolve-get-error-close': [FAIL],
-  'built-ins/Promise/all/species-get-error': [FAIL],
-  'built-ins/Promise/allSettled/capability-executor-called-twice': [FAIL],
-  'built-ins/Promise/allSettled/capability-resolve-throws-no-close': [FAIL],
-  'built-ins/Promise/allSettled/capability-resolve-throws-reject': [FAIL],
-  'built-ins/Promise/allSettled/invoke-resolve-get-error-close': [FAIL],
-  'built-ins/Promise/allSettled/species-get-error': [FAIL],
-  'built-ins/Promise/race/capability-executor-called-twice': [FAIL],
-  'built-ins/Promise/race/invoke-resolve-get-error-close': [FAIL],
-  'built-ins/Promise/race/species-get-error': [FAIL],
+  # https://bugs.chromium.org/p/v8/issues/detail?id=9229
+  'language/expressions/class/elements/syntax/early-errors/grammar-private-environment-on-class-heritage': [FAIL],
+  'language/expressions/class/elements/syntax/early-errors/grammar-private-environment-on-class-heritage-chained-usage': [FAIL],
+  'language/expressions/class/elements/syntax/early-errors/grammar-private-environment-on-class-heritage-function-expression': [FAIL],
+  'language/expressions/class/elements/syntax/early-errors/grammar-private-environment-on-class-heritage-recursive': [FAIL],
+  'language/statements/class/elements/syntax/early-errors/grammar-private-environment-on-class-heritage': [FAIL],
+  'language/statements/class/elements/syntax/early-errors/grammar-private-environment-on-class-heritage-chained-usage': [FAIL],
+  'language/statements/class/elements/syntax/early-errors/grammar-private-environment-on-class-heritage-function-expression': [FAIL],
+  'language/statements/class/elements/syntax/early-errors/grammar-private-environment-on-class-heritage-recursive': [FAIL],
 
   ######################## NEEDS INVESTIGATION ###########################
 
@@ -1221,13 +1204,6 @@
   'built-ins/SharedArrayBuffer/allocation-limit': [SKIP],
   'built-ins/SharedArrayBuffer/length-is-too-large-throws': [SKIP],
 }],  # asan == True or msan == True or tsan == True
-
-['variant == interpreted_regexp', {
-  # Call stack exceeded: https://crbug.com/v8/8678
-  'built-ins/RegExp/CharacterClassEscapes/character-class-non-digit-class-escape-plus-quantifier-flags-u': [SKIP],
-  'built-ins/RegExp/CharacterClassEscapes/character-class-non-whitespace-class-escape-plus-quantifier-flags-u': [SKIP],
-  'built-ins/RegExp/CharacterClassEscapes/character-class-non-word-class-escape-plus-quantifier-flags-u': [SKIP],
-}],  # variant == interpreted_regexp
 
 ##############################################################################
 ['variant == jitless', {

@@ -5,11 +5,11 @@
 #ifndef V8_WASM_WASM_MODULE_BUILDER_H_
 #define V8_WASM_WASM_MODULE_BUILDER_H_
 
-#include "src/signature.h"
+#include "src/codegen/signature.h"
 #include "src/zone/zone-containers.h"
 
-#include "src/v8memory.h"
-#include "src/vector.h"
+#include "src/common/v8memory.h"
+#include "src/utils/vector.h"
 #include "src/wasm/leb-helper.h"
 #include "src/wasm/local-decl-encoder.h"
 #include "src/wasm/wasm-module.h"
@@ -90,7 +90,7 @@ class ZoneBuffer : public ZoneObject {
 
   void write_string(Vector<const char> name) {
     write_size(name.length());
-    write(reinterpret_cast<const byte*>(name.start()), name.length());
+    write(reinterpret_cast<const byte*>(name.begin()), name.length());
   }
 
   size_t reserve_u32v() {

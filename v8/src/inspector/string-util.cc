@@ -4,11 +4,12 @@
 
 #include "src/inspector/string-util.h"
 
+#include <cinttypes>
 #include <cmath>
 
 #include "src/base/platform/platform.h"
-#include "src/conversions.h"
 #include "src/inspector/protocol/Protocol.h"
+#include "src/numbers/conversions.h"
 
 namespace v8_inspector {
 
@@ -122,12 +123,6 @@ std::unique_ptr<protocol::Value> StringUtil::parseJSON(const String16& string) {
   if (!string.length()) return nullptr;
   return parseJSONCharacters(string.characters16(),
                              static_cast<int>(string.length()));
-}
-
-// static
-std::unique_ptr<protocol::Value> StringUtil::parseProtocolMessage(
-    const ProtocolMessage& message) {
-  return parseJSON(message.json);
 }
 
 // static

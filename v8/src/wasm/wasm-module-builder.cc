@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/signature.h"
+#include "src/codegen/signature.h"
 
-#include "src/handles.h"
-#include "src/objects-inl.h"
-#include "src/v8.h"
+#include "src/handles/handles.h"
+#include "src/init/v8.h"
+#include "src/objects/objects-inl.h"
 #include "src/zone/zone-containers.h"
 
 #include "src/wasm/function-body-decoder.h"
@@ -16,7 +16,7 @@
 #include "src/wasm/wasm-module.h"
 #include "src/wasm/wasm-opcodes.h"
 
-#include "src/v8memory.h"
+#include "src/common/v8memory.h"
 
 namespace v8 {
 namespace internal {

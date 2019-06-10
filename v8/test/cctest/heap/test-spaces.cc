@@ -31,8 +31,8 @@
 #include "src/base/platform/platform.h"
 #include "src/heap/factory.h"
 #include "src/heap/spaces-inl.h"
-#include "src/objects-inl.h"
 #include "src/objects/free-space.h"
+#include "src/objects/objects-inl.h"
 #include "src/snapshot/snapshot.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-tester.h"
@@ -301,7 +301,7 @@ TEST(LargeObjectSpace) {
   int lo_size = Page::kPageSize;
 
   Object obj = lo->AllocateRaw(lo_size).ToObjectChecked();
-  CHECK(obj->IsHeapObject());
+  CHECK(obj.IsHeapObject());
 
   HeapObject ho = HeapObject::cast(obj);
 
@@ -390,7 +390,7 @@ static HeapObject AllocateUnaligned(NewSpace* space, int size) {
   CHECK(!allocation.IsRetry());
   HeapObject filler;
   CHECK(allocation.To(&filler));
-  space->heap()->CreateFillerObjectAt(filler->address(), size,
+  space->heap()->CreateFillerObjectAt(filler.address(), size,
                                       ClearRecordedSlots::kNo);
   return filler;
 }
@@ -400,7 +400,7 @@ static HeapObject AllocateUnaligned(PagedSpace* space, int size) {
   CHECK(!allocation.IsRetry());
   HeapObject filler;
   CHECK(allocation.To(&filler));
-  space->heap()->CreateFillerObjectAt(filler->address(), size,
+  space->heap()->CreateFillerObjectAt(filler.address(), size,
                                       ClearRecordedSlots::kNo);
   return filler;
 }
@@ -571,7 +571,7 @@ HEAP_TEST(Regress777177) {
     heap::SimulateFullSpace(old_space);
     AllocationResult result = old_space->AllocateRaw(filler_size, kWordAligned);
     HeapObject obj = result.ToObjectChecked();
-    heap->CreateFillerObjectAt(obj->address(), filler_size,
+    heap->CreateFillerObjectAt(obj.address(), filler_size,
                                ClearRecordedSlots::kNo);
   }
 
@@ -582,14 +582,14 @@ HEAP_TEST(Regress777177) {
         old_space->AllocateRaw(max_object_size, kWordAligned);
     HeapObject obj = result.ToObjectChecked();
     // Simulate allocation folding moving the top pointer back.
-    old_space->SetTopAndLimit(obj->address(), old_space->limit());
+    old_space->SetTopAndLimit(obj.address(), old_space->limit());
   }
 
   {
     // This triggers assert in crbug.com/777177.
     AllocationResult result = old_space->AllocateRaw(filler_size, kWordAligned);
     HeapObject obj = result.ToObjectChecked();
-    heap->CreateFillerObjectAt(obj->address(), filler_size,
+    heap->CreateFillerObjectAt(obj.address(), filler_size,
                                ClearRecordedSlots::kNo);
   }
   old_space->RemoveAllocationObserver(&observer);
@@ -621,17 +621,17 @@ HEAP_TEST(Regress791582) {
     AllocationResult result =
         new_space->AllocateRaw(until_page_end, kWordAligned);
     HeapObject obj = result.ToObjectChecked();
-    heap->CreateFillerObjectAt(obj->address(), until_page_end,
+    heap->CreateFillerObjectAt(obj.address(), until_page_end,
                                ClearRecordedSlots::kNo);
     // Simulate allocation folding moving the top pointer back.
-    *new_space->allocation_top_address() = obj->address();
+    *new_space->allocation_top_address() = obj.address();
   }
 
   {
     // This triggers assert in crbug.com/791582
     AllocationResult result = new_space->AllocateRaw(256, kWordAligned);
     HeapObject obj = result.ToObjectChecked();
-    heap->CreateFillerObjectAt(obj->address(), 256, ClearRecordedSlots::kNo);
+    heap->CreateFillerObjectAt(obj.address(), 256, ClearRecordedSlots::kNo);
   }
   new_space->RemoveAllocationObserver(&observer);
 }
@@ -656,7 +656,7 @@ TEST(ShrinkPageToHighWaterMarkFreeSpaceEnd) {
   old_space->ResetFreeList();
 
   HeapObject filler = HeapObject::FromAddress(array->address() + array->Size());
-  CHECK(filler->IsFreeSpace());
+  CHECK(filler.IsFreeSpace());
   size_t shrunk = old_space->ShrinkPageToHighWaterMark(page);
   size_t should_have_shrunk = RoundDown(
       static_cast<size_t>(MemoryChunkLayout::AllocatableMemoryInDataPage() -
@@ -707,7 +707,7 @@ TEST(ShrinkPageToHighWaterMarkOneWordFiller) {
   old_space->ResetFreeList();
 
   HeapObject filler = HeapObject::FromAddress(array->address() + array->Size());
-  CHECK_EQ(filler->map(),
+  CHECK_EQ(filler.map(),
            ReadOnlyRoots(CcTest::heap()).one_pointer_filler_map());
 
   size_t shrunk = old_space->ShrinkPageToHighWaterMark(page);
@@ -734,11 +734,107 @@ TEST(ShrinkPageToHighWaterMarkTwoWordFiller) {
   old_space->ResetFreeList();
 
   HeapObject filler = HeapObject::FromAddress(array->address() + array->Size());
-  CHECK_EQ(filler->map(),
+  CHECK_EQ(filler.map(),
            ReadOnlyRoots(CcTest::heap()).two_pointer_filler_map());
 
   size_t shrunk = old_space->ShrinkPageToHighWaterMark(page);
   CHECK_EQ(0u, shrunk);
+}
+
+HEAP_TEST(AllocateObjTinyFreeList) {
+  CcTest::InitializeVM();
+  Isolate* isolate = CcTest::i_isolate();
+  HandleScope scope(isolate);
+
+  heap::SealCurrentObjects(CcTest::heap());
+
+  // tinyObjPage will contain the page that contains the tiny object.
+  Page* tiny_obj_page;
+  {
+    // Allocates a tiny object (ie, that fits in the Tiny freelist).
+    // It will go at the begining of a page.
+    // Note that the handlescope is locally scoped.
+    {
+      HandleScope tiny_scope(isolate);
+      size_t tiny_obj_size =
+          (FreeList::kTinyListMax - FixedArray::kHeaderSize) / kTaggedSize;
+      Handle<FixedArray> tiny_obj = isolate->factory()->NewFixedArray(
+          static_cast<int>(tiny_obj_size), AllocationType::kOld);
+      // Remember the page of this tiny object.
+      tiny_obj_page = Page::FromHeapObject(*tiny_obj);
+    }
+
+    // Fill up the page entirely.
+    PagedSpace* old_space = CcTest::heap()->old_space();
+    int space_remaining =
+        static_cast<int>(*old_space->allocation_limit_address() -
+                         *old_space->allocation_top_address());
+    std::vector<Handle<FixedArray>> handles = heap::CreatePadding(
+        old_space->heap(), space_remaining, AllocationType::kOld);
+
+    // Checking that the new objects were indeed allocated on the same page
+    // as the tiny one.
+    CHECK_EQ(tiny_obj_page, Page::FromHeapObject(*(handles.back())));
+  }
+
+  // Call gc to reclain tinyObj (since its HandleScope went out of scope).
+  CcTest::CollectAllGarbage();
+  isolate->heap()->mark_compact_collector()->EnsureSweepingCompleted();
+  isolate->heap()->old_space()->FreeLinearAllocationArea();
+
+  // Now allocate a tyniest object.
+  // It should go at the same place as the previous one.
+  size_t tiniest_obj_size =
+      (FreeList::kTiniestListMax - FixedArray::kHeaderSize) / kTaggedSize;
+  Handle<FixedArray> tiniest_obj = isolate->factory()->NewFixedArray(
+      static_cast<int>(tiniest_obj_size), AllocationType::kOld);
+
+  // Check that the new tiny object is in the same page as the previous one.
+  Page* tiniest_obj_page = Page::FromHeapObject(*tiniest_obj);
+  CHECK_EQ(tiny_obj_page, tiniest_obj_page);
+}
+
+HEAP_TEST(EmptyFreeListCategoriesRemoved) {
+  CcTest::InitializeVM();
+  Isolate* isolate = CcTest::i_isolate();
+  HandleScope scope(isolate);
+
+  heap::SealCurrentObjects(CcTest::heap());
+
+  // The maximum size for a Tiny FixedArray.
+  // (there is no specific reason for using Tiny rather than any other category)
+  constexpr size_t tiny_obj_size =
+      (FreeList::kTinyListMax - FixedArray::kHeaderSize) / kTaggedSize;
+
+  Page* tiny_obj_page;
+  {
+    // Allocate a Tiny object that will be destroyed later.
+    HandleScope tiny_scope(isolate);
+    Handle<FixedArray> tiny_obj = isolate->factory()->NewFixedArray(
+        static_cast<int>(tiny_obj_size), AllocationType::kOld);
+    tiny_obj_page = Page::FromHeapObject(*tiny_obj);
+  }
+
+  // Fill up the page entirely.
+  PagedSpace* old_space = CcTest::heap()->old_space();
+  int space_remaining =
+      static_cast<int>(*old_space->allocation_limit_address() -
+                       *old_space->allocation_top_address());
+  std::vector<Handle<FixedArray>> handles = heap::CreatePadding(
+      old_space->heap(), space_remaining, AllocationType::kOld);
+
+  // Call gc to reclaim |tiny_obj| (since its HandleScope went out of scope).
+  CcTest::CollectAllGarbage();
+  isolate->heap()->mark_compact_collector()->EnsureSweepingCompleted();
+  isolate->heap()->old_space()->FreeLinearAllocationArea();
+
+  // Allocates a new tiny_obj, which should take the place of the old one.
+  Handle<FixedArray> tiny_obj = isolate->factory()->NewFixedArray(
+      static_cast<int>(tiny_obj_size), AllocationType::kOld);
+  CHECK_EQ(tiny_obj_page, Page::FromHeapObject(*tiny_obj));
+
+  // The Tiny FreeListCategory should now be empty
+  CHECK_NULL(isolate->heap()->old_space()->free_list()->categories_[kTiny]);
 }
 
 }  // namespace heap

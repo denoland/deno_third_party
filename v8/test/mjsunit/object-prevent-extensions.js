@@ -30,6 +30,8 @@
 // Flags: --allow-natives-syntax
 
 
+assertFalse(Object.isExtensible());
+
 var obj1 = {};
 // Extensible defaults to true.
 assertTrue(Object.isExtensible(obj1));
@@ -409,3 +411,51 @@ assertEquals(arr[2], undefined);
 assertEquals(arr.pop(), undefined);
 assertEquals(arr.length, 1);
 assertEquals(arr[1], undefined);
+
+// Change length with holey entries at the end
+var arr = ['a', ,];
+Object.preventExtensions(arr);
+assertEquals(arr.length, 2);
+arr.length = 0;
+assertEquals(arr.length, 0);
+arr.length = 3;
+assertEquals(arr.length, 3);
+arr.length = 0;
+assertEquals(arr.length, 0);
+
+// Spread with array
+var arr = ['a', 'b', 'c'];
+Object.preventExtensions(arr);
+var arrSpread = [...arr];
+assertEquals(arrSpread.length, arr.length);
+assertEquals(arrSpread[0], 'a');
+assertEquals(arrSpread[1], 'b');
+assertEquals(arrSpread[2], 'c');
+
+// Spread with array-like
+function returnArgs() {
+  return Object.preventExtensions(arguments);
+}
+var arrLike = returnArgs('a', 'b', 'c');
+assertFalse(Object.isExtensible(arrLike));
+var arrSpread = [...arrLike];
+assertEquals(arrSpread.length, arrLike.length);
+assertEquals(arrSpread[0], 'a');
+assertEquals(arrSpread[1], 'b');
+assertEquals(arrSpread[2], 'c');
+
+// Spread with holey
+function countArgs() {
+  return arguments.length;
+}
+var arr = [, 'b','c'];
+Object.preventExtensions(arr);
+assertEquals(countArgs(...arr), 3);
+assertEquals(countArgs(...[...arr]), 3);
+assertEquals(countArgs.apply(this, [...arr]), 3);
+function checkUndefined() {
+  return arguments[0] === undefined;
+}
+assertTrue(checkUndefined(...arr));
+assertTrue(checkUndefined(...[...arr]));
+assertTrue(checkUndefined.apply(this, [...arr]));

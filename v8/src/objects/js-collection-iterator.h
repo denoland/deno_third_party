@@ -5,9 +5,9 @@
 #ifndef V8_OBJECTS_JS_COLLECTION_ITERATOR_H_
 #define V8_OBJECTS_JS_COLLECTION_ITERATOR_H_
 
-#include "src/globals.h"
-#include "src/objects.h"
+#include "src/common/globals.h"
 #include "src/objects/js-objects.h"
+#include "src/objects/objects.h"
 #include "src/objects/smi.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -25,6 +25,7 @@ class JSCollectionIterator : public JSObject {
   DECL_ACCESSORS(index, Object)
 
   void JSCollectionIteratorPrint(std::ostream& os, const char* name);
+  DECL_VERIFIER(JSCollectionIterator)
 
   DEFINE_FIELD_OFFSET_CONSTANTS(JSObject::kHeaderSize,
                                 TORQUE_GENERATED_JSCOLLECTION_ITERATOR_FIELDS)

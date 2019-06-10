@@ -5,11 +5,11 @@
 #ifndef V8_OBJECTS_CODE_H_
 #define V8_OBJECTS_CODE_H_
 
-#include "src/contexts.h"
-#include "src/handler-table.h"
-#include "src/objects.h"
+#include "src/codegen/handler-table.h"
+#include "src/objects/contexts.h"
 #include "src/objects/fixed-array.h"
 #include "src/objects/heap-object.h"
+#include "src/objects/objects.h"
 #include "src/objects/struct.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -22,7 +22,6 @@ class ByteArray;
 class BytecodeArray;
 class CodeDataContainer;
 class CodeDesc;
-class MaybeObject;
 
 namespace interpreter {
 class Register;
@@ -43,6 +42,7 @@ class Code : public HeapObject {
   V(BUILTIN)                \
   V(REGEXP)                 \
   V(WASM_FUNCTION)          \
+  V(WASM_TO_CAPI_FUNCTION)  \
   V(WASM_TO_JS_FUNCTION)    \
   V(JS_TO_WASM_FUNCTION)    \
   V(WASM_INTERPRETER_ENTRY) \
@@ -741,15 +741,15 @@ class BytecodeArray : public FixedArrayBase {
   inline Address GetFirstBytecodeAddress();
 
   // Accessors for frame size.
-  inline int frame_size() const;
-  inline void set_frame_size(int frame_size);
+  inline int32_t frame_size() const;
+  inline void set_frame_size(int32_t frame_size);
 
   // Accessor for register count (derived from frame_size).
   inline int register_count() const;
 
   // Accessors for parameter count (including implicit 'this' receiver).
-  inline int parameter_count() const;
-  inline void set_parameter_count(int number_of_parameters);
+  inline int32_t parameter_count() const;
+  inline void set_parameter_count(int32_t number_of_parameters);
 
   // Register used to pass the incoming new.target or generator object from the
   // fucntion call.
@@ -828,28 +828,15 @@ class BytecodeArray : public FixedArrayBase {
   // Compares only the bytecode array but not any of the header fields.
   bool IsBytecodeEqual(const BytecodeArray other) const;
 
-// Layout description.
-#define BYTECODE_ARRAY_FIELDS(V)                           \
-  /* Pointer fields. */                                    \
-  V(kConstantPoolOffset, kTaggedSize)                      \
-  V(kHandlerTableOffset, kTaggedSize)                      \
-  V(kSourcePositionTableOffset, kTaggedSize)               \
-  V(kFrameSizeOffset, kIntSize)                            \
-  V(kParameterSizeOffset, kIntSize)                        \
-  V(kIncomingNewTargetOrGeneratorRegisterOffset, kIntSize) \
-  V(kOSRNestingLevelOffset, kCharSize)                     \
-  V(kBytecodeAgeOffset, kCharSize)                         \
-  /* Total size. */                                        \
-  V(kHeaderSize, 0)
-
+  // Layout description.
   DEFINE_FIELD_OFFSET_CONSTANTS(FixedArrayBase::kHeaderSize,
-                                BYTECODE_ARRAY_FIELDS)
-#undef BYTECODE_ARRAY_FIELDS
+                                TORQUE_GENERATED_BYTECODE_ARRAY_FIELDS)
+  static constexpr int kHeaderSize = kSize;
 
   // InterpreterEntryTrampoline expects these fields to be next to each other
   // and writes a 16-bit value to reset them.
   STATIC_ASSERT(BytecodeArray::kBytecodeAgeOffset ==
-                kOSRNestingLevelOffset + kCharSize);
+                kOsrNestingLevelOffset + kCharSize);
 
   // Maximal memory consumption for a single BytecodeArray.
   static const int kMaxSize = 512 * MB;

@@ -13,6 +13,7 @@
 #include "src/objects/js-objects-inl.h"
 #include "src/objects/name.h"
 #include "src/objects/templates.h"
+#include "torque-generated/class-definitions-tq-inl.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -23,12 +24,12 @@ namespace internal {
 OBJECT_CONSTRUCTORS_IMPL(AccessCheckInfo, Struct)
 OBJECT_CONSTRUCTORS_IMPL(AccessorInfo, Struct)
 OBJECT_CONSTRUCTORS_IMPL(InterceptorInfo, Struct)
-OBJECT_CONSTRUCTORS_IMPL(CallHandlerInfo, Tuple3)
+
+TQ_OBJECT_CONSTRUCTORS_IMPL(CallHandlerInfo)
 
 CAST_ACCESSOR(AccessorInfo)
 CAST_ACCESSOR(AccessCheckInfo)
 CAST_ACCESSOR(InterceptorInfo)
-CAST_ACCESSOR(CallHandlerInfo)
 
 ACCESSORS(AccessorInfo, name, Name, kNameOffset)
 SMI_ACCESSORS(AccessorInfo, flags, kFlagsOffset)
@@ -46,7 +47,7 @@ bool AccessorInfo::has_getter() {
   bool result = getter() != Smi::kZero;
   DCHECK_EQ(result,
             getter() != Smi::kZero &&
-                Foreign::cast(getter())->foreign_address() != kNullAddress);
+                Foreign::cast(getter()).foreign_address() != kNullAddress);
   return result;
 }
 
@@ -54,7 +55,7 @@ bool AccessorInfo::has_setter() {
   bool result = setter() != Smi::kZero;
   DCHECK_EQ(result,
             setter() != Smi::kZero &&
-                Foreign::cast(setter())->foreign_address() != kNullAddress);
+                Foreign::cast(setter()).foreign_address() != kNullAddress);
   return result;
 }
 
@@ -88,13 +89,13 @@ BIT_FIELD_ACCESSORS(AccessorInfo, flags, initial_property_attributes,
 
 bool AccessorInfo::IsCompatibleReceiver(Object receiver) {
   if (!HasExpectedReceiverType()) return true;
-  if (!receiver->IsJSObject()) return false;
+  if (!receiver.IsJSObject()) return false;
   return FunctionTemplateInfo::cast(expected_receiver_type())
-      ->IsTemplateFor(JSObject::cast(receiver)->map());
+      .IsTemplateFor(JSObject::cast(receiver).map());
 }
 
 bool AccessorInfo::HasExpectedReceiverType() {
-  return expected_receiver_type()->IsFunctionTemplateInfo();
+  return expected_receiver_type().IsFunctionTemplateInfo();
 }
 
 ACCESSORS(AccessCheckInfo, callback, Object, kCallbackOffset)
@@ -119,9 +120,6 @@ BOOL_ACCESSORS(InterceptorInfo, flags, non_masking, kNonMasking)
 BOOL_ACCESSORS(InterceptorInfo, flags, is_named, kNamed)
 BOOL_ACCESSORS(InterceptorInfo, flags, has_no_side_effect, kHasNoSideEffect)
 
-ACCESSORS(CallHandlerInfo, callback, Object, kCallbackOffset)
-ACCESSORS(CallHandlerInfo, js_callback, Object, kJsCallbackOffset)
-ACCESSORS(CallHandlerInfo, data, Object, kDataOffset)
 
 bool CallHandlerInfo::IsSideEffectFreeCallHandlerInfo() const {
   ReadOnlyRoots roots = GetReadOnlyRoots();

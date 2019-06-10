@@ -7,10 +7,10 @@
 
 #include <unordered_map>
 
-#include "src/allocation.h"
 #include "src/base/platform/mutex.h"
-#include "src/globals.h"
+#include "src/common/globals.h"
 #include "src/objects/js-array-buffer.h"
+#include "src/utils/allocation.h"
 
 namespace v8 {
 namespace internal {
@@ -116,8 +116,6 @@ class LocalArrayBufferTracker {
   // Internal version of add that does not update counters. Requires separate
   // logic for updating external memory counters.
   inline void AddInternal(JSArrayBuffer buffer, size_t length);
-
-  inline Space* space();
 
   Page* page_;
   // The set contains raw heap pointers which are removed by the GC upon

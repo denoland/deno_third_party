@@ -7,10 +7,10 @@
 
 #include "src/ic/handler-configuration.h"
 
-#include "src/field-index-inl.h"
-#include "src/handles-inl.h"
-#include "src/objects-inl.h"
+#include "src/handles/handles-inl.h"
 #include "src/objects/data-handler-inl.h"
+#include "src/objects/field-index-inl.h"
+#include "src/objects/objects-inl.h"
 #include "src/objects/smi.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -25,7 +25,7 @@ CAST_ACCESSOR(LoadHandler)
 
 // Decodes kind from Smi-handler.
 LoadHandler::Kind LoadHandler::GetHandlerKind(Smi smi_handler) {
-  return KindBits::decode(smi_handler->value());
+  return KindBits::decode(smi_handler.value());
 }
 
 Handle<Smi> LoadHandler::LoadNormal(Isolate* isolate) {

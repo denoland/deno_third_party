@@ -4,9 +4,9 @@
 
 #include "src/compiler/compilation-dependencies.h"
 
-#include "src/handles-inl.h"
-#include "src/objects-inl.h"
+#include "src/handles/handles-inl.h"
 #include "src/objects/allocation-site-inl.h"
+#include "src/objects/objects-inl.h"
 #include "src/zone/zone-handle-set.h"
 
 namespace v8 {
@@ -181,9 +181,8 @@ class FieldRepresentationDependency final
   bool IsValid() const override {
     DisallowHeapAllocation no_heap_allocation;
     Handle<Map> owner = owner_.object();
-    return representation_.Equals(owner->instance_descriptors()
-                                      ->GetDetails(descriptor_)
-                                      .representation());
+    return representation_.Equals(
+        owner->instance_descriptors().GetDetails(descriptor_).representation());
   }
 
   void Install(const MaybeObjectHandle& code) const override {
@@ -213,7 +212,7 @@ class FieldTypeDependency final : public CompilationDependencies::Dependency {
     DisallowHeapAllocation no_heap_allocation;
     Handle<Map> owner = owner_.object();
     Handle<Object> type = type_.object();
-    return *type == owner->instance_descriptors()->GetFieldType(descriptor_);
+    return *type == owner->instance_descriptors().GetFieldType(descriptor_);
   }
 
   void Install(const MaybeObjectHandle& code) const override {
@@ -242,7 +241,7 @@ class FieldConstnessDependency final
     DisallowHeapAllocation no_heap_allocation;
     Handle<Map> owner = owner_.object();
     return PropertyConstness::kConst ==
-           owner->instance_descriptors()->GetDetails(descriptor_).constness();
+           owner->instance_descriptors().GetDetails(descriptor_).constness();
   }
 
   void Install(const MaybeObjectHandle& code) const override {
@@ -332,7 +331,7 @@ class ElementsKindDependency final
   bool IsValid() const override {
     Handle<AllocationSite> site = site_.object();
     ElementsKind kind = site->PointsToLiteral()
-                            ? site->boilerplate()->GetElementsKind()
+                            ? site->boilerplate().GetElementsKind()
                             : site->GetElementsKind();
     return kind_ == kind;
   }
@@ -372,9 +371,8 @@ class InitialMapInstanceSizePredictionDependency final
 
   void Install(const MaybeObjectHandle& code) const override {
     SLOW_DCHECK(IsValid());
-    DCHECK(!function_.object()
-                ->initial_map()
-                ->IsInobjectSlackTrackingInProgress());
+    DCHECK(
+        !function_.object()->initial_map().IsInobjectSlackTrackingInProgress());
   }
 
  private:
@@ -585,9 +583,9 @@ template <class MapContainer>
 void CompilationDependencies::DependOnStablePrototypeChains(
     MapContainer const& receiver_maps, WhereToStart start,
     base::Optional<JSObjectRef> last_prototype) {
-  // Determine actual holder and perform prototype chain checks.
   for (auto map : receiver_maps) {
     MapRef receiver_map(broker_, map);
+    if (start == kStartAtReceiver) DependOnStableMap(receiver_map);
     if (receiver_map.IsPrimitiveMap()) {
       // Perform the implicit ToObject for primitives here.
       // Implemented according to ES6 section 7.3.2 GetV (V, P).
@@ -595,12 +593,11 @@ void CompilationDependencies::DependOnStablePrototypeChains(
           broker_->native_context().GetConstructorFunction(receiver_map);
       if (constructor.has_value()) receiver_map = constructor->initial_map();
     }
-    if (start == kStartAtReceiver) DependOnStableMap(receiver_map);
     DependOnStablePrototypeChain(this, receiver_map, last_prototype);
   }
 }
 template void CompilationDependencies::DependOnStablePrototypeChains(
-    MapHandles const& receiver_maps, WhereToStart start,
+    ZoneVector<Handle<Map>> const& receiver_maps, WhereToStart start,
     base::Optional<JSObjectRef> last_prototype);
 template void CompilationDependencies::DependOnStablePrototypeChains(
     ZoneHandleSet<Map> const& receiver_maps, WhereToStart start,

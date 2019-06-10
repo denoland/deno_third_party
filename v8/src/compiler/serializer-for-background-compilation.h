@@ -7,9 +7,9 @@
 
 #include "src/base/optional.h"
 #include "src/compiler/access-info.h"
-#include "src/handles.h"
-#include "src/maybe-handles.h"
-#include "src/utils.h"
+#include "src/utils/utils.h"
+#include "src/handles/handles.h"
+#include "src/handles/maybe-handles.h"
 #include "src/zone/zone-containers.h"
 
 namespace v8 {
@@ -31,7 +31,6 @@ class Zone;
 namespace compiler {
 
 #define CLEAR_ENVIRONMENT_LIST(V) \
-  V(Abort)                        \
   V(CallRuntime)                  \
   V(CallRuntimeForPair)           \
   V(CreateBlockContext)           \
@@ -41,11 +40,14 @@ namespace compiler {
   V(PopContext)                   \
   V(PushContext)                  \
   V(ResumeGenerator)              \
-  V(ReThrow)                      \
   V(StaContextSlot)               \
   V(StaCurrentContextSlot)        \
   V(SuspendGenerator)             \
-  V(SwitchOnGeneratorState)       \
+  V(SwitchOnGeneratorState)
+
+#define KILL_ENVIRONMENT_LIST(V) \
+  V(Abort)                       \
+  V(ReThrow)                     \
   V(Throw)
 
 #define CLEAR_ACCUMULATOR_LIST(V)   \
@@ -152,6 +154,11 @@ namespace compiler {
   V(ThrowSuperAlreadyCalledIfNotHole) \
   V(ThrowSuperNotCalledIfHole)
 
+#define UNREACHABLE_BYTECODE_LIST(V) \
+  V(ExtraWide)                       \
+  V(Illegal)                         \
+  V(Wide)
+
 #define SUPPORTED_BYTECODE_LIST(V)   \
   V(CallAnyReceiver)                 \
   V(CallProperty)                    \
@@ -166,9 +173,7 @@ namespace compiler {
   V(Construct)                       \
   V(ConstructWithSpread)             \
   V(CreateClosure)                   \
-  V(ExtraWide)                       \
   V(GetSuperConstructor)             \
-  V(Illegal)                         \
   V(LdaConstant)                     \
   V(LdaFalse)                        \
   V(LdaGlobal)                       \
@@ -189,15 +194,18 @@ namespace compiler {
   V(StaGlobal)                       \
   V(StaInArrayLiteral)               \
   V(StaKeyedProperty)                \
+  V(StaNamedOwnProperty)             \
   V(StaNamedProperty)                \
   V(Star)                            \
+  V(SwitchOnSmiNoFeedback)           \
   V(TestIn)                          \
-  V(Wide)                            \
-  CLEAR_ENVIRONMENT_LIST(V)          \
   CLEAR_ACCUMULATOR_LIST(V)          \
+  CLEAR_ENVIRONMENT_LIST(V)          \
   CONDITIONAL_JUMPS_LIST(V)          \
+  IGNORED_BYTECODE_LIST(V)           \
+  KILL_ENVIRONMENT_LIST(V)           \
   UNCONDITIONAL_JUMPS_LIST(V)        \
-  IGNORED_BYTECODE_LIST(V)
+  UNREACHABLE_BYTECODE_LIST(V)
 
 class JSHeapBroker;
 
@@ -257,30 +265,47 @@ class Hints {
   void Clear();
   bool IsEmpty() const;
 
+#ifdef ENABLE_SLOW_DCHECKS
+  bool Includes(Hints const& other) const;
+  bool Equals(Hints const& other) const;
+#endif
+
  private:
   ConstantsSet constants_;
   MapsSet maps_;
   BlueprintsSet function_blueprints_;
 };
-
 using HintsVector = ZoneVector<Hints>;
+
+enum class SerializerForBackgroundCompilationFlag : uint8_t {
+  kBailoutOnUninitialized = 1 << 0,
+  kCollectSourcePositions = 1 << 1,
+  kOsr = 1 << 2,
+};
+using SerializerForBackgroundCompilationFlags =
+    base::Flags<SerializerForBackgroundCompilationFlag>;
 
 // The SerializerForBackgroundCompilation makes sure that the relevant function
 // data such as bytecode, SharedFunctionInfo and FeedbackVector, used by later
 // optimizations in the compiler, is copied to the heap broker.
 class SerializerForBackgroundCompilation {
  public:
-  SerializerForBackgroundCompilation(JSHeapBroker* broker, Zone* zone,
-                                     Handle<JSFunction> closure);
+  SerializerForBackgroundCompilation(
+      JSHeapBroker* broker, CompilationDependencies* dependencies, Zone* zone,
+      Handle<JSFunction> closure,
+      SerializerForBackgroundCompilationFlags flags);
   Hints Run();  // NOTE: Returns empty for an already-serialized function.
 
   class Environment;
 
  private:
-  SerializerForBackgroundCompilation(JSHeapBroker* broker, Zone* zone,
-                                     CompilationSubject function,
-                                     base::Optional<Hints> new_target,
-                                     const HintsVector& arguments);
+  SerializerForBackgroundCompilation(
+      JSHeapBroker* broker, CompilationDependencies* dependencies, Zone* zone,
+      CompilationSubject function, base::Optional<Hints> new_target,
+      const HintsVector& arguments,
+      SerializerForBackgroundCompilationFlags flags);
+
+  bool BailoutOnUninitialized(FeedbackSlot slot);
 
   void TraverseBytecode();
 
@@ -297,7 +322,6 @@ class SerializerForBackgroundCompilation {
                           bool with_spread = false);
 
   void ProcessJump(interpreter::BytecodeArrayIterator* iterator);
-  void MergeAfterJump(interpreter::BytecodeArrayIterator* iterator);
 
   void ProcessKeyedPropertyAccess(Hints const& receiver, Hints const& key,
                                   FeedbackSlot slot, AccessMode mode);
@@ -307,24 +331,40 @@ class SerializerForBackgroundCompilation {
                                   FeedbackSlot slot, AccessMode mode);
 
   GlobalAccessFeedback const* ProcessFeedbackForGlobalAccess(FeedbackSlot slot);
-  void ProcessFeedbackForKeyedPropertyAccess(FeedbackSlot slot,
-                                             AccessMode mode);
-  void ProcessFeedbackForNamedPropertyAccess(FeedbackSlot slot,
-                                             NameRef const& name);
+  NamedAccessFeedback const* ProcessFeedbackMapsForNamedAccess(
+      const MapHandles& maps, AccessMode mode, NameRef const& name);
+  ElementAccessFeedback const* ProcessFeedbackMapsForElementAccess(
+      const MapHandles& maps, AccessMode mode);
+  void ProcessFeedbackForPropertyAccess(FeedbackSlot slot, AccessMode mode,
+                                        base::Optional<NameRef> static_name);
   void ProcessMapForNamedPropertyAccess(MapRef const& map, NameRef const& name);
 
   Hints RunChildSerializer(CompilationSubject function,
                            base::Optional<Hints> new_target,
                            const HintsVector& arguments, bool with_spread);
 
+  // When (forward-)branching bytecodes are encountered, e.g. a conditional
+  // jump, we call ContributeToJumpTargetEnvironment to "remember" the current
+  // environment, associated with the jump target offset. When serialization
+  // eventually reaches that offset, we call IncorporateJumpTargetEnvironment to
+  // merge that environment back into whatever is the current environment then.
+  // Note: Since there may be multiple jumps to the same target,
+  // ContributeToJumpTargetEnvironment may actually do a merge as well.
+  void ContributeToJumpTargetEnvironment(int target_offset);
+  void IncorporateJumpTargetEnvironment(int target_offset);
+
   JSHeapBroker* broker() const { return broker_; }
+  CompilationDependencies* dependencies() const { return dependencies_; }
   Zone* zone() const { return zone_; }
   Environment* environment() const { return environment_; }
+  SerializerForBackgroundCompilationFlags flags() const { return flags_; }
 
   JSHeapBroker* const broker_;
+  CompilationDependencies* const dependencies_;
   Zone* const zone_;
   Environment* const environment_;
-  ZoneUnorderedMap<int, Environment*> stashed_environments_;
+  ZoneUnorderedMap<int, Environment*> jump_target_environments_;
+  SerializerForBackgroundCompilationFlags const flags_;
 };
 
 }  // namespace compiler

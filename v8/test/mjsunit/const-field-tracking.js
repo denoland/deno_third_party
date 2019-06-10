@@ -37,6 +37,7 @@ function TestLoadFromConstantFieldOfAConstantObject(the_value, other_value) {
   // {constant_object} is known to the compiler via global property cell
   // tracking.
   var load = MakeFunctionWithUniqueSFI("return constant_object.a.v;");
+  %PrepareFunctionForOptimization(load);
   load();
   load();
   %OptimizeFunctionOnNextCall(load);
@@ -98,6 +99,7 @@ function TestLoadFromConstantFieldOfAPrototype(the_value, other_value) {
 
   // Ensure O.prototype is in fast mode by loading from its field.
   function warmup() { return new O().v; }
+  %EnsureFeedbackVectorForFunction(warmup);
   warmup(); warmup(); warmup();
   assertTrue(%HasFastProperties(O.prototype));
 
@@ -105,6 +107,7 @@ function TestLoadFromConstantFieldOfAPrototype(the_value, other_value) {
   // map and therefore the compiler knows the prototype object and can
   // optimize load of "v".
   var load = MakeFunctionWithUniqueSFI("o", "return o.v;");
+  %PrepareFunctionForOptimization(load);
   load(new O());
   load(new O());
   %OptimizeFunctionOnNextCall(load);
@@ -168,6 +171,7 @@ function TestStoreToConstantFieldOfConstantObject(the_value, other_value) {
   // {constant_object} is known to the compiler via global property cell
   // tracking.
   var store = MakeFunctionWithUniqueSFI("v", "constant_object.a.v = v;");
+  %PrepareFunctionForOptimization(store);
   store(the_value);
   store(the_value);
   %OptimizeFunctionOnNextCall(store);

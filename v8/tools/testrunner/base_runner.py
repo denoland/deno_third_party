@@ -185,11 +185,13 @@ class BuildConfig(object):
     self.is_android = build_config['is_android']
     self.is_clang = build_config['is_clang']
     self.is_debug = build_config['is_debug']
+    self.is_full_debug = build_config['is_full_debug']
     self.msan = build_config['is_msan']
     self.no_i18n = not build_config['v8_enable_i18n_support']
     self.no_snap = not build_config['v8_use_snapshot']
     self.predictable = build_config['v8_enable_verify_predictable']
     self.tsan = build_config['is_tsan']
+    # TODO(machenbach): We only have ubsan not ubsan_vptr.
     self.ubsan_vptr = build_config['is_ubsan_vptr']
     self.embedded_builtins = build_config['v8_enable_embedded_builtins']
     self.verify_csa = build_config['v8_enable_verify_csa']
@@ -199,6 +201,11 @@ class BuildConfig(object):
     if self.arch in ['mips', 'mipsel', 'mips64', 'mips64el']:
       self.mips_arch_variant = build_config['mips_arch_variant']
       self.mips_use_msa = build_config['mips_use_msa']
+
+  @property
+  def use_sanitizer(self):
+    return (self.asan or self.cfi_vptr or self.msan or self.tsan or
+            self.ubsan_vptr)
 
   def __str__(self):
     detected_options = []
@@ -551,6 +558,9 @@ class BaseTestRunner(object):
         asan_options.append('detect_leaks=1')
       else:
         asan_options.append('detect_leaks=0')
+      if utils.GuessOS() == 'windows':
+        # https://crbug.com/967663
+        asan_options.append('detect_stack_use_after_return=0')
       os.environ['ASAN_OPTIONS'] = ":".join(asan_options)
 
     if self.build_config.cfi_vptr:
@@ -670,6 +680,7 @@ class BaseTestRunner(object):
       "gcov_coverage": self.build_config.gcov_coverage,
       "isolates": options.isolates,
       "is_clang": self.build_config.is_clang,
+      "is_full_debug": self.build_config.is_full_debug,
       "mips_arch_variant": mips_arch_variant,
       "mode": self.mode_options.status_mode
               if not self.build_config.dcheck_always_on
@@ -693,10 +704,6 @@ class BaseTestRunner(object):
     }
 
   def _create_test_config(self, options):
-    # TODO(machenbach): Remove temporary hard-coded timeout when infra side is
-    # removed.
-    if options.buildbot:
-      options.timeout = 200
     timeout = options.timeout * self._timeout_scalefactor(options)
     return TestConfig(
         command_prefix=options.command_prefix,
@@ -713,15 +720,18 @@ class BaseTestRunner(object):
     )
 
   def _timeout_scalefactor(self, options):
+    """Increases timeout for slow build configurations."""
     factor = self.mode_options.timeout_scalefactor
-
-    # Simulators are slow, therefore allow a longer timeout.
     if self.build_config.arch in SLOW_ARCHS:
+      factor *= 4
+    if self.build_config.lite_mode:
       factor *= 2
-
-    # Predictable mode is slower.
     if self.build_config.predictable:
-      factor *= 2
+      factor *= 4
+    if self.build_config.use_sanitizer:
+      factor *= 1.5
+    if self.build_config.is_full_debug:
+      factor *= 4
 
     return factor
 

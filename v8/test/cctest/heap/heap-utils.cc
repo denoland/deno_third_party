@@ -4,11 +4,11 @@
 
 #include "test/cctest/heap/heap-utils.h"
 
+#include "src/execution/isolate.h"
 #include "src/heap/factory.h"
 #include "src/heap/heap-inl.h"
 #include "src/heap/incremental-marking.h"
 #include "src/heap/mark-compact.h"
-#include "src/isolate.h"
 #include "test/cctest/cctest.h"
 
 namespace v8 {
@@ -213,6 +213,7 @@ void ForceEvacuationCandidate(Page* page) {
   CHECK(FLAG_manual_evacuation_candidates_selection);
   page->SetFlag(MemoryChunk::FORCE_EVACUATION_CANDIDATE_FOR_TESTING);
   PagedSpace* space = static_cast<PagedSpace*>(page->owner());
+  DCHECK_NOT_NULL(space);
   Address top = space->top();
   Address limit = space->limit();
   if (top < limit && Page::FromAllocationAreaAddress(top) == page) {

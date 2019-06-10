@@ -52,7 +52,9 @@
   V(Regress791582)                                        \
   V(Regress845060)                                        \
   V(RegressMissingWriteBarrierInAllocate)                 \
-  V(WriteBarriersInCopyJSObject)
+  V(WriteBarriersInCopyJSObject)                          \
+  V(AllocateObjTinyFreeList)                              \
+  V(EmptyFreeListCategoriesRemoved)
 
 #define HEAP_TEST(Name)                                                   \
   CcTest register_test_##Name(v8::internal::heap::HeapTester::Test##Name, \

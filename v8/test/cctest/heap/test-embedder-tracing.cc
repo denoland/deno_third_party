@@ -6,10 +6,10 @@
 #include <vector>
 
 #include "include/v8.h"
-#include "src/api-inl.h"
+#include "src/api/api-inl.h"
 #include "src/heap/heap-inl.h"
-#include "src/objects-inl.h"
 #include "src/objects/module.h"
+#include "src/objects/objects-inl.h"
 #include "src/objects/script.h"
 #include "src/objects/shared-function-info.h"
 #include "test/cctest/cctest.h"
@@ -36,7 +36,7 @@ v8::Local<v8::Object> ConstructTraceableJSApiObject(
   instance->SetAlignedPointerInInternalField(1, second_field);
   CHECK(!instance.IsEmpty());
   i::Handle<i::JSReceiver> js_obj = v8::Utils::OpenHandle(*instance);
-  CHECK_EQ(i::JS_API_OBJECT_TYPE, js_obj->map()->instance_type());
+  CHECK_EQ(i::JS_API_OBJECT_TYPE, js_obj->map().instance_type());
   return scope.Escape(instance);
 }
 
@@ -69,7 +69,7 @@ class TestEmbedderHeapTracer final : public v8::EmbedderHeapTracer {
 
   bool IsTracingDone() final { return to_register_with_v8_.empty(); }
 
-  void TracePrologue() final {
+  void TracePrologue(EmbedderHeapTracer::TraceFlags) final {
     if (prologue_behavior_ == TracePrologueBehavior::kCallV8WriteBarrier) {
       auto local = array_.Get(isolate());
       local->Set(local->CreationContext(), 0, v8::Object::New(isolate()))
@@ -211,7 +211,7 @@ TEST(TracingInEphemerons) {
     Handle<JSObject> js_key =
         handle(JSObject::cast(*v8::Utils::OpenHandle(*key)), i_isolate);
     Handle<JSReceiver> js_api_object = v8::Utils::OpenHandle(*api_object);
-    int32_t hash = js_key->GetOrCreateHash(i_isolate)->value();
+    int32_t hash = js_key->GetOrCreateHash(i_isolate).value();
     JSWeakCollection::Set(weak_map, js_key, js_api_object, hash);
   }
   CcTest::CollectGarbage(i::OLD_SPACE);

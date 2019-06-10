@@ -6,12 +6,12 @@
 
 #include <iomanip>
 
+#include "src/codegen/register-configuration.h"
+#include "src/codegen/source-position.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph.h"
 #include "src/compiler/schedule.h"
 #include "src/compiler/state-values-utils.h"
-#include "src/register-configuration.h"
-#include "src/source-position.h"
 
 namespace v8 {
 namespace internal {
@@ -56,7 +56,6 @@ FlagsCondition CommuteFlagsCondition(FlagsCondition condition) {
     case kPositiveOrZero:
     case kNegative:
       UNREACHABLE();
-      break;
     case kEqual:
     case kNotEqual:
     case kOverflow:
@@ -531,7 +530,7 @@ Constant::Constant(RelocatablePtrConstantInfo info) {
 }
 
 Handle<HeapObject> Constant::ToHeapObject() const {
-  DCHECK_EQ(kHeapObject, type());
+  DCHECK(kHeapObject == type() || kCompressedHeapObject == type());
   Handle<HeapObject> value(
       reinterpret_cast<Address*>(static_cast<intptr_t>(value_)));
   return value;
@@ -562,7 +561,8 @@ std::ostream& operator<<(std::ostream& os, const Constant& constant) {
       return os << constant.ToFloat64().value();
     case Constant::kExternalReference:
       return os << constant.ToExternalReference().address();
-    case Constant::kHeapObject:
+    case Constant::kHeapObject:  // Fall through.
+    case Constant::kCompressedHeapObject:
       return os << Brief(*constant.ToHeapObject());
     case Constant::kRpoNumber:
       return os << "RPO" << constant.ToRpoNumber().ToInt();

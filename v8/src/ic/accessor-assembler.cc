@@ -5,17 +5,17 @@
 #include "src/ic/accessor-assembler.h"
 
 #include "src/ast/ast.h"
-#include "src/code-factory.h"
-#include "src/counters.h"
+#include "src/codegen/code-factory.h"
 #include "src/ic/handler-configuration.h"
 #include "src/ic/ic.h"
 #include "src/ic/keyed-store-generic.h"
 #include "src/ic/stub-cache.h"
-#include "src/objects-inl.h"
+#include "src/logging/counters.h"
 #include "src/objects/cell.h"
 #include "src/objects/foreign.h"
 #include "src/objects/heap-number.h"
 #include "src/objects/module.h"
+#include "src/objects/objects-inl.h"
 #include "src/objects/smi.h"
 
 namespace v8 {
@@ -57,7 +57,6 @@ TNode<MaybeObject> AccessorAssembler::LoadHandlerDataField(
       break;
     default:
       UNREACHABLE();
-      break;
   }
   USE(minimum_size);
   CSA_ASSERT(this, UintPtrGreaterThanOrEqual(
@@ -335,17 +334,16 @@ void AccessorAssembler::HandleLoadICSmiHandlerCase(
     BIND(&if_element);
     Comment("element_load");
     Node* intptr_index = TryToIntptr(p->name, miss);
-    Node* elements = LoadElements(holder);
     Node* is_jsarray_condition =
         IsSetWord<LoadHandler::IsJsArrayBits>(handler_word);
     Node* elements_kind =
         DecodeWord32FromWord<LoadHandler::ElementsKindBits>(handler_word);
     Label if_hole(this), unimplemented_elements_kind(this),
         if_oob(this, Label::kDeferred);
-    EmitElementLoad(holder, elements, elements_kind, intptr_index,
-                    is_jsarray_condition, &if_hole, &rebox_double,
-                    &var_double_value, &unimplemented_elements_kind, &if_oob,
-                    miss, exit_point, access_mode);
+    EmitElementLoad(holder, elements_kind, intptr_index, is_jsarray_condition,
+                    &if_hole, &rebox_double, &var_double_value,
+                    &unimplemented_elements_kind, &if_oob, miss, exit_point,
+                    access_mode);
 
     BIND(&unimplemented_elements_kind);
     {
@@ -1840,7 +1838,8 @@ void AccessorAssembler::StoreNamedField(Node* handler_word, Node* object,
     StoreObjectFieldNoWriteBarrier(property_storage, offset, value,
                                    MachineRepresentation::kFloat64);
   } else if (representation.IsSmi()) {
-    StoreObjectFieldNoWriteBarrier(property_storage, offset, value);
+    TNode<Smi> value_smi = CAST(value);
+    StoreObjectFieldNoWriteBarrier(property_storage, offset, value_smi);
   } else {
     StoreObjectField(property_storage, offset, value);
   }
@@ -1869,82 +1868,87 @@ void AccessorAssembler::EmitFastElementsBoundsCheck(Node* object,
 }
 
 void AccessorAssembler::EmitElementLoad(
-    Node* object, Node* elements, Node* elements_kind,
-    SloppyTNode<IntPtrT> intptr_index, Node* is_jsarray_condition,
-    Label* if_hole, Label* rebox_double, Variable* var_double_value,
-    Label* unimplemented_elements_kind, Label* out_of_bounds, Label* miss,
-    ExitPoint* exit_point, LoadAccessMode access_mode) {
-  Label if_typed_array(this), if_fast_packed(this), if_fast_holey(this),
-      if_fast_double(this), if_fast_holey_double(this), if_nonfast(this),
-      if_dictionary(this);
-  GotoIf(
+    Node* object, Node* elements_kind, SloppyTNode<IntPtrT> intptr_index,
+    Node* is_jsarray_condition, Label* if_hole, Label* rebox_double,
+    Variable* var_double_value, Label* unimplemented_elements_kind,
+    Label* out_of_bounds, Label* miss, ExitPoint* exit_point,
+    LoadAccessMode access_mode) {
+  Label if_typed_array(this), if_fast(this), if_fast_packed(this),
+      if_fast_holey(this), if_fast_double(this), if_fast_holey_double(this),
+      if_nonfast(this), if_dictionary(this);
+  Branch(
       Int32GreaterThan(elements_kind, Int32Constant(LAST_FROZEN_ELEMENTS_KIND)),
-      &if_nonfast);
+      &if_nonfast, &if_fast);
 
-  EmitFastElementsBoundsCheck(object, elements, intptr_index,
-                              is_jsarray_condition, out_of_bounds);
-  int32_t kinds[] = {// Handled by if_fast_packed.
-                     PACKED_SMI_ELEMENTS, PACKED_ELEMENTS,
-                     PACKED_SEALED_ELEMENTS, PACKED_FROZEN_ELEMENTS,
-                     // Handled by if_fast_holey.
-                     HOLEY_SMI_ELEMENTS, HOLEY_ELEMENTS,
-                     // Handled by if_fast_double.
-                     PACKED_DOUBLE_ELEMENTS,
-                     // Handled by if_fast_holey_double.
-                     HOLEY_DOUBLE_ELEMENTS};
-  Label* labels[] = {
-      // FAST_{SMI,}_ELEMENTS
-      &if_fast_packed, &if_fast_packed, &if_fast_packed, &if_fast_packed,
-      // FAST_HOLEY_{SMI,}_ELEMENTS
-      &if_fast_holey, &if_fast_holey,
-      // PACKED_DOUBLE_ELEMENTS
-      &if_fast_double,
-      // HOLEY_DOUBLE_ELEMENTS
-      &if_fast_holey_double};
-  Switch(elements_kind, unimplemented_elements_kind, kinds, labels,
-         arraysize(kinds));
-
-  BIND(&if_fast_packed);
+  BIND(&if_fast);
   {
-    Comment("fast packed elements");
-    exit_point->Return(
-        access_mode == LoadAccessMode::kHas
-            ? TrueConstant()
-            : UnsafeLoadFixedArrayElement(CAST(elements), intptr_index));
-  }
+    TNode<FixedArrayBase> elements = LoadJSObjectElements(CAST(object));
+    EmitFastElementsBoundsCheck(object, elements, intptr_index,
+                                is_jsarray_condition, out_of_bounds);
+    int32_t kinds[] = {// Handled by if_fast_packed.
+                       PACKED_SMI_ELEMENTS, PACKED_ELEMENTS,
+                       PACKED_SEALED_ELEMENTS, PACKED_FROZEN_ELEMENTS,
+                       // Handled by if_fast_holey.
+                       HOLEY_SMI_ELEMENTS, HOLEY_ELEMENTS,
+                       HOLEY_FROZEN_ELEMENTS, HOLEY_SEALED_ELEMENTS,
+                       // Handled by if_fast_double.
+                       PACKED_DOUBLE_ELEMENTS,
+                       // Handled by if_fast_holey_double.
+                       HOLEY_DOUBLE_ELEMENTS};
+    Label* labels[] = {
+        // FAST_{SMI,}_ELEMENTS
+        &if_fast_packed, &if_fast_packed, &if_fast_packed, &if_fast_packed,
+        // FAST_HOLEY_{SMI,}_ELEMENTS
+        &if_fast_holey, &if_fast_holey, &if_fast_holey, &if_fast_holey,
+        // PACKED_DOUBLE_ELEMENTS
+        &if_fast_double,
+        // HOLEY_DOUBLE_ELEMENTS
+        &if_fast_holey_double};
+    Switch(elements_kind, unimplemented_elements_kind, kinds, labels,
+           arraysize(kinds));
 
-  BIND(&if_fast_holey);
-  {
-    Comment("fast holey elements");
-    Node* element = UnsafeLoadFixedArrayElement(CAST(elements), intptr_index);
-    GotoIf(WordEqual(element, TheHoleConstant()), if_hole);
-    exit_point->Return(access_mode == LoadAccessMode::kHas ? TrueConstant()
-                                                           : element);
-  }
-
-  BIND(&if_fast_double);
-  {
-    Comment("packed double elements");
-    if (access_mode == LoadAccessMode::kHas) {
-      exit_point->Return(TrueConstant());
-    } else {
-      var_double_value->Bind(LoadFixedDoubleArrayElement(
-          elements, intptr_index, MachineType::Float64()));
-      Goto(rebox_double);
+    BIND(&if_fast_packed);
+    {
+      Comment("fast packed elements");
+      exit_point->Return(
+          access_mode == LoadAccessMode::kHas
+              ? TrueConstant()
+              : UnsafeLoadFixedArrayElement(CAST(elements), intptr_index));
     }
-  }
 
-  BIND(&if_fast_holey_double);
-  {
-    Comment("holey double elements");
-    Node* value = LoadFixedDoubleArrayElement(elements, intptr_index,
-                                              MachineType::Float64(), 0,
-                                              INTPTR_PARAMETERS, if_hole);
-    if (access_mode == LoadAccessMode::kHas) {
-      exit_point->Return(TrueConstant());
-    } else {
-      var_double_value->Bind(value);
-      Goto(rebox_double);
+    BIND(&if_fast_holey);
+    {
+      Comment("fast holey elements");
+      Node* element = UnsafeLoadFixedArrayElement(CAST(elements), intptr_index);
+      GotoIf(WordEqual(element, TheHoleConstant()), if_hole);
+      exit_point->Return(access_mode == LoadAccessMode::kHas ? TrueConstant()
+                                                             : element);
+    }
+
+    BIND(&if_fast_double);
+    {
+      Comment("packed double elements");
+      if (access_mode == LoadAccessMode::kHas) {
+        exit_point->Return(TrueConstant());
+      } else {
+        var_double_value->Bind(LoadFixedDoubleArrayElement(
+            CAST(elements), intptr_index, MachineType::Float64()));
+        Goto(rebox_double);
+      }
+    }
+
+    BIND(&if_fast_holey_double);
+    {
+      Comment("holey double elements");
+      Node* value = LoadFixedDoubleArrayElement(CAST(elements), intptr_index,
+                                                MachineType::Float64(), 0,
+                                                INTPTR_PARAMETERS, if_hole);
+      if (access_mode == LoadAccessMode::kHas) {
+        exit_point->Return(TrueConstant());
+      } else {
+        var_double_value->Bind(value);
+        Goto(rebox_double);
+      }
     }
   }
 
@@ -1958,123 +1962,127 @@ void AccessorAssembler::EmitElementLoad(
     GotoIf(Word32Equal(elements_kind, Int32Constant(DICTIONARY_ELEMENTS)),
            &if_dictionary);
     Goto(unimplemented_elements_kind);
-  }
 
-  BIND(&if_dictionary);
-  {
-    Comment("dictionary elements");
-    GotoIf(IntPtrLessThan(intptr_index, IntPtrConstant(0)), out_of_bounds);
+    BIND(&if_dictionary);
+    {
+      Comment("dictionary elements");
+      GotoIf(IntPtrLessThan(intptr_index, IntPtrConstant(0)), out_of_bounds);
 
-    TNode<Object> value = BasicLoadNumberDictionaryElement(
-        CAST(elements), intptr_index, miss, if_hole);
-    exit_point->Return(access_mode == LoadAccessMode::kHas ? TrueConstant()
-                                                           : value);
-  }
+      TNode<FixedArrayBase> elements = LoadJSObjectElements(CAST(object));
+      TNode<Object> value = BasicLoadNumberDictionaryElement(
+          CAST(elements), intptr_index, miss, if_hole);
+      exit_point->Return(access_mode == LoadAccessMode::kHas ? TrueConstant()
+                                                             : value);
+    }
 
-  BIND(&if_typed_array);
-  {
-    Comment("typed elements");
-    // Check if buffer has been detached.
-    Node* buffer = LoadObjectField(object, JSArrayBufferView::kBufferOffset);
-    GotoIf(IsDetachedBuffer(buffer), miss);
+    BIND(&if_typed_array);
+    {
+      Comment("typed elements");
+      // Check if buffer has been detached.
+      Node* buffer = LoadObjectField(object, JSArrayBufferView::kBufferOffset);
+      GotoIf(IsDetachedBuffer(buffer), miss);
 
-    // Bounds check.
-    Node* length = SmiUntag(LoadJSTypedArrayLength(CAST(object)));
-    GotoIfNot(UintPtrLessThan(intptr_index, length), out_of_bounds);
-    if (access_mode == LoadAccessMode::kHas) {
-      exit_point->Return(TrueConstant());
-    } else {
-      Node* backing_store = LoadFixedTypedArrayBackingStore(CAST(elements));
+      // Bounds check.
+      TNode<UintPtrT> length = LoadJSTypedArrayLength(CAST(object));
+      GotoIfNot(UintPtrLessThan(intptr_index, length), out_of_bounds);
+      if (access_mode == LoadAccessMode::kHas) {
+        exit_point->Return(TrueConstant());
+      } else {
+        Node* backing_store = LoadJSTypedArrayBackingStore(CAST(object));
 
-      Label uint8_elements(this), int8_elements(this), uint16_elements(this),
-          int16_elements(this), uint32_elements(this), int32_elements(this),
-          float32_elements(this), float64_elements(this),
-          bigint64_elements(this), biguint64_elements(this);
-      Label* elements_kind_labels[] = {
-          &uint8_elements,    &uint8_elements,    &int8_elements,
-          &uint16_elements,   &int16_elements,    &uint32_elements,
-          &int32_elements,    &float32_elements,  &float64_elements,
-          &bigint64_elements, &biguint64_elements};
-      int32_t elements_kinds[] = {
-          UINT8_ELEMENTS,    UINT8_CLAMPED_ELEMENTS, INT8_ELEMENTS,
-          UINT16_ELEMENTS,   INT16_ELEMENTS,         UINT32_ELEMENTS,
-          INT32_ELEMENTS,    FLOAT32_ELEMENTS,       FLOAT64_ELEMENTS,
-          BIGINT64_ELEMENTS, BIGUINT64_ELEMENTS};
-      const size_t kTypedElementsKindCount =
-          LAST_FIXED_TYPED_ARRAY_ELEMENTS_KIND -
-          FIRST_FIXED_TYPED_ARRAY_ELEMENTS_KIND + 1;
-      DCHECK_EQ(kTypedElementsKindCount, arraysize(elements_kinds));
-      DCHECK_EQ(kTypedElementsKindCount, arraysize(elements_kind_labels));
-      Switch(elements_kind, miss, elements_kinds, elements_kind_labels,
-             kTypedElementsKindCount);
-      BIND(&uint8_elements);
-      {
-        Comment("UINT8_ELEMENTS");  // Handles UINT8_CLAMPED_ELEMENTS too.
-        Node* element = Load(MachineType::Uint8(), backing_store, intptr_index);
-        exit_point->Return(SmiFromInt32(element));
-      }
-      BIND(&int8_elements);
-      {
-        Comment("INT8_ELEMENTS");
-        Node* element = Load(MachineType::Int8(), backing_store, intptr_index);
-        exit_point->Return(SmiFromInt32(element));
-      }
-      BIND(&uint16_elements);
-      {
-        Comment("UINT16_ELEMENTS");
-        Node* index = WordShl(intptr_index, IntPtrConstant(1));
-        Node* element = Load(MachineType::Uint16(), backing_store, index);
-        exit_point->Return(SmiFromInt32(element));
-      }
-      BIND(&int16_elements);
-      {
-        Comment("INT16_ELEMENTS");
-        Node* index = WordShl(intptr_index, IntPtrConstant(1));
-        Node* element = Load(MachineType::Int16(), backing_store, index);
-        exit_point->Return(SmiFromInt32(element));
-      }
-      BIND(&uint32_elements);
-      {
-        Comment("UINT32_ELEMENTS");
-        Node* index = WordShl(intptr_index, IntPtrConstant(2));
-        Node* element = Load(MachineType::Uint32(), backing_store, index);
-        exit_point->Return(ChangeUint32ToTagged(element));
-      }
-      BIND(&int32_elements);
-      {
-        Comment("INT32_ELEMENTS");
-        Node* index = WordShl(intptr_index, IntPtrConstant(2));
-        Node* element = Load(MachineType::Int32(), backing_store, index);
-        exit_point->Return(ChangeInt32ToTagged(element));
-      }
-      BIND(&float32_elements);
-      {
-        Comment("FLOAT32_ELEMENTS");
-        Node* index = WordShl(intptr_index, IntPtrConstant(2));
-        Node* element = Load(MachineType::Float32(), backing_store, index);
-        var_double_value->Bind(ChangeFloat32ToFloat64(element));
-        Goto(rebox_double);
-      }
-      BIND(&float64_elements);
-      {
-        Comment("FLOAT64_ELEMENTS");
-        Node* index = WordShl(intptr_index, IntPtrConstant(3));
-        Node* element = Load(MachineType::Float64(), backing_store, index);
-        var_double_value->Bind(element);
-        Goto(rebox_double);
-      }
-      BIND(&bigint64_elements);
-      {
-        Comment("BIGINT64_ELEMENTS");
-        exit_point->Return(LoadFixedTypedArrayElementAsTagged(
-            backing_store, intptr_index, BIGINT64_ELEMENTS, INTPTR_PARAMETERS));
-      }
-      BIND(&biguint64_elements);
-      {
-        Comment("BIGUINT64_ELEMENTS");
-        exit_point->Return(LoadFixedTypedArrayElementAsTagged(
-            backing_store, intptr_index, BIGUINT64_ELEMENTS,
-            INTPTR_PARAMETERS));
+        Label uint8_elements(this), int8_elements(this), uint16_elements(this),
+            int16_elements(this), uint32_elements(this), int32_elements(this),
+            float32_elements(this), float64_elements(this),
+            bigint64_elements(this), biguint64_elements(this);
+        Label* elements_kind_labels[] = {
+            &uint8_elements,    &uint8_elements,    &int8_elements,
+            &uint16_elements,   &int16_elements,    &uint32_elements,
+            &int32_elements,    &float32_elements,  &float64_elements,
+            &bigint64_elements, &biguint64_elements};
+        int32_t elements_kinds[] = {
+            UINT8_ELEMENTS,    UINT8_CLAMPED_ELEMENTS, INT8_ELEMENTS,
+            UINT16_ELEMENTS,   INT16_ELEMENTS,         UINT32_ELEMENTS,
+            INT32_ELEMENTS,    FLOAT32_ELEMENTS,       FLOAT64_ELEMENTS,
+            BIGINT64_ELEMENTS, BIGUINT64_ELEMENTS};
+        const size_t kTypedElementsKindCount =
+            LAST_FIXED_TYPED_ARRAY_ELEMENTS_KIND -
+            FIRST_FIXED_TYPED_ARRAY_ELEMENTS_KIND + 1;
+        DCHECK_EQ(kTypedElementsKindCount, arraysize(elements_kinds));
+        DCHECK_EQ(kTypedElementsKindCount, arraysize(elements_kind_labels));
+        Switch(elements_kind, miss, elements_kinds, elements_kind_labels,
+               kTypedElementsKindCount);
+        BIND(&uint8_elements);
+        {
+          Comment("UINT8_ELEMENTS");  // Handles UINT8_CLAMPED_ELEMENTS too.
+          Node* element =
+              Load(MachineType::Uint8(), backing_store, intptr_index);
+          exit_point->Return(SmiFromInt32(element));
+        }
+        BIND(&int8_elements);
+        {
+          Comment("INT8_ELEMENTS");
+          Node* element =
+              Load(MachineType::Int8(), backing_store, intptr_index);
+          exit_point->Return(SmiFromInt32(element));
+        }
+        BIND(&uint16_elements);
+        {
+          Comment("UINT16_ELEMENTS");
+          Node* index = WordShl(intptr_index, IntPtrConstant(1));
+          Node* element = Load(MachineType::Uint16(), backing_store, index);
+          exit_point->Return(SmiFromInt32(element));
+        }
+        BIND(&int16_elements);
+        {
+          Comment("INT16_ELEMENTS");
+          Node* index = WordShl(intptr_index, IntPtrConstant(1));
+          Node* element = Load(MachineType::Int16(), backing_store, index);
+          exit_point->Return(SmiFromInt32(element));
+        }
+        BIND(&uint32_elements);
+        {
+          Comment("UINT32_ELEMENTS");
+          Node* index = WordShl(intptr_index, IntPtrConstant(2));
+          Node* element = Load(MachineType::Uint32(), backing_store, index);
+          exit_point->Return(ChangeUint32ToTagged(element));
+        }
+        BIND(&int32_elements);
+        {
+          Comment("INT32_ELEMENTS");
+          Node* index = WordShl(intptr_index, IntPtrConstant(2));
+          Node* element = Load(MachineType::Int32(), backing_store, index);
+          exit_point->Return(ChangeInt32ToTagged(element));
+        }
+        BIND(&float32_elements);
+        {
+          Comment("FLOAT32_ELEMENTS");
+          Node* index = WordShl(intptr_index, IntPtrConstant(2));
+          Node* element = Load(MachineType::Float32(), backing_store, index);
+          var_double_value->Bind(ChangeFloat32ToFloat64(element));
+          Goto(rebox_double);
+        }
+        BIND(&float64_elements);
+        {
+          Comment("FLOAT64_ELEMENTS");
+          Node* index = WordShl(intptr_index, IntPtrConstant(3));
+          Node* element = Load(MachineType::Float64(), backing_store, index);
+          var_double_value->Bind(element);
+          Goto(rebox_double);
+        }
+        BIND(&bigint64_elements);
+        {
+          Comment("BIGINT64_ELEMENTS");
+          exit_point->Return(LoadFixedTypedArrayElementAsTagged(
+              backing_store, intptr_index, BIGINT64_ELEMENTS,
+              INTPTR_PARAMETERS));
+        }
+        BIND(&biguint64_elements);
+        {
+          Comment("BIGUINT64_ELEMENTS");
+          exit_point->Return(LoadFixedTypedArrayElementAsTagged(
+              backing_store, intptr_index, BIGUINT64_ELEMENTS,
+              INTPTR_PARAMETERS));
+        }
       }
     }
   }
@@ -2130,7 +2138,6 @@ void AccessorAssembler::GenericElementLoad(Node* receiver, Node* receiver_map,
   // Receivers requiring non-standard element accesses (interceptors, access
   // checks, strings and string wrappers, proxies) are handled in the runtime.
   GotoIf(IsCustomElementsReceiverInstanceType(instance_type), &if_custom);
-  Node* elements = LoadElements(receiver);
   Node* elements_kind = LoadMapElementsKind(receiver_map);
   Node* is_jsarray_condition = InstanceTypeEqual(instance_type, JS_ARRAY_TYPE);
   VARIABLE(var_double_value, MachineRepresentation::kFloat64);
@@ -2139,10 +2146,9 @@ void AccessorAssembler::GenericElementLoad(Node* receiver, Node* receiver_map,
   // Unimplemented elements kinds fall back to a runtime call.
   Label* unimplemented_elements_kind = slow;
   IncrementCounter(isolate()->counters()->ic_keyed_load_generic_smi(), 1);
-  EmitElementLoad(receiver, elements, elements_kind, index,
-                  is_jsarray_condition, &if_element_hole, &rebox_double,
-                  &var_double_value, unimplemented_elements_kind, &if_oob, slow,
-                  &direct_exit);
+  EmitElementLoad(receiver, elements_kind, index, is_jsarray_condition,
+                  &if_element_hole, &rebox_double, &var_double_value,
+                  unimplemented_elements_kind, &if_oob, slow, &direct_exit);
 
   BIND(&rebox_double);
   Return(AllocateHeapNumberWithValue(var_double_value.value()));
@@ -2604,46 +2610,15 @@ void AccessorAssembler::LoadIC_Noninlined(const LoadICParameters* p,
   }
 }
 
-// TODO(8860): This check is only required so we can make prototypes fast on
-// the first load. This is not really useful when there is no feedback vector
-// and may not be important when lazily allocating feedback vectors. Once lazy
-// allocation of feedback vectors has landed try to eliminate this check.
-void AccessorAssembler::BranchIfPrototypeShouldbeFast(Node* receiver_map,
-                                                      Label* prototype_not_fast,
-                                                      Label* prototype_fast) {
-  VARIABLE(var_map, MachineRepresentation::kTagged);
-  var_map.Bind(receiver_map);
-  Label loop_body(this, &var_map);
-  Goto(&loop_body);
-
-  BIND(&loop_body);
-  {
-    Node* map = var_map.value();
-    Node* prototype = LoadMapPrototype(map);
-    GotoIf(IsNull(prototype), prototype_fast);
-    TNode<PrototypeInfo> proto_info =
-        LoadMapPrototypeInfo(receiver_map, prototype_not_fast);
-    GotoIf(IsNull(prototype), prototype_not_fast);
-    TNode<Uint32T> flags =
-        LoadObjectField<Uint32T>(proto_info, PrototypeInfo::kBitFieldOffset);
-    GotoIf(Word32Equal(flags, Uint32Constant(0)), prototype_not_fast);
-
-    Node* prototype_map = LoadMap(prototype);
-    var_map.Bind(prototype_map);
-    Goto(&loop_body);
-  }
-}
-
 void AccessorAssembler::LoadIC_Uninitialized(const LoadICParameters* p) {
   Label miss(this, Label::kDeferred),
-      check_if_fast_prototype(this, Label::kDeferred),
       check_function_prototype(this);
   Node* receiver = p->receiver;
   GotoIf(TaggedIsSmi(receiver), &miss);
   Node* receiver_map = LoadMap(receiver);
   Node* instance_type = LoadMapInstanceType(receiver_map);
 
-  GotoIf(IsUndefined(p->vector), &check_if_fast_prototype);
+  GotoIf(IsUndefined(p->vector), &check_function_prototype);
   // Optimistically write the state transition to the vector.
   StoreFeedbackVectorSlot(p->vector, p->slot,
                           LoadRoot(RootIndex::kpremonomorphic_symbol),
@@ -2651,12 +2626,6 @@ void AccessorAssembler::LoadIC_Uninitialized(const LoadICParameters* p) {
   StoreWeakReferenceInFeedbackVector(p->vector, p->slot, receiver_map,
                                      kTaggedSize, SMI_PARAMETERS);
   Goto(&check_function_prototype);
-
-  BIND(&check_if_fast_prototype);
-  {
-    BranchIfPrototypeShouldbeFast(receiver_map, &miss,
-                                  &check_function_prototype);
-  }
 
   BIND(&check_function_prototype);
   {
@@ -2910,6 +2879,7 @@ void AccessorAssembler::KeyedLoadICGeneric(const LoadICParameters* p) {
 
   Node* receiver = p->receiver;
   GotoIf(TaggedIsSmi(receiver), &if_runtime);
+  GotoIf(IsNullOrUndefined(receiver), &if_runtime);
 
   TryToName(p->name, &if_index, &var_index, &if_unique_name, &var_unique,
             &if_other, &if_notunique);
@@ -3670,7 +3640,7 @@ void AccessorAssembler::GenerateStoreInArrayLiteralIC() {
 
 void AccessorAssembler::GenerateCloneObjectIC_Slow() {
   using Descriptor = CloneObjectWithVectorDescriptor;
-  TNode<HeapObject> source = CAST(Parameter(Descriptor::kSource));
+  TNode<Object> source = CAST(Parameter(Descriptor::kSource));
   TNode<Smi> flags = CAST(Parameter(Descriptor::kFlags));
   TNode<Context> context = CAST(Parameter(Descriptor::kContext));
 
@@ -3702,28 +3672,16 @@ void AccessorAssembler::GenerateCloneObjectIC_Slow() {
   }
 
   ReturnIf(IsNullOrUndefined(source), result);
+  source = ToObject_Inline(context, source);
 
-  CSA_ASSERT(this, IsJSReceiver(source));
+  Label call_runtime(this, Label::kDeferred), done(this);
 
-  Label call_runtime(this, Label::kDeferred);
-  Label done(this);
-
-  TNode<Map> map = LoadMap(source);
-  TNode<Int32T> type = LoadMapInstanceType(map);
-  {
-    Label cont(this);
-    GotoIf(IsJSObjectInstanceType(type), &cont);
-    GotoIf(InstanceTypeEqual(type, JS_PROXY_TYPE), &call_runtime);
-    GotoIfNot(IsStringInstanceType(type), &done);
-    Branch(SmiEqual(LoadStringLengthAsSmi(CAST(source)), SmiConstant(0)), &done,
-           &call_runtime);
-    BIND(&cont);
-  }
-
+  TNode<Map> source_map = LoadMap(CAST(source));
+  GotoIfNot(IsJSObjectMap(source_map), &call_runtime);
   GotoIfNot(IsEmptyFixedArray(LoadElements(CAST(source))), &call_runtime);
 
   ForEachEnumerableOwnProperty(
-      context, map, CAST(source), kPropertyAdditionOrder,
+      context, source_map, CAST(source), kPropertyAdditionOrder,
       [=](TNode<Name> key, TNode<Object> value) {
         SetPropertyInLiteral(context, result, key, value);
       },
@@ -3740,17 +3698,17 @@ void AccessorAssembler::GenerateCloneObjectIC_Slow() {
 
 void AccessorAssembler::GenerateCloneObjectIC() {
   using Descriptor = CloneObjectWithVectorDescriptor;
-  TNode<HeapObject> source = CAST(Parameter(Descriptor::kSource));
-  Node* flags = Parameter(Descriptor::kFlags);
-  Node* slot = Parameter(Descriptor::kSlot);
-  Node* vector = Parameter(Descriptor::kVector);
-  Node* context = Parameter(Descriptor::kContext);
+  TNode<Object> source = CAST(Parameter(Descriptor::kSource));
+  TNode<Smi> flags = CAST(Parameter(Descriptor::kFlags));
+  TNode<Smi> slot = CAST(Parameter(Descriptor::kSlot));
+  TNode<HeapObject> vector = CAST(Parameter(Descriptor::kVector));
+  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
   TVARIABLE(MaybeObject, var_handler);
-  Label if_handler(this, &var_handler);
-  Label miss(this, Label::kDeferred), try_polymorphic(this, Label::kDeferred),
+  Label if_handler(this, &var_handler), miss(this, Label::kDeferred),
+      try_polymorphic(this, Label::kDeferred),
       try_megamorphic(this, Label::kDeferred), slow(this, Label::kDeferred);
 
-  TNode<Map> source_map = LoadMap(UncheckedCast<HeapObject>(source));
+  TNode<Map> source_map = LoadReceiverMap(source);
   GotoIf(IsDeprecatedMap(source_map), &miss);
 
   GotoIf(IsUndefined(vector), &slow);
@@ -3770,6 +3728,7 @@ void AccessorAssembler::GenerateCloneObjectIC() {
 
     Label allocate_object(this);
     GotoIf(IsNullOrUndefined(source), &allocate_object);
+    CSA_SLOW_ASSERT(this, IsJSObjectMap(source_map));
     CSA_SLOW_ASSERT(this, IsJSObjectMap(result_map));
 
     // The IC fast case should only be taken if the result map a compatible
@@ -3783,7 +3742,7 @@ void AccessorAssembler::GenerateCloneObjectIC() {
     // either an Smi, or a PropertyArray.
     // FIXME: Make a CSA macro for this
     TNode<Object> source_properties =
-        LoadObjectField(source, JSObject::kPropertiesOrHashOffset);
+        LoadObjectField(CAST(source), JSObject::kPropertiesOrHashOffset);
     {
       GotoIf(TaggedIsSmi(source_properties), &allocate_object);
       GotoIf(IsEmptyFixedArray(source_properties), &allocate_object);
@@ -3833,7 +3792,7 @@ void AccessorAssembler::GenerateCloneObjectIC() {
               TimesTaggedSize(UncheckedCast<IntPtrT>(field_index));
 
           if (may_use_mutable_heap_numbers) {
-            TNode<Object> field = LoadObjectField(source, field_offset);
+            TNode<Object> field = LoadObjectField(CAST(source), field_offset);
             field = CloneIfMutablePrimitive(field);
             TNode<IntPtrT> result_offset =
                 IntPtrAdd(field_offset, field_offset_difference);
@@ -3841,7 +3800,7 @@ void AccessorAssembler::GenerateCloneObjectIC() {
           } else {
             // Copy fields as raw data.
             TNode<IntPtrT> field =
-                LoadObjectField<IntPtrT>(source, field_offset);
+                LoadObjectField<IntPtrT>(CAST(source), field_offset);
             TNode<IntPtrT> result_offset =
                 IntPtrAdd(field_offset, field_offset_difference);
             StoreObjectFieldNoWriteBarrier(object, result_offset, field);

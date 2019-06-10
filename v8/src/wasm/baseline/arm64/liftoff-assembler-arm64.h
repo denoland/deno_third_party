@@ -7,8 +7,6 @@
 
 #include "src/wasm/baseline/liftoff-assembler.h"
 
-#define BAILOUT(reason) bailout("arm64 " reason)
-
 namespace v8 {
 namespace internal {
 namespace wasm {
@@ -135,7 +133,7 @@ void LiftoffAssembler::PatchPrepareStackFrame(int offset,
     if (!IsImmAddSub(bytes)) {
       // Stack greater than 4M! Because this is a quite improbable case, we
       // just fallback to Turbofan.
-      BAILOUT("Stack too big");
+      bailout(kOtherReason, "Stack too big");
       return;
     }
   }
@@ -144,12 +142,33 @@ void LiftoffAssembler::PatchPrepareStackFrame(int offset,
   // before checking it.
   // TODO(arm): Remove this when the stack check mechanism will be updated.
   if (bytes > KB / 2) {
-    BAILOUT("Stack limited to 512 bytes to avoid a bug in StackCheck");
+    bailout(kOtherReason,
+            "Stack limited to 512 bytes to avoid a bug in StackCheck");
     return;
   }
 #endif
   PatchingAssembler patching_assembler(AssemblerOptions{},
                                        buffer_start_ + offset, 1);
+#if V8_OS_WIN
+  if (bytes > kStackPageSize) {
+    // Generate OOL code (at the end of the function, where the current
+    // assembler is pointing) to do the explicit stack limit check (see
+    // https://docs.microsoft.com/en-us/previous-versions/visualstudio/
+    // visual-studio-6.0/aa227153(v=vs.60)).
+    // At the function start, emit a jump to that OOL code (from {offset} to
+    // {pc_offset()}).
+    int ool_offset = pc_offset() - offset;
+    patching_assembler.b(ool_offset >> kInstrSizeLog2);
+
+    // Now generate the OOL code.
+    Claim(bytes, 1);
+    // Jump back to the start of the function (from {pc_offset()} to {offset +
+    // kInstrSize}).
+    int func_start_offset = offset + kInstrSize - pc_offset();
+    b(func_start_offset >> kInstrSizeLog2);
+    return;
+  }
+#endif
   patching_assembler.PatchSubSp(bytes);
 }
 
@@ -382,10 +401,22 @@ void LiftoffAssembler::FillI64Half(Register, uint32_t index, RegPairHalf) {
                                      Register rhs) {             \
     instruction(dst.W(), lhs.W(), rhs.W());                      \
   }
+#define I32_BINOP_I(name, instruction)                           \
+  I32_BINOP(name, instruction)                                   \
+  void LiftoffAssembler::emit_##name(Register dst, Register lhs, \
+                                     int32_t imm) {              \
+    instruction(dst.W(), lhs.W(), Immediate(imm));               \
+  }
 #define I64_BINOP(name, instruction)                                           \
   void LiftoffAssembler::emit_##name(LiftoffRegister dst, LiftoffRegister lhs, \
                                      LiftoffRegister rhs) {                    \
     instruction(dst.gp().X(), lhs.gp().X(), rhs.gp().X());                     \
+  }
+#define I64_BINOP_I(name, instruction)                                         \
+  I64_BINOP(name, instruction)                                                 \
+  void LiftoffAssembler::emit_##name(LiftoffRegister dst, LiftoffRegister lhs, \
+                                     int32_t imm) {                            \
+    instruction(dst.gp().X(), lhs.gp().X(), imm);                              \
   }
 #define FP32_BINOP(name, instruction)                                        \
   void LiftoffAssembler::emit_##name(DoubleRegister dst, DoubleRegister lhs, \
@@ -439,21 +470,21 @@ void LiftoffAssembler::FillI64Half(Register, uint32_t index, RegPairHalf) {
     instruction(dst.gp().X(), src.gp().X(), amount);                           \
   }
 
-I32_BINOP(i32_add, Add)
+I32_BINOP_I(i32_add, Add)
 I32_BINOP(i32_sub, Sub)
 I32_BINOP(i32_mul, Mul)
-I32_BINOP(i32_and, And)
-I32_BINOP(i32_or, Orr)
-I32_BINOP(i32_xor, Eor)
+I32_BINOP_I(i32_and, And)
+I32_BINOP_I(i32_or, Orr)
+I32_BINOP_I(i32_xor, Eor)
 I32_SHIFTOP(i32_shl, Lsl)
 I32_SHIFTOP(i32_sar, Asr)
 I32_SHIFTOP_I(i32_shr, Lsr)
-I64_BINOP(i64_add, Add)
+I64_BINOP_I(i64_add, Add)
 I64_BINOP(i64_sub, Sub)
 I64_BINOP(i64_mul, Mul)
-I64_BINOP(i64_and, And)
-I64_BINOP(i64_or, Orr)
-I64_BINOP(i64_xor, Eor)
+I64_BINOP_I(i64_and, And)
+I64_BINOP_I(i64_or, Orr)
+I64_BINOP_I(i64_xor, Eor)
 I64_SHIFTOP(i64_shl, Lsl)
 I64_SHIFTOP(i64_sar, Asr)
 I64_SHIFTOP_I(i64_shr, Lsr)
@@ -578,15 +609,6 @@ void LiftoffAssembler::emit_i32_remu(Register dst, Register lhs, Register rhs,
   Cbz(rhs_w, trap_div_by_zero);
   // Compute remainder.
   Msub(dst_w, scratch, rhs_w, lhs_w);
-}
-
-void LiftoffAssembler::emit_i64_add(LiftoffRegister dst, LiftoffRegister lhs,
-                                    int32_t imm) {
-  Add(dst.gp().X(), lhs.gp().X(), Immediate(imm));
-}
-
-void LiftoffAssembler::emit_i32_add(Register dst, Register lhs, int32_t imm) {
-  Add(dst.W(), lhs.W(), Immediate(imm));
 }
 
 bool LiftoffAssembler::emit_i64_divs(LiftoffRegister dst, LiftoffRegister lhs,
@@ -1064,7 +1086,5 @@ void LiftoffStackSlots::Construct() {
 }  // namespace wasm
 }  // namespace internal
 }  // namespace v8
-
-#undef BAILOUT
 
 #endif  // V8_WASM_BASELINE_ARM64_LIFTOFF_ASSEMBLER_ARM64_H_

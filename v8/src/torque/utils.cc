@@ -15,7 +15,7 @@ namespace v8 {
 namespace internal {
 namespace torque {
 
-DEFINE_CONTEXTUAL_VARIABLE(LintErrors)
+DEFINE_CONTEXTUAL_VARIABLE(TorqueMessages)
 
 std::string StringLiteralUnquote(const std::string& s) {
   DCHECK(('"' == s.front() && '"' == s.back()) ||
@@ -62,7 +62,6 @@ std::string StringLiteralQuote(const std::string& s) {
       case '\t':
         result << "\\t";
         break;
-      case '\'':
       case '"':
       case '\\':
         result << "\\" << s[i];
@@ -124,23 +123,21 @@ std::string CurrentPositionAsString() {
   return PositionAsString(CurrentSourcePosition::Get());
 }
 
-[[noreturn]] void ThrowTorqueError(const std::string& message,
-                                   bool include_position) {
-  TorqueError error(message);
-  if (include_position) error.position = CurrentSourcePosition::Get();
-  throw error;
+MessageBuilder::MessageBuilder(const std::string& message,
+                               TorqueMessage::Kind kind) {
+  base::Optional<SourcePosition> position;
+  if (CurrentSourcePosition::HasScope()) {
+    position = CurrentSourcePosition::Get();
+  }
+  message_ = TorqueMessage{message, position, kind};
 }
 
-void ReportLintError(const std::string& error) {
-  LintErrors::Get().push_back({error, CurrentSourcePosition::Get()});
+void MessageBuilder::Report() const {
+  TorqueMessages::Get().push_back(message_);
 }
 
-void NamingConventionError(const std::string& type, const std::string& name,
-                           const std::string& convention) {
-  std::stringstream sstream;
-  sstream << type << " \"" << name << "\" does not follow \"" << convention
-          << "\" naming convention.";
-  ReportLintError(sstream.str());
+[[noreturn]] void MessageBuilder::Throw() const {
+  throw TorqueAbortCompilation{};
 }
 
 namespace {
@@ -183,12 +180,16 @@ bool IsMachineType(const std::string& s) {
 
 bool IsLowerCamelCase(const std::string& s) {
   if (s.empty()) return false;
-  return islower(s[0]) && !ContainsUnderscore(s);
+  size_t start = 0;
+  if (s[0] == '_') start = 1;
+  return islower(s[start]) && !ContainsUnderscore(s.substr(start));
 }
 
 bool IsUpperCamelCase(const std::string& s) {
   if (s.empty()) return false;
-  return isupper(s[0]) && !ContainsUnderscore(s);
+  size_t start = 0;
+  if (s[0] == '_') start = 1;
+  return isupper(s[start]) && !ContainsUnderscore(s.substr(1));
 }
 
 bool IsSnakeCase(const std::string& s) {
@@ -217,6 +218,11 @@ std::string CapifyStringWithUnderscores(const std::string& camellified_string) {
     if (previousWasLower && isupper(current)) {
       result += "_";
     }
+    if (current == '.' || current == '-') {
+      result += "_";
+      previousWasLower = false;
+      continue;
+    }
     result += toupper(current);
     previousWasLower = (islower(current));
   }
@@ -244,6 +250,15 @@ std::string DashifyString(const std::string& underscore_string) {
   std::string result = underscore_string;
   std::replace(result.begin(), result.end(), '_', '-');
   return result;
+}
+
+std::string UnderlinifyPath(std::string path) {
+  std::replace(path.begin(), path.end(), '-', '_');
+  std::replace(path.begin(), path.end(), '/', '_');
+  std::replace(path.begin(), path.end(), '\\', '_');
+  std::replace(path.begin(), path.end(), '.', '_');
+  transform(path.begin(), path.end(), path.begin(), ::toupper);
+  return path;
 }
 
 void ReplaceFileContentsIfDifferent(const std::string& file_path,

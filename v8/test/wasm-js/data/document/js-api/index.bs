@@ -149,6 +149,7 @@ urlPrefix: https://webassembly.github.io/spec/core/; spec: WebAssembly; type: df
     text: the instantiation algorithm; url: exec/modules.html#instantiation
     text: module; url: syntax/modules.html#syntax-module
     text: 𝗂𝗆𝗉𝗈𝗋𝗍𝗌; url: syntax/modules.html#syntax-module
+    text: import; url: syntax/modules.html#syntax-import
     url: syntax/types.html#external-types
         text: external type
         text: 𝖿𝗎𝗇𝖼
@@ -218,7 +219,7 @@ fetch('demo.wasm').then(response =>
 
 Note: WebAssembly semantics are defined in terms of an abstract [=store=], representing the state of the WebAssembly abstract machine. WebAssembly operations take a store and return an updated store.
 
-Each [=agent=] has an <dfn>associated store</dfn>. When a new agent is created, its associated store is set to the result of [=init_store=]().
+Each [=agent=] has an <dfn>associated store</dfn>. When a new agent is created, its associated store is set to the result of [=store_init=]().
 
 Note: In this specification, no WebAssembly-related objects, memory or addresses can be shared among agents in an [=agent cluster=]. In a future version of WebAssembly, this may change.
 
@@ -322,7 +323,7 @@ A {{Module}} object represents a single WebAssembly module. Each {{Module}} obje
     1. Let |imports| be an empty [=list=] of [=external value=]s.
     1. For each (|moduleName|, |componentName|, |externtype|) in [=module_imports=](|module|), do
         1. Let |o| be ? [=Get=](|importObject|, |moduleName|).
-        1. If [=Type=](|o|) is not [=Object=], throw a {{TypeError}} exception.
+        1. If [=Type=](|o|) is not Object, throw a {{TypeError}} exception.
         1. Let |v| be ? [=Get=](|o|, |componentName|)
         1. If |externtype| is of the form [=𝖿𝗎𝗇𝖼=] |functype|,
             1. If [=IsCallable=](|v|) is false, throw a {{LinkError}} exception.
@@ -336,7 +337,7 @@ A {{Module}} object represents a single WebAssembly module. Each {{Module}} obje
             1. Let |externfunc| be the [=external value=] [=external value|𝖿𝗎𝗇𝖼=] |funcaddr|.
             1. [=Append=] |externfunc| to |imports|.
         1. If |externtype| is of the form [=𝗀𝗅𝗈𝖻𝖺𝗅=] <var ignore>mut</var> |valtype|,
-            1. If [=Type=](|v|) is [=Number=],
+            1. If [=Type=](|v|) is Number,
                 1. If |valtype| is [=𝗂𝟨𝟦=], throw a {{LinkError}} exception.
                 1. Let |value| be [=ToWebAssemblyValue=](|v|, |valtype|)
                 1. Let |store| be the [=surrounding agent=]'s [=associated store=].
@@ -1084,3 +1085,9 @@ In practice, an implementation may run out of resources for valid modules below 
 <li>The maximum number of locals declared in a function, including implicitly declared as parameters, is 50000.</li>
 
 </ul>
+
+<h2 id="security-considerations">Security and Privacy Considerations</h2>
+
+<p><em>This section is non-normative.</em></p>
+
+This document defines a host environment for WebAssembly. It enables a WebAssembly instance to [=import=] JavaScript objects and functions from an [=read the imports|import object=], but otherwise provides no access to the embedding environment. Thus a WebAssembly instance is bounds to the same constraints as JavaScript.

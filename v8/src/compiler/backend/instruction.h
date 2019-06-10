@@ -11,15 +11,15 @@
 #include <set>
 
 #include "src/base/compiler-specific.h"
+#include "src/codegen/external-reference.h"
+#include "src/codegen/register-arch.h"
+#include "src/codegen/source-position.h"
+#include "src/common/globals.h"
 #include "src/compiler/backend/instruction-codes.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/frame.h"
 #include "src/compiler/opcodes.h"
-#include "src/double.h"
-#include "src/external-reference.h"
-#include "src/globals.h"
-#include "src/register-arch.h"
-#include "src/source-position.h"
+#include "src/numbers/double.h"
 #include "src/zone/zone-allocator.h"
 
 namespace v8 {
@@ -1007,6 +1007,7 @@ class V8_EXPORT_PRIVATE Constant final {
     kFloat32,
     kFloat64,
     kExternalReference,
+    kCompressedHeapObject,
     kHeapObject,
     kRpoNumber,
     kDelayedStringConstant
@@ -1018,8 +1019,9 @@ class V8_EXPORT_PRIVATE Constant final {
   explicit Constant(double v) : type_(kFloat64), value_(bit_cast<int64_t>(v)) {}
   explicit Constant(ExternalReference ref)
       : type_(kExternalReference), value_(bit_cast<intptr_t>(ref.address())) {}
-  explicit Constant(Handle<HeapObject> obj)
-      : type_(kHeapObject), value_(bit_cast<intptr_t>(obj)) {}
+  explicit Constant(Handle<HeapObject> obj, bool is_compressed = false)
+      : type_(is_compressed ? kCompressedHeapObject : kHeapObject),
+        value_(bit_cast<intptr_t>(obj)) {}
   explicit Constant(RpoNumber rpo) : type_(kRpoNumber), value_(rpo.ToInt()) {}
   explicit Constant(const StringConstantBase* str)
       : type_(kDelayedStringConstant), value_(bit_cast<intptr_t>(str)) {}

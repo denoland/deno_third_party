@@ -4,11 +4,11 @@
 
 #include "test/common/wasm/wasm-module-runner.h"
 
-#include "src/handles.h"
-#include "src/isolate.h"
-#include "src/objects-inl.h"
+#include "src/execution/isolate.h"
+#include "src/handles/handles.h"
 #include "src/objects/heap-number-inl.h"
-#include "src/property-descriptor.h"
+#include "src/objects/objects-inl.h"
+#include "src/objects/property-descriptor.h"
 #include "src/wasm/module-decoder.h"
 #include "src/wasm/wasm-engine.h"
 #include "src/wasm/wasm-interpreter.h"
@@ -261,7 +261,7 @@ int32_t CallWasmFunctionForTesting(Isolate* isolate,
     return Smi::ToInt(*result);
   }
   if (result->IsHeapNumber()) {
-    return static_cast<int32_t>(HeapNumber::cast(*result)->value());
+    return static_cast<int32_t>(HeapNumber::cast(*result).value());
   }
   thrower->RuntimeError(
       "Calling exported wasm function failed: Return value should be number");

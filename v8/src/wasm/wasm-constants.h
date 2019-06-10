@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "src/globals.h"
+#include "src/common/globals.h"
 
 namespace v8 {
 namespace internal {
@@ -105,6 +105,8 @@ using WasmCodePosition = int;
 constexpr WasmCodePosition kNoCodePosition = -1;
 
 constexpr uint32_t kExceptionAttribute = 0;
+
+constexpr uint32_t kAnonymousFuncIndex = 0xffffffff;
 
 }  // namespace wasm
 }  // namespace internal

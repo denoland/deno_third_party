@@ -745,3 +745,51 @@ assertEquals(arr[2], 'b');
 assertEquals(arr[3], undefined);
 arr.length = 2;
 assertEquals(arr.length, 3);
+
+// Change length with holey entries at the end
+var arr = ['a', ,];
+Object.freeze(arr);
+assertEquals(arr.length, 2);
+arr.length = 0;
+assertEquals(arr.length, 2);
+arr.length = 3;
+assertEquals(arr.length, 2);
+arr.length = 0;
+assertEquals(arr.length, 2);
+
+// Spread with array
+var arr = ['a', 'b', 'c'];
+Object.freeze(arr);
+var arrSpread = [...arr];
+assertEquals(arrSpread.length, arr.length);
+assertEquals(arrSpread[0], 'a');
+assertEquals(arrSpread[1], 'b');
+assertEquals(arrSpread[2], 'c');
+
+// Spread with array-like
+function returnArgs() {
+  return Object.freeze(arguments);
+}
+var arrLike = returnArgs('a', 'b', 'c');
+assertTrue(Object.isFrozen(arrLike));
+var arrSpread = [...arrLike];
+assertEquals(arrSpread.length, arrLike.length);
+assertEquals(arrSpread[0], 'a');
+assertEquals(arrSpread[1], 'b');
+assertEquals(arrSpread[2], 'c');
+
+// Spread with holey
+function countArgs() {
+  return arguments.length;
+}
+var arr = [, 'b','c'];
+Object.freeze(arr);
+assertEquals(countArgs(...arr), 3);
+assertEquals(countArgs(...[...arr]), 3);
+assertEquals(countArgs.apply(this, [...arr]), 3);
+function checkUndefined() {
+  return arguments[0] === undefined;
+}
+assertTrue(checkUndefined(...arr));
+assertTrue(checkUndefined(...[...arr]));
+assertTrue(checkUndefined.apply(this, [...arr]));

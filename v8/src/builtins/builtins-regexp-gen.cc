@@ -8,10 +8,10 @@
 #include "src/builtins/builtins-utils-gen.h"
 #include "src/builtins/builtins.h"
 #include "src/builtins/growable-fixed-array-gen.h"
-#include "src/code-factory.h"
-#include "src/code-stub-assembler.h"
-#include "src/counters.h"
+#include "src/codegen/code-factory.h"
+#include "src/codegen/code-stub-assembler.h"
 #include "src/heap/factory-inl.h"
+#include "src/logging/counters.h"
 #include "src/objects/js-regexp-string-iterator.h"
 #include "src/objects/js-regexp.h"
 #include "src/objects/regexp-match-info.h"
@@ -35,7 +35,7 @@ TNode<IntPtrT> RegExpBuiltinsAssembler::IntPtrZero() {
 
 TNode<JSRegExpResult> RegExpBuiltinsAssembler::AllocateRegExpResult(
     TNode<Context> context, TNode<Smi> length, TNode<Smi> index,
-    TNode<String> input) {
+    TNode<String> input, TNode<FixedArray>* elements_out) {
 #ifdef DEBUG
   TNode<Smi> max_length = SmiConstant(JSArray::kInitialMaxFastElementArray);
   CSA_ASSERT(this, SmiLessThanOrEqual(length, max_length));
@@ -89,6 +89,7 @@ TNode<JSRegExpResult> RegExpBuiltinsAssembler::AllocateRegExpResult(
   FillFixedArrayWithValue(elements_kind, elements, IntPtrZero(), length_intptr,
                           RootIndex::kUndefinedValue);
 
+  if (elements_out) *elements_out = CAST(elements);
   return CAST(result);
 }
 
@@ -177,9 +178,9 @@ TNode<JSRegExpResult> RegExpBuiltinsAssembler::ConstructNewResultFromMatchInfo(
   TNode<String> first =
       CAST(CallBuiltin(Builtins::kSubString, context, string, start, end));
 
-  TNode<JSRegExpResult> result =
-      AllocateRegExpResult(context, num_results, start, string);
-  TNode<FixedArray> result_elements = CAST(LoadElements(result));
+  TNode<FixedArray> result_elements;
+  TNode<JSRegExpResult> result = AllocateRegExpResult(
+      context, num_results, start, string, &result_elements);
 
   UnsafeStoreFixedArrayElement(result_elements, 0, first, SKIP_WRITE_BARRIER);
 
@@ -1923,6 +1924,22 @@ void RegExpBuiltinsAssembler::RegExpPrototypeMatchBody(Node* const context,
     Variable* vars[] = {array.var_array(), array.var_length(),
                         array.var_capacity()};
     Label loop(this, 3, vars), out(this);
+
+    // Check if the regexp is an ATOM type. If then, keep the literal string to
+    // search for so that we can avoid calling substring in the loop below.
+    TVARIABLE(BoolT, var_atom, Int32FalseConstant());
+    TVARIABLE(String, var_search_string, EmptyStringConstant());
+    if (is_fastpath) {
+      TNode<JSRegExp> maybe_atom_regexp = CAST(regexp);
+      TNode<FixedArray> data =
+          CAST(LoadObjectField(maybe_atom_regexp, JSRegExp::kDataOffset));
+      GotoIfNot(SmiEqual(CAST(LoadFixedArrayElement(data, JSRegExp::kTagIndex)),
+                         SmiConstant(JSRegExp::ATOM)),
+                &loop);
+      var_search_string =
+          CAST(LoadFixedArrayElement(data, JSRegExp::kAtomPatternIndex));
+      var_atom = Int32TrueConstant();
+    }
     Goto(&loop);
 
     BIND(&loop);
@@ -1937,13 +1954,22 @@ void RegExpBuiltinsAssembler::RegExpPrototypeMatchBody(Node* const context,
             RegExpPrototypeExecBodyWithoutResult(CAST(context), CAST(regexp),
                                                  string, &if_didnotmatch, true);
 
-        Node* const match_from = UnsafeLoadFixedArrayElement(
-            match_indices, RegExpMatchInfo::kFirstCaptureIndex);
-        Node* const match_to = UnsafeLoadFixedArrayElement(
-            match_indices, RegExpMatchInfo::kFirstCaptureIndex + 1);
+        Label dosubstring(this), donotsubstring(this);
+        Branch(var_atom.value(), &donotsubstring, &dosubstring);
 
-        var_match.Bind(CallBuiltin(Builtins::kSubString, context, string,
-                                   match_from, match_to));
+        BIND(&dosubstring);
+        {
+          Node* const match_from = UnsafeLoadFixedArrayElement(
+              match_indices, RegExpMatchInfo::kFirstCaptureIndex);
+          Node* const match_to = UnsafeLoadFixedArrayElement(
+              match_indices, RegExpMatchInfo::kFirstCaptureIndex + 1);
+          var_match.Bind(CallBuiltin(Builtins::kSubString, context, string,
+                                     match_from, match_to));
+          Goto(&if_didmatch);
+        }
+
+        BIND(&donotsubstring);
+        var_match.Bind(var_search_string.value());
         Goto(&if_didmatch);
       } else {
         DCHECK(!is_fastpath);

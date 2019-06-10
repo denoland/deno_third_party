@@ -4,12 +4,12 @@
 
 #include "src/runtime/runtime-utils.h"
 
-#include "src/arguments-inl.h"
 #include "src/base/platform/time.h"
-#include "src/conversions-inl.h"
-#include "src/counters.h"
-#include "src/futex-emulation.h"
-#include "src/globals.h"
+#include "src/common/globals.h"
+#include "src/execution/arguments-inl.h"
+#include "src/execution/futex-emulation.h"
+#include "src/logging/counters.h"
+#include "src/numbers/conversions-inl.h"
 #include "src/objects/heap-object-inl.h"
 #include "src/objects/js-array-buffer-inl.h"
 

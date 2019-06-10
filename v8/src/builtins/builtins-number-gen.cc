@@ -5,7 +5,7 @@
 #include "src/builtins/builtins-math-gen.h"
 #include "src/builtins/builtins-utils-gen.h"
 #include "src/builtins/builtins.h"
-#include "src/code-stub-assembler.h"
+#include "src/codegen/code-stub-assembler.h"
 #include "src/ic/binary-op-assembler.h"
 
 namespace v8 {
@@ -538,8 +538,8 @@ TF_BUILTIN(Add, AddStubAssembler) {
 
   BIND(&do_bigint_add);
   {
-    Return(CallRuntime(Runtime::kBigIntBinaryOp, context, var_left.value(),
-                       var_right.value(), SmiConstant(Operation::kAdd)));
+    TailCallBuiltin(Builtins::kBigIntAdd, context, var_left.value(),
+                    var_right.value());
   }
 
   BIND(&do_double_add);

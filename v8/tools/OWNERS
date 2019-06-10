@@ -1,3 +1,5 @@
-machenbach@chromium.org
-sergiyb@chromium.org
-tmrts@chromium.org
+file://INFRA_OWNERS
+
+per-file gen-postmortem-metadata.py=file://COMMON_OWNERS
+per-file v8heapconst.py=file://COMMON_OWNERS
+per-file whitespace.txt=file://COMMON_OWNERS

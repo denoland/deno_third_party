@@ -9,7 +9,7 @@
 #include "src/compiler/node.h"
 #include "src/compiler/opcodes.h"
 #include "src/compiler/operator.h"
-#include "src/handles-inl.h"
+#include "src/handles/handles-inl.h"
 #include "src/zone/zone.h"
 
 namespace v8 {
@@ -464,7 +464,8 @@ IfValueParameters const& IfValueParametersOf(const Operator* op) {
   V(LoopExitEffect, Operator::kNoThrow, 0, 1, 1, 0, 1, 0)                     \
   V(Checkpoint, Operator::kKontrol, 0, 1, 1, 0, 1, 0)                         \
   V(FinishRegion, Operator::kKontrol, 1, 1, 0, 1, 1, 0)                       \
-  V(Retain, Operator::kKontrol, 1, 1, 0, 0, 1, 0)
+  V(Retain, Operator::kKontrol, 1, 1, 0, 0, 1, 0)                             \
+  V(StaticAssert, Operator::kFoldable, 1, 1, 0, 0, 1, 0)
 
 #define CACHED_BRANCH_LIST(V)   \
   V(None, CriticalSafetyCheck)  \
@@ -1215,8 +1216,18 @@ const Operator* CommonOperatorBuilder::HeapConstant(
       value);                                         // parameter
 }
 
+const Operator* CommonOperatorBuilder::CompressedHeapConstant(
+    const Handle<HeapObject>& value) {
+  return new (zone()) Operator1<Handle<HeapObject>>(       // --
+      IrOpcode::kCompressedHeapConstant, Operator::kPure,  // opcode
+      "CompressedHeapConstant",                            // name
+      0, 0, 0, 1, 0, 0,                                    // counts
+      value);                                              // parameter
+}
+
 Handle<HeapObject> HeapConstantOf(const Operator* op) {
-  DCHECK_EQ(IrOpcode::kHeapConstant, op->opcode());
+  DCHECK(IrOpcode::kHeapConstant == op->opcode() ||
+         IrOpcode::kCompressedHeapConstant == op->opcode());
   return OpParameter<Handle<HeapObject>>(op);
 }
 

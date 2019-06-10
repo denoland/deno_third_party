@@ -7,18 +7,18 @@
 
 #include <memory>
 
-#include "src/allocation.h"
 #include "src/base/atomic-utils.h"
 #include "src/base/atomicops.h"
 #include "src/base/platform/condition-variable.h"
 #include "src/base/platform/mutex.h"
 #include "src/base/platform/time.h"
-#include "src/isolate.h"
+#include "src/execution/isolate.h"
 #include "src/libsampler/sampler.h"
-#include "src/locked-queue.h"
 #include "src/profiler/circular-queue.h"
 #include "src/profiler/profiler-listener.h"
 #include "src/profiler/tick-sample.h"
+#include "src/utils/allocation.h"
+#include "src/utils/locked-queue.h"
 
 namespace v8 {
 namespace internal {
@@ -172,6 +172,8 @@ class V8_EXPORT_PRIVATE ProfilerEventsProcessor : public base::Thread,
   // Add a sample into the tick sample events buffer. Used for testing.
   void AddSample(TickSample sample);
 
+  virtual void SetSamplingInterval(base::TimeDelta) {}
+
  protected:
   ProfilerEventsProcessor(Isolate* isolate, ProfileGenerator* generator);
 
@@ -211,6 +213,8 @@ class V8_EXPORT_PRIVATE SamplingEventsProcessor
 
   void Run() override;
 
+  void SetSamplingInterval(base::TimeDelta period) override;
+
   // Tick sample events are filled directly in the buffer of the circular
   // queue (because the structure is of fixed width, but usually not all
   // stack frame entries are filled.) This method returns a pointer to the
@@ -221,6 +225,7 @@ class V8_EXPORT_PRIVATE SamplingEventsProcessor
   inline void FinishTickSample();
 
   sampler::Sampler* sampler() { return sampler_.get(); }
+  base::TimeDelta period() const { return period_; }
 
  private:
   SampleProcessingResult ProcessOneSample() override;
@@ -231,7 +236,7 @@ class V8_EXPORT_PRIVATE SamplingEventsProcessor
   SamplingCircularQueue<TickSampleEventRecord,
                         kTickSampleQueueLength> ticks_buffer_;
   std::unique_ptr<sampler::Sampler> sampler_;
-  const base::TimeDelta period_;  // Samples & code events processing period.
+  base::TimeDelta period_;           // Samples & code events processing period.
   const bool use_precise_sampling_;  // Whether or not busy-waiting is used for
                                      // low sampling intervals on Windows.
 };
@@ -248,15 +253,15 @@ class V8_EXPORT_PRIVATE CpuProfiler {
 
   static void CollectSample(Isolate* isolate);
 
-  typedef v8::CpuProfilingMode ProfilingMode;
-  typedef v8::CpuProfilingNamingMode NamingMode;
+  using ProfilingMode = v8::CpuProfilingMode;
+  using NamingMode = v8::CpuProfilingNamingMode;
 
+  base::TimeDelta sampling_interval() const { return base_sampling_interval_; }
   void set_sampling_interval(base::TimeDelta value);
   void set_use_precise_sampling(bool);
   void CollectSample();
-  void StartProfiling(const char* title, bool record_samples = false,
-                      ProfilingMode mode = ProfilingMode::kLeafNodeLineNumbers);
-  void StartProfiling(String title, bool record_samples, ProfilingMode mode);
+  void StartProfiling(const char* title, CpuProfilingOptions options = {});
+  void StartProfiling(String title, CpuProfilingOptions options = {});
   CpuProfile* StopProfiling(const char* title);
   CpuProfile* StopProfiling(String title);
   int GetProfilesCount();
@@ -282,10 +287,18 @@ class V8_EXPORT_PRIVATE CpuProfiler {
   void LogBuiltins();
   void CreateEntriesForRuntimeCallStats();
 
+  // Computes a sampling interval sufficient to accomodate attached profiles.
+  base::TimeDelta ComputeSamplingInterval() const;
+  // Dynamically updates the sampler to use a sampling interval sufficient for
+  // child profiles.
+  void AdjustSamplingInterval();
+
   Isolate* const isolate_;
   const NamingMode naming_mode_;
-  base::TimeDelta sampling_interval_;
   bool use_precise_sampling_ = true;
+  // Sampling interval to which per-profile sampling intervals will be clamped
+  // to a multiple of, or used as the default if unspecified.
+  base::TimeDelta base_sampling_interval_;
   std::unique_ptr<CpuProfilesCollection> profiles_;
   std::unique_ptr<ProfileGenerator> generator_;
   std::unique_ptr<ProfilerEventsProcessor> processor_;

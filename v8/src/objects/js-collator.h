@@ -12,12 +12,12 @@
 #include <set>
 #include <string>
 
+#include "src/execution/isolate.h"
 #include "src/heap/factory.h"
-#include "src/isolate.h"
-#include "src/objects.h"
 #include "src/objects/intl-objects.h"
 #include "src/objects/js-objects.h"
 #include "src/objects/managed.h"
+#include "src/objects/objects.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -47,14 +47,8 @@ class JSCollator : public JSObject {
   DECL_VERIFIER(JSCollator)
 
 // Layout description.
-#define JS_COLLATOR_FIELDS(V)         \
-  V(kICUCollatorOffset, kTaggedSize)  \
-  V(kBoundCompareOffset, kTaggedSize) \
-  /* Total size. */                   \
-  V(kSize, 0)
-
-  DEFINE_FIELD_OFFSET_CONSTANTS(JSObject::kHeaderSize, JS_COLLATOR_FIELDS)
-#undef JS_COLLATOR_FIELDS
+  DEFINE_FIELD_OFFSET_CONSTANTS(JSObject::kHeaderSize,
+                                TORQUE_GENERATED_JSCOLLATOR_FIELDS)
 
   DECL_ACCESSORS(icu_collator, Managed<icu::Collator>)
   DECL_ACCESSORS(bound_compare, Object)

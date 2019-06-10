@@ -6,9 +6,9 @@
 #define V8_COMPILER_JS_INTRINSIC_LOWERING_H_
 
 #include "src/base/compiler-specific.h"
+#include "src/common/globals.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph-reducer.h"
-#include "src/globals.h"
 
 namespace v8 {
 namespace internal {
@@ -39,6 +39,7 @@ class V8_EXPORT_PRIVATE JSIntrinsicLowering final
   Reduction Reduce(Node* node) final;
 
  private:
+  Reduction ReduceCopyDataProperties(Node* node);
   Reduction ReduceCreateIterResultObject(Node* node);
   Reduction ReduceDeoptimizeNow(Node* node);
   Reduction ReduceCreateJSGeneratorObject(Node* node);
@@ -57,6 +58,7 @@ class V8_EXPORT_PRIVATE JSIntrinsicLowering final
   Reduction ReduceIsInstanceType(Node* node, InstanceType instance_type);
   Reduction ReduceIsJSReceiver(Node* node);
   Reduction ReduceIsSmi(Node* node);
+  Reduction ReduceTurbofanStaticAssert(Node* node);
   Reduction ReduceToLength(Node* node);
   Reduction ReduceToObject(Node* node);
   Reduction ReduceToString(Node* node);

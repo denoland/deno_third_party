@@ -7,11 +7,11 @@
 #include "src/base/functional.h"
 #include "src/base/platform/platform.h"
 #include "src/base/template-utils.h"
-#include "src/counters.h"
-#include "src/flags.h"
-#include "src/objects-inl.h"
-#include "src/ostreams.h"
-#include "src/v8.h"
+#include "src/flags/flags.h"
+#include "src/init/v8.h"
+#include "src/logging/counters.h"
+#include "src/objects/objects-inl.h"
+#include "src/utils/ostreams.h"
 #include "src/wasm/decoder.h"
 #include "src/wasm/function-body-decoder-impl.h"
 #include "src/wasm/wasm-engine.h"
@@ -122,6 +122,8 @@ ValueType TypeOf(const WasmModule* module, const WasmInitExpr& expr) {
       return kWasmF64;
     case WasmInitExpr::kRefNullConst:
       return kWasmNullRef;
+    case WasmInitExpr::kRefFuncConst:
+      return kWasmAnyFunc;
     default:
       UNREACHABLE();
   }
@@ -284,12 +286,12 @@ class ModuleDecoderImpl : public Decoder {
       }
     }
     // File are named `HASH.{ok,failed}.wasm`.
-    size_t hash = base::hash_range(module_bytes.start(), module_bytes.end());
+    size_t hash = base::hash_range(module_bytes.begin(), module_bytes.end());
     EmbeddedVector<char, 32> buf;
     SNPrintF(buf, "%016zx.%s.wasm", hash, ok() ? "ok" : "failed");
-    std::string name(buf.start());
+    std::string name(buf.begin());
     if (FILE* wasm_file = base::OS::FOpen((path + name).c_str(), "wb")) {
-      if (fwrite(module_bytes.start(), module_bytes.length(), 1, wasm_file) !=
+      if (fwrite(module_bytes.begin(), module_bytes.length(), 1, wasm_file) !=
           1) {
         OFStream os(stderr);
         os << "Error while dumping wasm file" << std::endl;
@@ -365,8 +367,7 @@ class ModuleDecoderImpl : public Decoder {
     if (failed()) return;
     Reset(bytes, offset);
     TRACE("Section: %s\n", SectionName(section_code));
-    TRACE("Decode Section %p - %p\n", static_cast<const void*>(bytes.begin()),
-          static_cast<const void*>(bytes.end()));
+    TRACE("Decode Section %p - %p\n", bytes.begin(), bytes.end());
 
     // Check if the section is out-of-order.
     if (section_code < next_ordered_section_ &&
@@ -807,7 +808,8 @@ class ModuleDecoderImpl : public Decoder {
           errorf(pos, "out of bounds table index %u", table_index);
           break;
         }
-        if (module_->tables[table_index].type != kWasmAnyFunc) {
+        if (!ValueTypes::IsSubType(kWasmAnyFunc,
+                                   module_->tables[table_index].type)) {
           errorf(pos,
                  "Invalid element segment. Table %u is not of type AnyFunc",
                  table_index);
@@ -815,7 +817,7 @@ class ModuleDecoderImpl : public Decoder {
         }
       } else {
         ValueType type = consume_reference_type();
-        if (type != kWasmAnyFunc) {
+        if (!ValueTypes::IsSubType(kWasmAnyFunc, type)) {
           error(pc_ - 1, "invalid element segment type");
           break;
         }
@@ -1032,13 +1034,6 @@ class ModuleDecoderImpl : public Decoder {
           static_cast<WasmCompilationHintTier>(hint_byte >> 2 & 0x3);
       hint.top_tier =
           static_cast<WasmCompilationHintTier>(hint_byte >> 4 & 0x3);
-
-      // Check strategy.
-      if (hint.strategy > WasmCompilationHintStrategy::kEager) {
-        decoder.errorf(decoder.pc(),
-                       "Invalid compilation hint %#x (unknown strategy)",
-                       hint_byte);
-      }
 
       // Ensure that the top tier never downgrades a compilation result.
       // If baseline and top tier are the same compilation will be invoked only
@@ -1274,7 +1269,7 @@ class ModuleDecoderImpl : public Decoder {
                ValueTypes::TypeName(module->globals[other_index].type));
       }
     } else {
-      if (!ValueTypes::IsSubType(global->type, TypeOf(module, global->init))) {
+      if (!ValueTypes::IsSubType(TypeOf(module, global->init), global->type)) {
         errorf(pos, "type error in global initialization, expected %s, got %s",
                ValueTypes::TypeName(global->type),
                ValueTypes::TypeName(TypeOf(module, global->init)));
@@ -1312,9 +1307,8 @@ class ModuleDecoderImpl : public Decoder {
                           const WasmModule* module, WasmFunction* function) {
     WasmFunctionName func_name(function,
                                wire_bytes.GetNameOrNull(function, module));
-    if (FLAG_trace_wasm_decoder || FLAG_trace_wasm_decode_time) {
-      StdoutStream os;
-      os << "Verifying wasm function " << func_name << std::endl;
+    if (FLAG_trace_wasm_decoder) {
+      StdoutStream{} << "Verifying wasm function " << func_name << std::endl;
     }
     FunctionBody body = {
         function->sig, function->code.offset(),
@@ -1546,6 +1540,16 @@ class ModuleDecoderImpl : public Decoder {
         }
         V8_FALLTHROUGH;
       }
+      case kExprRefFunc: {
+        if (enabled_features_.anyref) {
+          FunctionIndexImmediate<Decoder::kValidate> imm(this, pc() - 1);
+          expr.kind = WasmInitExpr::kRefFuncConst;
+          expr.val.function_index = imm.index;
+          len = imm.length;
+          break;
+        }
+        V8_FALLTHROUGH;
+      }
       default: {
         error("invalid opcode in initialization expression");
         expr.kind = WasmInitExpr::kNone;
@@ -1676,45 +1680,41 @@ class ModuleDecoderImpl : public Decoder {
   void consume_segment_header(const char* name, bool* is_active,
                               uint32_t* index, WasmInitExpr* offset) {
     const byte* pos = pc();
-    // In the MVP, this is a table or memory index field that must be 0, but
-    // we've repurposed it as a flags field in the bulk memory proposal.
-    uint32_t flags;
-    if (enabled_features_.bulk_memory) {
-      flags = consume_u32v("flags");
-      if (failed()) return;
-    } else {
-      // Without the bulk memory proposal, we should still read the table
-      // index. This is the same as reading the `ActiveWithIndex` flag with
-      // the bulk memory proposal.
-      flags = SegmentFlags::kActiveWithIndex;
-    }
+    uint32_t flag = consume_u32v("flag");
 
-    bool read_index;
-    bool read_offset;
-    if (flags == SegmentFlags::kActiveNoIndex) {
-      *is_active = true;
-      read_index = false;
-      read_offset = true;
-    } else if (flags == SegmentFlags::kPassive) {
-      *is_active = false;
-      read_index = false;
-      read_offset = false;
-    } else if (flags == SegmentFlags::kActiveWithIndex) {
-      *is_active = true;
-      read_index = true;
-      read_offset = true;
-    } else {
-      errorf(pos, "illegal flag value %u. Must be 0, 1, or 2", flags);
+    // Some flag values are only valid for specific proposals.
+    if (flag == SegmentFlags::kPassive) {
+      if (!enabled_features_.bulk_memory) {
+        error(
+            "Passive element segments require --experimental-wasm-bulk-memory");
+        return;
+      }
+    } else if (flag == SegmentFlags::kActiveWithIndex) {
+      if (!(enabled_features_.bulk_memory || enabled_features_.anyref)) {
+        error(
+            "Element segments with table indices require "
+            "--experimental-wasm-bulk-memory or --experimental-wasm-anyref");
+        return;
+      }
+    } else if (flag != SegmentFlags::kActiveNoIndex) {
+      errorf(pos, "illegal flag value %u. Must be 0, 1, or 2", flag);
       return;
     }
 
-    if (read_index) {
-      *index = consume_u32v(name);
-    } else {
+    // We know now that the flag is valid. Time to read the rest.
+    if (flag == SegmentFlags::kActiveNoIndex) {
+      *is_active = true;
       *index = 0;
+      *offset = consume_init_expr(module_.get(), kWasmI32);
+      return;
     }
-
-    if (read_offset) {
+    if (flag == SegmentFlags::kPassive) {
+      *is_active = false;
+      return;
+    }
+    if (flag == SegmentFlags::kActiveWithIndex) {
+      *is_active = true;
+      *index = consume_u32v(name);
       *offset = consume_init_expr(module_.get(), kWasmI32);
     }
   }

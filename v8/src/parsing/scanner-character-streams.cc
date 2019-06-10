@@ -8,12 +8,12 @@
 #include <vector>
 
 #include "include/v8.h"
-#include "src/counters.h"
-#include "src/globals.h"
-#include "src/handles.h"
-#include "src/objects-inl.h"
+#include "src/common/globals.h"
+#include "src/handles/handles.h"
+#include "src/logging/counters.h"
+#include "src/objects/objects-inl.h"
 #include "src/parsing/scanner.h"
-#include "src/unicode-inl.h"
+#include "src/strings/unicode-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -22,11 +22,11 @@ class ScopedExternalStringLock {
  public:
   explicit ScopedExternalStringLock(ExternalString string) {
     DCHECK(!string.is_null());
-    if (string->IsExternalOneByteString()) {
-      resource_ = ExternalOneByteString::cast(string)->resource();
+    if (string.IsExternalOneByteString()) {
+      resource_ = ExternalOneByteString::cast(string).resource();
     } else {
-      DCHECK(string->IsExternalTwoByteString());
-      resource_ = ExternalTwoByteString::cast(string)->resource();
+      DCHECK(string.IsExternalTwoByteString());
+      resource_ = ExternalTwoByteString::cast(string).resource();
     }
     DCHECK(resource_);
     resource_->Lock();
@@ -100,7 +100,7 @@ class ExternalStringStream {
   ExternalStringStream(ExternalString string, size_t start_offset,
                        size_t length)
       : lock_(string),
-        data_(string->GetChars() + start_offset),
+        data_(string.GetChars() + start_offset),
         length_(length) {}
 
   ExternalStringStream(const ExternalStringStream& other) V8_NOEXCEPT
@@ -590,7 +590,8 @@ void Utf8ExternalStreamingStream::FillBufferFromCurrentChunk() {
     }
   }
 
-  while (cursor < end && output_cursor + 1 < buffer_start_ + kBufferSize) {
+  const uint16_t* max_buffer_end = buffer_start_ + kBufferSize;
+  while (cursor < end && output_cursor + 1 < max_buffer_end) {
     unibrow::uchar t =
         unibrow::Utf8::ValueOfIncremental(&cursor, &state, &incomplete_char);
     if (V8_LIKELY(t <= unibrow::Utf16::kMaxNonSurrogateCharCode)) {
@@ -601,6 +602,15 @@ void Utf8ExternalStreamingStream::FillBufferFromCurrentChunk() {
       *(output_cursor++) = unibrow::Utf16::LeadSurrogate(t);
       *(output_cursor++) = unibrow::Utf16::TrailSurrogate(t);
     }
+    // Fast path for ascii sequences.
+    size_t remaining = end - cursor;
+    size_t max_buffer = max_buffer_end - output_cursor;
+    int max_length = static_cast<int>(Min(remaining, max_buffer));
+    DCHECK_EQ(state, unibrow::Utf8::State::kAccept);
+    int ascii_length = NonAsciiStart(cursor, max_length);
+    CopyChars(output_cursor, cursor, ascii_length);
+    cursor += ascii_length;
+    output_cursor += ascii_length;
   }
 
   current_.pos.bytes = chunk.start.bytes + (cursor - chunk.data);
@@ -746,9 +756,9 @@ Utf16CharacterStream* ScannerStream::For(Isolate* isolate, Handle<String> data,
   size_t start_offset = 0;
   if (data->IsSlicedString()) {
     SlicedString string = SlicedString::cast(*data);
-    start_offset = string->offset();
-    String parent = string->parent();
-    if (parent->IsThinString()) parent = ThinString::cast(parent)->actual();
+    start_offset = string.offset();
+    String parent = string.parent();
+    if (parent.IsThinString()) parent = ThinString::cast(parent).actual();
     data = handle(parent, isolate);
   } else {
     data = String::Flatten(isolate, data);

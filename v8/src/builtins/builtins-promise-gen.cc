@@ -9,19 +9,19 @@
 #include "src/builtins/builtins-promise.h"
 #include "src/builtins/builtins-utils-gen.h"
 #include "src/builtins/builtins.h"
-#include "src/code-factory.h"
-#include "src/code-stub-assembler.h"
-#include "src/objects-inl.h"
+#include "src/codegen/code-factory.h"
+#include "src/codegen/code-stub-assembler.h"
 #include "src/objects/js-promise.h"
+#include "src/objects/objects-inl.h"
 #include "src/objects/smi.h"
 
 namespace v8 {
 namespace internal {
 
-typedef compiler::Node Node;
+using Node = compiler::Node;
 template <class T>
 using TNode = CodeStubAssembler::TNode<T>;
-using IteratorRecord = IteratorBuiltinsAssembler::IteratorRecord;
+using IteratorRecord = TorqueStructIteratorRecord;
 
 Node* PromiseBuiltinsAssembler::AllocateJSPromise(Node* context) {
   Node* const native_context = LoadNativeContext(context);
@@ -516,7 +516,8 @@ Node* PromiseBuiltinsAssembler::AllocatePromiseReaction(
 Node* PromiseBuiltinsAssembler::AllocatePromiseReactionJobTask(
     Node* map, Node* context, Node* argument, Node* handler,
     Node* promise_or_capability) {
-  Node* const microtask = Allocate(PromiseReactionJobTask::kSize);
+  Node* const microtask =
+      Allocate(PromiseReactionJobTask::kSizeOfAllPromiseReactionJobTasks);
   StoreMapNoWriteBarrier(microtask, map);
   StoreObjectFieldNoWriteBarrier(
       microtask, PromiseReactionJobTask::kArgumentOffset, argument);
@@ -640,8 +641,10 @@ Node* PromiseBuiltinsAssembler::TriggerPromiseReactions(
       // Morph {current} from a PromiseReaction into a PromiseReactionJobTask
       // and schedule that on the microtask queue. We try to minimize the number
       // of stores here to avoid screwing up the store buffer.
-      STATIC_ASSERT(static_cast<int>(PromiseReaction::kSize) ==
-                    static_cast<int>(PromiseReactionJobTask::kSize));
+      STATIC_ASSERT(
+          static_cast<int>(PromiseReaction::kSize) ==
+          static_cast<int>(
+              PromiseReactionJobTask::kSizeOfAllPromiseReactionJobTasks));
       if (type == PromiseReaction::kFulfill) {
         StoreMapNoWriteBarrier(current,
                                RootIndex::kPromiseFulfillReactionJobTaskMap);

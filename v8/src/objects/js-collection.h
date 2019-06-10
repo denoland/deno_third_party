@@ -5,8 +5,8 @@
 #ifndef V8_OBJECTS_JS_COLLECTION_H_
 #define V8_OBJECTS_JS_COLLECTION_H_
 
-#include "src/objects.h"
 #include "src/objects/js-collection-iterator.h"
+#include "src/objects/objects.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -30,6 +30,8 @@ class JSCollection : public JSObject {
 
   static const int kAddFunctionDescriptorIndex = 3;
 
+  DECL_VERIFIER(JSCollection)
+
   OBJECT_CONSTRUCTORS(JSCollection, JSObject);
 };
 
@@ -44,6 +46,8 @@ class JSSet : public JSCollection {
   // Dispatched behavior.
   DECL_PRINTER(JSSet)
   DECL_VERIFIER(JSSet)
+  DEFINE_FIELD_OFFSET_CONSTANTS(JSCollection::kHeaderSize,
+                                TORQUE_GENERATED_JSWEAK_SET_FIELDS)
 
   OBJECT_CONSTRUCTORS(JSSet, JSCollection);
 };
@@ -72,6 +76,8 @@ class JSMap : public JSCollection {
   // Dispatched behavior.
   DECL_PRINTER(JSMap)
   DECL_VERIFIER(JSMap)
+  DEFINE_FIELD_OFFSET_CONSTANTS(JSCollection::kHeaderSize,
+                                TORQUE_GENERATED_JSWEAK_MAP_FIELDS)
 
   OBJECT_CONSTRUCTORS(JSMap, JSCollection);
 };
@@ -110,6 +116,8 @@ class JSWeakCollection : public JSObject {
   static Handle<JSArray> GetEntries(Handle<JSWeakCollection> holder,
                                     int max_entries);
 
+  DECL_VERIFIER(JSWeakCollection)
+
   DEFINE_FIELD_OFFSET_CONSTANTS(JSObject::kHeaderSize,
                                 TORQUE_GENERATED_JSWEAK_COLLECTION_FIELDS)
 
@@ -120,6 +128,8 @@ class JSWeakCollection : public JSObject {
 
   // Visit the whole object.
   using BodyDescriptor = BodyDescriptorImpl;
+
+  static const int kSizeOfAllWeakCollections = kHeaderSize;
 
   OBJECT_CONSTRUCTORS(JSWeakCollection, JSObject);
 };
@@ -133,6 +143,9 @@ class JSWeakMap : public JSWeakCollection {
   DECL_PRINTER(JSWeakMap)
   DECL_VERIFIER(JSWeakMap)
 
+  DEFINE_FIELD_OFFSET_CONSTANTS(JSWeakCollection::kHeaderSize,
+                                TORQUE_GENERATED_JSWEAK_MAP_FIELDS)
+  STATIC_ASSERT(kSize == kSizeOfAllWeakCollections);
   OBJECT_CONSTRUCTORS(JSWeakMap, JSWeakCollection);
 };
 
@@ -144,6 +157,9 @@ class JSWeakSet : public JSWeakCollection {
   // Dispatched behavior.
   DECL_PRINTER(JSWeakSet)
   DECL_VERIFIER(JSWeakSet)
+  DEFINE_FIELD_OFFSET_CONSTANTS(JSWeakCollection::kHeaderSize,
+                                TORQUE_GENERATED_JSWEAK_SET_FIELDS)
+  STATIC_ASSERT(kSize == kSizeOfAllWeakCollections);
 
   OBJECT_CONSTRUCTORS(JSWeakSet, JSWeakCollection);
 };

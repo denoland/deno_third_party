@@ -9,8 +9,8 @@
 #ifndef V8_OBJECTS_JS_BREAK_ITERATOR_INL_H_
 #define V8_OBJECTS_JS_BREAK_ITERATOR_INL_H_
 
-#include "src/objects-inl.h"
 #include "src/objects/js-break-iterator.h"
+#include "src/objects/objects-inl.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -22,11 +22,12 @@ OBJECT_CONSTRUCTORS_IMPL(JSV8BreakIterator, JSObject)
 
 inline void JSV8BreakIterator::set_type(Type type) {
   DCHECK_GT(JSV8BreakIterator::Type::COUNT, type);
-  WRITE_FIELD(*this, kTypeOffset, Smi::FromInt(static_cast<int>(type)));
+  WRITE_FIELD(*this, kBreakIteratorTypeOffset,
+              Smi::FromInt(static_cast<int>(type)));
 }
 
 inline JSV8BreakIterator::Type JSV8BreakIterator::type() const {
-  Object value = READ_FIELD(*this, kTypeOffset);
+  Object value = READ_FIELD(*this, kBreakIteratorTypeOffset);
   return static_cast<JSV8BreakIterator::Type>(Smi::ToInt(value));
 }
 

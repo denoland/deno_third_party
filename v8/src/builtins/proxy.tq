@@ -15,10 +15,16 @@ namespace proxy {
 
   macro IsRevokedProxy(implicit context: Context)(o: JSReceiver): bool {
     const proxy: JSProxy = Cast<JSProxy>(o) otherwise return false;
-    const handler: JSReceiver =
-        Cast<JSReceiver>(proxy.handler) otherwise return true;
+    Cast<JSReceiver>(proxy.handler) otherwise return true;
     return false;
   }
+
+  extern transitioning macro ProxiesCodeStubAssembler::CheckGetSetTrapResult(
+      implicit context:
+          Context)(Object, JSProxy, Name, Object, constexpr int31): Object;
+
+  extern transitioning macro ProxiesCodeStubAssembler::CheckHasTrapResult(
+      implicit context: Context)(Object, JSProxy, Name): Object;
 
   const kProxyNonObject: constexpr MessageTemplate
   generates 'MessageTemplate::kProxyNonObject';
@@ -26,6 +32,12 @@ namespace proxy {
   generates 'MessageTemplate::kProxyHandlerOrTargetRevoked';
   const kProxyRevoked: constexpr MessageTemplate
   generates 'MessageTemplate::kProxyRevoked';
+  const kProxyTrapReturnedFalsishFor: constexpr MessageTemplate
+  generates 'MessageTemplate::kProxyTrapReturnedFalsishFor';
+  const kProxyPrivate: constexpr MessageTemplate
+  generates 'MessageTemplate::kProxyPrivate';
+  const kProxyIsExtensibleInconsistent: constexpr MessageTemplate
+  generates 'MessageTemplate::kProxyIsExtensibleInconsistent';
 
   const kProxyGet: constexpr int31
   generates 'JSProxy::AccessKind::kGet';

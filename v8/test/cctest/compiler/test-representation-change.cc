@@ -7,10 +7,10 @@
 #include "src/compiler/node-matchers.h"
 #include "src/compiler/representation-change.h"
 #include "src/compiler/type-cache.h"
-#include "src/objects-inl.h"
+#include "src/objects/objects-inl.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/compiler/codegen-tester.h"
-#include "test/cctest/compiler/graph-builder-tester.h"
+#include "test/cctest/compiler/graph-and-builders.h"
 #include "test/cctest/compiler/value-helper.h"
 
 namespace v8 {
@@ -544,7 +544,8 @@ TEST(SingleChanges) {
               Type::Number(), MachineRepresentation::kFloat64);
   CheckChange(IrOpcode::kTruncateTaggedToFloat64,
               MachineRepresentation::kTagged, Type::NumberOrUndefined(),
-              MachineRepresentation::kFloat64);
+              UseInfo(MachineRepresentation::kFloat64,
+                      Truncation::OddballAndBigIntToNumber()));
   CheckChange(IrOpcode::kChangeTaggedToFloat64, MachineRepresentation::kTagged,
               Type::Signed31(), MachineRepresentation::kFloat64);
 

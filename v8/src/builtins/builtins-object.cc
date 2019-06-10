@@ -4,14 +4,14 @@
 
 #include "src/builtins/builtins-utils-inl.h"
 #include "src/builtins/builtins.h"
-#include "src/code-factory.h"
-#include "src/counters.h"
+#include "src/codegen/code-factory.h"
+#include "src/execution/message-template.h"
 #include "src/heap/heap-inl.h"  // For ToBoolean. TODO(jkummerow): Drop.
-#include "src/keys.h"
-#include "src/lookup.h"
-#include "src/message-template.h"
-#include "src/objects-inl.h"
-#include "src/property-descriptor.h"
+#include "src/logging/counters.h"
+#include "src/objects/keys.h"
+#include "src/objects/lookup.h"
+#include "src/objects/objects-inl.h"
+#include "src/objects/property-descriptor.h"
 
 namespace v8 {
 namespace internal {
@@ -330,18 +330,6 @@ Object GetOwnPropertyKeys(Isolate* isolate, BuiltinArguments args,
 // ES6 section 19.1.2.8 Object.getOwnPropertySymbols ( O )
 BUILTIN(ObjectGetOwnPropertySymbols) {
   return GetOwnPropertyKeys(isolate, args, SKIP_STRINGS);
-}
-
-// ES6 section 19.1.2.11 Object.isExtensible ( O )
-BUILTIN(ObjectIsExtensible) {
-  HandleScope scope(isolate);
-  Handle<Object> object = args.atOrUndefined(isolate, 1);
-  Maybe<bool> result =
-      object->IsJSReceiver()
-          ? JSReceiver::IsExtensible(Handle<JSReceiver>::cast(object))
-          : Just(false);
-  MAYBE_RETURN(result, ReadOnlyRoots(isolate).exception());
-  return isolate->heap()->ToBoolean(result.FromJust());
 }
 
 // ES6 section 19.1.2.12 Object.isFrozen ( O )

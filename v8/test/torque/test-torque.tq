@@ -34,16 +34,19 @@ namespace test {
     goto Label3(Null, 7);
   }
 
+  @export
   macro TestConstexpr1() {
     check(FromConstexpr<bool>(IsFastElementsKind(PACKED_SMI_ELEMENTS)));
   }
 
+  @export
   macro TestConstexprIf() {
     check(ElementsKindTestHelper1(UINT8_ELEMENTS));
     check(ElementsKindTestHelper1(UINT16_ELEMENTS));
     check(!ElementsKindTestHelper1(UINT32_ELEMENTS));
   }
 
+  @export
   macro TestConstexprReturn() {
     check(FromConstexpr<bool>(ElementsKindTestHelper3(UINT8_ELEMENTS)));
     check(FromConstexpr<bool>(ElementsKindTestHelper3(UINT16_ELEMENTS)));
@@ -51,6 +54,7 @@ namespace test {
     check(FromConstexpr<bool>(!ElementsKindTestHelper3(UINT32_ELEMENTS)));
   }
 
+  @export
   macro TestGotoLabel(): Boolean {
     try {
       LabelTestHelper1() otherwise Label1;
@@ -60,6 +64,7 @@ namespace test {
     }
   }
 
+  @export
   macro TestGotoLabelWithOneParameter(): Boolean {
     try {
       LabelTestHelper2() otherwise Label2;
@@ -70,6 +75,7 @@ namespace test {
     }
   }
 
+  @export
   macro TestGotoLabelWithTwoParameters(): Boolean {
     try {
       LabelTestHelper3() otherwise Label3;
@@ -81,14 +87,15 @@ namespace test {
     }
   }
 
-  builtin GenericBuiltinTest<T: type>(c: Context, param: T): Object {
+  builtin GenericBuiltinTest<T: type>(_c: Context, _param: T): Object {
     return Null;
   }
 
-  GenericBuiltinTest<Object>(c: Context, param: Object): Object {
+  GenericBuiltinTest<Object>(_c: Context, param: Object): Object {
     return param;
   }
 
+  @export
   macro TestBuiltinSpecialization(c: Context) {
     check(GenericBuiltinTest<Smi>(c, 0) == Null);
     check(GenericBuiltinTest<Smi>(c, 1) == Null);
@@ -117,6 +124,7 @@ namespace test {
     }
   }
 
+  @export
   macro TestPartiallyUnusedLabel(): Boolean {
     let r1: bool = CallLabelTestHelper4(true);
     let r2: bool = CallLabelTestHelper4(false);
@@ -128,7 +136,7 @@ namespace test {
     }
   }
 
-  macro GenericMacroTest<T: type>(param: T): Object {
+  macro GenericMacroTest<T: type>(_param: T): Object {
     return Undefined;
   }
 
@@ -136,8 +144,8 @@ namespace test {
     return param2;
   }
 
-  macro GenericMacroTestWithLabels<T: type>(param: T): Object
-      labels X {
+  macro GenericMacroTestWithLabels<T: type>(_param: T): Object
+  labels _X {
     return Undefined;
   }
 
@@ -146,9 +154,10 @@ namespace test {
     return Cast<Smi>(param2) otherwise Y;
   }
 
+  @export
   macro TestMacroSpecialization() {
     try {
-      const smi0: Smi = 0;
+      const _smi0: Smi = 0;
       check(GenericMacroTest<Smi>(0) == Undefined);
       check(GenericMacroTest<Smi>(1) == Undefined);
       check(GenericMacroTest<Object>(Null) == Null);
@@ -166,13 +175,14 @@ namespace test {
     }
   }
 
-  builtin TestHelperPlus1(context: Context, x: Smi): Smi {
+  builtin TestHelperPlus1(_context: Context, x: Smi): Smi {
     return x + 1;
   }
-  builtin TestHelperPlus2(context: Context, x: Smi): Smi {
+  builtin TestHelperPlus2(_context: Context, x: Smi): Smi {
     return x + 2;
   }
 
+  @export
   macro TestFunctionPointers(implicit context: Context)(): Boolean {
     let fptr: builtin(Context, Smi) => Smi = TestHelperPlus1;
     check(fptr(context, 42) == 43);
@@ -181,17 +191,20 @@ namespace test {
     return True;
   }
 
+  @export
   macro TestVariableRedeclaration(implicit context: Context)(): Boolean {
-    let var1: int31 = FromConstexpr<bool>(42 == 0) ? 0 : 1;
-    let var2: int31 = FromConstexpr<bool>(42 == 0) ? 1 : 0;
+    let _var1: int31 = FromConstexpr<bool>(42 == 0) ? 0 : 1;
+    let _var2: int31 = FromConstexpr<bool>(42 == 0) ? 1 : 0;
     return True;
   }
 
+  @export
   macro TestTernaryOperator(x: Smi): Smi {
     let b: bool = x < 0 ? true : false;
     return b ? x - 10 : x + 100;
   }
 
+  @export
   macro TestFunctionPointerToGeneric(c: Context) {
     let fptr1: builtin(Context, Smi) => Object = GenericBuiltinTest<Smi>;
     let fptr2: builtin(Context, Object) => Object = GenericBuiltinTest<Object>;
@@ -203,10 +216,12 @@ namespace test {
   }
 
   type ObjectToObject = builtin(Context, Object) => Object;
+  @export
   macro TestTypeAlias(x: ObjectToObject): BuiltinPtr {
     return x;
   }
 
+  @export
   macro TestUnsafeCast(implicit context: Context)(n: Number): Boolean {
     if (TaggedIsSmi(n)) {
       let m: Smi = UnsafeCast<Smi>(n);
@@ -217,16 +232,19 @@ namespace test {
     return False;
   }
 
+  @export
   macro TestHexLiteral() {
     check(Convert<intptr>(0xffff) + 1 == 0x10000);
     check(Convert<intptr>(-0xffff) == -65535);
   }
 
+  @export
   macro TestLargeIntegerLiterals(implicit c: Context)() {
-    let x: int32 = 0x40000000;
-    let y: int32 = 0x7fffffff;
+    let _x: int32 = 0x40000000;
+    let _y: int32 = 0x7fffffff;
   }
 
+  @export
   macro TestMultilineAssert() {
     let someVeryLongVariableNameThatWillCauseLineBreaks: Smi = 5;
     check(
@@ -234,6 +252,7 @@ namespace test {
         someVeryLongVariableNameThatWillCauseLineBreaks < 10);
   }
 
+  @export
   macro TestNewlineInString() {
     Print('Hello, World!\n');
   }
@@ -242,12 +261,14 @@ namespace test {
   const kIntptrConst: intptr = 4;
   const kSmiConst: Smi = 3;
 
+  @export
   macro TestModuleConstBindings() {
     check(kConstexprConst == Int32Constant(5));
     check(kIntptrConst == 4);
     check(kSmiConst == 3);
   }
 
+  @export
   macro TestLocalConstBindings() {
     const x: constexpr int31 = 3;
     const xSmi: Smi = x;
@@ -273,10 +294,12 @@ namespace test {
     y: Smi;
   }
 
+  @export
   macro TestStruct1(i: TestStructA): Smi {
     return i.i;
   }
 
+  @export
   macro TestStruct2(implicit context: Context)(): TestStructA {
     return TestStructA{
       indexes: UnsafeCast<FixedArray>(kEmptyFixedArray),
@@ -285,17 +308,18 @@ namespace test {
     };
   }
 
+  @export
   macro TestStruct3(implicit context: Context)(): TestStructA {
     let a: TestStructA =
     TestStructA{indexes: UnsafeCast<FixedArray>(kEmptyFixedArray), i: 13, k: 5};
-    let b: TestStructA = a;
+    let _b: TestStructA = a;
     let c: TestStructA = TestStruct2();
     a.i = TestStruct1(c);
     a.k = a.i;
     let d: TestStructB;
     d.x = a;
     d = TestStructB{x: a, y: 7};
-    let e: TestStructA = d.x;
+    let _e: TestStructA = d.x;
     let f: Smi = TestStructA{
       indexes: UnsafeCast<FixedArray>(kEmptyFixedArray),
       i: 27,
@@ -310,23 +334,25 @@ namespace test {
     y: TestStructA;
   }
 
+  @export
   macro TestStruct4(implicit context: Context)(): TestStructC {
     return TestStructC{x: TestStruct2(), y: TestStruct2()};
   }
 
-  macro TestStructInLabel(implicit context: Context)(): never
-      labels Foo(TestStructA) {
+  macro TestStructInLabel(implicit context: Context)(): never labels
+  Foo(TestStructA) {
     goto Foo(TestStruct2());
   }
   macro CallTestStructInLabel(implicit context: Context)() {
     try {
       TestStructInLabel() otherwise Foo;
     }
-    label Foo(s: TestStructA) {}
+    label Foo(_s: TestStructA) {}
   }
 
   // This macro tests different versions of the for-loop where some parts
   // are (not) present.
+  @export
   macro TestForLoop() {
     let sum: Smi = 0;
     for (let i: Smi = 0; i < 5; ++i) sum += i;
@@ -421,13 +447,14 @@ namespace test {
     }
 
     // Test if we can handle uninitialized values on the stack.
-    let i: Smi;
+    let _i: Smi;
     for (let j: Smi = 0; j < 10; ++j) {
     }
   }
 
+  @export
   macro TestSubtyping(x: Smi) {
-    const foo: Object = x;
+    const _foo: Object = x;
   }
 
   macro IncrementIfSmi<A: type>(x: A): A {
@@ -446,7 +473,7 @@ namespace test {
       int32 {
     let result: int32 = 0;
     typeswitch (IncrementIfSmi(x)) {
-      case (x: FixedArray): {
+      case (_x: FixedArray): {
         result = result + 1;
       }
       case (Number): {
@@ -463,7 +490,7 @@ namespace test {
       case (a: FixedArray): {
         result = result + Convert<int32>(a.length);
       }
-      case (x: HeapNumber): {
+      case (_x: HeapNumber): {
         result = result + 7;
       }
     }
@@ -471,6 +498,7 @@ namespace test {
     return result;
   }
 
+  @export
   macro TestTypeswitch(implicit context: Context)() {
     check(TypeswitchExample(FromConstexpr<Smi>(5)) == 26);
     const a: FixedArray = AllocateZeroedFixedArray(3);
@@ -478,15 +506,16 @@ namespace test {
     check(TypeswitchExample(FromConstexpr<Number>(0.5)) == 27);
   }
 
+  @export
   macro TestTypeswitchAsanLsanFailure(implicit context: Context)(obj: Object) {
     typeswitch (obj) {
-      case (o: Smi): {
+      case (_o: Smi): {
       }
-      case (o: JSTypedArray): {
+      case (_o: JSTypedArray): {
       }
-      case (o: JSReceiver): {
+      case (_o: JSReceiver): {
       }
-      case (o: HeapObject): {
+      case (_o: HeapObject): {
       }
     }
   }
@@ -498,6 +527,7 @@ namespace test {
     return o + 1;
   }
 
+  @export
   macro TestGenericOverload(implicit context: Context)() {
     const xSmi: Smi = 5;
     const xObject: Object = xSmi;
@@ -505,6 +535,7 @@ namespace test {
     check(UnsafeCast<Smi>(ExampleGenericOverload<Object>(xObject)) == 5);
   }
 
+  @export
   macro TestEquality(implicit context: Context)() {
     const notEqual: bool =
         AllocateHeapNumberWithValue(0.5) != AllocateHeapNumberWithValue(0.5);
@@ -523,30 +554,37 @@ namespace test {
     }
   }
 
+  @export
   macro TestOrAnd1(x: bool, y: bool, z: bool): bool {
     return BoolToBranch(x) || y && z ? true : false;
   }
 
+  @export
   macro TestOrAnd2(x: bool, y: bool, z: bool): bool {
     return x || BoolToBranch(y) && z ? true : false;
   }
 
+  @export
   macro TestOrAnd3(x: bool, y: bool, z: bool): bool {
     return x || y && BoolToBranch(z) ? true : false;
   }
 
+  @export
   macro TestAndOr1(x: bool, y: bool, z: bool): bool {
     return BoolToBranch(x) && y || z ? true : false;
   }
 
+  @export
   macro TestAndOr2(x: bool, y: bool, z: bool): bool {
     return x && BoolToBranch(y) || z ? true : false;
   }
 
+  @export
   macro TestAndOr3(x: bool, y: bool, z: bool): bool {
     return x && y || BoolToBranch(z) ? true : false;
   }
 
+  @export
   macro TestLogicalOperators() {
     check(TestAndOr1(true, true, true));
     check(TestAndOr2(true, true, true));
@@ -598,12 +636,13 @@ namespace test {
     check(!TestOrAnd3(false, false, false));
   }
 
-  macro TestCall(i: Smi): Smi
-      labels A {
+  @export
+  macro TestCall(i: Smi): Smi labels A {
     if (i < 5) return i;
     goto A;
   }
 
+  @export
   macro TestOtherwiseWithCode1() {
     let v: Smi = 0;
     let s: Smi = 1;
@@ -616,6 +655,7 @@ namespace test {
     assert(v == 2);
   }
 
+  @export
   macro TestOtherwiseWithCode2() {
     let s: Smi = 0;
     for (let i: Smi = 0; i < 10; ++i) {
@@ -625,6 +665,7 @@ namespace test {
     assert(s == 5);
   }
 
+  @export
   macro TestOtherwiseWithCode3() {
     let s: Smi = 0;
     for (let i: Smi = 0; i < 10; ++i) {
@@ -633,6 +674,7 @@ namespace test {
     assert(s == 10);
   }
 
+  @export
   macro TestForwardLabel() {
     try {
       goto A;
@@ -645,40 +687,46 @@ namespace test {
     }
   }
 
+  @export
   macro TestQualifiedAccess(implicit context: Context)() {
     let s: Smi = 0;
     check(!array::IsJSArray(s));
   }
 
+  @export
   macro TestCatch1(implicit context: Context)(): Smi {
     let r: Smi = 0;
     try {
       ThrowTypeError(kInvalidArrayLength);
-    } catch (e) {
+    } catch (_e) {
       r = 1;
       return r;
     }
   }
 
+  @export
   macro TestCatch2Wrapper(implicit context: Context)(): never {
     ThrowTypeError(kInvalidArrayLength);
   }
 
+  @export
   macro TestCatch2(implicit context: Context)(): Smi {
     let r: Smi = 0;
     try {
       TestCatch2Wrapper();
-    } catch (e) {
+    } catch (_e) {
       r = 2;
       return r;
     }
   }
 
-  macro TestCatch3WrapperWithLabel(implicit context: Context)(): never
-      labels Abort {
+  @export
+  macro TestCatch3WrapperWithLabel(implicit context: Context)():
+      never labels _Abort {
     ThrowTypeError(kInvalidArrayLength);
   }
 
+  @export
   macro TestCatch3(implicit context: Context)(): Smi {
     let r: Smi = 0;
     try {
@@ -687,7 +735,7 @@ namespace test {
     label Abort {
       return -1;
     }
-    catch (e) {
+    catch (_e) {
       r = 2;
       return r;
     }
@@ -697,24 +745,26 @@ namespace test {
   // it's only purpose is to make sure tha the CSA macros in the
   // IteratorBuiltinsAssembler match the signatures provided in
   // iterator.tq.
+  @export
   macro TestIterator(implicit context: Context)(o: Object, map: Map) {
     try {
       const t1: Object = iterator::GetIteratorMethod(o);
       const t2: iterator::IteratorRecord = iterator::GetIterator(o);
 
-      const t3: Object = iterator::IteratorStep(t2) otherwise Fail;
+      const _t3: Object = iterator::IteratorStep(t2) otherwise Fail;
       const t4: Object = iterator::IteratorStep(t2, map) otherwise Fail;
 
       const t5: Object = iterator::IteratorValue(t4);
-      const t6: Object = iterator::IteratorValue(t4, map);
+      const _t6: Object = iterator::IteratorValue(t4, map);
 
-      const t7: JSArray = iterator::IterableToList(t1, t1);
+      const _t7: JSArray = iterator::IterableToList(t1, t1);
 
       iterator::IteratorCloseOnException(t2, t5);
     }
     label Fail {}
   }
 
+  @export
   macro TestFrame1(implicit context: Context)() {
     const f: Frame = LoadFramePointer();
     const frameType: FrameType =
@@ -722,17 +772,18 @@ namespace test {
     assert(frameType == STUB_FRAME);
     assert(f.caller == LoadParentFramePointer());
     typeswitch (f) {
-      case (f: StandardFrame): {
+      case (_f: StandardFrame): {
         unreachable;
       }
-      case (f: ArgumentsAdaptorFrame): {
+      case (_f: ArgumentsAdaptorFrame): {
         unreachable;
       }
-      case (f: StubFrame): {
+      case (_f: StubFrame): {
       }
     }
   }
 
+  @export
   macro TestNew(implicit context: Context)() {
     const f: JSArray = NewJSArray();
     assert(f.IsEmpty());
@@ -756,6 +807,7 @@ namespace test {
     c: int32;
   }
 
+  @export
   macro TestStructConstructor(implicit context: Context)() {
     // Test default constructor
     let a: TestOuter = TestOuter{a: 5, b: TestInner{x: 6, y: 7}, c: 8};
@@ -768,43 +820,6 @@ namespace test {
     a.b.SetX(2);
     assert(a.b.x == 2);
     assert(a.b.GetX() == 2);
-  }
-
-  extern class TestClassWithAllTypes extends JSObject {
-    a: int8;
-    b: uint8;
-    b2: uint8;
-    b3: uint8;
-    c: int16;
-    d: uint16;
-    e: int32;
-    f: uint32;
-    g: RawPtr;
-    h: intptr;
-    i: uintptr;
-  }
-
-  macro TestClassWithAllTypesLoadsAndStores(
-      t: TestClassWithAllTypes, r: RawPtr, v1: int8, v2: uint8, v3: int16,
-      v4: uint16) {
-    t.a = v1;
-    t.b = v2;
-    t.c = v3;
-    t.d = v4;
-    t.e = 0;
-    t.f = 0;
-    t.g = r;
-    t.h = 0;
-    t.i = 0;
-    t.a = t.a;
-    t.b = t.b;
-    t.c = t.c;
-    t.d = t.d;
-    t.e = t.e;
-    t.f = t.f;
-    t.g = t.g;
-    t.h = t.h;
-    t.i = t.i;
   }
 
   class InternalClass {
@@ -821,6 +836,7 @@ namespace test {
     return new InternalClass{a: x, b: x + 1};
   }
 
+  @export
   macro TestInternalClass(implicit context: Context)() {
     const o = NewInternalClass(5);
     o.Flip() otherwise unreachable;
@@ -839,11 +855,12 @@ namespace test {
     const b: int32;
   }
 
+  @export
   macro TestConstInStructs() {
     const x = StructWithConst{a: Null, b: 1};
     let y = StructWithConst{a: Null, b: 1};
     y.a = Undefined;
-    const copy = x;
+    const _copy = x;
   }
 
   struct TestIterator {
@@ -854,6 +871,7 @@ namespace test {
     count: Smi;
   }
 
+  @export
   macro TestNewFixedArrayFromSpread(implicit context: Context)(): Object {
     const i = TestIterator{count: 5};
     return new FixedArray{map: kFixedArrayMap, length: 5, objects: ...i};
@@ -873,6 +891,7 @@ namespace test {
     * b = tmp;
   }
 
+  @export
   macro TestReferences() {
     const array = new SmiPair{a: 7, b: 2};
     const ref:&Smi = & array.a;
@@ -882,4 +901,27 @@ namespace test {
     check(array.a == 2);
     check(array.b == 9);
   }
+
+  @export
+  macro TestStaticAssert() {
+    StaticAssert(1 + 2 == 3);
+  }
+
+  class SmiBox {
+    value: Smi;
+    unrelated: Smi;
+  }
+
+  builtin NewSmiBox(implicit c: Context)(value: Smi): SmiBox {
+    return new SmiBox{value, unrelated: 0};
+  }
+
+  @export
+  macro TestLoadEliminationNoWrite(implicit c: Context)() {
+    const box = NewSmiBox(123);
+    const v1 = box.value;
+    const v2 = (box.unrelated == 0) ? box.value : box.value;
+    StaticAssert(WordEqual(v1, v2));
+  }
+
 }

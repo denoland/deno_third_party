@@ -9,7 +9,7 @@
 #include "src/compiler/frame-states.h"
 #include "src/compiler/graph-reducer.h"
 #include "src/compiler/node-properties.h"
-#include "src/deoptimize-reason.h"
+#include "src/deoptimizer/deoptimize-reason.h"
 
 namespace v8 {
 namespace internal {
@@ -122,6 +122,7 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   Reduction ReduceStringPrototypeStringAt(
       const Operator* string_access_operator, Node* node);
   Reduction ReduceStringPrototypeCharAt(Node* node);
+  Reduction ReduceStringPrototypeStartsWith(Node* node);
 
 #ifdef V8_INTL_SUPPORT
   Reduction ReduceStringPrototypeToLowerCaseIntl(Node* node);
@@ -190,11 +191,6 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
 
   Reduction ReduceNumberConstructor(Node* node);
 
-  Node* InsertMapChecksIfUnreliableReceiverMaps(
-      NodeProperties::InferReceiverMapsResult result,
-      ZoneHandleSet<Map> const& receiver_maps, VectorSlotPair const& feedback,
-      Node* receiver, Node* effect, Node* control);
-
   // Returns the updated {to} node, and updates control and effect along the
   // way.
   Node* DoFilterPostCallbackWork(ElementsKind kind, Node** control,
@@ -234,6 +230,10 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
                                    FrameStateType frame_state_type,
                                    const SharedFunctionInfoRef& shared,
                                    Node* context = nullptr);
+
+  void CheckIfElementsKind(Node* receiver_elements_kind, ElementsKind kind,
+                           Node* control, Node** if_true, Node** if_false);
+  Node* LoadReceiverElementsKind(Node* receiver, Node** effect, Node** control);
 
   Graph* graph() const;
   JSGraph* jsgraph() const { return jsgraph_; }

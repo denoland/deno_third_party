@@ -390,6 +390,9 @@ let kExprMemoryFill = 0x0b;
 let kExprTableInit = 0x0c;
 let kExprElemDrop = 0x0d;
 let kExprTableCopy = 0x0e;
+let kExprTableGrow = 0x0f;
+let kExprTableSize = 0x10;
+let kExprTableFill = 0x11;
 
 // Atomic opcodes.
 let kExprAtomicNotify = 0x00;
@@ -467,6 +470,7 @@ let kExprF32x4Min = 0x9e;
 let kCompilationHintStrategyDefault = 0x00;
 let kCompilationHintStrategyLazy = 0x01;
 let kCompilationHintStrategyEager = 0x02;
+let kCompilationHintStrategyLazyBaselineEagerTopTier = 0x03;
 let kCompilationHintTierDefault = 0x00;
 let kCompilationHintTierInterpreter = 0x01;
 let kCompilationHintTierBaseline = 0x02;
@@ -842,12 +846,12 @@ class WasmModuleBuilder {
     return this;
   }
 
-  addImportedTable(module, name, initial, maximum) {
+  addImportedTable(module, name, initial, maximum, type) {
     if (this.tables.length != 0) {
       throw new Error('Imported tables must be declared before local ones');
     }
     let o = {module: module, name: name, kind: kExternalTable, initial: initial,
-             maximum: maximum};
+             maximum: maximum, type: type || kWasmAnyFunctionTypeForm};
     this.imports.push(o);
     return this.num_imported_tables++;
   }
@@ -893,28 +897,9 @@ class WasmModuleBuilder {
     this.exports.push({name: name, kind: kExternalMemory, index: 0});
   }
 
-  addElementSegment(table, base, is_global, array, is_import = false) {
-    if (this.tables.length + this.num_imported_tables == 0) {
-      this.addTable(kWasmAnyFunc, 0);
-    }
+  addElementSegment(table, base, is_global, array) {
     this.element_segments.push({table: table, base: base, is_global: is_global,
                                     array: array, is_active: true});
-
-    // As a testing convenience, update the table length when adding an element
-    // segment. If the table is imported, we can't do this because we don't
-    // know how long the table actually is. If |is_global| is true, then the
-    // base is a global index, instead of an integer offset, so we can't update
-    // the table then either.
-    if (!(is_import || is_global)) {
-      var length = base + array.length;
-      if (length > this.tables[0].initial_size) {
-        this.tables[0].initial_size = length;
-      }
-      if (this.tables[0].has_max &&
-          length > this.tables[0].max_size) {
-        this.tables[0].max_size = length;
-      }
-    }
     return this;
   }
 
@@ -931,7 +916,15 @@ class WasmModuleBuilder {
     if (this.tables.length == 0) {
       this.addTable(kWasmAnyFunc, 0);
     }
-    return this.addElementSegment(0, this.tables[0].initial_size, false, array);
+    // Adjust the table to the correct size.
+    let table = this.tables[0];
+    const base = table.initial_size;
+    const table_size = base + array.length;
+    table.initial_size = table_size;
+    if (table.has_max && table_size > table.max_size) {
+      table.max_size = table_size;
+    }
+    return this.addElementSegment(0, base, false, array);
   }
 
   setTableBounds(min, max = undefined) {
@@ -998,7 +991,7 @@ class WasmModuleBuilder {
             section.emit_u32v(imp.initial); // initial
             if (has_max) section.emit_u32v(imp.maximum); // maximum
           } else if (imp.kind == kExternalTable) {
-            section.emit_u8(kWasmAnyFunctionTypeForm);
+            section.emit_u8(imp.type);
             var has_max = (typeof imp.maximum) != "undefined";
             section.emit_u8(has_max ? 1 : 0); // flags
             section.emit_u32v(imp.initial); // initial
@@ -1085,8 +1078,15 @@ class WasmModuleBuilder {
               f64_view[0] = global.init;
               section.emit_bytes(f64_bytes_view);
               break;
-            case kWasmAnyRef:
             case kWasmAnyFunc:
+            case kWasmAnyRef:
+              if (global.function_index !== undefined) {
+                section.emit_u8(kExprRefFunc);
+                section.emit_u32v(global.function_index);
+              } else {
+                section.emit_u8(kExprRefNull);
+              }
+              break;
             case kWasmExceptRef:
               section.emit_u8(kExprRefNull);
               break;

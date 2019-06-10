@@ -44,13 +44,10 @@ from testrunner.outproc import test262
 
 # TODO(littledan): move the flag mapping into the status file
 FEATURE_FLAGS = {
-  'class-fields-public': '--harmony-public-fields',
-  'class-static-fields-public': '--harmony-class-fields',
-  'class-fields-private': '--harmony-private-fields',
-  'class-static-fields-private': '--harmony-private-fields',
   'numeric-separator-literal': '--harmony-numeric-separator',
   'Intl.DateTimeFormat-datetimestyle': '--harmony-intl-datetime-style',
-  'Intl.Locale': '--harmony-locale',
+  'Intl.DateTimeFormat-formatRange': '--harmony-intl-date-format-range',
+  'Intl.NumberFormat-unified': '--harmony-intl-numberformat-unified',
   'Intl.Segmenter': '--harmony-intl-segmenter',
   'Symbol.prototype.description': '--harmony-symbol-description',
   'globalThis': '--harmony-global',
@@ -62,8 +59,7 @@ FEATURE_FLAGS = {
 }
 
 SKIPPED_FEATURES = set(['class-methods-private',
-                        'class-static-methods-private',
-                        'Intl.NumberFormat-unified'])
+                        'class-static-methods-private'])
 
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 

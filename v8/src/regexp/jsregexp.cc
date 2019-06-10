@@ -8,15 +8,14 @@
 #include <vector>
 
 #include "src/base/platform/platform.h"
-#include "src/code-tracer.h"
-#include "src/compilation-cache.h"
-#include "src/elements.h"
-#include "src/execution.h"
+#include "src/codegen/compilation-cache.h"
+#include "src/diagnostics/code-tracer.h"
+#include "src/execution/execution.h"
+#include "src/execution/isolate-inl.h"
+#include "src/execution/message-template.h"
 #include "src/heap/factory.h"
 #include "src/heap/heap-inl.h"
-#include "src/isolate-inl.h"
-#include "src/message-template.h"
-#include "src/ostreams.h"
+#include "src/objects/elements.h"
 #include "src/regexp/interpreter-irregexp.h"
 #include "src/regexp/jsregexp-inl.h"
 #include "src/regexp/regexp-macro-assembler-irregexp.h"
@@ -25,13 +24,15 @@
 #include "src/regexp/regexp-parser.h"
 #include "src/regexp/regexp-stack.h"
 #include "src/runtime/runtime.h"
-#include "src/splay-tree-inl.h"
-#include "src/string-search.h"
-#include "src/unicode-decoder.h"
-#include "src/unicode-inl.h"
+#include "src/strings/string-search.h"
+#include "src/strings/unicode-decoder.h"
+#include "src/strings/unicode-inl.h"
+#include "src/utils/ostreams.h"
+#include "src/utils/splay-tree-inl.h"
 #include "src/zone/zone-list-inl.h"
 
 #ifdef V8_INTL_SUPPORT
+#include "unicode/locid.h"
 #include "unicode/uniset.h"
 #include "unicode/utypes.h"
 #endif  // V8_INTL_SUPPORT
@@ -176,7 +177,7 @@ MaybeHandle<Object> RegExpImpl::Compile(Isolate* isolate, Handle<JSRegExp> re,
   if (!has_been_compiled) {
     IrregexpInitialize(isolate, re, pattern, flags, parse_result.capture_count);
   }
-  DCHECK(re->data()->IsFixedArray());
+  DCHECK(re->data().IsFixedArray());
   // Compilation succeeded so the data is set on the regexp
   // and we can store it in the cache.
   Handle<FixedArray> data(FixedArray::cast(re->data()), isolate);
@@ -230,8 +231,8 @@ int RegExpImpl::AtomExecRaw(Isolate* isolate, Handle<JSRegExp> regexp,
   DisallowHeapAllocation no_gc;  // ensure vectors stay valid
 
   String needle = String::cast(regexp->DataAt(JSRegExp::kAtomPatternIndex));
-  int needle_len = needle->length();
-  DCHECK(needle->IsFlat());
+  int needle_len = needle.length();
+  DCHECK(needle.IsFlat());
   DCHECK_LT(0, needle_len);
 
   if (index + needle_len > subject->length()) {
@@ -239,7 +240,7 @@ int RegExpImpl::AtomExecRaw(Isolate* isolate, Handle<JSRegExp> regexp,
   }
 
   for (int i = 0; i < output_size; i += 2) {
-    String::FlatContent needle_content = needle->GetFlatContent(no_gc);
+    String::FlatContent needle_content = needle.GetFlatContent(no_gc);
     String::FlatContent subject_content = subject->GetFlatContent(no_gc);
     DCHECK(needle_content.IsFlat());
     DCHECK(subject_content.IsFlat());
@@ -300,8 +301,8 @@ bool RegExpImpl::EnsureCompiledIrregexp(Isolate* isolate, Handle<JSRegExp> re,
                                         bool is_one_byte) {
   Object compiled_code = re->DataAt(JSRegExp::code_index(is_one_byte));
   if (compiled_code != Smi::FromInt(JSRegExp::kUninitializedValue)) {
-    DCHECK(FLAG_regexp_interpret_all ? compiled_code->IsByteArray()
-                                     : compiled_code->IsCode());
+    DCHECK(FLAG_regexp_interpret_all ? compiled_code.IsByteArray()
+                                     : compiled_code.IsCode());
     return true;
   }
   return CompileIrregexp(isolate, re, sample_subject, is_one_byte);
@@ -317,7 +318,7 @@ bool RegExpImpl::CompileIrregexp(Isolate* isolate, Handle<JSRegExp> re,
   Object entry = re->DataAt(JSRegExp::code_index(is_one_byte));
   // When arriving here entry can only be a smi representing an uncompiled
   // regexp.
-  DCHECK(entry->IsSmi());
+  DCHECK(entry.IsSmi());
   int entry_value = Smi::ToInt(entry);
   DCHECK_EQ(JSRegExp::kUninitializedValue, entry_value);
 #endif
@@ -340,7 +341,7 @@ bool RegExpImpl::CompileIrregexp(Isolate* isolate, Handle<JSRegExp> re,
                             sample_subject, is_one_byte);
   if (result.error_message != nullptr) {
     // Unable to compile regexp.
-    if (FLAG_abort_on_stack_or_string_length_overflow &&
+    if (FLAG_correctness_fuzzer_suppressions &&
         strncmp(result.error_message, "Stack overflow", 15) == 0) {
       FATAL("Aborting on stack overflow");
     }
@@ -363,37 +364,36 @@ bool RegExpImpl::CompileIrregexp(Isolate* isolate, Handle<JSRegExp> re,
 }
 
 int RegExpImpl::IrregexpMaxRegisterCount(FixedArray re) {
-  return Smi::cast(
-      re->get(JSRegExp::kIrregexpMaxRegisterCountIndex))->value();
+  return Smi::cast(re.get(JSRegExp::kIrregexpMaxRegisterCountIndex)).value();
 }
 
 void RegExpImpl::SetIrregexpMaxRegisterCount(FixedArray re, int value) {
-  re->set(JSRegExp::kIrregexpMaxRegisterCountIndex, Smi::FromInt(value));
+  re.set(JSRegExp::kIrregexpMaxRegisterCountIndex, Smi::FromInt(value));
 }
 
 void RegExpImpl::SetIrregexpCaptureNameMap(FixedArray re,
                                            Handle<FixedArray> value) {
   if (value.is_null()) {
-    re->set(JSRegExp::kIrregexpCaptureNameMapIndex, Smi::kZero);
+    re.set(JSRegExp::kIrregexpCaptureNameMapIndex, Smi::kZero);
   } else {
-    re->set(JSRegExp::kIrregexpCaptureNameMapIndex, *value);
+    re.set(JSRegExp::kIrregexpCaptureNameMapIndex, *value);
   }
 }
 
 int RegExpImpl::IrregexpNumberOfCaptures(FixedArray re) {
-  return Smi::ToInt(re->get(JSRegExp::kIrregexpCaptureCountIndex));
+  return Smi::ToInt(re.get(JSRegExp::kIrregexpCaptureCountIndex));
 }
 
 int RegExpImpl::IrregexpNumberOfRegisters(FixedArray re) {
-  return Smi::ToInt(re->get(JSRegExp::kIrregexpMaxRegisterCountIndex));
+  return Smi::ToInt(re.get(JSRegExp::kIrregexpMaxRegisterCountIndex));
 }
 
 ByteArray RegExpImpl::IrregexpByteCode(FixedArray re, bool is_one_byte) {
-  return ByteArray::cast(re->get(JSRegExp::code_index(is_one_byte)));
+  return ByteArray::cast(re.get(JSRegExp::code_index(is_one_byte)));
 }
 
 Code RegExpImpl::IrregexpNativeCode(FixedArray re, bool is_one_byte) {
-  return Code::cast(re->get(JSRegExp::code_index(is_one_byte)));
+  return Code::cast(re.get(JSRegExp::code_index(is_one_byte)));
 }
 
 void RegExpImpl::IrregexpInitialize(Isolate* isolate, Handle<JSRegExp> re,
@@ -525,7 +525,7 @@ MaybeHandle<Object> RegExpImpl::IrregexpExec(
 #ifdef DEBUG
   if (FLAG_regexp_interpret_all && FLAG_trace_regexp_bytecodes) {
     String pattern = regexp->Pattern();
-    PrintF("\n\nRegexp match:   /%s/\n\n", pattern->ToCString().get());
+    PrintF("\n\nRegexp match:   /%s/\n\n", pattern.ToCString().get());
     PrintF("\n\nSubject string: '%s'\n\n", subject->ToCString().get());
   }
 #endif
@@ -1725,7 +1725,6 @@ static inline bool EmitAtomLetter(Isolate* isolate,
       break;
     default:
       UNREACHABLE();
-      break;
   }
   return true;
 }
@@ -2754,7 +2753,7 @@ RegExpNode* TextNode::FilterOneByte(int depth) {
         }
         if (c > unibrow::Latin1::kMaxChar) return set_replacement(nullptr);
         // Replace quark in case we converted to Latin-1.
-        uint16_t* writable_quarks = const_cast<uint16_t*>(quarks.start());
+        uint16_t* writable_quarks = const_cast<uint16_t*>(quarks.begin());
         writable_quarks[j] = c;
       }
     } else {
@@ -5950,9 +5949,10 @@ void CharacterRange::AddCaseEquivalents(Isolate* isolate, Zone* zone,
       if (top > String::kMaxOneByteCharCode) top = String::kMaxOneByteCharCode;
     }
     already_added.add(bottom, top);
+    icu::Locale locale = icu::Locale::getRoot();
     while (bottom <= top) {
       icu::UnicodeString upper(bottom);
-      upper.toUpper();
+      upper.toUpper(locale);
       icu::UnicodeSet expanded(bottom, bottom);
       expanded.closeOver(USET_CASE_INSENSITIVE);
       for (int32_t i = 0; i < expanded.getRangeCount(); i++) {
@@ -5960,7 +5960,7 @@ void CharacterRange::AddCaseEquivalents(Isolate* isolate, Zone* zone,
         UChar32 end = expanded.getRangeEnd(i);
         while (start <= end) {
           icu::UnicodeString upper2(start);
-          upper2.toUpper();
+          upper2.toUpper(locale);
           // Only add if the upper case are the same.
           if (upper[0] == upper2[0]) {
             others.add(start);
@@ -6872,32 +6872,32 @@ Object RegExpResultsCache::Lookup(Heap* heap, String key_string,
                                   FixedArray* last_match_cache,
                                   ResultsCacheType type) {
   FixedArray cache;
-  if (!key_string->IsInternalizedString()) return Smi::kZero;
+  if (!key_string.IsInternalizedString()) return Smi::kZero;
   if (type == STRING_SPLIT_SUBSTRINGS) {
-    DCHECK(key_pattern->IsString());
-    if (!key_pattern->IsInternalizedString()) return Smi::kZero;
+    DCHECK(key_pattern.IsString());
+    if (!key_pattern.IsInternalizedString()) return Smi::kZero;
     cache = heap->string_split_cache();
   } else {
     DCHECK(type == REGEXP_MULTIPLE_INDICES);
-    DCHECK(key_pattern->IsFixedArray());
+    DCHECK(key_pattern.IsFixedArray());
     cache = heap->regexp_multiple_cache();
   }
 
-  uint32_t hash = key_string->Hash();
+  uint32_t hash = key_string.Hash();
   uint32_t index = ((hash & (kRegExpResultsCacheSize - 1)) &
                     ~(kArrayEntriesPerCacheEntry - 1));
-  if (cache->get(index + kStringOffset) != key_string ||
-      cache->get(index + kPatternOffset) != key_pattern) {
+  if (cache.get(index + kStringOffset) != key_string ||
+      cache.get(index + kPatternOffset) != key_pattern) {
     index =
         ((index + kArrayEntriesPerCacheEntry) & (kRegExpResultsCacheSize - 1));
-    if (cache->get(index + kStringOffset) != key_string ||
-        cache->get(index + kPatternOffset) != key_pattern) {
+    if (cache.get(index + kStringOffset) != key_string ||
+        cache.get(index + kPatternOffset) != key_pattern) {
       return Smi::kZero;
     }
   }
 
-  *last_match_cache = FixedArray::cast(cache->get(index + kLastMatchOffset));
-  return cache->get(index + kArrayOffset);
+  *last_match_cache = FixedArray::cast(cache.get(index + kLastMatchOffset));
+  return cache.get(index + kArrayOffset);
 }
 
 void RegExpResultsCache::Enter(Isolate* isolate, Handle<String> key_string,
@@ -6961,7 +6961,7 @@ void RegExpResultsCache::Enter(Isolate* isolate, Handle<String> key_string,
 
 void RegExpResultsCache::Clear(FixedArray cache) {
   for (int i = 0; i < kRegExpResultsCacheSize; i++) {
-    cache->set(i, Smi::kZero);
+    cache.set(i, Smi::kZero);
   }
 }
 

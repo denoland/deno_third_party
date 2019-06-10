@@ -6,16 +6,16 @@
 
 #include <stack>
 
-#include "src/code-factory.h"
+#include "src/codegen/code-factory.h"
 #include "src/compiler/access-builder.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/linkage.h"
 #include "src/compiler/node-matchers.h"
 #include "src/compiler/node-properties.h"
 #include "src/compiler/operator-properties.h"
-#include "src/counters.h"
-#include "src/objects-inl.h"
+#include "src/logging/counters.h"
 #include "src/objects/js-generator.h"
+#include "src/objects/objects-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -28,8 +28,12 @@ Reduction JSIntrinsicLowering::Reduce(Node* node) {
   if (node->opcode() != IrOpcode::kJSCallRuntime) return NoChange();
   const Runtime::Function* const f =
       Runtime::FunctionForId(CallRuntimeParametersOf(node->op()).id());
+  if (f->function_id == Runtime::kTurbofanStaticAssert)
+    return ReduceTurbofanStaticAssert(node);
   if (f->intrinsic_type != Runtime::IntrinsicType::INLINE) return NoChange();
   switch (f->function_id) {
+    case Runtime::kInlineCopyDataProperties:
+      return ReduceCopyDataProperties(node);
     case Runtime::kInlineCreateIterResultObject:
       return ReduceCreateIterResultObject(node);
     case Runtime::kInlineDeoptimizeNow:
@@ -62,8 +66,6 @@ Reduction JSIntrinsicLowering::Reduce(Node* node) {
       return ReduceGeneratorGetResumeMode(node);
     case Runtime::kInlineIsArray:
       return ReduceIsInstanceType(node, JS_ARRAY_TYPE);
-    case Runtime::kInlineIsTypedArray:
-      return ReduceIsInstanceType(node, JS_TYPED_ARRAY_TYPE);
     case Runtime::kInlineIsJSReceiver:
       return ReduceIsJSReceiver(node);
     case Runtime::kInlineIsSmi:
@@ -84,6 +86,10 @@ Reduction JSIntrinsicLowering::Reduce(Node* node) {
   return NoChange();
 }
 
+Reduction JSIntrinsicLowering::ReduceCopyDataProperties(Node* node) {
+  return Change(
+      node, Builtins::CallableFor(isolate(), Builtins::kCopyDataProperties), 0);
+}
 
 Reduction JSIntrinsicLowering::ReduceCreateIterResultObject(Node* node) {
   Node* const value = NodeProperties::GetValueInput(node, 0);
@@ -260,6 +266,19 @@ Reduction JSIntrinsicLowering::ReduceIsJSReceiver(Node* node) {
 
 Reduction JSIntrinsicLowering::ReduceIsSmi(Node* node) {
   return Change(node, simplified()->ObjectIsSmi());
+}
+
+Reduction JSIntrinsicLowering::ReduceTurbofanStaticAssert(Node* node) {
+  if (FLAG_always_opt) {
+    // Ignore static asserts, as we most likely won't have enough information
+    RelaxEffectsAndControls(node);
+  } else {
+    Node* value = NodeProperties::GetValueInput(node, 0);
+    Node* effect = NodeProperties::GetEffectInput(node);
+    Node* assert = graph()->NewNode(common()->StaticAssert(), value, effect);
+    ReplaceWithValue(node, node, assert, nullptr);
+  }
+  return Changed(jsgraph_->UndefinedConstant());
 }
 
 Reduction JSIntrinsicLowering::Change(Node* node, const Operator* op) {

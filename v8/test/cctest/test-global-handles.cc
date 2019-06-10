@@ -25,12 +25,12 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "src/api-inl.h"
-#include "src/global-handles.h"
+#include "src/api/api-inl.h"
+#include "src/execution/isolate.h"
+#include "src/handles/global-handles.h"
 #include "src/heap/factory.h"
 #include "src/heap/heap-inl.h"
-#include "src/isolate.h"
-#include "src/objects-inl.h"
+#include "src/objects/objects-inl.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-utils.h"
 
@@ -388,7 +388,7 @@ TEST(TracedGlobalToJSApiObjectWithIdentityHashSurvivesScavenge) {
         Handle<JSReceiver> key =
             Utils::OpenHandle(*fp->handle.Get(CcTest::isolate()));
         Handle<Smi> smi(Smi::FromInt(23), i_isolate);
-        int32_t hash = key->GetOrCreateHash(i_isolate)->value();
+        int32_t hash = key->GetOrCreateHash(i_isolate).value();
         JSWeakCollection::Set(weakmap, key, smi, hash);
       },
       []() { InvokeScavenge(); }, SurvivalMode::kSurvives);
@@ -589,11 +589,11 @@ TEST(GCFromWeakCallbacks) {
   v8::Context::Scope context_scope(context);
 
   static const int kNumberOfGCTypes = 2;
-  typedef v8::WeakCallbackInfo<FlagAndGlobal>::Callback Callback;
+  using Callback = v8::WeakCallbackInfo<FlagAndGlobal>::Callback;
   Callback gc_forcing_callback[kNumberOfGCTypes] = {&ForceScavenge1,
                                                     &ForceMarkSweep1};
 
-  typedef void (*GCInvoker)();
+  using GCInvoker = void (*)();
   GCInvoker invoke_gc[kNumberOfGCTypes] = {&InvokeScavenge, &InvokeMarkSweep};
 
   for (int outer_gc = 0; outer_gc < kNumberOfGCTypes; outer_gc++) {

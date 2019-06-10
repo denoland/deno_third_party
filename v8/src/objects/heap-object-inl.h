@@ -9,16 +9,13 @@
 
 #include "src/heap/heap-write-barrier-inl.h"
 // TODO(jkummerow): Get rid of this by moving NROSO::GetIsolate elsewhere.
-#include "src/isolate.h"
+#include "src/execution/isolate.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
 
 namespace v8 {
 namespace internal {
-
-OBJECT_CONSTRUCTORS_IMPL(HeapObject, Object)
-CAST_ACCESSOR(HeapObject)
 
 HeapObject::HeapObject(Address ptr, AllowInlineSmiStorage allow_smi)
     : Object(ptr) {
@@ -28,19 +25,13 @@ HeapObject::HeapObject(Address ptr, AllowInlineSmiStorage allow_smi)
 }
 
 // static
-HeapObject HeapObject::FromAddress(Address address) {
-  DCHECK_TAG_ALIGNED(address);
-  return HeapObject(address + kHeapObjectTag);
-}
-
-// static
 Heap* NeverReadOnlySpaceObject::GetHeap(const HeapObject object) {
   return GetHeapFromWritableObject(object);
 }
 
 // static
 Isolate* NeverReadOnlySpaceObject::GetIsolate(const HeapObject object) {
-  return Isolate::FromHeap(GetHeap(object));
+  return GetIsolateFromWritableObject(object);
 }
 
 }  // namespace internal

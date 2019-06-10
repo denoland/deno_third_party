@@ -4,14 +4,16 @@
 
 #include "src/profiler/tick-sample.h"
 
+#include <cinttypes>
+
 #include "include/v8-profiler.h"
-#include "src/asan.h"
-#include "src/counters.h"
-#include "src/frames-inl.h"
+#include "src/execution/frames-inl.h"
+#include "src/execution/simulator.h"
+#include "src/execution/vm-state-inl.h"
 #include "src/heap/heap-inl.h"  // For MemoryAllocator::code_range.
-#include "src/msan.h"
-#include "src/simulator.h"
-#include "src/vm-state-inl.h"
+#include "src/logging/counters.h"
+#include "src/sanitizer/asan.h"
+#include "src/sanitizer/msan.h"
 
 namespace v8 {
 namespace {
@@ -118,12 +120,14 @@ bool SimulatorHelper::FillRegisters(Isolate* isolate,
   }
   state->sp = reinterpret_cast<void*>(simulator->get_register(Simulator::sp));
   state->fp = reinterpret_cast<void*>(simulator->get_register(Simulator::fp));
+  state->lr = reinterpret_cast<void*>(simulator->get_lr());
 #elif V8_TARGET_ARCH_S390
   if (!simulator->has_bad_pc()) {
     state->pc = reinterpret_cast<void*>(simulator->get_pc());
   }
   state->sp = reinterpret_cast<void*>(simulator->get_register(Simulator::sp));
   state->fp = reinterpret_cast<void*>(simulator->get_register(Simulator::fp));
+  state->lr = reinterpret_cast<void*>(simulator->get_register(Simulator::ra));
 #endif
   if (state->sp == 0 || state->fp == 0) {
     // It possible that the simulator is interrupted while it is updating
@@ -273,7 +277,8 @@ bool TickSample::GetStackSample(Isolate* v8_isolate, RegisterState* regs,
 
       // If the bytecode array is a heap object and the bytecode offset is a
       // Smi, use those, otherwise fall back to using the frame's pc.
-      if (HAS_HEAP_OBJECT_TAG(bytecode_array) && HAS_SMI_TAG(bytecode_offset)) {
+      if (HAS_STRONG_HEAP_OBJECT_TAG(bytecode_array) &&
+          HAS_SMI_TAG(bytecode_offset)) {
         frames[i++] = reinterpret_cast<void*>(
             bytecode_array + i::Internals::SmiValue(bytecode_offset));
         continue;
@@ -289,10 +294,12 @@ namespace internal {
 
 void TickSample::Init(Isolate* isolate, const v8::RegisterState& state,
                       RecordCEntryFrame record_c_entry_frame, bool update_stats,
-                      bool use_simulator_reg_state) {
+                      bool use_simulator_reg_state,
+                      base::TimeDelta sampling_interval) {
   v8::TickSample::Init(reinterpret_cast<v8::Isolate*>(isolate), state,
                        record_c_entry_frame, update_stats,
                        use_simulator_reg_state);
+  this->sampling_interval = sampling_interval;
   if (pc == nullptr) return;
   timestamp = base::TimeTicks::HighResolutionNow();
 }
@@ -309,6 +316,8 @@ void TickSample::print() const {
   PrintF(" - %s: %p\n",
          has_external_callback ? "external_callback_entry" : "tos", tos);
   PrintF(" - update_stats: %d\n", update_stats);
+  PrintF(" - sampling_interval: %" PRId64 "\n",
+         sampling_interval.InMicroseconds());
   PrintF("\n");
 }
 

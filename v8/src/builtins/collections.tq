@@ -5,9 +5,9 @@
 #include 'src/builtins/builtins-collections-gen.h'
 
 namespace collections {
+  @export
   macro LoadKeyValuePairNoSideEffects(implicit context: Context)(o: Object):
-      KeyValuePair
-      labels MayHaveSideEffects {
+      KeyValuePair labels MayHaveSideEffects {
     typeswitch (o) {
       case (a: FastJSArray): {
         const length: Smi = a.length;
@@ -33,7 +33,7 @@ namespace collections {
           }
         }
       }
-      case (receiver: JSReceiver): {
+      case (JSReceiver): {
         goto MayHaveSideEffects;
       }
       case (o: Object): deferred {
@@ -42,6 +42,7 @@ namespace collections {
     }
   }
 
+  @export
   transitioning macro LoadKeyValuePair(implicit context: Context)(o: Object):
       KeyValuePair {
     try {
