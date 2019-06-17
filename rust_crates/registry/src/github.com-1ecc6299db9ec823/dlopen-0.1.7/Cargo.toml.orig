@@ -1,0 +1,70 @@
+[package]
+name = "dlopen"
+version = "0.1.7"
+authors = ["Szymon Wieloch <szymon.wieloch@gmail.com>"]
+description = "Library for opening and operating on dynamic link libraries (also known as shared objects or shared libraries)."
+keywords = [
+    #common functions
+    "dlopen", "dll", "so", "dylib", "shared"]
+license = "MIT"
+repository = "https://github.com/szymonwieloch/rust-dlopen"
+
+[dependencies]
+lazy_static = "1.2.0"
+
+[dependencies.dlopen_derive]
+path = "rust-dlopen-derive"
+version = "0.1.4"
+
+[target.'cfg(windows)'.dependencies]
+winapi = "0.2"
+kernel32-sys = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.29"
+
+
+[dev-dependencies.example_dylib]
+path = "rust-example-dylib"
+version = "0.1.0"
+
+[dev-dependencies]
+const-cstr = "0.1"
+libc = "0.2.29"
+regex = "0.2"
+
+[badges.travis-ci]
+repository = "szymonwieloch/rust-dlopen"
+branch = "master"
+
+[badges.appveyor]
+repository = "szymonwieloch/rust-dlopen"
+branch = "master"
+
+[badges.is-it-maintained-open-issues]
+repository = "szymonwieloch/rust-dlopen"
+
+[badges.codecov]
+repository = "szymonwieloch/rust-dlopen"
+branch = "master"
+service = "github"
+
+[[example]]
+name = "raw"
+crate-type = ["bin"]
+
+[[example]]
+name = "symbor"
+crate-type = ["bin"]
+
+[[example]]
+name = "symbor_api"
+crate-type = ["bin"]
+
+[[example]]
+name = "wrapper_api"
+crate-type = ["bin"]
+
+[[example]]
+name = "wrapper_multi_api"
+crate-type = ["bin"]
