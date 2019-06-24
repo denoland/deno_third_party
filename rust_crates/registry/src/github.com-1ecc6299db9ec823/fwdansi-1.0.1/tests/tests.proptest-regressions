@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+xs 3335351554 386647235 3584534272 266266105 # shrinks to ref elements = [Reset]
+xs 1928044643 2253320966 2424427606 448028530 # shrinks to ref ansi_string = [27]
+xs 1984785545 2043478319 191885995 1442765875 # shrinks to ref elements = [Text([27])]
+xs 4274884889 8924921 2258884976 859679705 # shrinks to ref elements = [Text([27, 91, 109])]
+xs 428132133 722552347 3851126282 1913029940 # shrinks to ref elements = [Text([27, 91, 58])]

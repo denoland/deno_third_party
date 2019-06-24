@@ -1,0 +1,20 @@
+environment:
+  matrix:
+    - TOOLCHAIN: 1.27.2
+    - TOOLCHAIN: stable
+    - TOOLCHAIN: beta
+    - TOOLCHAIN: nightly
+
+install:
+  - appveyor DownloadFile https://win.rustup.rs/x86_64 -FileName rustup-init.exe
+  - rustup-init -y --default-toolchain %TOOLCHAIN%
+  - SET PATH=%PATH%;C:\Users\appveyor\.cargo\bin
+  - rustc -vV
+  - cargo -vV
+
+test_script:
+  - cargo build
+  - cargo test
+  - cargo run --example run-rustc
+
+build: false

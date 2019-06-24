@@ -1,0 +1,13 @@
+sudo: false
+language: rust
+
+rust:
+ - 1.27.2
+ - stable
+ - beta
+ - nightly
+
+script:
+ - cargo build
+ - cargo test
+ - cargo run --example run-rustc
