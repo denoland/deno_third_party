@@ -3915,9 +3915,12 @@ if (current_toolchain == v8_generator_toolchain) {
     deps = [
       ":v8_libbase",
       "//build/win:default_exe_manifest",
-      "//third_party/icu",
     ]
-
+    if (v8_enable_i18n_support) {
+      deps += [
+        "//third_party/icu",
+      ]
+    }
     configs = [ ":internal_config" ]
   }
 }
