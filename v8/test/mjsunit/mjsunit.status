@@ -241,6 +241,10 @@
 
   # BUG(v8:9260)
   'tools/profviz': [SKIP],
+
+  # Test doesn't work on 32-bit architectures (it would require a
+  # regexp pattern with too many captures).
+  'regress/regress-976627': [FAIL, ['arch == x64 or arch == arm64 or arch == mips64el or arch == ppc64 or arch == s390x', PASS]],
 }],  # ALWAYS
 
 ['novfp3 == True', {
@@ -365,6 +369,7 @@
   'regress/regress-6838-3': [SKIP],
   'regress/regress-9022': [SKIP],
   'regress/regress-crbug-934138': [SKIP],
+  'regress/regress-crbug-976934': [SKIP],
 
   # Timeouts in lite / jitless mode.
   'asm/embenchen/*': [SKIP],
@@ -777,6 +782,11 @@
   # Slow tests.
   'es6/typedarray-of': [PASS, SLOW],
   'regress/regress-crbug-854299': [PASS, SLOW],
+
+  # Runs flakily OOM because multiple isolates are involved which create many
+  # wasm memories each. Before running OOM on a wasm memory allocation we
+  # trigger a GC, but only in the isolate allocating the new memory.
+  'wasm/module-memory': [SKIP],
 }],  # 'isolates'
 
 ##############################################################################

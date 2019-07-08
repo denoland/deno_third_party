@@ -376,9 +376,9 @@ Condition FlagsConditionToCondition(FlagsCondition condition) {
   UNREACHABLE();
 }
 
-void EmitWordLoadPoisoningIfNeeded(CodeGenerator* codegen,
-                                   InstructionCode opcode, Instruction* instr,
-                                   Arm64OperandConverter& i) {
+void EmitWordLoadPoisoningIfNeeded(
+    CodeGenerator* codegen, InstructionCode opcode, Instruction* instr,
+    Arm64OperandConverter& i) {  // NOLINT(runtime/references)
   const MemoryAccessMode access_mode =
       static_cast<MemoryAccessMode>(MiscField::decode(opcode));
   if (access_mode == kMemoryAccessPoisoned) {
@@ -622,8 +622,8 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     }
     case kArchCallBuiltinPointer: {
       DCHECK(!instr->InputAt(0)->IsImmediate());
-      Register builtin_pointer = i.InputRegister(0);
-      __ CallBuiltinPointer(builtin_pointer);
+      Register builtin_index = i.InputRegister(0);
+      __ CallBuiltinByIndex(builtin_index);
       RecordCallPosition(instr);
       frame_access_state()->ClearSPDelta();
       break;
@@ -2201,6 +2201,8 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     VRegister temp = scope.AcquireV(format);               \
     __ Instr(temp, i.InputSimd128Register(0).V##FORMAT()); \
     __ Umov(i.OutputRegister32(), temp, 0);                \
+    __ Cmp(i.OutputRegister32(), 0);                       \
+    __ Cset(i.OutputRegister32(), ne);                     \
     break;                                                 \
   }
       SIMD_REDUCE_OP_CASE(kArm64S1x4AnyTrue, Umaxv, kFormatS, 4S);
@@ -2400,12 +2402,14 @@ void CodeGenerator::AssembleArchTableSwitch(Instruction* instr) {
   __ Adr(temp, &table);
   __ Add(temp, temp, Operand(input, UXTW, 2));
   __ Br(temp);
-  __ StartBlockPools();
-  __ Bind(&table);
-  for (size_t index = 0; index < case_count; ++index) {
-    __ B(GetLabel(i.InputRpo(index + 2)));
+  {
+    TurboAssembler::BlockPoolsScope block_pools(tasm(),
+                                                case_count * kInstrSize);
+    __ Bind(&table);
+    for (size_t index = 0; index < case_count; ++index) {
+      __ B(GetLabel(i.InputRpo(index + 2)));
+    }
   }
-  __ EndBlockPools();
 }
 
 void CodeGenerator::FinishFrame(Frame* frame) {
@@ -2438,8 +2442,8 @@ void CodeGenerator::AssembleConstructFrame() {
 
   // The frame has been previously padded in CodeGenerator::FinishFrame().
   DCHECK_EQ(frame()->GetTotalFrameSlotCount() % 2, 0);
-  int required_slots = frame()->GetTotalFrameSlotCount() -
-                       call_descriptor->CalculateFixedFrameSize();
+  int required_slots =
+      frame()->GetTotalFrameSlotCount() - frame()->GetFixedSlotCount();
 
   CPURegList saves = CPURegList(CPURegister::kRegister, kXRegSizeInBits,
                                 call_descriptor->CalleeSavedRegisters());
@@ -2578,7 +2582,17 @@ void CodeGenerator::AssembleConstructFrame() {
                MemOperand(fp, WasmCompiledFrameConstants::kWasmInstanceOffset));
       } break;
       case CallDescriptor::kCallAddress:
+        if (info()->GetOutputStackFrameType() == StackFrame::C_WASM_ENTRY) {
+          required_slots += 2;  // marker + saved c_entry_fp.
+        }
         __ Claim(required_slots);
+        if (info()->GetOutputStackFrameType() == StackFrame::C_WASM_ENTRY) {
+          UseScratchRegisterScope temps(tasm());
+          Register scratch = temps.AcquireX();
+          __ Mov(scratch, StackFrame::TypeToMarker(StackFrame::C_WASM_ENTRY));
+          __ Str(scratch,
+                 MemOperand(fp, TypedFrameConstants::kFrameTypeOffset));
+        }
         break;
       default:
         UNREACHABLE();
@@ -2655,7 +2669,7 @@ void CodeGenerator::AssembleReturn(InstructionOperand* pop) {
   __ Ret();
 }
 
-void CodeGenerator::FinishCode() { __ CheckConstPool(true, false); }
+void CodeGenerator::FinishCode() { __ ForceConstantPoolEmissionWithoutJump(); }
 
 void CodeGenerator::AssembleMove(InstructionOperand* source,
                                  InstructionOperand* destination) {
@@ -2676,8 +2690,11 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
       if (IsMaterializableFromRoot(src_object, &index)) {
         __ LoadRoot(dst, index);
       } else {
-        // TODO(v8:8977): Add the needed RelocInfo and make this mov on 32 bits
-        __ Mov(dst, src_object);
+        // TODO(v8:8977): Even though this mov happens on 32 bits (Note the
+        // .W()) and we are passing along the RelocInfo, we still haven't made
+        // the address embedded in the code-stream actually be compressed.
+        __ Mov(dst.W(),
+               Immediate(src_object, RelocInfo::COMPRESSED_EMBEDDED_OBJECT));
       }
     } else {
       __ Mov(dst, g.ToImmediate(source));

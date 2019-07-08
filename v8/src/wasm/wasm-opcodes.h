@@ -6,7 +6,7 @@
 #define V8_WASM_WASM_OPCODES_H_
 
 #include "src/common/globals.h"
-#include "src/execution/message-template.h"
+#include "src/common/message-template.h"
 #include "src/wasm/value-type.h"
 #include "src/wasm/wasm-constants.h"
 
@@ -51,8 +51,8 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(TeeLocal, 0x22, _)           \
   V(GetGlobal, 0x23, _)          \
   V(SetGlobal, 0x24, _)          \
-  V(GetTable, 0x25, _)           \
-  V(SetTable, 0x26, _)           \
+  V(TableGet, 0x25, _)           \
+  V(TableSet, 0x26, _)           \
   V(I32Const, 0x41, _)           \
   V(I64Const, 0x42, _)           \
   V(F32Const, 0x43, _)           \
@@ -272,7 +272,9 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I8x16Splat, 0xfd04, s_i)             \
   V(I16x8Splat, 0xfd08, s_i)             \
   V(I32x4Splat, 0xfd0c, s_i)             \
+  V(I64x2Splat, 0xfd0f, s_l)             \
   V(F32x4Splat, 0xfd12, s_f)             \
+  V(F64x2Splat, 0xfd15, s_d)             \
   V(I8x16Eq, 0xfd18, s_ss)               \
   V(I8x16Ne, 0xfd19, s_ss)               \
   V(I8x16LtS, 0xfd1a, s_ss)              \
@@ -303,6 +305,8 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I32x4LeU, 0xfd33, s_ss)              \
   V(I32x4GeS, 0xfd34, s_ss)              \
   V(I32x4GeU, 0xfd35, s_ss)              \
+  V(I64x2Eq, 0xfd36, s_ss)               \
+  V(I64x2Ne, 0xfd37, s_ss)               \
   V(F32x4Eq, 0xfd40, s_ss)               \
   V(F32x4Ne, 0xfd41, s_ss)               \
   V(F32x4Lt, 0xfd42, s_ss)               \
@@ -352,6 +356,9 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I32x4MinU, 0xfd81, s_ss)             \
   V(I32x4MaxS, 0xfd82, s_ss)             \
   V(I32x4MaxU, 0xfd83, s_ss)             \
+  V(I64x2Neg, 0xfd84, s_s)               \
+  V(I64x2Add, 0xfd8a, s_ss)              \
+  V(I64x2Sub, 0xfd8d, s_ss)              \
   V(F32x4Abs, 0xfd95, s_s)               \
   V(F32x4Neg, 0xfd96, s_s)               \
   V(F32x4RecipApprox, 0xfd98, s_s)       \
@@ -385,6 +392,7 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I8x16ExtractLane, 0xfd05, _)                 \
   V(I16x8ExtractLane, 0xfd09, _)                 \
   V(I32x4ExtractLane, 0xfd0d, _)                 \
+  V(I64x2ExtractLane, 0xfd10, _)                 \
   V(F32x4ExtractLane, 0xfd13, _)                 \
   V(I8x16Shl, 0xfd54, _)                         \
   V(I8x16ShrS, 0xfd55, _)                        \
@@ -394,12 +402,16 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I16x8ShrU, 0xfd67, _)                        \
   V(I32x4Shl, 0xfd76, _)                         \
   V(I32x4ShrS, 0xfd77, _)                        \
-  V(I32x4ShrU, 0xfd78, _)
+  V(I32x4ShrU, 0xfd78, _)                        \
+  V(I64x2Shl, 0xfd87, _)                         \
+  V(I64x2ShrS, 0xfd88, _)                        \
+  V(I64x2ShrU, 0xfd89, _)
 
 #define FOREACH_SIMD_1_OPERAND_2_PARAM_OPCODE(V) \
   V(I8x16ReplaceLane, 0xfd07, _)                 \
   V(I16x8ReplaceLane, 0xfd0b, _)                 \
   V(I32x4ReplaceLane, 0xfd0e, _)                 \
+  V(I64x2ReplaceLane, 0xfd11, _)                 \
   V(F32x4ReplaceLane, 0xfd14, _)
 
 #define FOREACH_SIMD_1_OPERAND_OPCODE(V)   \
@@ -558,8 +570,10 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
 #define FOREACH_SIMD_SIGNATURE(V)          \
   V(s_s, kWasmS128, kWasmS128)             \
   V(s_f, kWasmS128, kWasmF32)              \
+  V(s_d, kWasmS128, kWasmF64)              \
   V(s_ss, kWasmS128, kWasmS128, kWasmS128) \
   V(s_i, kWasmS128, kWasmI32)              \
+  V(s_l, kWasmS128, kWasmI64)              \
   V(s_si, kWasmS128, kWasmS128, kWasmI32)  \
   V(i_s, kWasmI32, kWasmS128)              \
   V(v_is, kWasmStmt, kWasmI32, kWasmS128)  \

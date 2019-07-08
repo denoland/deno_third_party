@@ -92,12 +92,14 @@ class Typer::Visitor : public Reducer {
     return UpdateType(node, TypeBinaryOp(node, x));
       SIMPLIFIED_NUMBER_BINOP_LIST(DECLARE_CASE)
       SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_CASE)
+      SIMPLIFIED_SPECULATIVE_BIGINT_BINOP_LIST(DECLARE_CASE)
 #undef DECLARE_CASE
 
 #define DECLARE_CASE(x) \
   case IrOpcode::k##x:  \
     return UpdateType(node, TypeUnaryOp(node, x));
       SIMPLIFIED_NUMBER_UNOP_LIST(DECLARE_CASE)
+      SIMPLIFIED_BIGINT_UNOP_LIST(DECLARE_CASE)
       SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(DECLARE_CASE)
 #undef DECLARE_CASE
 
@@ -158,12 +160,14 @@ class Typer::Visitor : public Reducer {
     return TypeBinaryOp(node, x);
       SIMPLIFIED_NUMBER_BINOP_LIST(DECLARE_CASE)
       SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_CASE)
+      SIMPLIFIED_SPECULATIVE_BIGINT_BINOP_LIST(DECLARE_CASE)
 #undef DECLARE_CASE
 
 #define DECLARE_CASE(x) \
   case IrOpcode::k##x:  \
     return TypeUnaryOp(node, x);
       SIMPLIFIED_NUMBER_UNOP_LIST(DECLARE_CASE)
+      SIMPLIFIED_BIGINT_UNOP_LIST(DECLARE_CASE)
       SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(DECLARE_CASE)
 #undef DECLARE_CASE
 
@@ -276,6 +280,7 @@ class Typer::Visitor : public Reducer {
     return t->operation_typer_.Name(type); \
   }
   SIMPLIFIED_NUMBER_UNOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_BIGINT_UNOP_LIST(DECLARE_METHOD)
   SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(DECLARE_METHOD)
 #undef DECLARE_METHOD
 #define DECLARE_METHOD(Name)                       \
@@ -284,6 +289,7 @@ class Typer::Visitor : public Reducer {
   }
   SIMPLIFIED_NUMBER_BINOP_LIST(DECLARE_METHOD)
   SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_SPECULATIVE_BIGINT_BINOP_LIST(DECLARE_METHOD)
 #undef DECLARE_METHOD
 
   static Type ObjectIsArrayBufferView(Type, Typer*);
@@ -2060,6 +2066,10 @@ Type Typer::Visitor::TypeStringFromSingleCharCode(Node* node) {
 
 Type Typer::Visitor::TypeStringFromSingleCodePoint(Node* node) {
   return TypeUnaryOp(node, StringFromSingleCodePointTyper);
+}
+
+Type Typer::Visitor::TypeStringFromCodePointAt(Node* node) {
+  return Type::String();
 }
 
 Type Typer::Visitor::TypeStringIndexOf(Node* node) {

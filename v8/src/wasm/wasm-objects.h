@@ -40,15 +40,17 @@ class SeqOneByteString;
 class WasmCapiFunction;
 class WasmDebugInfo;
 class WasmExceptionTag;
-class WasmInstanceObject;
-class WasmModuleObject;
 class WasmExportedFunction;
+class WasmInstanceObject;
+class WasmJSFunction;
+class WasmModuleObject;
+class WasmIndirectFunctionTable;
 
 template <class CppType>
 class Managed;
 
 #define DECL_OPTIONAL_ACCESSORS(name, type) \
-  V8_INLINE bool has_##name();              \
+  DECL_GETTER(has_##name, bool)             \
   DECL_ACCESSORS(name, type)
 
 // A helper for an entry in an indirect function table (IFT).
@@ -60,7 +62,11 @@ class Managed;
 // - target = entrypoint to Wasm code or import wrapper code
 class IndirectFunctionTableEntry {
  public:
-  inline IndirectFunctionTableEntry(Handle<WasmInstanceObject>, int index);
+  inline IndirectFunctionTableEntry(Handle<WasmInstanceObject>, int table_index,
+                                    int entry_index);
+
+  inline IndirectFunctionTableEntry(Handle<WasmIndirectFunctionTable> table,
+                                    int entry_index);
 
   void clear();
   V8_EXPORT_PRIVATE void Set(int sig_id,
@@ -70,12 +76,13 @@ class IndirectFunctionTableEntry {
 
   void CopyFrom(const IndirectFunctionTableEntry& that);
 
-  Object object_ref();
-  int sig_id();
-  Address target();
+  Object object_ref() const;
+  int sig_id() const;
+  Address target() const;
 
  private:
   Handle<WasmInstanceObject> const instance_;
+  Handle<WasmIndirectFunctionTable> const table_;
   int const index_;
 };
 
@@ -292,11 +299,16 @@ class V8_EXPORT_PRIVATE WasmTableObject : public JSObject {
   static void Fill(Isolate* isolate, Handle<WasmTableObject> table,
                    uint32_t start, Handle<Object> entry, uint32_t count);
 
+  // TODO(mstarzinger): Unify these three methods into one.
   static void UpdateDispatchTables(Isolate* isolate,
                                    Handle<WasmTableObject> table,
                                    int entry_index, wasm::FunctionSig* sig,
                                    Handle<WasmInstanceObject> target_instance,
                                    int target_func_index);
+  static void UpdateDispatchTables(Isolate* isolate,
+                                   Handle<WasmTableObject> table,
+                                   int entry_index,
+                                   Handle<WasmJSFunction> function);
   static void UpdateDispatchTables(Isolate* isolate,
                                    Handle<WasmTableObject> table,
                                    int entry_index,
@@ -312,14 +324,12 @@ class V8_EXPORT_PRIVATE WasmTableObject : public JSObject {
                                           int func_index);
 
   // This function reads the content of a function table entry and returns it
-  // through the out parameters {is_valid}, {is_null}, {instance}, and
-  // {function_index}.
-  static void GetFunctionTableEntry(Isolate* isolate,
-                                    Handle<WasmTableObject> table,
-                                    int entry_index, bool* is_valid,
-                                    bool* is_null,
-                                    MaybeHandle<WasmInstanceObject>* instance,
-                                    int* function_index);
+  // through the out parameters {is_valid}, {is_null}, {instance},
+  // {function_index}, and {maybe_js_function}.
+  static void GetFunctionTableEntry(
+      Isolate* isolate, Handle<WasmTableObject> table, int entry_index,
+      bool* is_valid, bool* is_null, MaybeHandle<WasmInstanceObject>* instance,
+      int* function_index, MaybeHandle<WasmJSFunction>* maybe_js_function);
 
   OBJECT_CONSTRUCTORS(WasmTableObject, JSObject);
 };
@@ -431,6 +441,7 @@ class WasmInstanceObject : public JSObject {
   DECL_OPTIONAL_ACCESSORS(imported_mutable_globals_buffers, FixedArray)
   DECL_OPTIONAL_ACCESSORS(debug_info, WasmDebugInfo)
   DECL_OPTIONAL_ACCESSORS(tables, FixedArray)
+  DECL_OPTIONAL_ACCESSORS(indirect_function_tables, FixedArray)
   DECL_ACCESSORS(imported_function_refs, FixedArray)
   DECL_OPTIONAL_ACCESSORS(indirect_function_table_refs, FixedArray)
   DECL_OPTIONAL_ACCESSORS(managed_native_allocations, Foreign)
@@ -495,6 +506,7 @@ class WasmInstanceObject : public JSObject {
   V(kImportedMutableGlobalsBuffersOffset, kTaggedSize)                    \
   V(kDebugInfoOffset, kTaggedSize)                                        \
   V(kTablesOffset, kTaggedSize)                                           \
+  V(kIndirectFunctionTablesOffset, kTaggedSize)                           \
   V(kManagedNativeAllocationsOffset, kTaggedSize)                         \
   V(kExceptionsTableOffset, kTaggedSize)                                  \
   V(kNullValueOffset, kTaggedSize)                                        \
@@ -536,6 +548,7 @@ class WasmInstanceObject : public JSObject {
       kImportedMutableGlobalsBuffersOffset,
       kDebugInfoOffset,
       kTablesOffset,
+      kIndirectFunctionTablesOffset,
       kManagedNativeAllocationsOffset,
       kExceptionsTableOffset,
       kNullValueOffset,
@@ -545,9 +558,8 @@ class WasmInstanceObject : public JSObject {
   V8_EXPORT_PRIVATE const wasm::WasmModule* module();
 
   V8_EXPORT_PRIVATE static bool EnsureIndirectFunctionTableWithMinimumSize(
-      Handle<WasmInstanceObject> instance, uint32_t minimum_size);
-
-  bool has_indirect_function_table();
+      Handle<WasmInstanceObject> instance, int table_index,
+      uint32_t minimum_size);
 
   V8_EXPORT_PRIVATE void SetRawMemory(byte* mem_start, size_t mem_size);
 
@@ -560,6 +572,10 @@ class WasmInstanceObject : public JSObject {
       Isolate*, Handle<WasmModuleObject>);
 
   Address GetCallTarget(uint32_t func_index);
+
+  static int IndirectFunctionTableSize(Isolate* isolate,
+                                       Handle<WasmInstanceObject> instance,
+                                       uint32_t table_index);
 
   // Copies table entries. Returns {false} if the ranges are out-of-bounds.
   static bool CopyTableEntries(Isolate* isolate,
@@ -596,6 +612,14 @@ class WasmInstanceObject : public JSObject {
                                       Handle<WasmInstanceObject> instance,
                                       int index,
                                       Handle<WasmExportedFunction> val);
+
+  // Imports a constructed {WasmJSFunction} into the indirect function table of
+  // this instance. Note that this might trigger wrapper compilation, since a
+  // {WasmJSFunction} is instance-independent and just wraps a JS callable.
+  static void ImportWasmJSFunctionIntoTable(Isolate* isolate,
+                                            Handle<WasmInstanceObject> instance,
+                                            int table_index, int entry_index,
+                                            Handle<WasmJSFunction> js_function);
 
   OBJECT_CONSTRUCTORS(WasmInstanceObject, JSObject);
 
@@ -681,9 +705,11 @@ class WasmJSFunction : public JSFunction {
   static Handle<WasmJSFunction> New(Isolate* isolate, wasm::FunctionSig* sig,
                                     Handle<JSReceiver> callable);
 
+  JSReceiver GetCallable() const;
   // Deserializes the signature of this function using the provided zone. Note
   // that lifetime of the signature is hence directly coupled to the zone.
   wasm::FunctionSig* GetSignature(Zone* zone);
+  bool MatchesSignature(wasm::FunctionSig* sig);
 
   DECL_CAST(WasmJSFunction)
   OBJECT_CONSTRUCTORS(WasmJSFunction, JSFunction);
@@ -706,6 +732,33 @@ class WasmCapiFunction : public JSFunction {
 
   DECL_CAST(WasmCapiFunction)
   OBJECT_CONSTRUCTORS(WasmCapiFunction, JSFunction);
+};
+
+class WasmIndirectFunctionTable : public Struct {
+ public:
+  DECL_PRIMITIVE_ACCESSORS(size, uint32_t)
+  DECL_PRIMITIVE_ACCESSORS(sig_ids, uint32_t*)
+  DECL_PRIMITIVE_ACCESSORS(targets, Address*)
+  DECL_OPTIONAL_ACCESSORS(managed_native_allocations, Foreign)
+  DECL_ACCESSORS(refs, FixedArray)
+
+  static Handle<WasmIndirectFunctionTable> New(Isolate* isolate, uint32_t size);
+  static void Resize(Isolate* isolate, Handle<WasmIndirectFunctionTable> table,
+                     uint32_t new_size);
+
+  DECL_CAST(WasmIndirectFunctionTable)
+
+  DECL_PRINTER(WasmIndirectFunctionTable)
+  DECL_VERIFIER(WasmIndirectFunctionTable)
+
+  DEFINE_FIELD_OFFSET_CONSTANTS(
+      HeapObject::kHeaderSize,
+      TORQUE_GENERATED_WASM_INDIRECT_FUNCTION_TABLE_FIELDS)
+
+  STATIC_ASSERT(kStartOfStrongFieldsOffset == kManagedNativeAllocationsOffset);
+  using BodyDescriptor = FlexibleBodyDescriptor<kStartOfStrongFieldsOffset>;
+
+  OBJECT_CONSTRUCTORS(WasmIndirectFunctionTable, Struct);
 };
 
 class WasmCapiFunctionData : public Struct {
@@ -738,6 +791,9 @@ class WasmExportedFunctionData : public Struct {
   DECL_ACCESSORS(instance, WasmInstanceObject)
   DECL_INT_ACCESSORS(jump_table_offset)
   DECL_INT_ACCESSORS(function_index)
+  DECL_ACCESSORS(c_wrapper_code, Object)
+  DECL_ACCESSORS(wasm_call_target, Smi)
+  DECL_INT_ACCESSORS(packed_args_size)
 
   DECL_CAST(WasmExportedFunctionData)
 
@@ -761,6 +817,7 @@ class WasmJSFunctionData : public Struct {
   DECL_INT_ACCESSORS(serialized_return_count)
   DECL_INT_ACCESSORS(serialized_parameter_count)
   DECL_ACCESSORS(serialized_signature, PodArray<wasm::ValueType>)
+  DECL_ACCESSORS(callable, JSReceiver)
   DECL_ACCESSORS(wrapper_code, Code)
 
   DECL_CAST(WasmJSFunctionData)
@@ -854,8 +911,8 @@ class WasmDebugInfo : public Struct {
                                               Address frame_pointer,
                                               int frame_index);
 
-  V8_EXPORT_PRIVATE static Handle<JSFunction> GetCWasmEntry(
-      Handle<WasmDebugInfo>, wasm::FunctionSig*);
+  V8_EXPORT_PRIVATE static Handle<Code> GetCWasmEntry(Handle<WasmDebugInfo>,
+                                                      wasm::FunctionSig*);
 
   OBJECT_CONSTRUCTORS(WasmDebugInfo, Struct);
 };

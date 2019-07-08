@@ -1811,6 +1811,8 @@ void InstructionSelector::VisitNode(Node* node) {
     case IrOpcode::kUnsafePointerAdd:
       MarkAsRepresentation(MachineType::PointerRepresentation(), node);
       return VisitUnsafePointerAdd(node);
+    case IrOpcode::kF64x2Splat:
+      return MarkAsSimd128(node), VisitF64x2Splat(node);
     case IrOpcode::kF32x4Splat:
       return MarkAsSimd128(node), VisitF32x4Splat(node);
     case IrOpcode::kF32x4ExtractLane:
@@ -1849,6 +1851,28 @@ void InstructionSelector::VisitNode(Node* node) {
       return MarkAsSimd128(node), VisitF32x4Lt(node);
     case IrOpcode::kF32x4Le:
       return MarkAsSimd128(node), VisitF32x4Le(node);
+    case IrOpcode::kI64x2Splat:
+      return MarkAsSimd128(node), VisitI64x2Splat(node);
+    case IrOpcode::kI64x2ExtractLane:
+      return MarkAsWord64(node), VisitI64x2ExtractLane(node);
+    case IrOpcode::kI64x2ReplaceLane:
+      return MarkAsSimd128(node), VisitI64x2ReplaceLane(node);
+    case IrOpcode::kI64x2Neg:
+      return MarkAsSimd128(node), VisitI64x2Neg(node);
+    case IrOpcode::kI64x2Shl:
+      return MarkAsSimd128(node), VisitI64x2Shl(node);
+    case IrOpcode::kI64x2ShrS:
+      return MarkAsSimd128(node), VisitI64x2ShrS(node);
+    case IrOpcode::kI64x2Add:
+      return MarkAsSimd128(node), VisitI64x2Add(node);
+    case IrOpcode::kI64x2Sub:
+      return MarkAsSimd128(node), VisitI64x2Sub(node);
+    case IrOpcode::kI64x2Eq:
+      return MarkAsSimd128(node), VisitI64x2Eq(node);
+    case IrOpcode::kI64x2Ne:
+      return MarkAsSimd128(node), VisitI64x2Ne(node);
+    case IrOpcode::kI64x2ShrU:
+      return MarkAsSimd128(node), VisitI64x2ShrU(node);
     case IrOpcode::kI32x4Splat:
       return MarkAsSimd128(node), VisitI32x4Splat(node);
     case IrOpcode::kI32x4ExtractLane:
@@ -2492,6 +2516,21 @@ void InstructionSelector::VisitWord64AtomicCompareExchange(Node* node) {
 #endif  // !V8_TARGET_ARCH_X64 && !V8_TARGET_ARCH_ARM64 && !V8_TARGET_ARCH_PPC
         // !V8_TARGET_ARCH_MIPS64 && !V8_TARGET_ARCH_S390
 
+#if !V8_TARGET_ARCH_X64
+void InstructionSelector::VisitF64x2Splat(Node* node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitI64x2Splat(Node* node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitI64x2ExtractLane(Node* node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitI64x2ReplaceLane(Node* node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitI64x2Neg(Node* node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitI64x2Shl(Node* node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitI64x2ShrS(Node* node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitI64x2Add(Node* node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitI64x2Sub(Node* node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitI64x2Eq(Node* node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitI64x2Ne(Node* node) { UNIMPLEMENTED(); }
+void InstructionSelector::VisitI64x2ShrU(Node* node) { UNIMPLEMENTED(); }
+#endif  // !V8_TARGET_ARCH_X64
+
 void InstructionSelector::VisitFinishRegion(Node* node) { EmitIdentity(node); }
 
 void InstructionSelector::VisitParameter(Node* node) {
@@ -2965,7 +3004,7 @@ void InstructionSelector::CanonicalizeShuffle(bool inputs_equal,
 void InstructionSelector::CanonicalizeShuffle(Node* node, uint8_t* shuffle,
                                               bool* is_swizzle) {
   // Get raw shuffle indices.
-  memcpy(shuffle, OpParameter<uint8_t*>(node->op()), kSimd128Size);
+  memcpy(shuffle, S8x16ShuffleOf(node->op()), kSimd128Size);
   bool needs_swap;
   bool inputs_equal = GetVirtualRegister(node->InputAt(0)) ==
                       GetVirtualRegister(node->InputAt(1));

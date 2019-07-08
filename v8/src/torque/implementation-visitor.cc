@@ -415,61 +415,128 @@ void ImplementationVisitor::Visit(Builtin* builtin) {
 
   BlockBindings<LocalValue> parameter_bindings(&ValueBindingsManager::Get());
 
-  // Context
-  const bool context_is_implicit = signature.implicit_count > 0;
-  std::string parameter0 =
-      AddParameter(0, builtin, &parameters, &parameter_types,
-                   &parameter_bindings, context_is_implicit);
-  source_out() << "  TNode<Context> " << parameter0
-               << " = UncheckedCast<Context>(Parameter("
-               << "Descriptor::kContext));\n";
-  source_out() << "  USE(" << parameter0 << ");\n";
+  if (builtin->IsVarArgsJavaScript() || builtin->IsFixedArgsJavaScript()) {
+    if (builtin->IsVarArgsJavaScript()) {
+      DCHECK(signature.parameter_types.var_args);
+      if (signature.ExplicitCount() > 0) {
+        Error("Cannot mix explicit parameters with varargs.")
+            .Position(signature.parameter_names[signature.implicit_count]->pos);
+      }
 
-  size_t first = 1;
-  if (builtin->IsVarArgsJavaScript()) {
-    DCHECK(signature.parameter_types.var_args);
-    source_out()
-        << "  Node* argc = Parameter(Descriptor::kJSActualArgumentsCount);\n";
-    std::string parameter1 = AddParameter(
-        1, builtin, &parameters, &parameter_types, &parameter_bindings, true);
-    source_out()
-        << "  TNode<IntPtrT> arguments_length(ChangeInt32ToIntPtr(argc));\n";
-    source_out() << "  TNode<RawPtrT> arguments_frame = "
-                    "UncheckedCast<RawPtrT>(LoadFramePointer());\n";
-    source_out() << "  TorqueStructArguments "
-                    "torque_arguments(GetFrameArguments(arguments_frame, "
-                    "arguments_length));\n";
-    source_out() << "  CodeStubArguments arguments(this, torque_arguments);\n";
+      source_out()
+          << "  Node* argc = Parameter(Descriptor::kJSActualArgumentsCount);\n";
+      source_out()
+          << "  TNode<IntPtrT> arguments_length(ChangeInt32ToIntPtr(argc));\n";
+      source_out() << "  TNode<RawPtrT> arguments_frame = "
+                      "UncheckedCast<RawPtrT>(LoadFramePointer());\n";
+      source_out() << "  TorqueStructArguments "
+                      "torque_arguments(GetFrameArguments(arguments_frame, "
+                      "arguments_length));\n";
+      source_out()
+          << "  CodeStubArguments arguments(this, torque_arguments);\n";
 
-    source_out() << "  TNode<Object> " << parameter1
-                 << " = arguments.GetReceiver();\n";
-    source_out() << "USE(" << parameter1 << ");\n";
-    parameters.Push("torque_arguments.frame");
-    parameters.Push("torque_arguments.base");
-    parameters.Push("torque_arguments.length");
-    const Type* arguments_type = TypeOracle::GetArgumentsType();
-    StackRange range = parameter_types.PushMany(LowerType(arguments_type));
-    parameter_bindings.Add(*signature.arguments_variable,
-                           LocalValue{true, VisitResult(arguments_type, range)},
-                           true);
+      parameters.Push("torque_arguments.frame");
+      parameters.Push("torque_arguments.base");
+      parameters.Push("torque_arguments.length");
+      const Type* arguments_type = TypeOracle::GetArgumentsType();
+      StackRange range = parameter_types.PushMany(LowerType(arguments_type));
+      parameter_bindings.Add(
+          *signature.arguments_variable,
+          LocalValue{true, VisitResult(arguments_type, range)}, true);
+    }
 
-    first = 2;
+    for (size_t i = 0; i < signature.implicit_count; ++i) {
+      const std::string& param_name = signature.parameter_names[i]->value;
+      SourcePosition param_pos = signature.parameter_names[i]->pos;
+      std::string generated_name = AddParameter(
+          i, builtin, &parameters, &parameter_types, &parameter_bindings, true);
+      const Type* actual_type = signature.parameter_types.types[i];
+      const Type* expected_type;
+      if (param_name == "context") {
+        source_out() << "  TNode<Context> " << generated_name
+                     << " = UncheckedCast<Context>(Parameter("
+                     << "Descriptor::kContext));\n";
+        source_out() << "  USE(" << generated_name << ");\n";
+        expected_type = TypeOracle::GetContextType();
+      } else if (param_name == "receiver") {
+        source_out()
+            << "  TNode<Object> " << generated_name << " = "
+            << (builtin->IsVarArgsJavaScript()
+                    ? "arguments.GetReceiver()"
+                    : "UncheckedCast<Object>(Parameter(Descriptor::kReceiver))")
+            << ";\n";
+        source_out() << "USE(" << generated_name << ");\n";
+        expected_type = TypeOracle::GetObjectType();
+      } else if (param_name == "newTarget") {
+        source_out() << "  TNode<Object> " << generated_name
+                     << " = UncheckedCast<Object>(Parameter("
+                     << "Descriptor::kJSNewTarget));\n";
+        source_out() << "USE(" << generated_name << ");\n";
+        expected_type = TypeOracle::GetObjectType();
+      } else if (param_name == "target") {
+        source_out() << "  TNode<JSFunction> " << generated_name
+                     << " = UncheckedCast<JSFunction>(Parameter("
+                     << "Descriptor::kJSTarget));\n";
+        source_out() << "USE(" << generated_name << ");\n";
+        expected_type = TypeOracle::GetJSFunctionType();
+      } else {
+        Error(
+            "Unexpected implicit parameter \"", param_name,
+            "\" for JavaScript calling convention, "
+            "expected \"context\", \"receiver\", \"target\", or \"newTarget\"")
+            .Position(param_pos);
+        expected_type = actual_type;
+      }
+      if (actual_type != expected_type) {
+        Error("According to JavaScript calling convention, expected parameter ",
+              param_name, " to have type ", *expected_type, " but found type ",
+              *actual_type)
+            .Position(param_pos);
+      }
+    }
+
+    for (size_t i = signature.implicit_count;
+         i < signature.parameter_names.size(); ++i) {
+      const std::string& parameter_name = signature.parameter_names[i]->value;
+      const Type* type = signature.types()[i];
+      const bool mark_as_used = signature.implicit_count > i;
+      std::string var = AddParameter(i, builtin, &parameters, &parameter_types,
+                                     &parameter_bindings, mark_as_used);
+      source_out() << "  " << type->GetGeneratedTypeName() << " " << var
+                   << " = "
+                   << "UncheckedCast<" << type->GetGeneratedTNodeTypeName()
+                   << ">(Parameter(Descriptor::k"
+                   << CamelifyString(parameter_name) << "));\n";
+      source_out() << "  USE(" << var << ");\n";
+    }
+
+  } else {
+    DCHECK(builtin->IsStub());
+
+    // Context
+    const bool context_is_implicit = signature.implicit_count > 0;
+    std::string parameter0 =
+        AddParameter(0, builtin, &parameters, &parameter_types,
+                     &parameter_bindings, context_is_implicit);
+    source_out() << "  TNode<Context> " << parameter0
+                 << " = UncheckedCast<Context>(Parameter("
+                 << "Descriptor::kContext));\n";
+    source_out() << "  USE(" << parameter0 << ");\n";
+
+    for (size_t i = 1; i < signature.parameter_names.size(); ++i) {
+      const std::string& parameter_name = signature.parameter_names[i]->value;
+      const Type* type = signature.types()[i];
+      const bool mark_as_used = signature.implicit_count > i;
+      std::string var = AddParameter(i, builtin, &parameters, &parameter_types,
+                                     &parameter_bindings, mark_as_used);
+      source_out() << "  " << type->GetGeneratedTypeName() << " " << var
+                   << " = "
+                   << "UncheckedCast<" << type->GetGeneratedTNodeTypeName()
+                   << ">(Parameter(Descriptor::k"
+                   << CamelifyString(parameter_name) << "));\n";
+      source_out() << "  USE(" << var << ");\n";
+    }
   }
-
-  for (size_t i = 0; i < signature.parameter_names.size(); ++i) {
-    if (i < first) continue;
-    const std::string& parameter_name = signature.parameter_names[i]->value;
-    const Type* type = signature.types()[i];
-    const bool mark_as_used = signature.implicit_count > i;
-    std::string var = AddParameter(i, builtin, &parameters, &parameter_types,
-                                   &parameter_bindings, mark_as_used);
-    source_out() << "  " << type->GetGeneratedTypeName() << " " << var << " = "
-                 << "UncheckedCast<" << type->GetGeneratedTNodeTypeName()
-                 << ">(Parameter(Descriptor::k"
-                 << CamelifyString(parameter_name) << "));\n";
-    source_out() << "  USE(" << var << ");\n";
-  }
-
   assembler_ = CfgAssembler(parameter_types);
   const Type* body_result = Visit(*builtin->body());
   if (body_result != TypeOracle::GetNeverType()) {
@@ -979,10 +1046,13 @@ const Type* ImplementationVisitor::Visit(AssertStatement* stmt) {
         for (Identifier* label : call->labels) {
           LabelBindingsManager::Get().TryLookup(label->value);
         }
+        // TODO(szuend): In case the call expression resolves to a macro
+        //               callable, mark the macro as used as well.
       } else if (auto call = CallMethodExpression::DynamicCast(expression)) {
         for (Identifier* label : call->labels) {
           LabelBindingsManager::Get().TryLookup(label->value);
         }
+        // TODO(szuend): Mark the underlying macro as used.
       }
     });
   }
@@ -1295,43 +1365,51 @@ VisitResult ImplementationVisitor::Visit(NewExpression* expr) {
   InitializerResults initializer_results =
       VisitInitializerResults(class_type, expr->initializers);
 
-  // Output the code to generate an uninitialized object of the class size in
-  // the GC heap.
-  VisitResult allocate_result;
+  VisitResult object_map;
+  const Field& map_field = class_type->LookupField("map");
+  if (map_field.offset != 0) {
+    ReportError("class initializers must have a map as first parameter");
+  }
+  const std::map<std::string, VisitResult>& initializer_fields =
+      initializer_results.field_value_map;
+  auto it_object_map = initializer_fields.find(map_field.name_and_type.name);
   if (class_type->IsExtern()) {
-    const Field& map_field = class_type->LookupField("map");
-    if (map_field.offset != 0) {
-      ReportError(
-          "external classes initializers must have a map as first parameter");
-    }
-    NameValueMap initializer_fields = initializer_results.field_value_map;
-    if (initializer_fields.find(map_field.name_and_type.name) ==
-        initializer_fields.end()) {
+    if (it_object_map == initializer_fields.end()) {
       ReportError("Constructor for ", class_type->name(),
                   " needs Map argument!");
     }
-    VisitResult object_map = initializer_fields[map_field.name_and_type.name];
-    Arguments size_arguments;
-    size_arguments.parameters.push_back(object_map);
-    VisitResult object_size = GenerateCall("%GetAllocationBaseSize",
-                                           size_arguments, {class_type}, false);
-
-    object_size =
-        AddVariableObjectSize(object_size, class_type, initializer_results);
-
-    Arguments allocate_arguments;
-    allocate_arguments.parameters.push_back(object_size);
-    allocate_result =
-        GenerateCall("%Allocate", allocate_arguments, {class_type}, false);
-    DCHECK(allocate_result.IsOnStack());
+    object_map = it_object_map->second;
   } else {
-    Arguments allocate_arguments;
-    allocate_arguments.parameters.push_back(
-        VisitResult(TypeOracle::GetConstexprIntPtrType(),
-                    std::to_string(class_type->size() / kTaggedSize)));
-    allocate_result = GenerateCall("%AllocateInternalClass", allocate_arguments,
-                                   {class_type}, false);
+    if (it_object_map != initializer_fields.end()) {
+      ReportError(
+          "Constructor for ", class_type->name(),
+          " must not specify Map argument; it is automatically inserted.");
+    }
+    Arguments get_struct_map_arguments;
+    get_struct_map_arguments.parameters.push_back(
+        VisitResult(TypeOracle::GetConstexprInstanceTypeType(),
+                    CapifyStringWithUnderscores(class_type->name()) + "_TYPE"));
+    object_map =
+        GenerateCall("%GetStructMap", get_struct_map_arguments, {}, false);
+    CurrentSourcePosition::Scope current_pos(expr->pos);
+    initializer_results.names.insert(initializer_results.names.begin(),
+                                     MakeNode<Identifier>("map"));
+    initializer_results.field_value_map[map_field.name_and_type.name] =
+        object_map;
   }
+  Arguments size_arguments;
+  size_arguments.parameters.push_back(object_map);
+  VisitResult object_size = GenerateCall("%GetAllocationBaseSize",
+                                         size_arguments, {class_type}, false);
+
+  object_size =
+      AddVariableObjectSize(object_size, class_type, initializer_results);
+
+  Arguments allocate_arguments;
+  allocate_arguments.parameters.push_back(object_size);
+  VisitResult allocate_result =
+      GenerateCall("%Allocate", allocate_arguments, {class_type}, false);
+  DCHECK(allocate_result.IsOnStack());
 
   InitializeAggregate(class_type, allocate_result, initializer_results);
 
@@ -1830,7 +1908,7 @@ LocationReference ImplementationVisitor::GetLocationReference(
         return LocationReference::Temporary(
             (*value)->value, "constant value " + expr->name->value);
       }
-      return LocationReference::VariableAccess((*value)->value);
+      return LocationReference::VariableAccess((*value)->value, *value);
     }
   }
 
@@ -1927,6 +2005,12 @@ void ImplementationVisitor::GenerateAssignToLocation(
         GenerateImplicitConvert(variable.type(), assignment_value);
     assembler().Poke(variable.stack_range(), converted_value.stack_range(),
                      variable.type());
+
+    // Local variables are detected by the existence of a binding. Assignment
+    // to local variables is recorded to support lint errors.
+    if (reference.binding()) {
+      (*reference.binding())->SetWritten();
+    }
   } else if (reference.IsIndexedFieldAccess()) {
     ReportError("assigning a value directly to an indexed field isn't allowed");
   } else if (reference.IsHeapReference()) {
@@ -2121,6 +2205,7 @@ VisitResult ImplementationVisitor::GenerateCall(
     if (is_tailcall) {
       ReportError("can't tail call a macro");
     }
+    macro->SetUsed();
     if (return_type->IsConstexpr()) {
       DCHECK_EQ(0, arguments.labels.size());
       std::stringstream result;
@@ -2852,8 +2937,80 @@ class MacroFieldOffsetsGenerator : public FieldOffsetsGenerator {
  private:
   std::ostream& out_;
 };
-
 }  // namespace
+
+void ImplementationVisitor::GenerateInstanceTypes(
+    const std::string& output_directory) {
+  std::stringstream header;
+  std::string file_name = "instance-types-tq.h";
+  {
+    IncludeGuardScope(header, file_name);
+
+    header << "#define TORQUE_DEFINED_INSTANCE_TYPES(V) \\\n";
+    for (const TypeAlias* alias : GlobalContext::GetClasses()) {
+      const ClassType* type = ClassType::DynamicCast(alias->type());
+      if (type->IsExtern()) continue;
+      std::string type_name =
+          CapifyStringWithUnderscores(type->name()) + "_TYPE";
+      header << "  V(" << type_name << ") \\\n";
+    }
+    header << "\n\n";
+
+    header << "#define TORQUE_STRUCT_LIST_GENERATOR(V, _) \\\n";
+    for (const TypeAlias* alias : GlobalContext::GetClasses()) {
+      const ClassType* type = ClassType::DynamicCast(alias->type());
+      if (type->IsExtern()) continue;
+      std::string type_name =
+          CapifyStringWithUnderscores(type->name()) + "_TYPE";
+      std::string variable_name = SnakeifyString(type->name());
+      header << "  V(_, " << type_name << ", " << type->name() << ", "
+             << variable_name << ") \\\n";
+    }
+    header << "\n";
+  }
+  std::string output_header_path = output_directory + "/" + file_name;
+  WriteFile(output_header_path, header.str());
+}
+
+void ImplementationVisitor::GenerateCppForInternalClasses(
+    const std::string& output_directory) {
+  std::stringstream header;
+  std::stringstream inl;
+  std::string base_name = "internal-class-definitions-tq";
+  {
+    IncludeGuardScope header_guard(header, base_name + ".h");
+    header << "#include \"src/objects/objects.h\"\n";
+    header << "#include \"src/objects/struct.h\"\n";
+    header << "#include \"src/objects/js-objects.h\"\n";
+    header << "#include \"src/utils/utils.h\"\n";
+    header << "#include \"torque-generated/class-definitions-tq.h\"\n";
+    IncludeObjectMacrosScope header_macros(header);
+    NamespaceScope header_namespaces(header, {"v8", "internal"});
+
+    IncludeGuardScope inl_guard(inl, base_name + "-inl.h");
+    inl << "#include \"torque-generated/" << base_name << ".h\"\n";
+    inl << "#include \"torque-generated/class-definitions-tq-inl.h\"\n";
+    IncludeObjectMacrosScope inl_macros(inl);
+    NamespaceScope inl_namespaces(inl, {"v8", "internal"});
+
+    for (const TypeAlias* alias : GlobalContext::GetClasses()) {
+      const ClassType* type = ClassType::DynamicCast(alias->type());
+      if (type->IsExtern()) continue;
+      const ClassType* super = type->GetSuperClass();
+      std::string parent = "TorqueGenerated" + type->name() + "<" +
+                           type->name() + ", " + super->name() + ">";
+      header << "class " << type->name() << ": public " << parent << " {\n";
+      header << " public:\n";
+      header << "   TQ_OBJECT_CONSTRUCTORS(" << type->name() << ")\n";
+      header << "};\n\n";
+
+      inl << "TQ_OBJECT_CONSTRUCTORS_IMPL(" << type->name() << ")\n";
+    }
+  }
+  std::string dir_basename = output_directory + "/" + base_name;
+  WriteFile(dir_basename + ".h", header.str());
+  WriteFile(dir_basename + "-inl.h", inl.str());
+}
 
 void ImplementationVisitor::GenerateClassFieldOffsets(
     const std::string& output_directory) {
@@ -2864,7 +3021,6 @@ void ImplementationVisitor::GenerateClassFieldOffsets(
 
     for (const TypeAlias* alias : GlobalContext::GetClasses()) {
       const ClassType* type = ClassType::DynamicCast(alias->type());
-      if (!type->IsExtern()) continue;
 
       // TODO(danno): Remove this once all classes use ClassFieldOffsetGenerator
       // to generate field offsets without the use of macros.
@@ -3109,7 +3265,7 @@ void CppClassGenerator::GenerateFieldAccessorForSmi(const Field& f) {
   // Generate implementation in inline header.
   inl_ << "template <class D, class P>\n";
   inl_ << type << " " << gen_name_ << "<D, P>::" << name << "() const {\n";
-  inl_ << "  return Smi::cast(READ_FIELD(*this, " << offset << "));\n";
+  inl_ << "  return TaggedField<Smi, " << offset << ">::load(*this);\n";
   inl_ << "}\n";
 
   inl_ << "template <class D, class P>\n";
@@ -3134,6 +3290,7 @@ void CppClassGenerator::GenerateFieldAccessorForObject(const Field& f) {
     hdr_ << "  // Torque type: " << field_type->ToString() << "\n";
   }
   hdr_ << "  inline " << type << " " << name << "() const;\n";
+  hdr_ << "  inline " << type << " " << name << "(Isolate* isolate) const;\n";
   hdr_ << "  inline void set_" << name << "(" << type
        << " value, WriteBarrierMode mode = UPDATE_WRITE_BARRIER);\n\n";
 
@@ -3146,10 +3303,20 @@ void CppClassGenerator::GenerateFieldAccessorForObject(const Field& f) {
   // Generate implementation in inline header.
   inl_ << "template <class D, class P>\n";
   inl_ << type << " " << gen_name_ << "<D, P>::" << name << "() const {\n";
-  inl_ << "  Object value = READ_FIELD(*this, " << offset << ");\n";
+  inl_ << "  Isolate* isolate = GetIsolateForPtrCompr(*this);\n";
+  inl_ << "  return " << gen_name_ << "::" << name << "(isolate);\n";
+  inl_ << "}\n";
+
+  inl_ << "template <class D, class P>\n";
+  inl_ << type << " " << gen_name_ << "<D, P>::" << name
+       << "(Isolate* isolate) const {\n";
   if (class_type) {
-    inl_ << "  return " << type << "::cast(value);\n";
+    inl_ << "  return TaggedField<" << type << ", " << offset
+         << ">::load(isolate, *this);\n";
   } else {
+    // TODO(tebbi): load value as HeapObject when possible
+    inl_ << "  Object value = TaggedField<Object, " << offset
+         << ">::load(isolate, *this);\n";
     inl_ << "  DCHECK(" << type_check << ");\n";
     inl_ << "  return value;\n";
   }
@@ -3196,14 +3363,18 @@ void ImplementationVisitor::GenerateClassDefinitions(
         << "#include \"torque-generated/class-definitions-tq.h\"\n\n";
     implementation << "#include \"torque-generated/class-verifiers-tq.h\"\n\n";
     implementation << "#include \"src/objects/struct-inl.h\"\n\n";
+    implementation
+        << "#include "
+           "\"torque-generated/internal-class-definitions-tq-inl.h\"\n\n";
     NamespaceScope implementation_namespaces(implementation,
                                              {"v8", "internal"});
 
     for (const TypeAlias* alias : GlobalContext::GetClasses()) {
       const ClassType* type = ClassType::DynamicCast(alias->type());
-      if (!type->GenerateCppClassDefinitions()) continue;
-      CppClassGenerator g(type, header, inline_header, implementation);
-      g.GenerateClass();
+      if (type->GenerateCppClassDefinitions()) {
+        CppClassGenerator g(type, header, inline_header, implementation);
+        g.GenerateClass();
+      }
     }
   }
   WriteFile(file_basename + ".h", header.str());
@@ -3243,6 +3414,8 @@ void ImplementationVisitor::GeneratePrintDefinitions(
 
     impl << "#include \"src/objects/objects.h\"\n\n";
     impl << "#include <iosfwd>\n\n";
+    impl << "#include "
+            "\"torque-generated/internal-class-definitions-tq-inl.h\"\n";
     impl << "#include \"src/objects/struct-inl.h\"\n\n";
     impl << "#include \"src/objects/template-objects-inl.h\"\n\n";
 
@@ -3252,7 +3425,7 @@ void ImplementationVisitor::GeneratePrintDefinitions(
       const ClassType* type = ClassType::DynamicCast(alias->type());
       if (!type->ShouldGeneratePrint()) continue;
 
-      if (type->IsExtern() && type->GenerateCppClassDefinitions()) {
+      if (type->GenerateCppClassDefinitions()) {
         const ClassType* super = type->GetSuperClass();
         std::string gen_name = "TorqueGenerated" + type->name();
         std::string gen_name_T =
@@ -3280,8 +3453,10 @@ void GenerateClassFieldVerifier(const std::string& class_name,
   if (!f.generate_verify) return;
   const Type* field_type = f.name_and_type.type;
 
-  // We only verify tagged types, not raw numbers or pointers.
-  if (!field_type->IsSubtypeOf(TypeOracle::GetTaggedType())) return;
+  // We only verify tagged types, not raw numbers or pointers. Note that this
+  // must check against GetObjectType not GetTaggedType, because Uninitialized
+  // is a Tagged but should not be verified.
+  if (!field_type->IsSubtypeOf(TypeOracle::GetObjectType())) return;
 
   if (f.index) {
     if ((*f.index)->name_and_type.type != TypeOracle::GetSmiType()) {
@@ -3289,26 +3464,24 @@ void GenerateClassFieldVerifier(const std::string& class_name,
     }
     // We already verified the index field because it was listed earlier, so we
     // can assume it's safe to read here.
-    cc_contents << "  for (int i = 0; i < Smi::ToInt(READ_FIELD(o, "
-                << class_name << "::k"
-                << CamelifyString((*f.index)->name_and_type.name)
-                << "Offset)); ++i) {\n";
+    cc_contents << "  for (int i = 0; i < TaggedField<Smi, " << class_name
+                << "::k" << CamelifyString((*f.index)->name_and_type.name)
+                << "Offset>::load(o).value(); ++i) {\n";
   } else {
     cc_contents << "  {\n";
   }
 
   const char* object_type = f.is_weak ? "MaybeObject" : "Object";
-  const char* read_fn = f.is_weak ? "READ_WEAK_FIELD" : "READ_FIELD";
   const char* verify_fn =
       f.is_weak ? "VerifyMaybeObjectPointer" : "VerifyPointer";
-  const char* index_offset = f.index ? " + i * kTaggedSize" : "";
+  const char* index_offset = f.index ? "i * kTaggedSize" : "0";
   // Name the local var based on the field name for nicer CHECK output.
   const std::string value = f.name_and_type.name + "__value";
 
   // Read the field.
-  cc_contents << "    " << object_type << " " << value << " = " << read_fn
-              << "(o, " << class_name << "::k"
-              << CamelifyString(f.name_and_type.name) << "Offset"
+  cc_contents << "    " << object_type << " " << value << " = TaggedField<"
+              << object_type << ", " << class_name << "::k"
+              << CamelifyString(f.name_and_type.name) << "Offset>::load(o, "
               << index_offset << ");\n";
 
   // Call VerifyPointer or VerifyMaybeObjectPointer on it.
@@ -3325,16 +3498,6 @@ void GenerateClassFieldVerifier(const std::string& class_name,
     for (const std::string& runtime_type : field_type->GetRuntimeTypes()) {
       if (!type_check.empty()) type_check += " || ";
       type_check += strong_value + ".Is" + runtime_type + "()";
-    }
-    // Many subtypes of JSObject can be verified in partially-initialized states
-    // where their fields are all undefined. We explicitly allow that here. For
-    // any such fields that should never be undefined, we can include extra code
-    // in the custom verifier functions for them.
-    // TODO(1240798): If Factory::InitializeJSObjectFromMap is updated to use
-    // correct initial values based on the type of the field, then make this
-    // check stricter too.
-    if (class_type.IsSubtypeOf(TypeOracle::GetJSObjectType())) {
-      type_check += " || " + strong_value + ".IsUndefined(isolate)";
     }
     cc_contents << "    CHECK(" << type_check << ");\n";
   }
@@ -3359,6 +3522,8 @@ void ImplementationVisitor::GenerateClassVerifiers(
       cc_contents << "#include " << StringLiteralQuote(include_path) << "\n";
     }
     cc_contents << "#include \"torque-generated/" << file_name << ".h\"\n";
+    cc_contents << "#include "
+                   "\"torque-generated/internal-class-definitions-tq-inl.h\"\n";
 
     IncludeObjectMacrosScope object_macros(cc_contents);
 
@@ -3369,7 +3534,7 @@ void ImplementationVisitor::GenerateClassVerifiers(
     h_contents << "class Isolate;\n";
     for (const TypeAlias* alias : GlobalContext::GetClasses()) {
       const ClassType* type = ClassType::DynamicCast(alias->type());
-      if (!type->IsExtern() || !type->ShouldGenerateVerify()) continue;
+      if (!type->ShouldGenerateVerify()) continue;
       h_contents << "class " << type->name() << ";\n";
     }
 
@@ -3381,7 +3546,7 @@ void ImplementationVisitor::GenerateClassVerifiers(
     for (const TypeAlias* alias : GlobalContext::GetClasses()) {
       const ClassType* type = ClassType::DynamicCast(alias->type());
       std::string name = type->name();
-      if (!type->IsExtern() || !type->ShouldGenerateVerify()) continue;
+      if (!type->ShouldGenerateVerify()) continue;
 
       std::string method_name = name + "Verify";
 
@@ -3444,6 +3609,8 @@ void ImplementationVisitor::GenerateExportedMacrosAssembler(
     h_contents << "#include \"src/compiler/code-assembler.h\"\n";
     h_contents << "#include \"src/execution/frames.h\"\n";
     h_contents << "#include \"torque-generated/csa-types-tq.h\"\n";
+    h_contents
+        << "#include \"torque-generated/internal-class-definitions-tq.h\"\n";
     cc_contents << "#include \"torque-generated/" << file_name << ".h\"\n";
 
     for (SourceId file : SourceFileMap::AllSources()) {
@@ -3544,6 +3711,33 @@ void ImplementationVisitor::GenerateCSATypes(
     }
   }
   WriteFile(output_directory + "/" + file_name + ".h", h_contents.str());
+}
+
+void ReportAllUnusedMacros() {
+  for (const auto& declarable : GlobalContext::AllDeclarables()) {
+    if (!declarable->IsMacro() || declarable->IsExternMacro()) continue;
+
+    Macro* macro = Macro::cast(declarable.get());
+    if (macro->IsUsed()) continue;
+
+    if (macro->IsTorqueMacro() && TorqueMacro::cast(macro)->IsExportedToCSA()) {
+      continue;
+    }
+
+    std::vector<std::string> ignored_prefixes = {"Convert<", "Cast<",
+                                                 "FromConstexpr<"};
+    const std::string name = macro->ReadableName();
+    const bool ignore =
+        std::any_of(ignored_prefixes.begin(), ignored_prefixes.end(),
+                    [&name](const std::string& prefix) {
+                      return StringStartsWith(name, prefix);
+                    });
+
+    if (!ignore) {
+      Lint("Macro '", macro->ReadableName(), "' is never used.")
+          .Position(macro->IdentifierPosition());
+    }
+  }
 }
 
 }  // namespace torque

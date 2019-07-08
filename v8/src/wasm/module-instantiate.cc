@@ -25,6 +25,9 @@ namespace v8 {
 namespace internal {
 namespace wasm {
 
+using base::ReadLittleEndianValue;
+using base::WriteLittleEndianValue;
+
 namespace {
 byte* raw_buffer_ptr(MaybeHandle<JSArrayBuffer> buffer, int offset) {
   return static_cast<byte*>(buffer.ToHandleChecked()->backing_store()) + offset;
@@ -48,35 +51,8 @@ uint32_t EvalUint32InitExpr(Handle<WasmInstanceObject> instance,
   }
 }
 
-// Queue of import wrapper keys to compile for an instance.
-class ImportWrapperQueue {
- public:
-  // Removes an arbitrary cache key from the queue and returns it.
-  // If the queue is empty, returns nullopt.
-  // Thread-safe.
-  base::Optional<WasmImportWrapperCache::CacheKey> pop() {
-    base::Optional<WasmImportWrapperCache::CacheKey> key = base::nullopt;
-    base::LockGuard<base::Mutex> lock(&mutex_);
-    auto it = queue_.begin();
-    if (it != queue_.end()) {
-      key = *it;
-      queue_.erase(it);
-    }
-    return key;
-  }
-
-  // Add the given key to the queue.
-  // Not thread-safe.
-  void insert(const WasmImportWrapperCache::CacheKey& key) {
-    queue_.insert(key);
-  }
-
- private:
-  base::Mutex mutex_;
-  std::unordered_set<WasmImportWrapperCache::CacheKey,
-                     WasmImportWrapperCache::CacheKeyHash>
-      queue_;
-};
+using ImportWrapperQueue = WrapperQueue<WasmImportWrapperCache::CacheKey,
+                                        WasmImportWrapperCache::CacheKeyHash>;
 
 class CompileImportWrapperTask final : public CancelableTask {
  public:
@@ -202,7 +178,7 @@ class InstanceBuilder {
 
   // Initialize imported tables of type anyfunc.
   bool InitializeImportedIndirectFunctionTable(
-      Handle<WasmInstanceObject> instance, int import_index,
+      Handle<WasmInstanceObject> instance, int table_index, int import_index,
       Handle<WasmTableObject> table_object);
 
   // Process a single imported table.
@@ -255,7 +231,7 @@ class InstanceBuilder {
   // and globals.
   void ProcessExports(Handle<WasmInstanceObject> instance);
 
-  void InitializeTables(Handle<WasmInstanceObject> instance);
+  void InitializeIndirectFunctionTables(Handle<WasmInstanceObject> instance);
 
   void LoadTableSegments(Handle<WasmInstanceObject> instance);
 
@@ -421,15 +397,34 @@ MaybeHandle<WasmInstanceObject> InstanceBuilder::Build() {
   // Set up table storage space.
   //--------------------------------------------------------------------------
   int table_count = static_cast<int>(module_->tables.size());
-  Handle<FixedArray> tables = isolate_->factory()->NewFixedArray(table_count);
-  for (int i = module_->num_imported_tables; i < table_count; i++) {
-    const WasmTable& table = module_->tables[i];
-    Handle<WasmTableObject> table_obj = WasmTableObject::New(
-        isolate_, table.type, table.initial_size, table.has_maximum_size,
-        table.maximum_size, nullptr);
-    tables->set(i, *table_obj);
+  {
+    Handle<FixedArray> tables = isolate_->factory()->NewFixedArray(table_count);
+    for (int i = module_->num_imported_tables; i < table_count; i++) {
+      const WasmTable& table = module_->tables[i];
+      Handle<WasmTableObject> table_obj = WasmTableObject::New(
+          isolate_, table.type, table.initial_size, table.has_maximum_size,
+          table.maximum_size, nullptr);
+      tables->set(i, *table_obj);
+    }
+    instance->set_tables(*tables);
   }
-  instance->set_tables(*tables);
+
+  {
+    Handle<FixedArray> tables = isolate_->factory()->NewFixedArray(table_count);
+    // Table 0 is handled specially. See {InitializeIndirectFunctionTable} for
+    // the initilization. All generated and runtime code will use this optimized
+    // shortcut in the instance. Hence it is safe to start with table 1 in the
+    // iteration below.
+    for (int i = 1; i < table_count; ++i) {
+      const WasmTable& table = module_->tables[i];
+      if (table.type == kWasmAnyFunc) {
+        Handle<WasmIndirectFunctionTable> table_obj =
+            WasmIndirectFunctionTable::New(isolate_, table.initial_size);
+        tables->set(i, *table_obj);
+      }
+    }
+    instance->set_indirect_function_tables(*tables);
+  }
 
   //--------------------------------------------------------------------------
   // Process the imports for the module.
@@ -446,7 +441,7 @@ MaybeHandle<WasmInstanceObject> InstanceBuilder::Build() {
   // Initialize the indirect tables.
   //--------------------------------------------------------------------------
   if (table_count > 0) {
-    InitializeTables(instance);
+    InitializeIndirectFunctionTables(instance);
   }
 
   //--------------------------------------------------------------------------
@@ -550,9 +545,9 @@ MaybeHandle<WasmInstanceObject> InstanceBuilder::Build() {
   if (module_->start_function_index >= 0) {
     int start_index = module_->start_function_index;
     auto& function = module_->functions[start_index];
-    Handle<Code> wrapper_code = compiler::CompileJSToWasmWrapper(
-                                    isolate_, function.sig, function.imported)
-                                    .ToHandleChecked();
+    Handle<Code> wrapper_code =
+        JSToWasmWrapperCompilationUnit::CompileJSToWasmWrapper(
+            isolate_, function.sig, function.imported);
     // TODO(clemensh): Don't generate an exported function for the start
     // function. Use CWasmEntry instead.
     start_function_ = WasmExportedFunction::New(
@@ -904,14 +899,12 @@ bool InstanceBuilder::ProcessImportedFunction(
 }
 
 bool InstanceBuilder::InitializeImportedIndirectFunctionTable(
-    Handle<WasmInstanceObject> instance, int import_index,
+    Handle<WasmInstanceObject> instance, int table_index, int import_index,
     Handle<WasmTableObject> table_object) {
   int imported_table_size = table_object->entries().length();
   // Allocate a new dispatch table.
-  if (!instance->has_indirect_function_table()) {
-    WasmInstanceObject::EnsureIndirectFunctionTableWithMinimumSize(
-        instance, imported_table_size);
-  }
+  WasmInstanceObject::EnsureIndirectFunctionTableWithMinimumSize(
+      instance, table_index, imported_table_size);
   // Initialize the dispatch table with the (foreign) JS functions
   // that are already in the table.
   for (int i = 0; i < imported_table_size; ++i) {
@@ -919,15 +912,22 @@ bool InstanceBuilder::InitializeImportedIndirectFunctionTable(
     bool is_null;
     MaybeHandle<WasmInstanceObject> maybe_target_instance;
     int function_index;
+    MaybeHandle<WasmJSFunction> maybe_js_function;
     WasmTableObject::GetFunctionTableEntry(isolate_, table_object, i, &is_valid,
                                            &is_null, &maybe_target_instance,
-                                           &function_index);
+                                           &function_index, &maybe_js_function);
     if (!is_valid) {
       thrower_->LinkError("table import %d[%d] is not a wasm function",
                           import_index, i);
       return false;
     }
     if (is_null) continue;
+    Handle<WasmJSFunction> js_function;
+    if (maybe_js_function.ToHandle(&js_function)) {
+      WasmInstanceObject::ImportWasmJSFunctionIntoTable(
+          isolate_, instance, table_index, i, js_function);
+      continue;
+    }
 
     Handle<WasmInstanceObject> target_instance =
         maybe_target_instance.ToHandleChecked();
@@ -939,7 +939,7 @@ bool InstanceBuilder::InitializeImportedIndirectFunctionTable(
     // Look up the signature's canonical id. If there is no canonical
     // id, then the signature does not appear at all in this module,
     // so putting {-1} in the table will cause checks to always fail.
-    IndirectFunctionTableEntry(instance, i)
+    IndirectFunctionTableEntry(instance, table_index, i)
         .Set(module_->signature_map.Find(*sig), target_instance,
              function_index);
   }
@@ -958,7 +958,6 @@ bool InstanceBuilder::ProcessImportedTable(Handle<WasmInstanceObject> instance,
   }
   const WasmTable& table = module_->tables[table_index];
 
-  instance->tables().set(table_index, *value);
   auto table_object = Handle<WasmTableObject>::cast(value);
 
   int imported_table_size = table_object->entries().length();
@@ -995,13 +994,13 @@ bool InstanceBuilder::ProcessImportedTable(Handle<WasmInstanceObject> instance,
     return false;
   }
 
-  // The indirect function table only exists for table 0.
-  if (table.type == kWasmAnyFunc && table_index == 0 &&
-      !InitializeImportedIndirectFunctionTable(instance, import_index,
-                                               table_object)) {
+  if (table.type == kWasmAnyFunc &&
+      !InitializeImportedIndirectFunctionTable(instance, table_index,
+                                               import_index, table_object)) {
     return false;
   }
 
+  instance->tables().set(table_index, *value);
   return true;
 }
 
@@ -1611,15 +1610,14 @@ void InstanceBuilder::ProcessExports(Handle<WasmInstanceObject> instance) {
   }
 }
 
-void InstanceBuilder::InitializeTables(Handle<WasmInstanceObject> instance) {
-  size_t table_count = module_->tables.size();
-  for (size_t index = 0; index < table_count; ++index) {
-    const WasmTable& table = module_->tables[index];
+void InstanceBuilder::InitializeIndirectFunctionTables(
+    Handle<WasmInstanceObject> instance) {
+  for (int i = 0; i < static_cast<int>(module_->tables.size()); ++i) {
+    const WasmTable& table = module_->tables[i];
 
-    if (!instance->has_indirect_function_table() &&
-        table.type == kWasmAnyFunc) {
+    if (table.type == kWasmAnyFunc) {
       WasmInstanceObject::EnsureIndirectFunctionTableWithMinimumSize(
-          instance, table.initial_size);
+          instance, i, table.initial_size);
     }
   }
 }
@@ -1643,7 +1641,9 @@ bool LoadElemSegmentImpl(Isolate* isolate, Handle<WasmInstanceObject> instance,
 
     if (func_index == WasmElemSegment::kNullIndex) {
       if (table_object->type() == kWasmAnyFunc) {
-        IndirectFunctionTableEntry(instance, entry_index).clear();
+        IndirectFunctionTableEntry(instance, elem_segment.table_index,
+                                   entry_index)
+            .clear();
       }
       WasmTableObject::Set(isolate, table_object, entry_index,
                            isolate->factory()->null_value());
@@ -1652,13 +1652,11 @@ bool LoadElemSegmentImpl(Isolate* isolate, Handle<WasmInstanceObject> instance,
 
     const WasmFunction* function = &module->functions[func_index];
 
-    // Update the local dispatch table first if necessary. We only have to
-    // update the dispatch table if the first table of the instance is changed.
-    // For all other tables, function calls do not use a dispatch table at
-    // the moment.
-    if (elem_segment.table_index == 0 && table_object->type() == kWasmAnyFunc) {
+    // Update the local dispatch table first if necessary.
+    if (table_object->type() == kWasmAnyFunc) {
       uint32_t sig_id = module->signature_ids[function->sig_index];
-      IndirectFunctionTableEntry(instance, entry_index)
+      IndirectFunctionTableEntry(instance, elem_segment.table_index,
+                                 entry_index)
           .Set(sig_id, instance, func_index);
     }
 

@@ -291,14 +291,14 @@ class WasmGraphBuildingInterface {
     BUILD(SetGlobal, imm.index, value.node);
   }
 
-  void GetTable(FullDecoder* decoder, const Value& index, Value* result,
+  void TableGet(FullDecoder* decoder, const Value& index, Value* result,
                 const TableIndexImmediate<validate>& imm) {
-    result->node = BUILD(GetTable, imm.index, index.node, decoder->position());
+    result->node = BUILD(TableGet, imm.index, index.node, decoder->position());
   }
 
-  void SetTable(FullDecoder* decoder, const Value& index, const Value& value,
+  void TableSet(FullDecoder* decoder, const Value& index, const Value& value,
                 const TableIndexImmediate<validate>& imm) {
-    BUILD(SetTable, imm.index, index.node, value.node, decoder->position());
+    BUILD(TableSet, imm.index, index.node, value.node, decoder->position());
   }
 
   void Unreachable(FullDecoder* decoder) {
@@ -717,7 +717,7 @@ class WasmGraphBuildingInterface {
       Value& val = stack_values[i];
       Value& old = (*merge)[i];
       DCHECK_NOT_NULL(val.node);
-      DCHECK(val.type == kWasmVar ||
+      DCHECK(val.type == kWasmBottom ||
              ValueTypes::MachineRepresentationFor(val.type) ==
                  ValueTypes::MachineRepresentationFor(old.type));
       old.node = first ? val.node

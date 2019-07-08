@@ -475,10 +475,15 @@ enum class NumberOperationHint : uint8_t {
   kNumberOrOddball,    // Inputs were Number or Oddball, output was Number.
 };
 
+enum class BigIntOperationHint : uint8_t {
+  kBigInt,
+};
+
 size_t hash_value(NumberOperationHint);
+size_t hash_value(BigIntOperationHint);
 
 V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream&, NumberOperationHint);
-
+V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream&, BigIntOperationHint);
 V8_EXPORT_PRIVATE NumberOperationHint NumberOperationHintOf(const Operator* op)
     V8_WARN_UNUSED_RESULT;
 
@@ -653,6 +658,9 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
   const Operator* SpeculativeNumberLessThanOrEqual(NumberOperationHint hint);
   const Operator* SpeculativeNumberEqual(NumberOperationHint hint);
 
+  const Operator* SpeculativeBigIntAdd(BigIntOperationHint hint);
+  const Operator* BigIntAsUintN(int bits);
+
   const Operator* ReferenceEqual();
   const Operator* SameValue();
   const Operator* SameValueNumbersOnly();
@@ -666,9 +674,10 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
   const Operator* StringLessThan();
   const Operator* StringLessThanOrEqual();
   const Operator* StringCharCodeAt();
-  const Operator* StringCodePointAt(UnicodeEncoding encoding);
+  const Operator* StringCodePointAt();
   const Operator* StringFromSingleCharCode();
-  const Operator* StringFromSingleCodePoint(UnicodeEncoding encoding);
+  const Operator* StringFromSingleCodePoint();
+  const Operator* StringFromCodePointAt();
   const Operator* StringIndexOf();
   const Operator* StringLength();
   const Operator* StringToLowerCaseIntl();
@@ -686,6 +695,7 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
   const Operator* PlainPrimitiveToWord32();
   const Operator* PlainPrimitiveToFloat64();
 
+  const Operator* ChangeCompressedSignedToInt32();
   const Operator* ChangeTaggedSignedToInt32();
   const Operator* ChangeTaggedSignedToInt64();
   const Operator* ChangeTaggedToInt32();
@@ -704,6 +714,8 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
   const Operator* ChangeFloat64ToTaggedPointer();
   const Operator* ChangeTaggedToBit();
   const Operator* ChangeBitToTagged();
+  const Operator* TruncateBigIntToUint64();
+  const Operator* ChangeUint64ToBigInt();
   const Operator* TruncateTaggedToWord32();
   const Operator* TruncateTaggedToFloat64();
   const Operator* TruncateTaggedToBit();
@@ -752,6 +764,7 @@ class V8_EXPORT_PRIVATE SimplifiedOperatorBuilder final
                                        const VectorSlotPair& feedback);
   const Operator* CheckedTaggedToTaggedPointer(const VectorSlotPair& feedback);
   const Operator* CheckedTaggedToTaggedSigned(const VectorSlotPair& feedback);
+  const Operator* CheckBigInt(const VectorSlotPair& feedback);
   const Operator* CheckedCompressedToTaggedPointer(
       const VectorSlotPair& feedback);
   const Operator* CheckedCompressedToTaggedSigned(

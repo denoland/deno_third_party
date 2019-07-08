@@ -103,8 +103,8 @@ namespace internal {
                                                                                \
   /* String helpers */                                                         \
   TFC(StringCharAt, StringAt)                                                  \
-  TFC(StringCodePointAtUTF16, StringAt)                                        \
-  TFC(StringCodePointAtUTF32, StringAt)                                        \
+  TFC(StringCodePointAt, StringAt)                                             \
+  TFC(StringFromCodePointAt, StringAtAsString)                                 \
   TFC(StringEqual, Compare)                                                    \
   TFC(StringGreaterThan, Compare)                                              \
   TFC(StringGreaterThanOrEqual, Compare)                                       \
@@ -726,15 +726,12 @@ namespace internal {
   CPP(ObjectGetOwnPropertyDescriptors)                                         \
   TFJ(ObjectGetOwnPropertyNames, 1, kReceiver, kObject)                        \
   CPP(ObjectGetOwnPropertySymbols)                                             \
-  CPP(ObjectGetPrototypeOf)                                                    \
-  CPP(ObjectSetPrototypeOf)                                                    \
   TFJ(ObjectIs, 2, kReceiver, kLeft, kRight)                                   \
   CPP(ObjectIsFrozen)                                                          \
   CPP(ObjectIsSealed)                                                          \
   TFJ(ObjectKeys, 1, kReceiver, kObject)                                       \
   CPP(ObjectLookupGetter)                                                      \
   CPP(ObjectLookupSetter)                                                      \
-  CPP(ObjectPreventExtensions)                                                 \
   /* ES6 #sec-object.prototype.tostring */                                     \
   TFJ(ObjectPrototypeToString, 0, kReceiver)                                   \
   /* ES6 #sec-object.prototype.valueof */                                      \
@@ -825,13 +822,9 @@ namespace internal {
   CPP(ReflectDeleteProperty)                                                   \
   CPP(ReflectGet)                                                              \
   CPP(ReflectGetOwnPropertyDescriptor)                                         \
-  CPP(ReflectGetPrototypeOf)                                                   \
   TFJ(ReflectHas, 2, kReceiver, kTarget, kKey)                                 \
-  CPP(ReflectIsExtensible)                                                     \
   CPP(ReflectOwnKeys)                                                          \
-  CPP(ReflectPreventExtensions)                                                \
   CPP(ReflectSet)                                                              \
-  CPP(ReflectSetPrototypeOf)                                                   \
                                                                                \
   /* RegExp */                                                                 \
   CPP(RegExpCapture1Getter)                                                    \
@@ -1149,6 +1142,7 @@ namespace internal {
   ASM(StackCheck, Dummy)                                                       \
   ASM(DoubleToI, Dummy)                                                        \
   TFC(GetProperty, GetProperty)                                                \
+  TFS(GetPropertyWithReceiver, kObject, kKey, kReceiver, kOnNonExistent)       \
   TFS(SetProperty, kReceiver, kKey, kValue)                                    \
   TFS(SetPropertyInLiteral, kReceiver, kKey, kValue)                           \
   ASM(MemCopyUint8Uint8, CCall)                                                \

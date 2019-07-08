@@ -147,16 +147,17 @@ STATIC_ASSERT((kExternalStringTag | kTwoByteStringTag) ==
 
 STATIC_ASSERT(v8::String::TWO_BYTE_ENCODING == kTwoByteStringTag);
 
-bool String::IsOneByteRepresentation() const {
-  uint32_t type = map().instance_type();
+DEF_GETTER(String, IsOneByteRepresentation, bool) {
+  uint32_t type = map(isolate).instance_type();
   return (type & kStringEncodingMask) == kOneByteStringTag;
 }
 
-bool String::IsTwoByteRepresentation() const {
-  uint32_t type = map().instance_type();
+DEF_GETTER(String, IsTwoByteRepresentation, bool) {
+  uint32_t type = map(isolate).instance_type();
   return (type & kStringEncodingMask) == kTwoByteStringTag;
 }
 
+// static
 bool String::IsOneByteRepresentationUnderneath(String string) {
   while (true) {
     uint32_t type = string.map().instance_type();
@@ -398,7 +399,7 @@ String String::GetUnderlying() {
   STATIC_ASSERT(static_cast<int>(ConsString::kFirstOffset) ==
                 static_cast<int>(ThinString::kActualOffset));
   const int kUnderlyingOffset = SlicedString::kParentOffset;
-  return String::cast(READ_FIELD(*this, kUnderlyingOffset));
+  return TaggedField<String, kUnderlyingOffset>::load(*this);
 }
 
 template <class Visitor>
@@ -528,7 +529,7 @@ int SeqOneByteString::SeqOneByteStringSize(InstanceType instance_type) {
 }
 
 String SlicedString::parent() {
-  return String::cast(READ_FIELD(*this, kParentOffset));
+  return TaggedField<String, kParentOffset>::load(*this);
 }
 
 void SlicedString::set_parent(Isolate* isolate, String parent,
@@ -540,36 +541,22 @@ void SlicedString::set_parent(Isolate* isolate, String parent,
 
 SMI_ACCESSORS(SlicedString, offset, kOffsetOffset)
 
-String ConsString::first() {
-  return String::cast(READ_FIELD(*this, kFirstOffset));
+ACCESSORS(ConsString, first, String, kFirstOffset)
+
+Object ConsString::unchecked_first() {
+  return TaggedField<Object, kFirstOffset>::load(*this);
 }
 
-Object ConsString::unchecked_first() { return READ_FIELD(*this, kFirstOffset); }
-
-void ConsString::set_first(Isolate* isolate, String value,
-                           WriteBarrierMode mode) {
-  WRITE_FIELD(*this, kFirstOffset, value);
-  CONDITIONAL_WRITE_BARRIER(*this, kFirstOffset, value, mode);
-}
-
-String ConsString::second() {
-  return String::cast(READ_FIELD(*this, kSecondOffset));
-}
+ACCESSORS(ConsString, second, String, kSecondOffset)
 
 Object ConsString::unchecked_second() {
   return RELAXED_READ_FIELD(*this, kSecondOffset);
 }
 
-void ConsString::set_second(Isolate* isolate, String value,
-                            WriteBarrierMode mode) {
-  WRITE_FIELD(*this, kSecondOffset, value);
-  CONDITIONAL_WRITE_BARRIER(*this, kSecondOffset, value, mode);
-}
-
 ACCESSORS(ThinString, actual, String, kActualOffset)
 
-HeapObject ThinString::unchecked_actual() const {
-  return HeapObject::unchecked_cast(READ_FIELD(*this, kActualOffset));
+DEF_GETTER(ThinString, unchecked_actual, HeapObject) {
+  return TaggedField<HeapObject, kActualOffset>::load(isolate, *this);
 }
 
 bool ExternalString::is_uncached() const {

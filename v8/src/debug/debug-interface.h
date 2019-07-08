@@ -164,8 +164,9 @@ class WasmScript : public Script {
   uint32_t GetFunctionHash(int function_index);
 };
 
-V8_EXPORT_PRIVATE void GetLoadedScripts(Isolate* isolate,
-                                        PersistentValueVector<Script>& scripts);
+V8_EXPORT_PRIVATE void GetLoadedScripts(
+    Isolate* isolate,
+    PersistentValueVector<Script>& scripts);  // NOLINT(runtime/references)
 
 MaybeLocal<UnboundScript> CompileInspectorScript(Isolate* isolate,
                                                  Local<String> source);
@@ -489,13 +490,13 @@ class PostponeInterruptsScope {
 
 class WeakMap : public v8::Object {
  public:
-  V8_WARN_UNUSED_RESULT v8::MaybeLocal<v8::Value> Get(
+  V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT v8::MaybeLocal<v8::Value> Get(
       v8::Local<v8::Context> context, v8::Local<v8::Value> key);
-  V8_WARN_UNUSED_RESULT v8::MaybeLocal<WeakMap> Set(
+  V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT v8::MaybeLocal<WeakMap> Set(
       v8::Local<v8::Context> context, v8::Local<v8::Value> key,
       v8::Local<v8::Value> value);
 
-  static Local<WeakMap> New(v8::Isolate* isolate);
+  V8_EXPORT_PRIVATE static Local<WeakMap> New(v8::Isolate* isolate);
   V8_INLINE static WeakMap* Cast(Value* obj);
 
  private:

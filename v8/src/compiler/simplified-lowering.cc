@@ -444,6 +444,7 @@ class RepresentationSelector {
     break;                                                               \
   }
       SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_CASE)
+      SIMPLIFIED_SPECULATIVE_BIGINT_BINOP_LIST(DECLARE_CASE)
 #undef DECLARE_CASE
 
 #define DECLARE_CASE(Name)                  \
@@ -969,6 +970,8 @@ class RepresentationSelector {
       return MachineRepresentation::kTagged;
     } else if (type.Is(Type::Number())) {
       return MachineRepresentation::kFloat64;
+    } else if (type.Is(Type::BigInt()) && use.IsUsedAsWord64()) {
+      return MachineRepresentation::kWord64;
     } else if (type.Is(Type::ExternalPointer())) {
       return MachineType::PointerRepresentation();
     }
@@ -2464,6 +2467,20 @@ class RepresentationSelector {
         }
         return;
       }
+      case IrOpcode::kCheckBigInt: {
+        if (InputIs(node, Type::BigInt())) {
+          VisitNoop(node, truncation);
+        } else {
+          VisitUnop(node, UseInfo::AnyTagged(),
+                    MachineRepresentation::kTaggedPointer);
+        }
+        return;
+      }
+      case IrOpcode::kBigIntAsUintN: {
+        ProcessInput(node, 0, UseInfo::TruncatedBigIntAsWord64());
+        SetOutput(node, MachineRepresentation::kWord64, Type::BigInt());
+        return;
+      }
       case IrOpcode::kNumberAcos:
       case IrOpcode::kNumberAcosh:
       case IrOpcode::kNumberAsin:
@@ -2624,6 +2641,12 @@ class RepresentationSelector {
         SetOutput(node, MachineRepresentation::kTaggedPointer);
         return;
       }
+      case IrOpcode::kSpeculativeBigIntAdd: {
+        VisitBinop(node,
+                   UseInfo::CheckedBigIntAsTaggedPointer(VectorSlotPair{}),
+                   MachineRepresentation::kTaggedPointer);
+        return;
+      }
       case IrOpcode::kStringConcat: {
         // TODO(turbofan): We currently depend on having this first length input
         // to make sure that the overflow check is properly scheduled before the
@@ -2659,6 +2682,10 @@ class RepresentationSelector {
         VisitUnop(node, UseInfo::TruncatingWord32(),
                   MachineRepresentation::kTaggedPointer);
         return;
+      }
+      case IrOpcode::kStringFromCodePointAt: {
+        return VisitBinop(node, UseInfo::AnyTagged(), UseInfo::Word(),
+                          MachineRepresentation::kTaggedPointer);
       }
       case IrOpcode::kStringIndexOf: {
         ProcessInput(node, 0, UseInfo::AnyTagged());

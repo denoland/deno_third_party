@@ -93,8 +93,10 @@ BytecodeAnalysis::BytecodeAnalysis(Handle<BytecodeArray> bytecode_array,
 
 namespace {
 
-void UpdateInLiveness(Bytecode bytecode, BytecodeLivenessState& in_liveness,
-                      const interpreter::BytecodeArrayAccessor& accessor) {
+void UpdateInLiveness(
+    Bytecode bytecode,
+    BytecodeLivenessState& in_liveness,  // NOLINT(runtime/references)
+    const interpreter::BytecodeArrayAccessor& accessor) {
   int num_operands = Bytecodes::NumberOfOperands(bytecode);
   const OperandType* operand_types = Bytecodes::GetOperandTypes(bytecode);
 
@@ -201,12 +203,14 @@ void UpdateInLiveness(Bytecode bytecode, BytecodeLivenessState& in_liveness,
   }
 }
 
-void UpdateOutLiveness(Bytecode bytecode, BytecodeLivenessState& out_liveness,
-                       BytecodeLivenessState* next_bytecode_in_liveness,
-                       const interpreter::BytecodeArrayAccessor& accessor,
-                       const BytecodeLivenessMap& liveness_map) {
+void UpdateOutLiveness(
+    Bytecode bytecode,
+    BytecodeLivenessState& out_liveness,  // NOLINT(runtime/references)
+    BytecodeLivenessState* next_bytecode_in_liveness,
+    const interpreter::BytecodeArrayAccessor& accessor,
+    Handle<BytecodeArray> bytecode_array,
+    const BytecodeLivenessMap& liveness_map) {
   int current_offset = accessor.current_offset();
-  const Handle<BytecodeArray>& bytecode_array = accessor.bytecode_array();
 
   // Special case Suspend and Resume to just pass through liveness.
   if (bytecode == Bytecode::kSuspendGenerator ||
@@ -261,20 +265,24 @@ void UpdateOutLiveness(Bytecode bytecode, BytecodeLivenessState& out_liveness,
   }
 }
 
-void UpdateLiveness(Bytecode bytecode, BytecodeLiveness& liveness,
+void UpdateLiveness(Bytecode bytecode,
+                    BytecodeLiveness& liveness,  // NOLINT(runtime/references)
                     BytecodeLivenessState** next_bytecode_in_liveness,
                     const interpreter::BytecodeArrayAccessor& accessor,
+                    Handle<BytecodeArray> bytecode_array,
                     const BytecodeLivenessMap& liveness_map) {
   UpdateOutLiveness(bytecode, *liveness.out, *next_bytecode_in_liveness,
-                    accessor, liveness_map);
+                    accessor, bytecode_array, liveness_map);
   liveness.in->CopyFrom(*liveness.out);
   UpdateInLiveness(bytecode, *liveness.in, accessor);
 
   *next_bytecode_in_liveness = liveness.in;
 }
 
-void UpdateAssignments(Bytecode bytecode, BytecodeLoopAssignments& assignments,
-                       const interpreter::BytecodeArrayAccessor& accessor) {
+void UpdateAssignments(
+    Bytecode bytecode,
+    BytecodeLoopAssignments& assignments,  // NOLINT(runtime/references)
+    const interpreter::BytecodeArrayAccessor& accessor) {
   int num_operands = Bytecodes::NumberOfOperands(bytecode);
   const OperandType* operand_types = Bytecodes::GetOperandTypes(bytecode);
 
@@ -426,7 +434,7 @@ void BytecodeAnalysis::Analyze(BailoutId osr_bailout_id) {
       BytecodeLiveness& liveness = liveness_map_.InitializeLiveness(
           current_offset, bytecode_array()->register_count(), zone());
       UpdateLiveness(bytecode, liveness, &next_bytecode_in_liveness, iterator,
-                     liveness_map_);
+                     bytecode_array(), liveness_map_);
     }
   }
 
@@ -489,12 +497,13 @@ void BytecodeAnalysis::Analyze(BailoutId osr_bailout_id) {
       BytecodeLiveness& liveness = liveness_map_.GetLiveness(current_offset);
 
       UpdateLiveness(bytecode, liveness, &next_bytecode_in_liveness, iterator,
-                     liveness_map_);
+                     bytecode_array(), liveness_map_);
     }
     // Now we are at the loop header. Since the in-liveness of the header
     // can't change, we need only to update the out-liveness.
     UpdateOutLiveness(iterator.current_bytecode(), *header_liveness.out,
-                      next_bytecode_in_liveness, iterator, liveness_map_);
+                      next_bytecode_in_liveness, iterator, bytecode_array(),
+                      liveness_map_);
   }
 
   // Process the generator switch statement separately, once the loops are done.
@@ -533,7 +542,7 @@ void BytecodeAnalysis::Analyze(BailoutId osr_bailout_id) {
         DCHECK_NE(bytecode, Bytecode::kJumpLoop);
 
         UpdateLiveness(bytecode, liveness, &next_bytecode_in_liveness, iterator,
-                       liveness_map_);
+                       bytecode_array(), liveness_map_);
       }
     }
   }
@@ -758,14 +767,14 @@ bool BytecodeAnalysis::ResumeJumpTargetLeavesResolveSuspendIds(
         valid = false;
       } else {
         // Make sure we're resuming to a Resume bytecode
-        interpreter::BytecodeArrayAccessor assessor(bytecode_array(),
+        interpreter::BytecodeArrayAccessor accessor(bytecode_array(),
                                                     target.target_offset());
-        if (assessor.current_bytecode() != Bytecode::kResumeGenerator) {
+        if (accessor.current_bytecode() != Bytecode::kResumeGenerator) {
           PrintF(stderr,
                  "Expected resume target for id %d, offset %d, to be "
                  "ResumeGenerator, but found %s\n",
                  target.suspend_id(), target.target_offset(),
-                 Bytecodes::ToString(assessor.current_bytecode()));
+                 Bytecodes::ToString(accessor.current_bytecode()));
 
           valid = false;
         }
@@ -820,7 +829,7 @@ bool BytecodeAnalysis::LivenessIsValid() {
     previous_liveness.CopyFrom(*liveness.out);
 
     UpdateOutLiveness(bytecode, *liveness.out, next_bytecode_in_liveness,
-                      iterator, liveness_map_);
+                      iterator, bytecode_array(), liveness_map_);
     // UpdateOutLiveness skips kJumpLoop, so we update it manually.
     if (bytecode == Bytecode::kJumpLoop) {
       int target_offset = iterator.GetJumpTargetOffset();

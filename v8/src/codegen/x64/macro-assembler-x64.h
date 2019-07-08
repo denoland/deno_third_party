@@ -132,6 +132,7 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   AVX_OP(Psllq, psllq)
   AVX_OP(Psrld, psrld)
   AVX_OP(Psrlq, psrlq)
+  AVX_OP(Addss, addss)
   AVX_OP(Addsd, addsd)
   AVX_OP(Mulsd, mulsd)
   AVX_OP(Andps, andps)
@@ -344,7 +345,8 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void Call(ExternalReference ext);
   void Call(Label* target) { call(target); }
 
-  void CallBuiltinPointer(Register builtin_pointer) override;
+  Operand EntryFromBuiltinIndexAsOperand(Register builtin_index);
+  void CallBuiltinByIndex(Register builtin_index) override;
 
   void LoadCodeObjectEntry(Register destination, Register code_object) override;
   void CallCodeObject(Register code_object) override;

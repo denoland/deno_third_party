@@ -5,6 +5,7 @@
 #include "src/heap/heap.h"
 
 #include <cinttypes>
+#include <iomanip>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -63,7 +64,7 @@
 #include "src/objects/shared-function-info.h"
 #include "src/objects/slots-atomic-inl.h"
 #include "src/objects/slots-inl.h"
-#include "src/regexp/jsregexp.h"
+#include "src/regexp/regexp.h"
 #include "src/snapshot/embedded/embedded-data.h"
 #include "src/snapshot/natives.h"
 #include "src/snapshot/serializer-common.h"
@@ -118,6 +119,12 @@ void Heap_MarkingBarrierForDescriptorArraySlow(Heap* heap, HeapObject host,
                                              number_of_own_descriptors);
 }
 
+void Heap_GenerationalEphemeronKeyBarrierSlow(Heap* heap,
+                                              EphemeronHashTable table,
+                                              Address slot) {
+  heap->RecordEphemeronKeyWrite(table, slot);
+}
+
 void Heap::SetArgumentsAdaptorDeoptPCOffset(int pc_offset) {
   DCHECK_EQ(Smi::kZero, arguments_adaptor_deopt_pc_offset());
   set_arguments_adaptor_deopt_pc_offset(Smi::FromInt(pc_offset));
@@ -164,7 +171,8 @@ struct Heap::StrongRootsList {
 
 class IdleScavengeObserver : public AllocationObserver {
  public:
-  IdleScavengeObserver(Heap& heap, intptr_t step_size)
+  IdleScavengeObserver(Heap& heap,  // NOLINT(runtime/references)
+                       intptr_t step_size)
       : AllocationObserver(step_size), heap_(heap) {}
 
   void Step(int bytes_allocated, Address, size_t) override {
@@ -298,7 +306,7 @@ size_t Heap::Capacity() {
 
 size_t Heap::OldGenerationCapacity() {
   if (!HasBeenSetUp()) return 0;
-  PagedSpaces spaces(this);
+  PagedSpaceIterator spaces(this);
   size_t total = 0;
   for (PagedSpace* space = spaces.Next(); space != nullptr;
        space = spaces.Next()) {
@@ -310,7 +318,7 @@ size_t Heap::OldGenerationCapacity() {
 size_t Heap::CommittedOldGenerationMemory() {
   if (!HasBeenSetUp()) return 0;
 
-  PagedSpaces spaces(this);
+  PagedSpaceIterator spaces(this);
   size_t total = 0;
   for (PagedSpace* space = spaces.Next(); space != nullptr;
        space = spaces.Next()) {
@@ -507,6 +515,76 @@ void Heap::PrintShortHeapStatistics() {
                total_gc_time_ms_);
 }
 
+void Heap::PrintFreeListsStats() {
+  DCHECK(FLAG_trace_gc_freelists);
+
+  if (FLAG_trace_gc_freelists_verbose) {
+    PrintIsolate(isolate_,
+                 "Freelists statistics per Page: "
+                 "[category: length || total free bytes]\n");
+  }
+
+  int categories_lengths[kNumberOfCategories] = {0};
+  size_t categories_sums[kNumberOfCategories] = {0};
+  unsigned int pageCnt = 0;
+
+  // This loops computes freelists lengths and sum.
+  // If FLAG_trace_gc_freelists_verbose is enabled, it also prints
+  // the stats of each FreeListCategory of each Page.
+  for (Page* page : *old_space()) {
+    std::ostringstream out_str;
+
+    if (FLAG_trace_gc_freelists_verbose) {
+      out_str << "Page " << std::setw(4) << pageCnt;
+    }
+
+    for (int cat = kFirstCategory; cat <= kLastCategory; cat++) {
+      FreeListCategory* free_list =
+          page->free_list_category(static_cast<FreeListCategoryType>(cat));
+      int length = free_list->FreeListLength();
+      size_t sum = free_list->SumFreeList();
+
+      if (FLAG_trace_gc_freelists_verbose) {
+        out_str << "[" << cat << ": " << std::setw(4) << length << " || "
+                << std::setw(6) << sum << " ]"
+                << (cat == kLastCategory ? "\n" : ", ");
+      }
+      categories_lengths[cat] += length;
+      categories_sums[cat] += sum;
+    }
+
+    if (FLAG_trace_gc_freelists_verbose) {
+      PrintIsolate(isolate_, "%s", out_str.str().c_str());
+    }
+
+    pageCnt++;
+  }
+
+  // Print statistics about old_space (pages, free/wasted/used memory...).
+  PrintIsolate(
+      isolate_,
+      "%d pages. Free space: %.1f MB (waste: %.2f). "
+      "Usage: %.1f/%.1f (MB) -> %.2f%%.\n",
+      pageCnt, static_cast<double>(old_space_->Available()) / MB,
+      static_cast<double>(old_space_->Waste()) / MB,
+      static_cast<double>(old_space_->Size()) / MB,
+      static_cast<double>(old_space_->Capacity()) / MB,
+      static_cast<double>(old_space_->Size()) / old_space_->Capacity() * 100);
+
+  // Print global statistics of each FreeListCategory (length & sum).
+  PrintIsolate(isolate_,
+               "FreeLists global statistics: "
+               "[category: length || total free KB]\n");
+  std::ostringstream out_str;
+  for (int cat = 0; cat <= kLastCategory; cat++) {
+    out_str << "[" << cat << ": " << categories_lengths[cat] << " || "
+            << std::fixed << std::setprecision(2)
+            << static_cast<double>(categories_sums[cat]) / KB << " KB]"
+            << (cat == kLastCategory ? "\n" : ", ");
+  }
+  PrintIsolate(isolate_, "%s", out_str.str().c_str());
+}
+
 void Heap::DumpJSONHeapStatistics(std::stringstream& stream) {
   HeapStatistics stats;
   reinterpret_cast<v8::Isolate*>(isolate())->GetHeapStatistics(&stats);
@@ -547,7 +625,7 @@ void Heap::DumpJSONHeapStatistics(std::stringstream& stream) {
     MEMBER("malloced_memory") << stats.malloced_memory() << ","
     MEMBER("external_memory") << stats.external_memory() << ","
     MEMBER("peak_malloced_memory") << stats.peak_malloced_memory() << ","
-    MEMBER("pages") << LIST(
+    MEMBER("spaces") << LIST(
       SpaceStatistics(RO_SPACE)      << "," <<
       SpaceStatistics(NEW_SPACE)     << "," <<
       SpaceStatistics(OLD_SPACE)     << "," <<
@@ -1258,7 +1336,8 @@ intptr_t CompareWords(int size, HeapObject a, HeapObject b) {
   return 0;
 }
 
-void ReportDuplicates(int size, std::vector<HeapObject>& objects) {
+void ReportDuplicates(
+    int size, std::vector<HeapObject>& objects) {  // NOLINT(runtime/references)
   if (objects.size() == 0) return;
 
   sort(objects.begin(), objects.end(), [size](HeapObject a, HeapObject b) {
@@ -1345,16 +1424,16 @@ void Heap::CollectAllAvailableGarbage(GarbageCollectionReason gc_reason) {
 
   if (FLAG_trace_duplicate_threshold_kb) {
     std::map<int, std::vector<HeapObject>> objects_by_size;
-    PagedSpaces spaces(this);
+    PagedSpaceIterator spaces(this);
     for (PagedSpace* space = spaces.Next(); space != nullptr;
          space = spaces.Next()) {
-      HeapObjectIterator it(space);
+      PagedSpaceObjectIterator it(space);
       for (HeapObject obj = it.Next(); !obj.is_null(); obj = it.Next()) {
         objects_by_size[obj.Size()].push_back(obj);
       }
     }
     {
-      LargeObjectIterator it(lo_space());
+      LargeObjectSpaceObjectIterator it(lo_space());
       for (HeapObject obj = it.Next(); !obj.is_null(); obj = it.Next()) {
         objects_by_size[obj.Size()].push_back(obj);
       }
@@ -2665,6 +2744,7 @@ STATIC_ASSERT(IsAligned(ByteArray::kHeaderSize, kDoubleAlignment));
 #endif
 
 #ifdef V8_HOST_ARCH_32_BIT
+// NOLINTNEXTLINE(runtime/references) (false positive)
 STATIC_ASSERT((HeapNumber::kValueOffset & kDoubleAlignmentMask) == kTaggedSize);
 #endif
 
@@ -3914,9 +3994,9 @@ void Heap::Verify() {
 void Heap::VerifyReadOnlyHeap() {
   CHECK(!read_only_space_->writable());
   // TODO(v8:7464): Always verify read-only space once PagedSpace::Verify
-  // supports verifying shared read-only space. Currently HeapObjectIterator is
-  // explicitly disabled for read-only space when sharing is enabled, because it
-  // relies on PagedSpace::heap_ being non-null.
+  // supports verifying shared read-only space. Currently
+  // PagedSpaceObjectIterator is explicitly disabled for read-only space when
+  // sharing is enabled, because it relies on PagedSpace::heap_ being non-null.
 #ifndef V8_SHARED_RO_HEAP
   VerifyReadOnlyPointersVisitor read_only_visitor(this);
   read_only_space_->Verify(isolate(), &read_only_visitor);
@@ -4069,7 +4149,7 @@ void Heap::VerifyRememberedSetFor(HeapObject object) {
 
 #ifdef DEBUG
 void Heap::VerifyCountersAfterSweeping() {
-  PagedSpaces spaces(this);
+  PagedSpaceIterator spaces(this);
   for (PagedSpace* space = spaces.Next(); space != nullptr;
        space = spaces.Next()) {
     space->VerifyCountersAfterSweeping();
@@ -4077,7 +4157,7 @@ void Heap::VerifyCountersAfterSweeping() {
 }
 
 void Heap::VerifyCountersBeforeConcurrentSweeping() {
-  PagedSpaces spaces(this);
+  PagedSpaceIterator spaces(this);
   for (PagedSpace* space = spaces.Next(); space != nullptr;
        space = spaces.Next()) {
     space->VerifyCountersBeforeConcurrentSweeping();
@@ -4332,7 +4412,7 @@ void Heap::IterateBuiltins(RootVisitor* v) {
 }
 
 void Heap::ConfigureHeap(const v8::ResourceConstraints& constraints) {
-  // Initialize  max_semi_space_size_.
+  // Initialize max_semi_space_size_.
   {
     if (constraints.max_young_generation_size_in_bytes() > 0) {
       max_semi_space_size_ = SemiSpaceSizeFromYoungGenerationSize(
@@ -4340,6 +4420,20 @@ void Heap::ConfigureHeap(const v8::ResourceConstraints& constraints) {
     }
     if (FLAG_max_semi_space_size > 0) {
       max_semi_space_size_ = static_cast<size_t>(FLAG_max_semi_space_size) * MB;
+    } else if (FLAG_max_heap_size > 0) {
+      size_t max_heap_size = static_cast<size_t>(FLAG_max_heap_size) * MB;
+      size_t young_generation_size, old_generation_size;
+      if (FLAG_max_old_space_size > 0) {
+        old_generation_size = static_cast<size_t>(FLAG_max_old_space_size) * MB;
+        young_generation_size = max_heap_size > old_generation_size
+                                    ? max_heap_size - old_generation_size
+                                    : 0;
+      } else {
+        GenerationSizesFromHeapSize(max_heap_size, &young_generation_size,
+                                    &old_generation_size);
+      }
+      max_semi_space_size_ =
+          SemiSpaceSizeFromYoungGenerationSize(young_generation_size);
     }
     if (FLAG_stress_compaction) {
       // This will cause more frequent GCs when stressing.
@@ -4363,12 +4457,22 @@ void Heap::ConfigureHeap(const v8::ResourceConstraints& constraints) {
     if (FLAG_max_old_space_size > 0) {
       max_old_generation_size_ =
           static_cast<size_t>(FLAG_max_old_space_size) * MB;
+    } else if (FLAG_max_heap_size > 0) {
+      size_t max_heap_size = static_cast<size_t>(FLAG_max_heap_size) * MB;
+      size_t young_generation_size =
+          YoungGenerationSizeFromSemiSpaceSize(max_semi_space_size_);
+      max_old_generation_size_ = max_heap_size > young_generation_size
+                                     ? max_heap_size - young_generation_size
+                                     : 0;
     }
     max_old_generation_size_ =
         Max(max_old_generation_size_, MinOldGenerationSize());
     max_old_generation_size_ =
         RoundDown<Page::kPageSize>(max_old_generation_size_);
   }
+
+  CHECK_IMPLIES(FLAG_max_heap_size > 0,
+                FLAG_max_semi_space_size == 0 || FLAG_max_old_space_size == 0);
 
   // Initialize initial_semispace_size_.
   {
@@ -4485,7 +4589,7 @@ void Heap::RecordStats(HeapStats* stats, bool take_snapshot) {
   *stats->malloced_memory = isolate_->allocator()->GetCurrentMemoryUsage();
   *stats->malloced_peak_memory = isolate_->allocator()->GetMaxMemoryUsage();
   if (take_snapshot) {
-    HeapIterator iterator(this);
+    HeapObjectIterator iterator(this);
     for (HeapObject obj = iterator.Next(); !obj.is_null();
          obj = iterator.Next()) {
       InstanceType type = obj.map().instance_type();
@@ -4508,7 +4612,7 @@ void Heap::RecordStats(HeapStats* stats, bool take_snapshot) {
 }
 
 size_t Heap::OldGenerationSizeOfObjects() {
-  PagedSpaces spaces(this);
+  PagedSpaceIterator spaces(this);
   size_t total = 0;
   for (PagedSpace* space = spaces.Next(); space != nullptr;
        space = spaces.Next()) {
@@ -4589,7 +4693,7 @@ size_t Heap::GlobalMemoryAvailable() {
              ? GlobalSizeOfObjects() < global_allocation_limit_
                    ? global_allocation_limit_ - GlobalSizeOfObjects()
                    : 0
-             : 1;
+             : new_space_->Capacity() + 1;
 }
 
 // This function returns either kNoLimit, kSoftLimit, or kHardLimit.
@@ -4607,8 +4711,7 @@ Heap::IncrementalMarkingLimit Heap::IncrementalMarkingLimitReached() {
   if (FLAG_stress_incremental_marking) {
     return IncrementalMarkingLimit::kHardLimit;
   }
-  if (OldGenerationSizeOfObjects() <=
-      IncrementalMarking::kActivationThreshold) {
+  if (incremental_marking()->IsBelowActivationThresholds()) {
     // Incremental marking is disabled or it is too early to start.
     return IncrementalMarkingLimit::kNoLimit;
   }
@@ -4655,7 +4758,7 @@ Heap::IncrementalMarkingLimit Heap::IncrementalMarkingLimitReached() {
   const size_t global_memory_available = GlobalMemoryAvailable();
 
   if (old_generation_space_available > new_space_->Capacity() &&
-      (global_memory_available > 0)) {
+      (global_memory_available > new_space_->Capacity())) {
     return IncrementalMarkingLimit::kNoLimit;
   }
   if (ShouldOptimizeForMemoryUsage()) {
@@ -4690,7 +4793,7 @@ void Heap::DisableInlineAllocation() {
   new_space()->UpdateInlineAllocationLimit(0);
 
   // Update inline allocation limit for old spaces.
-  PagedSpaces spaces(this);
+  PagedSpaceIterator spaces(this);
   CodeSpaceMemoryModificationScope modification_scope(this);
   for (PagedSpace* space = spaces.Next(); space != nullptr;
        space = spaces.Next()) {
@@ -4850,7 +4953,6 @@ void Heap::SetUpFromReadOnlyHeap(ReadOnlyHeap* ro_heap) {
   DCHECK_NOT_NULL(ro_heap);
   DCHECK_IMPLIES(read_only_space_ != nullptr,
                  read_only_space_ == ro_heap->read_only_space());
-  read_only_heap_ = ro_heap;
   space_[RO_SPACE] = read_only_space_ = ro_heap->read_only_space();
 }
 
@@ -4989,7 +5091,7 @@ int Heap::NextStressMarkingLimit() {
 }
 
 void Heap::NotifyDeserializationComplete() {
-  PagedSpaces spaces(this);
+  PagedSpaceIterator spaces(this);
   for (PagedSpace* s = spaces.Next(); s != nullptr; s = spaces.Next()) {
     if (isolate()->snapshot_available()) s->ShrinkImmortalImmovablePages();
 #ifdef DEBUG
@@ -5136,7 +5238,7 @@ void Heap::TearDown() {
 
   tracer_.reset();
 
-  read_only_heap_->OnHeapTearDown();
+  isolate()->read_only_heap()->OnHeapTearDown();
   space_[RO_SPACE] = read_only_space_ = nullptr;
   for (int i = FIRST_MUTABLE_SPACE; i <= LAST_MUTABLE_SPACE; i++) {
     delete space_[i];
@@ -5239,7 +5341,7 @@ void Heap::CompactWeakArrayLists(AllocationType allocation) {
   // Find known PrototypeUsers and compact them.
   std::vector<Handle<PrototypeInfo>> prototype_infos;
   {
-    HeapIterator iterator(this);
+    HeapObjectIterator iterator(this);
     for (HeapObject o = iterator.Next(); !o.is_null(); o = iterator.Next()) {
       if (o.IsPrototypeInfo()) {
         PrototypeInfo prototype_info = PrototypeInfo::cast(o);
@@ -5418,7 +5520,7 @@ void Heap::ClearRecordedSlotRange(Address start, Address end) {
   }
 }
 
-PagedSpace* PagedSpaces::Next() {
+PagedSpace* PagedSpaceIterator::Next() {
   switch (counter_++) {
     case RO_SPACE:
     case NEW_SPACE:
@@ -5565,8 +5667,8 @@ class UnreachableObjectsFilter : public HeapObjectsFilter {
       reachable_;
 };
 
-HeapIterator::HeapIterator(Heap* heap,
-                           HeapIterator::HeapObjectsFiltering filtering)
+HeapObjectIterator::HeapObjectIterator(
+    Heap* heap, HeapObjectIterator::HeapObjectsFiltering filtering)
     : heap_(heap),
       filtering_(filtering),
       filter_(nullptr),
@@ -5585,8 +5687,7 @@ HeapIterator::HeapIterator(Heap* heap,
   object_iterator_ = space_iterator_->Next()->GetObjectIterator();
 }
 
-
-HeapIterator::~HeapIterator() {
+HeapObjectIterator::~HeapObjectIterator() {
 #ifdef DEBUG
   // Assert that in filtering mode we have iterated through all
   // objects. Otherwise, heap will be left in an inconsistent state.
@@ -5598,7 +5699,7 @@ HeapIterator::~HeapIterator() {
   delete filter_;
 }
 
-HeapObject HeapIterator::Next() {
+HeapObject HeapObjectIterator::Next() {
   if (filter_ == nullptr) return NextObject();
 
   HeapObject obj = NextObject();
@@ -5606,7 +5707,7 @@ HeapObject HeapIterator::Next() {
   return obj;
 }
 
-HeapObject HeapIterator::NextObject() {
+HeapObject HeapObjectIterator::NextObject() {
   // No iterator means we are done.
   if (object_iterator_.get() == nullptr) return HeapObject();
 
@@ -5765,7 +5866,7 @@ void Heap::AddDirtyJSFinalizationGroup(
   // for the root pointing to the first JSFinalizationGroup.
 }
 
-void Heap::AddKeepDuringJobTarget(Handle<JSReceiver> target) {
+void Heap::KeepDuringJob(Handle<JSReceiver> target) {
   DCHECK(FLAG_harmony_weak_refs);
   DCHECK(weak_refs_keep_during_job().IsUndefined() ||
          weak_refs_keep_during_job().IsOrderedHashSet());
@@ -5780,7 +5881,7 @@ void Heap::AddKeepDuringJobTarget(Handle<JSReceiver> target) {
   set_weak_refs_keep_during_job(*table);
 }
 
-void Heap::ClearKeepDuringJobSet() {
+void Heap::ClearKeptObjects() {
   set_weak_refs_keep_during_job(ReadOnlyRoots(isolate()).undefined_value());
 }
 

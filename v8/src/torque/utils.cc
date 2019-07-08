@@ -156,7 +156,7 @@ bool ContainsUpperCase(const std::string& s) {
 // keywords, e.g.: 'True', 'Undefined', etc.
 // These do not need to follow the default naming convention for constants.
 bool IsKeywordLikeName(const std::string& s) {
-  static const char* const keyword_like_constants[]{"True", "False", "Hole",
+  static const char* const keyword_like_constants[]{"True", "False", "TheHole",
                                                     "Null", "Undefined"};
 
   return std::find(std::begin(keyword_like_constants),
@@ -242,6 +242,19 @@ std::string CamelifyString(const std::string& underscore_string) {
     }
     result += current;
     word_beginning = false;
+  }
+  return result;
+}
+
+std::string SnakeifyString(const std::string& camel_string) {
+  std::string result;
+  bool previousWasLower = false;
+  for (auto current : camel_string) {
+    if (previousWasLower && isupper(current)) {
+      result += "_";
+    }
+    result += tolower(current);
+    previousWasLower = (islower(current));
   }
   return result;
 }

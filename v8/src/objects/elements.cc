@@ -4,10 +4,10 @@
 
 #include "src/objects/elements.h"
 
+#include "src/common/message-template.h"
 #include "src/execution/arguments.h"
 #include "src/execution/frames.h"
 #include "src/execution/isolate-inl.h"
-#include "src/execution/message-template.h"
 #include "src/heap/factory.h"
 #include "src/heap/heap-inl.h"  // For MaxNumberToStringCacheSize.
 #include "src/heap/heap-write-barrier-inl.h"
@@ -430,9 +430,8 @@ void SortIndices(Isolate* isolate, Handle<FixedArray> indices,
   AtomicSlot end(start + sort_size);
   std::sort(start, end, [isolate](Tagged_t elementA, Tagged_t elementB) {
 #ifdef V8_COMPRESS_POINTERS
-    DEFINE_ROOT_VALUE(isolate);
-    Object a(DecompressTaggedAny(ROOT_VALUE, elementA));
-    Object b(DecompressTaggedAny(ROOT_VALUE, elementB));
+    Object a(DecompressTaggedAny(isolate, elementA));
+    Object b(DecompressTaggedAny(isolate, elementB));
 #else
     Object a(elementA);
     Object b(elementB);
@@ -565,23 +564,6 @@ class ElementsAccessorBase : public InternalElementsAccessor {
       }
     }
     return true;
-  }
-
-  static void TryTransitionResultArrayToPacked(Handle<JSArray> array) {
-    if (!IsHoleyElementsKind(kind())) return;
-    Handle<FixedArrayBase> backing_store(array->elements(),
-                                         array->GetIsolate());
-    int length = Smi::ToInt(array->length());
-    if (!Subclass::IsPackedImpl(*array, *backing_store, 0, length)) return;
-
-    ElementsKind packed_kind = GetPackedElementsKind(kind());
-    Handle<Map> new_map =
-        JSObject::GetElementsTransitionMap(array, packed_kind);
-    JSObject::MigrateToMap(array, new_map);
-    if (FLAG_trace_elements_transitions) {
-      JSObject::PrintElementsTransition(stdout, array, kind(), backing_store,
-                                        packed_kind, backing_store);
-    }
   }
 
   bool HasElement(JSObject holder, uint32_t index, FixedArrayBase backing_store,
@@ -806,7 +788,8 @@ class ElementsAccessorBase : public InternalElementsAccessor {
 
   static void TransitionElementsKindImpl(Handle<JSObject> object,
                                          Handle<Map> to_map) {
-    Handle<Map> from_map = handle(object->map(), object->GetIsolate());
+    Isolate* isolate = object->GetIsolate();
+    Handle<Map> from_map = handle(object->map(), isolate);
     ElementsKind from_kind = from_map->elements_kind();
     ElementsKind to_kind = to_map->elements_kind();
     if (IsHoleyElementsKind(from_kind)) {
@@ -818,14 +801,12 @@ class ElementsAccessorBase : public InternalElementsAccessor {
       DCHECK(IsFastElementsKind(to_kind));
       DCHECK_NE(TERMINAL_FAST_ELEMENTS_KIND, from_kind);
 
-      Handle<FixedArrayBase> from_elements(object->elements(),
-                                           object->GetIsolate());
-      if (object->elements() ==
-              object->GetReadOnlyRoots().empty_fixed_array() ||
+      Handle<FixedArrayBase> from_elements(object->elements(), isolate);
+      if (object->elements() == ReadOnlyRoots(isolate).empty_fixed_array() ||
           IsDoubleElementsKind(from_kind) == IsDoubleElementsKind(to_kind)) {
         // No change is needed to the elements() buffer, the transition
         // only requires a map change.
-        JSObject::MigrateToMap(object, to_map);
+        JSObject::MigrateToMap(isolate, object, to_map);
       } else {
         DCHECK(
             (IsSmiElementsKind(from_kind) && IsDoubleElementsKind(to_kind)) ||
@@ -836,9 +817,9 @@ class ElementsAccessorBase : public InternalElementsAccessor {
         JSObject::SetMapAndElements(object, to_map, elements);
       }
       if (FLAG_trace_elements_transitions) {
-        JSObject::PrintElementsTransition(
-            stdout, object, from_kind, from_elements, to_kind,
-            handle(object->elements(), object->GetIsolate()));
+        JSObject::PrintElementsTransition(stdout, object, from_kind,
+                                          from_elements, to_kind,
+                                          handle(object->elements(), isolate));
       }
     }
   }
@@ -2604,7 +2585,7 @@ class FastSealedObjectElementsAccessor
                                     "SlowCopyForSetLengthImpl");
     new_map->set_is_extensible(false);
     new_map->set_elements_kind(DICTIONARY_ELEMENTS);
-    JSObject::MigrateToMap(array, new_map);
+    JSObject::MigrateToMap(isolate, array, new_map);
 
     if (!new_element_dictionary.is_null()) {
       array->set_elements(*new_element_dictionary);
@@ -2920,7 +2901,7 @@ class TypedElementsAccessor
       // fields (external pointers, doubles and BigInt data) are only
       // kTaggedSize aligned so we have to use unaligned pointer friendly way of
       // accessing them in order to avoid undefined behavior in C++ code.
-      WriteUnalignedValue<ElementType>(
+      base::WriteUnalignedValue<ElementType>(
           reinterpret_cast<Address>(data_ptr + entry), value);
     } else {
       data_ptr[entry] = value;
@@ -2960,7 +2941,7 @@ class TypedElementsAccessor
       // fields (external pointers, doubles and BigInt data) are only
       // kTaggedSize aligned so we have to use unaligned pointer friendly way of
       // accessing them in order to avoid undefined behavior in C++ code.
-      result = ReadUnalignedValue<ElementType>(
+      result = base::ReadUnalignedValue<ElementType>(
           reinterpret_cast<Address>(data_ptr + entry));
     } else {
       result = data_ptr[entry];
@@ -4339,7 +4320,7 @@ class FastSloppyArgumentsElementsAccessor
         ConvertElementsWithCapacity(object, old_arguments, from_kind, capacity);
     Handle<Map> new_map = JSObject::GetElementsTransitionMap(
         object, FAST_SLOPPY_ARGUMENTS_ELEMENTS);
-    JSObject::MigrateToMap(object, new_map);
+    JSObject::MigrateToMap(isolate, object, new_map);
     elements->set_arguments(FixedArray::cast(*arguments));
     JSObject::ValidateElements(*object);
   }
@@ -4511,8 +4492,8 @@ class StringWrapperElementsAccessor
 
  private:
   static String GetString(JSObject holder) {
-    DCHECK(holder.IsJSValue());
-    JSValue js_value = JSValue::cast(holder);
+    DCHECK(holder.IsJSPrimitiveWrapper());
+    JSPrimitiveWrapper js_value = JSPrimitiveWrapper::cast(holder);
     DCHECK(js_value.value().IsString());
     return String::cast(js_value.value());
   }

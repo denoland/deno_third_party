@@ -343,7 +343,7 @@ void Bootstrapper::LogAllMaps() {
 
 void Bootstrapper::DetachGlobal(Handle<Context> env) {
   isolate_->counters()->errors_thrown_per_context()->AddSample(
-      env->GetErrorsThrown());
+      env->native_context().GetErrorsThrown());
 
   ReadOnlyRoots roots(isolate_);
   Handle<JSGlobalProxy> global_proxy(env->global_proxy(), isolate_);
@@ -1423,7 +1423,7 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
     SimpleInstallFunction(isolate_, object_function, "is", Builtins::kObjectIs,
                           2, true);
     SimpleInstallFunction(isolate_, object_function, "preventExtensions",
-                          Builtins::kObjectPreventExtensions, 1, false);
+                          Builtins::kObjectPreventExtensions, 1, true);
     SimpleInstallFunction(isolate_, object_function, "seal",
                           Builtins::kObjectSeal, 1, false);
 
@@ -1446,10 +1446,10 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
 
     Handle<JSFunction> object_get_prototype_of =
         SimpleInstallFunction(isolate_, object_function, "getPrototypeOf",
-                              Builtins::kObjectGetPrototypeOf, 1, false);
+                              Builtins::kObjectGetPrototypeOf, 1, true);
     native_context()->set_object_get_prototype_of(*object_get_prototype_of);
     SimpleInstallFunction(isolate_, object_function, "setPrototypeOf",
-                          Builtins::kObjectSetPrototypeOf, 2, false);
+                          Builtins::kObjectSetPrototypeOf, 2, true);
 
     SimpleInstallFunction(isolate_, object_function, "isExtensible",
                           Builtins::kObjectIsExtensible, 1, true);
@@ -1466,6 +1466,8 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
     native_context()->set_object_keys(*object_keys);
     SimpleInstallFunction(isolate_, object_function, "entries",
                           Builtins::kObjectEntries, 1, true);
+    SimpleInstallFunction(isolate_, object_function, "fromEntries",
+                          Builtins::kObjectFromEntries, 1, false);
     SimpleInstallFunction(isolate_, object_function, "values",
                           Builtins::kObjectValues, 1, true);
 
@@ -1785,15 +1787,16 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
 
   {  // --- N u m b e r ---
     Handle<JSFunction> number_fun = InstallFunction(
-        isolate_, global, "Number", JS_VALUE_TYPE, JSValue::kSize, 0,
-        isolate_->initial_object_prototype(), Builtins::kNumberConstructor);
+        isolate_, global, "Number", JS_PRIMITIVE_WRAPPER_TYPE,
+        JSPrimitiveWrapper::kSize, 0, isolate_->initial_object_prototype(),
+        Builtins::kNumberConstructor);
     number_fun->shared().DontAdaptArguments();
     number_fun->shared().set_length(1);
     InstallWithIntrinsicDefaultProto(isolate_, number_fun,
                                      Context::NUMBER_FUNCTION_INDEX);
 
     // Create the %NumberPrototype%
-    Handle<JSValue> prototype = Handle<JSValue>::cast(
+    Handle<JSPrimitiveWrapper> prototype = Handle<JSPrimitiveWrapper>::cast(
         factory->NewJSObject(number_fun, AllocationType::kOld));
     prototype->set_value(Smi::kZero);
     JSFunction::SetPrototype(number_fun, prototype);
@@ -1868,15 +1871,16 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
 
   {  // --- B o o l e a n ---
     Handle<JSFunction> boolean_fun = InstallFunction(
-        isolate_, global, "Boolean", JS_VALUE_TYPE, JSValue::kSize, 0,
-        isolate_->initial_object_prototype(), Builtins::kBooleanConstructor);
+        isolate_, global, "Boolean", JS_PRIMITIVE_WRAPPER_TYPE,
+        JSPrimitiveWrapper::kSize, 0, isolate_->initial_object_prototype(),
+        Builtins::kBooleanConstructor);
     boolean_fun->shared().DontAdaptArguments();
     boolean_fun->shared().set_length(1);
     InstallWithIntrinsicDefaultProto(isolate_, boolean_fun,
                                      Context::BOOLEAN_FUNCTION_INDEX);
 
     // Create the %BooleanPrototype%
-    Handle<JSValue> prototype = Handle<JSValue>::cast(
+    Handle<JSPrimitiveWrapper> prototype = Handle<JSPrimitiveWrapper>::cast(
         factory->NewJSObject(boolean_fun, AllocationType::kOld));
     prototype->set_value(ReadOnlyRoots(isolate_).false_value());
     JSFunction::SetPrototype(boolean_fun, prototype);
@@ -1894,8 +1898,9 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
 
   {  // --- S t r i n g ---
     Handle<JSFunction> string_fun = InstallFunction(
-        isolate_, global, "String", JS_VALUE_TYPE, JSValue::kSize, 0,
-        isolate_->initial_object_prototype(), Builtins::kStringConstructor);
+        isolate_, global, "String", JS_PRIMITIVE_WRAPPER_TYPE,
+        JSPrimitiveWrapper::kSize, 0, isolate_->initial_object_prototype(),
+        Builtins::kStringConstructor);
     string_fun->shared().DontAdaptArguments();
     string_fun->shared().set_length(1);
     InstallWithIntrinsicDefaultProto(isolate_, string_fun,
@@ -1928,7 +1933,7 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
                           false);
 
     // Create the %StringPrototype%
-    Handle<JSValue> prototype = Handle<JSValue>::cast(
+    Handle<JSPrimitiveWrapper> prototype = Handle<JSPrimitiveWrapper>::cast(
         factory->NewJSObject(string_fun, AllocationType::kOld));
     prototype->set_value(ReadOnlyRoots(isolate_).empty_string());
     JSFunction::SetPrototype(string_fun, prototype);
@@ -2089,9 +2094,10 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
   }
 
   {  // --- S y m b o l ---
-    Handle<JSFunction> symbol_fun = InstallFunction(
-        isolate_, global, "Symbol", JS_VALUE_TYPE, JSValue::kSize, 0,
-        factory->the_hole_value(), Builtins::kSymbolConstructor);
+    Handle<JSFunction> symbol_fun =
+        InstallFunction(isolate_, global, "Symbol", JS_PRIMITIVE_WRAPPER_TYPE,
+                        JSPrimitiveWrapper::kSize, 0, factory->the_hole_value(),
+                        Builtins::kSymbolConstructor);
     symbol_fun->shared().set_length(0);
     symbol_fun->shared().DontAdaptArguments();
     native_context()->set_symbol_function(*symbol_fun);
@@ -2689,6 +2695,13 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
   // to the embedder data array so we don't need an empty embedder data array.
   Handle<EmbedderDataArray> embedder_data = factory->NewEmbedderDataArray(0);
   native_context()->set_embedder_data(*embedder_data);
+
+  {  // -- g l o b a l T h i s
+    Handle<JSGlobalProxy> global_proxy(native_context()->global_proxy(),
+                                       isolate_);
+    JSObject::AddProperty(isolate_, global, factory->globalThis_string(),
+                          global_proxy, DONT_ENUM);
+  }
 
   {  // -- J S O N
     Handle<JSObject> json_object =
@@ -3392,9 +3405,10 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
   }
 
   {  // -- B i g I n t
-    Handle<JSFunction> bigint_fun = InstallFunction(
-        isolate_, global, "BigInt", JS_VALUE_TYPE, JSValue::kSize, 0,
-        factory->the_hole_value(), Builtins::kBigIntConstructor);
+    Handle<JSFunction> bigint_fun =
+        InstallFunction(isolate_, global, "BigInt", JS_PRIMITIVE_WRAPPER_TYPE,
+                        JSPrimitiveWrapper::kSize, 0, factory->the_hole_value(),
+                        Builtins::kBigIntConstructor);
     bigint_fun->shared().DontAdaptArguments();
     bigint_fun->shared().set_length(1);
     InstallWithIntrinsicDefaultProto(isolate_, bigint_fun,
@@ -4231,7 +4245,6 @@ EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_dynamic_import)
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_import_meta)
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_numeric_separator)
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_regexp_sequence)
-EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_hashbang)
 
 #ifdef V8_INTL_SUPPORT
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_add_calendar_numbering_system)
@@ -4245,17 +4258,6 @@ EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_numberformat_unified)
 #endif  // V8_INTL_SUPPORT
 
 #undef EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE
-
-void Genesis::InitializeGlobal_harmony_global() {
-  if (!FLAG_harmony_global) return;
-
-  Factory* factory = isolate()->factory();
-  Handle<JSGlobalObject> global(native_context()->global_object(), isolate());
-  Handle<JSGlobalProxy> global_proxy(native_context()->global_proxy(),
-                                     isolate());
-  JSObject::AddProperty(isolate_, global, factory->globalThis_string(),
-                        global_proxy, DONT_ENUM);
-}
 
 void Genesis::InitializeGlobal_harmony_sharedarraybuffer() {
   if (!FLAG_harmony_sharedarraybuffer) return;
@@ -4311,7 +4313,7 @@ void Genesis::InitializeGlobal_harmony_weak_refs() {
 
     SimpleInstallFunction(isolate(), finalization_group_prototype,
                           "cleanupSome",
-                          Builtins::kFinalizationGroupCleanupSome, 0, false);
+                          Builtins::kFinalizationGroupCleanupSome, 1, false);
   }
   {
     // Create %WeakRefPrototype%
@@ -4501,12 +4503,6 @@ void Genesis::InitializeGlobal_harmony_intl_segmenter() {
 
 #endif  // V8_INTL_SUPPORT
 
-void Genesis::InitializeGlobal_harmony_object_from_entries() {
-  if (!FLAG_harmony_object_from_entries) return;
-  SimpleInstallFunction(isolate(), isolate()->object_function(), "fromEntries",
-                        Builtins::kObjectFromEntries, 1, false);
-}
-
 Handle<JSFunction> Genesis::CreateArrayBuffer(
     Handle<String> name, ArrayBufferKind array_buffer_kind) {
   // Create the %ArrayBufferPrototype%
@@ -4601,7 +4597,7 @@ void Genesis::InstallInternalPackedArray(Handle<JSObject> target,
   }
 
   JSObject::NormalizeProperties(
-      prototype, KEEP_INOBJECT_PROPERTIES, 6,
+      isolate(), prototype, KEEP_INOBJECT_PROPERTIES, 6,
       "OptimizeInternalPackedArrayPrototypeForAdding");
   InstallInternalPackedArrayFunction(prototype, "push");
   InstallInternalPackedArrayFunction(prototype, "pop");
@@ -4684,14 +4680,14 @@ bool Genesis::InstallNatives() {
                               "Bootstrapping");
 
   {
-    // Builtin function for OpaqueReference -- a JSValue-based object,
-    // that keeps its field isolated from JavaScript code. It may store
+    // Builtin function for OpaqueReference -- a JSPrimitiveWrapper-based
+    // object, that keeps its field isolated from JavaScript code. It may store
     // objects, that JavaScript code may not access.
     Handle<JSObject> prototype = factory()->NewJSObject(
         isolate()->object_function(), AllocationType::kOld);
-    Handle<JSFunction> opaque_reference_fun =
-        CreateFunction(isolate(), factory()->empty_string(), JS_VALUE_TYPE,
-                       JSValue::kSize, 0, prototype, Builtins::kIllegal);
+    Handle<JSFunction> opaque_reference_fun = CreateFunction(
+        isolate(), factory()->empty_string(), JS_PRIMITIVE_WRAPPER_TYPE,
+        JSPrimitiveWrapper::kSize, 0, prototype, Builtins::kIllegal);
     native_context()->set_opaque_reference_function(*opaque_reference_fun);
   }
 

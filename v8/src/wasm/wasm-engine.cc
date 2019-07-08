@@ -8,6 +8,7 @@
 #include "src/diagnostics/code-tracer.h"
 #include "src/diagnostics/compilation-statistics.h"
 #include "src/execution/frames.h"
+#include "src/execution/v8threads.h"
 #include "src/logging/counters.h"
 #include "src/objects/heap-number.h"
 #include "src/objects/js-promise.h"
@@ -88,10 +89,32 @@ class LogCodesTask : public Task {
   WasmEngine* const engine_;
 };
 
+void CheckNoArchivedThreads(Isolate* isolate) {
+  class ArchivedThreadsVisitor : public ThreadVisitor {
+    void VisitThread(Isolate* isolate, ThreadLocalTop* top) override {
+      // Archived threads are rarely used, and not combined with Wasm at the
+      // moment. Implement this and test it properly once we have a use case for
+      // that.
+      FATAL("archived threads in combination with wasm not supported");
+    }
+  } archived_threads_visitor;
+  isolate->thread_manager()->IterateArchivedThreads(&archived_threads_visitor);
+}
+
 class WasmGCForegroundTask : public Task {
  public:
   explicit WasmGCForegroundTask(Isolate* isolate) : isolate_(isolate) {
     DCHECK_NOT_NULL(isolate);
+  }
+
+  ~WasmGCForegroundTask() {
+    // If the isolate is already shutting down, the platform can delete this
+    // task without ever executing it. For that case, we need to deregister the
+    // task from the engine to avoid UAF.
+    if (isolate_) {
+      WasmEngine* engine = isolate_->wasm_engine();
+      engine->ReportLiveCodeForGC(isolate_, Vector<WasmCode*>{});
+    }
   }
 
   void Run() final {
@@ -104,7 +127,10 @@ class WasmGCForegroundTask : public Task {
       DCHECK_NE(StackFrame::WASM_COMPILED, it.frame()->type());
     }
 #endif
+    CheckNoArchivedThreads(isolate_);
     engine->ReportLiveCodeForGC(isolate_, Vector<WasmCode*>{});
+    // Cancel to signal to the destructor that this task executed.
+    Cancel();
   }
 
   void Cancel() { isolate_ = nullptr; }
@@ -453,6 +479,9 @@ Handle<WasmModuleObject> WasmEngine::ImportNativeModule(
     DCHECK_EQ(1, native_modules_.count(native_module));
     native_modules_[native_module]->isolates.insert(isolate);
   }
+
+  // Finish the Wasm script now and make it public to the debugger.
+  isolate->debug()->OnAfterCompile(script);
   return module_object;
 }
 
@@ -762,6 +791,8 @@ void WasmEngine::ReportLiveCodeFromStackForGC(Isolate* isolate) {
     if (frame->type() != StackFrame::WASM_COMPILED) continue;
     live_wasm_code.insert(WasmCompiledFrame::cast(frame)->wasm_code());
   }
+
+  CheckNoArchivedThreads(isolate);
 
   ReportLiveCodeForGC(isolate,
                       OwnedVector<WasmCode*>::Of(live_wasm_code).as_vector());

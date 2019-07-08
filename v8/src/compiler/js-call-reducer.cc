@@ -179,6 +179,100 @@ Reduction JSCallReducer::ReduceMathMinMax(Node* node, const Operator* op,
   return Replace(value);
 }
 
+// ES section #sec-math.hypot Math.hypot ( value1, value2, ...values )
+Reduction JSCallReducer::ReduceMathHypot(Node* node) {
+  CallParameters const& p = CallParametersOf(node->op());
+  if (p.speculation_mode() == SpeculationMode::kDisallowSpeculation) {
+    return NoChange();
+  }
+  if (node->op()->ValueInputCount() < 3) {
+    Node* value = jsgraph()->ZeroConstant();
+    ReplaceWithValue(node, value);
+    return Replace(value);
+  }
+  Node* effect = NodeProperties::GetEffectInput(node);
+  Node* control = NodeProperties::GetControlInput(node);
+  NodeVector values(graph()->zone());
+
+  Node* max = effect =
+      graph()->NewNode(simplified()->SpeculativeToNumber(
+                           NumberOperationHint::kNumberOrOddball, p.feedback()),
+                       NodeProperties::GetValueInput(node, 2), effect, control);
+  max = graph()->NewNode(simplified()->NumberAbs(), max);
+  values.push_back(max);
+  for (int i = 3; i < node->op()->ValueInputCount(); ++i) {
+    Node* input = effect = graph()->NewNode(
+        simplified()->SpeculativeToNumber(NumberOperationHint::kNumberOrOddball,
+                                          p.feedback()),
+        NodeProperties::GetValueInput(node, i), effect, control);
+    input = graph()->NewNode(simplified()->NumberAbs(), input);
+    values.push_back(input);
+
+    // Make sure {max} is NaN in the end in case any argument was NaN.
+    max = graph()->NewNode(
+        common()->Select(MachineRepresentation::kTagged),
+        graph()->NewNode(simplified()->NumberLessThanOrEqual(), input, max),
+        max, input);
+  }
+
+  Node* check0 = graph()->NewNode(simplified()->NumberEqual(), max,
+                                  jsgraph()->ZeroConstant());
+  Node* branch0 =
+      graph()->NewNode(common()->Branch(BranchHint::kFalse), check0, control);
+
+  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
+  Node* vtrue0 = jsgraph()->ZeroConstant();
+
+  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
+  Node* vfalse0;
+  {
+    Node* check1 = graph()->NewNode(simplified()->NumberEqual(), max,
+                                    jsgraph()->Constant(V8_INFINITY));
+    Node* branch1 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
+                                     check1, if_false0);
+
+    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
+    Node* vtrue1 = jsgraph()->Constant(V8_INFINITY);
+
+    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
+    Node* vfalse1;
+    {
+      // Kahan summation to avoid rounding errors.
+      // Normalize the numbers to the largest one to avoid overflow.
+      Node* sum = jsgraph()->ZeroConstant();
+      Node* compensation = jsgraph()->ZeroConstant();
+      for (Node* value : values) {
+        Node* n = graph()->NewNode(simplified()->NumberDivide(), value, max);
+        Node* summand = graph()->NewNode(
+            simplified()->NumberSubtract(),
+            graph()->NewNode(simplified()->NumberMultiply(), n, n),
+            compensation);
+        Node* preliminary =
+            graph()->NewNode(simplified()->NumberAdd(), sum, summand);
+        compensation = graph()->NewNode(
+            simplified()->NumberSubtract(),
+            graph()->NewNode(simplified()->NumberSubtract(), preliminary, sum),
+            summand);
+        sum = preliminary;
+      }
+      vfalse1 = graph()->NewNode(
+          simplified()->NumberMultiply(),
+          graph()->NewNode(simplified()->NumberSqrt(), sum), max);
+    }
+
+    if_false0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
+    vfalse0 = graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
+                               vtrue1, vfalse1, if_false0);
+  }
+
+  control = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
+  Node* value =
+      graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2), vtrue0,
+                       vfalse0, control);
+  ReplaceWithValue(node, value, effect, control);
+  return Replace(value);
+}
+
 Reduction JSCallReducer::Reduce(Node* node) {
   switch (node->opcode()) {
     case IrOpcode::kJSConstruct:
@@ -1001,10 +1095,10 @@ bool CanInlineArrayIteratingBuiltin(JSHeapBroker* broker,
   return true;
 }
 
-bool CanInlineArrayResizingBuiltin(JSHeapBroker* broker,
-                                   MapHandles const& receiver_maps,
-                                   std::vector<ElementsKind>& kinds,
-                                   bool builtin_is_push = false) {
+bool CanInlineArrayResizingBuiltin(
+    JSHeapBroker* broker, MapHandles const& receiver_maps,
+    std::vector<ElementsKind>& kinds,  // NOLINT(runtime/references)
+    bool builtin_is_push = false) {
   DCHECK_NE(0, receiver_maps.size());
   for (auto receiver_map : receiver_maps) {
     MapRef map(broker, receiver_map);
@@ -2735,6 +2829,8 @@ Reduction JSCallReducer::ReduceArraySome(Node* node,
 
 Reduction JSCallReducer::ReduceCallApiFunction(
     Node* node, const SharedFunctionInfoRef& shared) {
+  DisallowHeapAccessIf no_heap_acess(FLAG_concurrent_inlining);
+
   DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
   CallParameters const& p = CallParametersOf(node->op());
   int const argc = static_cast<int>(p.arity()) - 2;
@@ -2750,78 +2846,21 @@ Reduction JSCallReducer::ReduceCallApiFunction(
   Node* context = NodeProperties::GetContextInput(node);
   Node* frame_state = NodeProperties::GetFrameStateInput(node);
 
+  if (!shared.function_template_info().has_value()) {
+    TRACE_BROKER_MISSING(
+        broker(), "FunctionTemplateInfo for function with SFI " << shared);
+    return NoChange();
+  }
+
   // See if we can optimize this API call to {shared}.
-  Handle<FunctionTemplateInfo> function_template_info(
-      FunctionTemplateInfo::cast(shared.object()->function_data()), isolate());
-  CallOptimization call_optimization(isolate(), function_template_info);
-  if (!call_optimization.is_simple_api_call()) return NoChange();
+  FunctionTemplateInfoRef function_template_info(
+      shared.function_template_info().value());
 
-  // Try to infer the {receiver} maps from the graph.
-  MapInference inference(broker(), receiver, effect);
-  if (inference.HaveMaps()) {
-    MapHandles const& receiver_maps = inference.GetMaps();
+  if (!function_template_info.has_call_code()) return NoChange();
 
-    // Check that all {receiver_maps} are actually JSReceiver maps and
-    // that the {function_template_info} accepts them without access
-    // checks (even if "access check needed" is set for {receiver}).
-    //
-    // Note that we don't need to know the concrete {receiver} maps here,
-    // meaning it's fine if the {receiver_maps} are unreliable, and we also
-    // don't need to install any stability dependencies, since the only
-    // relevant information regarding the {receiver} is the Map::constructor
-    // field on the root map (which is different from the JavaScript exposed
-    // "constructor" property) and that field cannot change.
-    //
-    // So if we know that {receiver} had a certain constructor at some point
-    // in the past (i.e. it had a certain map), then this constructor is going
-    // to be the same later, since this information cannot change with map
-    // transitions.
-    //
-    // The same is true for the instance type, e.g. we still know that the
-    // instance type is JSObject even if that information is unreliable, and
-    // the "access check needed" bit, which also cannot change later.
-    for (Handle<Map> map : receiver_maps) {
-      MapRef receiver_map(broker(), map);
-      if (!receiver_map.IsJSReceiverMap() ||
-          (receiver_map.is_access_check_needed() &&
-           !function_template_info->accept_any_receiver())) {
-        return inference.NoChange();
-      }
-    }
-
-    // See if we can constant-fold the compatible receiver checks.
-    CallOptimization::HolderLookup lookup;
-    Handle<JSObject> api_holder =
-        call_optimization.LookupHolderOfExpectedType(receiver_maps[0], &lookup);
-    if (lookup == CallOptimization::kHolderNotFound)
-      return inference.NoChange();
-    for (size_t i = 1; i < receiver_maps.size(); ++i) {
-      CallOptimization::HolderLookup lookupi;
-      Handle<JSObject> holderi = call_optimization.LookupHolderOfExpectedType(
-          receiver_maps[i], &lookupi);
-      if (lookup != lookupi) return inference.NoChange();
-      if (!api_holder.is_identical_to(holderi)) return inference.NoChange();
-    }
-
-    if (p.speculation_mode() == SpeculationMode::kDisallowSpeculation &&
-        !inference.RelyOnMapsViaStability(dependencies())) {
-      // We were not able to make the receiver maps reliable without map checks
-      // but doing map checks would lead to deopt loops, so give up.
-      return inference.NoChange();
-    }
-
-    // TODO(neis): The maps were used in a way that does not actually require
-    // map checks or stability dependencies.
-    inference.RelyOnMapsPreferStability(dependencies(), jsgraph(), &effect,
-                                        control, p.feedback());
-
-    // Determine the appropriate holder for the {lookup}.
-    holder = lookup == CallOptimization::kHolderFound
-                 ? jsgraph()->HeapConstant(api_holder)
-                 : receiver;
-  } else if (function_template_info->accept_any_receiver() &&
-             function_template_info->signature().IsUndefined(isolate())) {
-    // We haven't found any {receiver_maps}, but we might still be able to
+  if (function_template_info.accept_any_receiver() &&
+      function_template_info.is_signature_undefined()) {
+    // We might be able to
     // optimize the API call depending on the {function_template_info}.
     // If the API function accepts any kind of {receiver}, we only need to
     // ensure that the {receiver} is actually a JSReceiver at this point,
@@ -2840,51 +2879,128 @@ Reduction JSCallReducer::ReduceCallApiFunction(
         graph()->NewNode(simplified()->ConvertReceiver(p.convert_mode()),
                          receiver, global_proxy, effect, control);
   } else {
-    // We don't have enough information to eliminate the access check
-    // and/or the compatible receiver check, so use the generic builtin
-    // that does those checks dynamically. This is still significantly
-    // faster than the generic call sequence.
-    Builtins::Name builtin_name =
-        !function_template_info->accept_any_receiver()
-            ? (function_template_info->signature().IsUndefined(isolate())
-                   ? Builtins::kCallFunctionTemplate_CheckAccess
-                   : Builtins::
-                         kCallFunctionTemplate_CheckAccessAndCompatibleReceiver)
-            : Builtins::kCallFunctionTemplate_CheckCompatibleReceiver;
+    // Try to infer the {receiver} maps from the graph.
+    MapInference inference(broker(), receiver, effect);
+    if (inference.HaveMaps()) {
+      MapHandles const& receiver_maps = inference.GetMaps();
+      MapRef first_receiver_map(broker(), receiver_maps[0]);
 
-    // The CallFunctionTemplate builtin requires the {receiver} to be
-    // an actual JSReceiver, so make sure we do the proper conversion
-    // first if necessary.
-    receiver = holder = effect =
-        graph()->NewNode(simplified()->ConvertReceiver(p.convert_mode()),
-                         receiver, global_proxy, effect, control);
+      // See if we can constant-fold the compatible receiver checks.
+      HolderLookupResult api_holder =
+          function_template_info.LookupHolderOfExpectedType(first_receiver_map,
+                                                            false);
+      if (api_holder.lookup == CallOptimization::kHolderNotFound)
+        return inference.NoChange();
 
-    Callable callable = Builtins::CallableFor(isolate(), builtin_name);
-    auto call_descriptor = Linkage::GetStubCallDescriptor(
-        graph()->zone(), callable.descriptor(),
-        argc + 1 /* implicit receiver */, CallDescriptor::kNeedsFrameState);
-    node->InsertInput(graph()->zone(), 0,
-                      jsgraph()->HeapConstant(callable.code()));
-    node->ReplaceInput(1, jsgraph()->HeapConstant(function_template_info));
-    node->InsertInput(graph()->zone(), 2, jsgraph()->Constant(argc));
-    node->ReplaceInput(3, receiver);       // Update receiver input.
-    node->ReplaceInput(6 + argc, effect);  // Update effect input.
-    NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
-    return Changed(node);
+      // Check that all {receiver_maps} are actually JSReceiver maps and
+      // that the {function_template_info} accepts them without access
+      // checks (even if "access check needed" is set for {receiver}).
+      //
+      // Note that we don't need to know the concrete {receiver} maps here,
+      // meaning it's fine if the {receiver_maps} are unreliable, and we also
+      // don't need to install any stability dependencies, since the only
+      // relevant information regarding the {receiver} is the Map::constructor
+      // field on the root map (which is different from the JavaScript exposed
+      // "constructor" property) and that field cannot change.
+      //
+      // So if we know that {receiver} had a certain constructor at some point
+      // in the past (i.e. it had a certain map), then this constructor is going
+      // to be the same later, since this information cannot change with map
+      // transitions.
+      //
+      // The same is true for the instance type, e.g. we still know that the
+      // instance type is JSObject even if that information is unreliable, and
+      // the "access check needed" bit, which also cannot change later.
+      CHECK(first_receiver_map.IsJSReceiverMap());
+      CHECK(!first_receiver_map.is_access_check_needed() ||
+            function_template_info.accept_any_receiver());
+
+      for (size_t i = 1; i < receiver_maps.size(); ++i) {
+        MapRef receiver_map(broker(), receiver_maps[i]);
+        HolderLookupResult holder_i =
+            function_template_info.LookupHolderOfExpectedType(receiver_map,
+                                                              false);
+
+        if (api_holder.lookup != holder_i.lookup) return inference.NoChange();
+        if (!(api_holder.holder.has_value() && holder_i.holder.has_value()))
+          return inference.NoChange();
+        if (!api_holder.holder->equals(*holder_i.holder))
+          return inference.NoChange();
+
+        CHECK(receiver_map.IsJSReceiverMap());
+        CHECK(!receiver_map.is_access_check_needed() ||
+              function_template_info.accept_any_receiver());
+      }
+
+      if (p.speculation_mode() == SpeculationMode::kDisallowSpeculation &&
+          !inference.RelyOnMapsViaStability(dependencies())) {
+        // We were not able to make the receiver maps reliable without map
+        // checks but doing map checks would lead to deopt loops, so give up.
+        return inference.NoChange();
+      }
+
+      // TODO(neis): The maps were used in a way that does not actually require
+      // map checks or stability dependencies.
+      inference.RelyOnMapsPreferStability(dependencies(), jsgraph(), &effect,
+                                          control, p.feedback());
+
+      // Determine the appropriate holder for the {lookup}.
+      holder = api_holder.lookup == CallOptimization::kHolderFound
+                   ? jsgraph()->Constant(*api_holder.holder)
+                   : receiver;
+    } else {
+      // We don't have enough information to eliminate the access check
+      // and/or the compatible receiver check, so use the generic builtin
+      // that does those checks dynamically. This is still significantly
+      // faster than the generic call sequence.
+      Builtins::Name builtin_name;
+      if (function_template_info.accept_any_receiver()) {
+        builtin_name = Builtins::kCallFunctionTemplate_CheckCompatibleReceiver;
+      } else if (function_template_info.is_signature_undefined()) {
+        builtin_name = Builtins::kCallFunctionTemplate_CheckAccess;
+      } else {
+        builtin_name =
+            Builtins::kCallFunctionTemplate_CheckAccessAndCompatibleReceiver;
+      }
+
+      // The CallFunctionTemplate builtin requires the {receiver} to be
+      // an actual JSReceiver, so make sure we do the proper conversion
+      // first if necessary.
+      receiver = holder = effect =
+          graph()->NewNode(simplified()->ConvertReceiver(p.convert_mode()),
+                           receiver, global_proxy, effect, control);
+
+      Callable callable = Builtins::CallableFor(isolate(), builtin_name);
+      auto call_descriptor = Linkage::GetStubCallDescriptor(
+          graph()->zone(), callable.descriptor(),
+          argc + 1 /* implicit receiver */, CallDescriptor::kNeedsFrameState);
+      node->InsertInput(graph()->zone(), 0,
+                        jsgraph()->HeapConstant(callable.code()));
+      node->ReplaceInput(1, jsgraph()->Constant(function_template_info));
+      node->InsertInput(graph()->zone(), 2, jsgraph()->Constant(argc));
+      node->ReplaceInput(3, receiver);       // Update receiver input.
+      node->ReplaceInput(6 + argc, effect);  // Update effect input.
+      NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
+      return Changed(node);
+    }
   }
 
   // TODO(turbofan): Consider introducing a JSCallApiCallback operator for
   // this and lower it during JSGenericLowering, and unify this with the
   // JSNativeContextSpecialization::InlineApiCall method a bit.
-  Handle<CallHandlerInfo> call_handler_info(
-      CallHandlerInfo::cast(function_template_info->call_code()), isolate());
-  Handle<Object> data(call_handler_info->data(), isolate());
+  if (!function_template_info.call_code().has_value()) {
+    TRACE_BROKER_MISSING(broker(), "call code for function template info "
+                                       << function_template_info);
+    return NoChange();
+  }
+  CallHandlerInfoRef call_handler_info =
+      function_template_info.call_code()->AsCallHandlerInfo();
   Callable call_api_callback = CodeFactory::CallApiCallback(isolate());
   CallInterfaceDescriptor cid = call_api_callback.descriptor();
   auto call_descriptor = Linkage::GetStubCallDescriptor(
       graph()->zone(), cid, argc + 1 /* implicit receiver */,
       CallDescriptor::kNeedsFrameState);
-  ApiFunction api_function(v8::ToCData<Address>(call_handler_info->callback()));
+  ApiFunction api_function(call_handler_info.callback());
   ExternalReference function_reference = ExternalReference::Create(
       &api_function, ExternalReference::DIRECT_API_CALL);
 
@@ -2895,7 +3011,8 @@ Reduction JSCallReducer::ReduceCallApiFunction(
                     jsgraph()->HeapConstant(call_api_callback.code()));
   node->ReplaceInput(1, jsgraph()->ExternalConstant(function_reference));
   node->InsertInput(graph()->zone(), 2, jsgraph()->Constant(argc));
-  node->InsertInput(graph()->zone(), 3, jsgraph()->Constant(data));
+  node->InsertInput(graph()->zone(), 3,
+                    jsgraph()->Constant(call_handler_info.data()));
   node->InsertInput(graph()->zone(), 4, holder);
   node->ReplaceInput(5, receiver);       // Update receiver input.
   node->ReplaceInput(7 + argc, continuation_frame_state);
@@ -3495,6 +3612,8 @@ Reduction JSCallReducer::ReduceJSCall(Node* node,
       return ReduceMathUnary(node, simplified()->NumberFloor());
     case Builtins::kMathFround:
       return ReduceMathUnary(node, simplified()->NumberFround());
+    case Builtins::kMathHypot:
+      return ReduceMathHypot(node);
     case Builtins::kMathLog:
       return ReduceMathUnary(node, simplified()->NumberLog());
     case Builtins::kMathLog1p:
@@ -3563,8 +3682,8 @@ Reduction JSCallReducer::ReduceJSCall(Node* node,
       return ReduceStringPrototypeStringAt(simplified()->StringCharCodeAt(),
                                            node);
     case Builtins::kStringPrototypeCodePointAt:
-      return ReduceStringPrototypeStringAt(
-          simplified()->StringCodePointAt(UnicodeEncoding::UTF32), node);
+      return ReduceStringPrototypeStringAt(simplified()->StringCodePointAt(),
+                                           node);
     case Builtins::kStringPrototypeSubstring:
       return ReduceStringPrototypeSubstring(node);
     case Builtins::kStringPrototypeSlice:
@@ -3642,12 +3761,13 @@ Reduction JSCallReducer::ReduceJSCall(Node* node,
       return ReduceDateNow(node);
     case Builtins::kNumberConstructor:
       return ReduceNumberConstructor(node);
+    case Builtins::kBigIntAsUintN:
+      return ReduceBigIntAsUintN(node);
     default:
       break;
   }
 
-  if (!TracingFlags::is_runtime_stats_enabled() &&
-      shared.object()->IsApiFunction()) {
+  if (shared.object()->IsApiFunction()) {
     return ReduceCallApiFunction(node, shared);
   }
   return NoChange();
@@ -5394,8 +5514,8 @@ Reduction JSCallReducer::ReduceStringFromCodePoint(Node* node) {
         graph()->NewNode(simplified()->CheckBounds(p.feedback()), input,
                          jsgraph()->Constant(0x10FFFF + 1), effect, control);
 
-    Node* value = graph()->NewNode(
-        simplified()->StringFromSingleCodePoint(UnicodeEncoding::UTF32), input);
+    Node* value =
+        graph()->NewNode(simplified()->StringFromSingleCodePoint(), input);
     ReplaceWithValue(node, value, effect);
     return Replace(value);
   }
@@ -5451,12 +5571,8 @@ Reduction JSCallReducer::ReduceStringIteratorPrototypeNext(Node* node) {
   Node* vtrue0;
   {
     done_true = jsgraph()->FalseConstant();
-    Node* codepoint = etrue0 = graph()->NewNode(
-        simplified()->StringCodePointAt(UnicodeEncoding::UTF16), string, index,
-        etrue0, if_true0);
-    vtrue0 = graph()->NewNode(
-        simplified()->StringFromSingleCodePoint(UnicodeEncoding::UTF16),
-        codepoint);
+    vtrue0 = etrue0 = graph()->NewNode(simplified()->StringFromCodePointAt(),
+                                       string, index, etrue0, if_true0);
 
     // Update iterator.[[NextIndex]]
     Node* char_length = graph()->NewNode(simplified()->StringLength(), vtrue0);
@@ -5560,6 +5676,8 @@ Node* JSCallReducer::CreateArtificialFrameState(
 }
 
 Reduction JSCallReducer::ReducePromiseConstructor(Node* node) {
+  DisallowHeapAccessIf no_heap_access(FLAG_concurrent_inlining);
+
   DCHECK_EQ(IrOpcode::kJSConstruct, node->opcode());
   ConstructParameters const& p = ConstructParametersOf(node->op());
   int arity = static_cast<int>(p.arity() - 2);
@@ -5568,7 +5686,6 @@ Reduction JSCallReducer::ReducePromiseConstructor(Node* node) {
   Node* target = NodeProperties::GetValueInput(node, 0);
   Node* executor = NodeProperties::GetValueInput(node, 1);
   Node* new_target = NodeProperties::GetValueInput(node, arity + 1);
-
   Node* context = NodeProperties::GetContextInput(node);
   Node* outer_frame_state = NodeProperties::GetFrameStateInput(node);
   Node* effect = NodeProperties::GetEffectInput(node);
@@ -5623,7 +5740,7 @@ Reduction JSCallReducer::ReducePromiseConstructor(Node* node) {
   // Allocate a promise context for the closures below.
   Node* promise_context = effect = graph()->NewNode(
       javascript()->CreateFunctionContext(
-          handle(native_context().object()->scope_info(), isolate()),
+          native_context().scope_info().object(),
           PromiseBuiltins::kPromiseContextLength - Context::MIN_CONTEXT_SLOTS,
           FUNCTION_SCOPE),
       context, effect, control);
@@ -5641,21 +5758,13 @@ Reduction JSCallReducer::ReducePromiseConstructor(Node* node) {
       promise_context, jsgraph()->TrueConstant(), effect, control);
 
   // Allocate the closure for the resolve case.
-  SharedFunctionInfoRef resolve_shared =
-      native_context().promise_capability_default_resolve_shared_fun();
-  Node* resolve = effect = graph()->NewNode(
-      javascript()->CreateClosure(
-          resolve_shared.object(), factory()->many_closures_cell(),
-          handle(resolve_shared.object()->GetCode(), isolate())),
+  Node* resolve = effect = CreateClosureFromBuiltinSharedFunctionInfo(
+      native_context().promise_capability_default_resolve_shared_fun(),
       promise_context, effect, control);
 
   // Allocate the closure for the reject case.
-  SharedFunctionInfoRef reject_shared =
-      native_context().promise_capability_default_reject_shared_fun();
-  Node* reject = effect = graph()->NewNode(
-      javascript()->CreateClosure(
-          reject_shared.object(), factory()->many_closures_cell(),
-          handle(reject_shared.object()->GetCode(), isolate())),
+  Node* reject = effect = CreateClosureFromBuiltinSharedFunctionInfo(
+      native_context().promise_capability_default_reject_shared_fun(),
       promise_context, effect, control);
 
   const std::vector<Node*> checkpoint_parameters_continuation(
@@ -5788,6 +5897,30 @@ Reduction JSCallReducer::ReducePromiseInternalResolve(Node* node) {
   return Replace(value);
 }
 
+bool JSCallReducer::DoPromiseChecks(MapInference* inference) {
+  if (!inference->HaveMaps()) return false;
+  MapHandles const& receiver_maps = inference->GetMaps();
+
+  // Check whether all {receiver_maps} are JSPromise maps and
+  // have the initial Promise.prototype as their [[Prototype]].
+  for (Handle<Map> map : receiver_maps) {
+    MapRef receiver_map(broker(), map);
+    if (!receiver_map.IsJSPromiseMap()) return false;
+    if (!FLAG_concurrent_inlining) {
+      receiver_map.SerializePrototype();
+    } else if (!receiver_map.serialized_prototype()) {
+      TRACE_BROKER_MISSING(broker(), "prototype for map " << receiver_map);
+      return false;
+    }
+    if (!receiver_map.prototype().equals(
+            native_context().promise_prototype())) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // ES section #sec-promise.prototype.catch
 Reduction JSCallReducer::ReducePromisePrototypeCatch(Node* node) {
   DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
@@ -5801,20 +5934,7 @@ Reduction JSCallReducer::ReducePromisePrototypeCatch(Node* node) {
   Node* control = NodeProperties::GetControlInput(node);
 
   MapInference inference(broker(), receiver, effect);
-  if (!inference.HaveMaps()) return NoChange();
-  MapHandles const& receiver_maps = inference.GetMaps();
-
-  // Check whether all {receiver_maps} are JSPromise maps and
-  // have the initial Promise.prototype as their [[Prototype]].
-  for (Handle<Map> map : receiver_maps) {
-    MapRef receiver_map(broker(), map);
-    if (!receiver_map.IsJSPromiseMap()) return inference.NoChange();
-    receiver_map.SerializePrototype();
-    if (!receiver_map.prototype().equals(
-            native_context().promise_prototype())) {
-      return inference.NoChange();
-    }
-  }
+  if (!DoPromiseChecks(&inference)) return inference.NoChange();
 
   if (!dependencies()->DependOnPromiseThenProtector())
     return inference.NoChange();
@@ -5839,8 +5959,21 @@ Reduction JSCallReducer::ReducePromisePrototypeCatch(Node* node) {
   return reduction.Changed() ? reduction : Changed(node);
 }
 
+Node* JSCallReducer::CreateClosureFromBuiltinSharedFunctionInfo(
+    SharedFunctionInfoRef shared, Node* context, Node* effect, Node* control) {
+  DCHECK(shared.HasBuiltinId());
+  Callable const callable = Builtins::CallableFor(
+      isolate(), static_cast<Builtins::Name>(shared.builtin_id()));
+  return graph()->NewNode(
+      javascript()->CreateClosure(
+          shared.object(), factory()->many_closures_cell(), callable.code()),
+      context, effect, control);
+}
+
 // ES section #sec-promise.prototype.finally
 Reduction JSCallReducer::ReducePromisePrototypeFinally(Node* node) {
+  DisallowHeapAccessIf no_heap_access(FLAG_concurrent_inlining);
+
   DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
   CallParameters const& p = CallParametersOf(node->op());
   int arity = static_cast<int>(p.arity() - 2);
@@ -5854,20 +5987,8 @@ Reduction JSCallReducer::ReducePromisePrototypeFinally(Node* node) {
   }
 
   MapInference inference(broker(), receiver, effect);
-  if (!inference.HaveMaps()) return NoChange();
+  if (!DoPromiseChecks(&inference)) return inference.NoChange();
   MapHandles const& receiver_maps = inference.GetMaps();
-
-  // Check whether all {receiver_maps} are JSPromise maps and
-  // have the initial Promise.prototype as their [[Prototype]].
-  for (Handle<Map> map : receiver_maps) {
-    MapRef receiver_map(broker(), map);
-    if (!receiver_map.IsJSPromiseMap()) return inference.NoChange();
-    receiver_map.SerializePrototype();
-    if (!receiver_map.prototype().equals(
-            native_context().promise_prototype())) {
-      return inference.NoChange();
-    }
-  }
 
   if (!dependencies()->DependOnPromiseHookProtector())
     return inference.NoChange();
@@ -5894,13 +6015,13 @@ Reduction JSCallReducer::ReducePromisePrototypeFinally(Node* node) {
         jsgraph()->Constant(native_context().promise_function());
 
     // Allocate shared context for the closures below.
-    context = etrue = graph()->NewNode(
-        javascript()->CreateFunctionContext(
-            handle(native_context().object()->scope_info(), isolate()),
-            PromiseBuiltins::kPromiseFinallyContextLength -
-                Context::MIN_CONTEXT_SLOTS,
-            FUNCTION_SCOPE),
-        context, etrue, if_true);
+    context = etrue =
+        graph()->NewNode(javascript()->CreateFunctionContext(
+                             native_context().scope_info().object(),
+                             PromiseBuiltins::kPromiseFinallyContextLength -
+                                 Context::MIN_CONTEXT_SLOTS,
+                             FUNCTION_SCOPE),
+                         context, etrue, if_true);
     etrue = graph()->NewNode(
         simplified()->StoreField(
             AccessBuilder::ForContextSlot(PromiseBuiltins::kOnFinallySlot)),
@@ -5911,22 +6032,14 @@ Reduction JSCallReducer::ReducePromisePrototypeFinally(Node* node) {
         context, constructor, etrue, if_true);
 
     // Allocate the closure for the reject case.
-    SharedFunctionInfoRef catch_finally =
-        native_context().promise_catch_finally_shared_fun();
-    catch_true = etrue = graph()->NewNode(
-        javascript()->CreateClosure(
-            catch_finally.object(), factory()->many_closures_cell(),
-            handle(catch_finally.object()->GetCode(), isolate())),
-        context, etrue, if_true);
+    catch_true = etrue = CreateClosureFromBuiltinSharedFunctionInfo(
+        native_context().promise_catch_finally_shared_fun(), context, etrue,
+        if_true);
 
     // Allocate the closure for the fulfill case.
-    SharedFunctionInfoRef then_finally =
-        native_context().promise_then_finally_shared_fun();
-    then_true = etrue = graph()->NewNode(
-        javascript()->CreateClosure(
-            then_finally.object(), factory()->many_closures_cell(),
-            handle(then_finally.object()->GetCode(), isolate())),
-        context, etrue, if_true);
+    then_true = etrue = CreateClosureFromBuiltinSharedFunctionInfo(
+        native_context().promise_then_finally_shared_fun(), context, etrue,
+        if_true);
   }
 
   Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
@@ -5974,6 +6087,8 @@ Reduction JSCallReducer::ReducePromisePrototypeFinally(Node* node) {
 }
 
 Reduction JSCallReducer::ReducePromisePrototypeThen(Node* node) {
+  DisallowHeapAccessIf no_heap_acess(FLAG_concurrent_inlining);
+
   DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
   CallParameters const& p = CallParametersOf(node->op());
   if (p.speculation_mode() == SpeculationMode::kDisallowSpeculation) {
@@ -5993,20 +6108,7 @@ Reduction JSCallReducer::ReducePromisePrototypeThen(Node* node) {
   Node* frame_state = NodeProperties::GetFrameStateInput(node);
 
   MapInference inference(broker(), receiver, effect);
-  if (!inference.HaveMaps()) return NoChange();
-  MapHandles const& receiver_maps = inference.GetMaps();
-
-  // Check whether all {receiver_maps} are JSPromise maps and
-  // have the initial Promise.prototype as their [[Prototype]].
-  for (Handle<Map> map : receiver_maps) {
-    MapRef receiver_map(broker(), map);
-    if (!receiver_map.IsJSPromiseMap()) return inference.NoChange();
-    receiver_map.SerializePrototype();
-    if (!receiver_map.prototype().equals(
-            native_context().promise_prototype())) {
-      return inference.NoChange();
-    }
-  }
+  if (!DoPromiseChecks(&inference)) return inference.NoChange();
 
   if (!dependencies()->DependOnPromiseHookProtector())
     return inference.NoChange();
@@ -6053,6 +6155,8 @@ Reduction JSCallReducer::ReducePromisePrototypeThen(Node* node) {
 
 // ES section #sec-promise.resolve
 Reduction JSCallReducer::ReducePromiseResolveTrampoline(Node* node) {
+  DisallowHeapAccessIf no_heap_acess(FLAG_concurrent_inlining);
+
   DCHECK_EQ(IrOpcode::kJSCall, node->opcode());
   Node* receiver = NodeProperties::GetValueInput(node, 1);
   Node* value = node->op()->ValueInputCount() > 2
@@ -7119,11 +7223,46 @@ Reduction JSCallReducer::ReduceNumberConstructor(Node* node) {
   return Changed(node);
 }
 
+Reduction JSCallReducer::ReduceBigIntAsUintN(Node* node) {
+  if (!jsgraph()->machine()->Is64()) {
+    return NoChange();
+  }
+
+  CallParameters const& p = CallParametersOf(node->op());
+  if (p.speculation_mode() == SpeculationMode::kDisallowSpeculation) {
+    return NoChange();
+  }
+  if (node->op()->ValueInputCount() < 3) {
+    return NoChange();
+  }
+
+  Node* effect = NodeProperties::GetEffectInput(node);
+  Node* control = NodeProperties::GetControlInput(node);
+  Node* bits = NodeProperties::GetValueInput(node, 2);
+  Node* value = NodeProperties::GetValueInput(node, 3);
+
+  NumberMatcher matcher(bits);
+  if (matcher.IsInteger() && matcher.IsInRange(0, 64)) {
+    const int bits_value = static_cast<int>(matcher.Value());
+    value = effect = graph()->NewNode(simplified()->CheckBigInt(p.feedback()),
+                                      value, effect, control);
+    value = graph()->NewNode(simplified()->BigIntAsUintN(bits_value), value);
+    ReplaceWithValue(node, value, effect);
+    return Replace(value);
+  }
+
+  return NoChange();
+}
+
 Graph* JSCallReducer::graph() const { return jsgraph()->graph(); }
 
 Isolate* JSCallReducer::isolate() const { return jsgraph()->isolate(); }
 
 Factory* JSCallReducer::factory() const { return isolate()->factory(); }
+
+NativeContextRef JSCallReducer::native_context() const {
+  return broker()->native_context();
+}
 
 CommonOperatorBuilder* JSCallReducer::common() const {
   return jsgraph()->common();

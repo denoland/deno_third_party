@@ -29,6 +29,7 @@ struct FieldAccess;
 class JSGraph;
 class JSHeapBroker;
 class JSOperatorBuilder;
+class MapInference;
 class NodeProperties;
 class SimplifiedOperatorBuilder;
 
@@ -155,6 +156,7 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   Reduction ReduceMathImul(Node* node);
   Reduction ReduceMathClz32(Node* node);
   Reduction ReduceMathMinMax(Node* node, const Operator* op, Node* empty_value);
+  Reduction ReduceMathHypot(Node* node);
 
   Reduction ReduceNumberIsFinite(Node* node);
   Reduction ReduceNumberIsInteger(Node* node);
@@ -190,6 +192,15 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   Reduction ReduceNumberParseInt(Node* node);
 
   Reduction ReduceNumberConstructor(Node* node);
+  Reduction ReduceBigIntAsUintN(Node* node);
+
+  // Helper to verify promise receiver maps are as expected.
+  // On bailout from a reduction, be sure to return inference.NoChange().
+  bool DoPromiseChecks(MapInference* inference);
+
+  Node* CreateClosureFromBuiltinSharedFunctionInfo(SharedFunctionInfoRef shared,
+                                                   Node* context, Node* effect,
+                                                   Node* control);
 
   // Returns the updated {to} node, and updates control and effect along the
   // way.
@@ -240,7 +251,7 @@ class V8_EXPORT_PRIVATE JSCallReducer final : public AdvancedReducer {
   JSHeapBroker* broker() const { return broker_; }
   Isolate* isolate() const;
   Factory* factory() const;
-  NativeContextRef native_context() const { return broker()->native_context(); }
+  NativeContextRef native_context() const;
   CommonOperatorBuilder* common() const;
   JSOperatorBuilder* javascript() const;
   SimplifiedOperatorBuilder* simplified() const;

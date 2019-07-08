@@ -115,7 +115,8 @@ class PipelineData {
         instruction_zone_(instruction_zone_scope_.zone()),
         codegen_zone_scope_(zone_stats_, ZONE_NAME),
         codegen_zone_(codegen_zone_scope_.zone()),
-        broker_(new JSHeapBroker(isolate_, info_->zone())),
+        broker_(new JSHeapBroker(isolate_, info_->zone(),
+                                 info_->trace_heap_broker_enabled())),
         register_allocation_zone_scope_(zone_stats_, ZONE_NAME),
         register_allocation_zone_(register_allocation_zone_scope_.zone()),
         assembler_options_(AssemblerOptions::Default(isolate)) {
@@ -267,7 +268,7 @@ class PipelineData {
   JSOperatorBuilder* javascript() const { return javascript_; }
   JSGraph* jsgraph() const { return jsgraph_; }
   MachineGraph* mcgraph() const { return mcgraph_; }
-  Handle<Context> native_context() const {
+  Handle<NativeContext> native_context() const {
     return handle(info()->native_context(), isolate());
   }
   Handle<JSGlobalObject> global_object() const {
@@ -398,7 +399,8 @@ class PipelineData {
     DCHECK_NULL(frame_);
     int fixed_frame_size = 0;
     if (call_descriptor != nullptr) {
-      fixed_frame_size = call_descriptor->CalculateFixedFrameSize();
+      fixed_frame_size =
+          call_descriptor->CalculateFixedFrameSize(info()->code_kind());
     }
     frame_ = new (codegen_zone()) Frame(fixed_frame_size);
   }
@@ -1041,6 +1043,119 @@ void PipelineCompilationJob::RegisterWeakObjectsInOptimizedCode(
   code->set_can_have_weak_objects(true);
 }
 
+class WasmHeapStubCompilationJob final : public OptimizedCompilationJob {
+ public:
+  WasmHeapStubCompilationJob(Isolate* isolate, CallDescriptor* call_descriptor,
+                             std::unique_ptr<Zone> zone, Graph* graph,
+                             Code::Kind kind,
+                             std::unique_ptr<char[]> debug_name,
+                             const AssemblerOptions& options,
+                             SourcePositionTable* source_positions)
+      // Note that the OptimizedCompilationInfo is not initialized at the time
+      // we pass it to the CompilationJob constructor, but it is not
+      // dereferenced there.
+      : OptimizedCompilationJob(isolate->stack_guard()->real_climit(), &info_,
+                                "TurboFan"),
+        debug_name_(std::move(debug_name)),
+        info_(CStrVector(debug_name_.get()), graph->zone(), kind),
+        call_descriptor_(call_descriptor),
+        zone_stats_(isolate->allocator()),
+        zone_(std::move(zone)),
+        graph_(graph),
+        data_(&zone_stats_, &info_, isolate, graph_, nullptr, source_positions,
+              new (zone_.get()) NodeOriginTable(graph_), nullptr, options),
+        pipeline_(&data_) {}
+
+  ~WasmHeapStubCompilationJob() = default;
+
+ protected:
+  Status PrepareJobImpl(Isolate* isolate) final;
+  Status ExecuteJobImpl() final;
+  Status FinalizeJobImpl(Isolate* isolate) final;
+
+ private:
+  std::unique_ptr<char[]> debug_name_;
+  OptimizedCompilationInfo info_;
+  CallDescriptor* call_descriptor_;
+  ZoneStats zone_stats_;
+  std::unique_ptr<Zone> zone_;
+  Graph* graph_;
+  PipelineData data_;
+  PipelineImpl pipeline_;
+
+  DISALLOW_COPY_AND_ASSIGN(WasmHeapStubCompilationJob);
+};
+
+// static
+std::unique_ptr<OptimizedCompilationJob>
+Pipeline::NewWasmHeapStubCompilationJob(Isolate* isolate,
+                                        CallDescriptor* call_descriptor,
+                                        std::unique_ptr<Zone> zone,
+                                        Graph* graph, Code::Kind kind,
+                                        std::unique_ptr<char[]> debug_name,
+                                        const AssemblerOptions& options,
+                                        SourcePositionTable* source_positions) {
+  return base::make_unique<WasmHeapStubCompilationJob>(
+      isolate, call_descriptor, std::move(zone), graph, kind,
+      std::move(debug_name), options, source_positions);
+}
+
+CompilationJob::Status WasmHeapStubCompilationJob::PrepareJobImpl(
+    Isolate* isolate) {
+  std::unique_ptr<PipelineStatistics> pipeline_statistics;
+  if (FLAG_turbo_stats || FLAG_turbo_stats_nvp) {
+    pipeline_statistics.reset(new PipelineStatistics(
+        &info_, isolate->GetTurboStatistics(), &zone_stats_));
+    pipeline_statistics->BeginPhaseKind("V8.WasmStubCodegen");
+  }
+  if (info_.trace_turbo_json_enabled() || info_.trace_turbo_graph_enabled()) {
+    CodeTracer::Scope tracing_scope(data_.GetCodeTracer());
+    OFStream os(tracing_scope.file());
+    os << "---------------------------------------------------\n"
+       << "Begin compiling method " << info_.GetDebugName().get()
+       << " using TurboFan" << std::endl;
+  }
+  if (info_.trace_turbo_graph_enabled()) {  // Simple textual RPO.
+    StdoutStream{} << "-- wasm stub " << Code::Kind2String(info_.code_kind())
+                   << " graph -- " << std::endl
+                   << AsRPO(*data_.graph());
+  }
+
+  if (info_.trace_turbo_json_enabled()) {
+    TurboJsonFile json_of(&info_, std::ios_base::trunc);
+    json_of << "{\"function\":\"" << info_.GetDebugName().get()
+            << "\", \"source\":\"\",\n\"phases\":[";
+  }
+  pipeline_.RunPrintAndVerify("V8.WasmMachineCode", true);
+  return CompilationJob::SUCCEEDED;
+}
+
+CompilationJob::Status WasmHeapStubCompilationJob::ExecuteJobImpl() {
+  pipeline_.ComputeScheduledGraph();
+  if (pipeline_.SelectInstructionsAndAssemble(call_descriptor_)) {
+    return CompilationJob::SUCCEEDED;
+  }
+  return CompilationJob::FAILED;
+}
+
+CompilationJob::Status WasmHeapStubCompilationJob::FinalizeJobImpl(
+    Isolate* isolate) {
+  Handle<Code> code;
+  if (pipeline_.FinalizeCode(call_descriptor_).ToHandle(&code) &&
+      pipeline_.CommitDependencies(code)) {
+    info_.SetCode(code);
+#ifdef ENABLE_DISASSEMBLER
+    if (FLAG_print_opt_code) {
+      CodeTracer::Scope tracing_scope(isolate->GetCodeTracer());
+      OFStream os(tracing_scope.file());
+      code->Disassemble(compilation_info()->GetDebugName().get(), os);
+    }
+#endif
+    return SUCCEEDED;
+  }
+  return FAILED;
+}
+
 template <typename Phase, typename... Args>
 void PipelineImpl::Run(Args&&... args) {
   PipelineRunScope scope(this->data_, Phase::phase_name());
@@ -1572,8 +1687,20 @@ struct CsaEarlyOptimizationPhase {
   void Run(PipelineData* data, Zone* temp_zone) {
     GraphReducer graph_reducer(temp_zone, data->graph(),
                                data->jsgraph()->Dead());
+    BranchElimination branch_condition_elimination(&graph_reducer,
+                                                   data->jsgraph(), temp_zone);
+    DeadCodeElimination dead_code_elimination(&graph_reducer, data->graph(),
+                                              data->common(), temp_zone);
+    CommonOperatorReducer common_reducer(&graph_reducer, data->graph(),
+                                         data->broker(), data->common(),
+                                         data->machine(), temp_zone);
+    ValueNumberingReducer value_numbering(temp_zone, data->graph()->zone());
     CsaLoadElimination load_elimination(&graph_reducer, data->jsgraph(),
                                         temp_zone);
+    AddReducer(data, &graph_reducer, &branch_condition_elimination);
+    AddReducer(data, &graph_reducer, &dead_code_elimination);
+    AddReducer(data, &graph_reducer, &common_reducer);
+    AddReducer(data, &graph_reducer, &value_numbering);
     AddReducer(data, &graph_reducer, &load_elimination);
     graph_reducer.ReduceGraph();
   }
@@ -2348,58 +2475,6 @@ wasm::WasmCompilationResult Pipeline::GenerateCodeForWasmNativeStub(
 }
 
 // static
-MaybeHandle<Code> Pipeline::GenerateCodeForWasmHeapStub(
-    Isolate* isolate, CallDescriptor* call_descriptor, Graph* graph,
-    Code::Kind kind, const char* debug_name, const AssemblerOptions& options,
-    SourcePositionTable* source_positions) {
-  OptimizedCompilationInfo info(CStrVector(debug_name), graph->zone(), kind);
-  // Construct a pipeline for scheduling and code generation.
-  ZoneStats zone_stats(isolate->allocator());
-  NodeOriginTable* node_positions = new (graph->zone()) NodeOriginTable(graph);
-  PipelineData data(&zone_stats, &info, isolate, graph, nullptr,
-                    source_positions, node_positions, nullptr, options);
-  std::unique_ptr<PipelineStatistics> pipeline_statistics;
-  if (FLAG_turbo_stats || FLAG_turbo_stats_nvp) {
-    pipeline_statistics.reset(new PipelineStatistics(
-        &info, isolate->GetTurboStatistics(), &zone_stats));
-    pipeline_statistics->BeginPhaseKind("V8.WasmStubCodegen");
-  }
-
-  PipelineImpl pipeline(&data);
-
-  if (info.trace_turbo_json_enabled() ||
-      info.trace_turbo_graph_enabled()) {
-    CodeTracer::Scope tracing_scope(data.GetCodeTracer());
-    OFStream os(tracing_scope.file());
-    os << "---------------------------------------------------\n"
-       << "Begin compiling method " << info.GetDebugName().get()
-       << " using TurboFan" << std::endl;
-  }
-
-  if (info.trace_turbo_graph_enabled()) {  // Simple textual RPO.
-    StdoutStream{} << "-- wasm stub " << Code::Kind2String(kind) << " graph -- "
-                   << std::endl
-                   << AsRPO(*graph);
-  }
-
-  if (info.trace_turbo_json_enabled()) {
-    TurboJsonFile json_of(&info, std::ios_base::trunc);
-    json_of << "{\"function\":\"" << info.GetDebugName().get()
-            << "\", \"source\":\"\",\n\"phases\":[";
-  }
-
-  pipeline.RunPrintAndVerify("V8.WasmMachineCode", true);
-  pipeline.ComputeScheduledGraph();
-
-  Handle<Code> code;
-  if (pipeline.GenerateCode(call_descriptor).ToHandle(&code) &&
-      pipeline.CommitDependencies(code)) {
-    return code;
-  }
-  return MaybeHandle<Code>();
-}
-
-// static
 MaybeHandle<Code> Pipeline::GenerateCodeForTesting(
     OptimizedCompilationInfo* info, Isolate* isolate,
     std::unique_ptr<JSHeapBroker>* out_broker) {
@@ -2466,11 +2541,11 @@ MaybeHandle<Code> Pipeline::GenerateCodeForTesting(
 }
 
 // static
-OptimizedCompilationJob* Pipeline::NewCompilationJob(
+std::unique_ptr<OptimizedCompilationJob> Pipeline::NewCompilationJob(
     Isolate* isolate, Handle<JSFunction> function, bool has_script) {
   Handle<SharedFunctionInfo> shared =
       handle(function->shared(), function->GetIsolate());
-  return new PipelineCompilationJob(isolate, shared, function);
+  return base::make_unique<PipelineCompilationJob>(isolate, shared, function);
 }
 
 // static
@@ -2887,8 +2962,9 @@ bool PipelineImpl::SelectInstructionsAndAssemble(
 }
 
 MaybeHandle<Code> PipelineImpl::GenerateCode(CallDescriptor* call_descriptor) {
-  if (!SelectInstructionsAndAssemble(call_descriptor))
+  if (!SelectInstructionsAndAssemble(call_descriptor)) {
     return MaybeHandle<Code>();
+  }
   return FinalizeCode();
 }
 
@@ -2944,6 +3020,9 @@ void PipelineImpl::AllocateRegisters(const RegisterConfiguration* config,
   }
   if (data->info()->is_turbo_preprocess_ranges()) {
     flags |= RegisterAllocationFlag::kTurboPreprocessRanges;
+  }
+  if (data->info()->trace_turbo_allocation_enabled()) {
+    flags |= RegisterAllocationFlag::kTraceAllocation;
   }
   data->InitializeRegisterAllocationData(config, call_descriptor, flags);
   if (info()->is_osr()) data->osr_helper()->SetupFrame(data->frame());

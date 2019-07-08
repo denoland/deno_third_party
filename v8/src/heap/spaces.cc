@@ -45,9 +45,9 @@ STATIC_ASSERT(kClearedWeakHeapObjectLower32 < Page::kHeaderSize);
 STATIC_ASSERT(kClearedWeakHeapObjectLower32 < LargePage::kHeaderSize);
 
 // ----------------------------------------------------------------------------
-// HeapObjectIterator
+// PagedSpaceObjectIterator
 
-HeapObjectIterator::HeapObjectIterator(PagedSpace* space)
+PagedSpaceObjectIterator::PagedSpaceObjectIterator(PagedSpace* space)
     : cur_addr_(kNullAddress),
       cur_end_(kNullAddress),
       space_(space),
@@ -58,7 +58,7 @@ HeapObjectIterator::HeapObjectIterator(PagedSpace* space)
 #endif
 }
 
-HeapObjectIterator::HeapObjectIterator(Page* page)
+PagedSpaceObjectIterator::PagedSpaceObjectIterator(Page* page)
     : cur_addr_(kNullAddress),
       cur_end_(kNullAddress),
       space_(reinterpret_cast<PagedSpace*>(page->owner())),
@@ -79,7 +79,7 @@ HeapObjectIterator::HeapObjectIterator(Page* page)
 
 // We have hit the end of the page and should advance to the next block of
 // objects.  This happens at the end of the page.
-bool HeapObjectIterator::AdvanceToNextPage() {
+bool PagedSpaceObjectIterator::AdvanceToNextPage() {
   DCHECK_EQ(cur_addr_, cur_end_);
   if (current_page_ == page_range_.end()) return false;
   Page* cur_page = *(current_page_++);
@@ -711,7 +711,7 @@ MemoryChunk* MemoryChunk::Initialize(Heap* heap, Address base, size_t size,
   chunk->invalidated_slots_ = nullptr;
   chunk->progress_bar_ = 0;
   chunk->high_water_mark_ = static_cast<intptr_t>(area_start - base);
-  chunk->set_concurrent_sweeping_state(kSweepingDone);
+  chunk->InitializeSweepingState();
   chunk->page_protection_change_mutex_ = new base::Mutex();
   chunk->write_unprotect_counter_ = 0;
   chunk->mutex_ = new base::Mutex();
@@ -744,7 +744,6 @@ MemoryChunk* MemoryChunk::Initialize(Heap* heap, Address base, size_t size,
 
   DCHECK_EQ(kFlagsOffset, OFFSET_OF(MemoryChunk, flags_));
   DCHECK_EQ(kHeapOffset, OFFSET_OF(MemoryChunk, heap_));
-  DCHECK_EQ(kOwnerOffset, OFFSET_OF(MemoryChunk, owner_));
 
   if (executable == EXECUTABLE) {
     chunk->SetFlag(IS_EXECUTABLE);
@@ -1021,6 +1020,24 @@ void MemoryChunk::SetYoungGenerationPageFlags(bool is_marking) {
   } else {
     ClearFlag(MemoryChunk::POINTERS_FROM_HERE_ARE_INTERESTING);
     ClearFlag(MemoryChunk::INCREMENTAL_MARKING);
+  }
+}
+
+bool MemoryChunk::SweepingDone() {
+  return !Sweeper::IsValidSweepingSpace(owner()->identity()) ||
+         heap_->mark_compact_collector()->epoch() == mark_compact_epoch_;
+}
+
+void MemoryChunk::MarkUnswept() {
+  DCHECK(Sweeper::IsValidSweepingSpace(owner()->identity()));
+  mark_compact_epoch_ = heap_->mark_compact_collector()->epoch() - 1;
+}
+
+void MemoryChunk::InitializeSweepingState() {
+  if (Sweeper::IsValidSweepingSpace(owner()->identity())) {
+    mark_compact_epoch_ = heap_->mark_compact_collector()->epoch();
+  } else {
+    mark_compact_epoch_ = 0;
   }
 }
 
@@ -1377,6 +1394,10 @@ void MemoryChunk::ReleaseAllocatedMemoryNeededForWritableChunk() {
     delete page_protection_change_mutex_;
     page_protection_change_mutex_ = nullptr;
   }
+  if (code_object_registry_ != nullptr) {
+    delete code_object_registry_;
+    code_object_registry_ = nullptr;
+  }
 
   ReleaseSlotSet<OLD_TO_NEW>();
   ReleaseSlotSet<OLD_TO_OLD>();
@@ -1386,7 +1407,6 @@ void MemoryChunk::ReleaseAllocatedMemoryNeededForWritableChunk() {
 
   if (local_tracker_ != nullptr) ReleaseLocalTracker();
   if (young_generation_bitmap_ != nullptr) ReleaseYoungGenerationBitmap();
-  if (code_object_registry_ != nullptr) delete code_object_registry_;
 }
 
 void MemoryChunk::ReleaseAllAllocatedMemory() {
@@ -1738,7 +1758,6 @@ Page* PagedSpace::RemovePageSafe(int size_in_bytes) {
 }
 
 size_t PagedSpace::AddPage(Page* page) {
-  CHECK(page->SweepingDone());
   page->set_owner(this);
   memory_chunk_list_.PushBack(page);
   AccountCommitted(page->size());
@@ -1976,7 +1995,7 @@ void PagedSpace::SetReadAndWritable() {
 }
 
 std::unique_ptr<ObjectIterator> PagedSpace::GetObjectIterator() {
-  return std::unique_ptr<ObjectIterator>(new HeapObjectIterator(this));
+  return std::unique_ptr<ObjectIterator>(new PagedSpaceObjectIterator(this));
 }
 
 bool PagedSpace::RefillLinearAllocationAreaFromFreeList(size_t size_in_bytes) {
@@ -2059,7 +2078,7 @@ void PagedSpace::Verify(Isolate* isolate, ObjectVisitor* visitor) {
       allocation_pointer_found_in_space = true;
     }
     CHECK(page->SweepingDone());
-    HeapObjectIterator it(page);
+    PagedSpaceObjectIterator it(page);
     Address end_of_previous_object = page->area_start();
     Address top = page->area_end();
 
@@ -2121,8 +2140,8 @@ void PagedSpace::VerifyLiveBytes() {
   IncrementalMarking::MarkingState* marking_state =
       heap()->incremental_marking()->marking_state();
   for (Page* page : *this) {
-    CHECK(page->SweepingDone());
-    HeapObjectIterator it(page);
+    PagedSpaceObjectIterator it(page);
+    DCHECK(page->SweepingDone());
     int black_size = 0;
     for (HeapObject object = it.Next(); !object.is_null(); object = it.Next()) {
       // All the interior pointers should be contained in the heap.
@@ -2142,7 +2161,7 @@ void PagedSpace::VerifyCountersAfterSweeping() {
   for (Page* page : *this) {
     DCHECK(page->SweepingDone());
     total_capacity += page->area_size();
-    HeapObjectIterator it(page);
+    PagedSpaceObjectIterator it(page);
     size_t real_allocated = 0;
     for (HeapObject object = it.Next(); !object.is_null(); object = it.Next()) {
       if (!object.IsFiller()) {
@@ -2532,11 +2551,11 @@ void SpaceWithLinearArea::InlineAllocationStep(Address top,
 }
 
 std::unique_ptr<ObjectIterator> NewSpace::GetObjectIterator() {
-  return std::unique_ptr<ObjectIterator>(new SemiSpaceIterator(this));
+  return std::unique_ptr<ObjectIterator>(new SemiSpaceObjectIterator(this));
 }
 
 #ifdef VERIFY_HEAP
-// We do not use the SemiSpaceIterator because verification doesn't assume
+// We do not use the SemiSpaceObjectIterator because verification doesn't assume
 // that it works (it depends on the invariants we are checking).
 void NewSpace::Verify(Isolate* isolate) {
   // The allocation pointer should be in the space or at the very end.
@@ -2807,6 +2826,7 @@ void SemiSpace::Swap(SemiSpace* from, SemiSpace* to) {
   std::swap(from->current_page_, to->current_page_);
   std::swap(from->external_backing_store_bytes_,
             to->external_backing_store_bytes_);
+  std::swap(from->pages_used_, to->pages_used_);
 
   to->FixPagesFlags(saved_to_space_flags, Page::kCopyOnFlipFlagsMask);
   from->FixPagesFlags(0, 0);
@@ -2893,16 +2913,14 @@ void SemiSpace::AssertValidRange(Address start, Address end) {
 }
 #endif
 
-
 // -----------------------------------------------------------------------------
-// SemiSpaceIterator implementation.
+// SemiSpaceObjectIterator implementation.
 
-SemiSpaceIterator::SemiSpaceIterator(NewSpace* space) {
+SemiSpaceObjectIterator::SemiSpaceObjectIterator(NewSpace* space) {
   Initialize(space->first_allocatable_address(), space->top());
 }
 
-
-void SemiSpaceIterator::Initialize(Address start, Address end) {
+void SemiSpaceObjectIterator::Initialize(Address start, Address end) {
   SemiSpace::AssertValidRange(start, end);
   current_ = start;
   limit_ = end;
@@ -2928,6 +2946,7 @@ void FreeListCategory::Reset() {
   set_prev(nullptr);
   set_next(nullptr);
   available_ = 0;
+  length_ = 0;
 }
 
 FreeSpace FreeListCategory::PickNodeFromList(size_t minimum_size,
@@ -2942,6 +2961,7 @@ FreeSpace FreeListCategory::PickNodeFromList(size_t minimum_size,
   set_top(node.next());
   *node_size = node.Size();
   available_ -= *node_size;
+  length_--;
   return node;
 }
 
@@ -2955,6 +2975,7 @@ FreeSpace FreeListCategory::SearchForNodeInList(size_t minimum_size,
     if (size >= minimum_size) {
       DCHECK_GE(available_, size);
       available_ -= size;
+      length_--;
       if (cur_node == top()) {
         set_top(cur_node.next());
       }
@@ -2980,6 +3001,7 @@ void FreeListCategory::Free(Address start, size_t size_in_bytes,
   free_space.set_next(top());
   set_top(free_space);
   available_ += size_in_bytes;
+  length_++;
   if ((mode == kLinkCategory) && (prev() == nullptr) && (next() == nullptr)) {
     owner()->AddCategory(this);
   }
@@ -2987,17 +3009,14 @@ void FreeListCategory::Free(Address start, size_t size_in_bytes,
 
 
 void FreeListCategory::RepairFreeList(Heap* heap) {
+  Map free_space_map = ReadOnlyRoots(heap).free_space_map();
   FreeSpace n = top();
   while (!n.is_null()) {
-    MapWordSlot map_location = n.map_slot();
-    // We can't use .is_null() here because *map_location returns an
-    // Object (for which "is null" is not defined, as it would be
-    // indistinguishable from "is Smi(0)"). Only HeapObject has "is_null()".
-    if (map_location.contains_value(kNullAddress)) {
-      map_location.store(ReadOnlyRoots(heap).free_space_map());
+    ObjectSlot map_slot = n.map_slot();
+    if (map_slot.contains_value(kNullAddress)) {
+      map_slot.store(free_space_map);
     } else {
-      DCHECK(map_location.contains_value(
-          ReadOnlyRoots(heap).free_space_map().ptr()));
+      DCHECK(map_slot.contains_value(free_space_map.ptr()));
     }
     n = n.next();
   }
@@ -3045,23 +3064,6 @@ size_t FreeList::Free(Address start, size_t size_in_bytes, FreeMode mode) {
   return 0;
 }
 
-FreeSpace FreeList::FindNodeIn(FreeListCategoryType type, size_t minimum_size,
-                               size_t* node_size) {
-  FreeListCategoryIterator it(this, type);
-  FreeSpace node;
-  while (it.HasNext()) {
-    FreeListCategory* current = it.Next();
-    node = current->PickNodeFromList(minimum_size, node_size);
-    if (!node.is_null()) {
-      DCHECK(IsVeryLong() || Available() == SumFreeLists());
-      if (current->is_empty()) {
-        RemoveCategory(current);
-      }
-      return node;
-    }
-  }
-  return node;
-}
 
 FreeSpace FreeList::TryFindNodeIn(FreeListCategoryType type,
                                   size_t minimum_size, size_t* node_size) {
@@ -3104,8 +3106,8 @@ FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
   FreeListCategoryType type =
       SelectFastAllocationFreeListCategoryType(size_in_bytes);
   for (int i = type; i < kHuge && node.is_null(); i++) {
-    node = FindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
-                      node_size);
+    node = TryFindNodeIn(static_cast<FreeListCategoryType>(i), size_in_bytes,
+                         node_size);
   }
 
   if (node.is_null()) {
@@ -3121,7 +3123,7 @@ FreeSpace FreeList::Allocate(size_t size_in_bytes, size_t* node_size) {
     if (type == kTiniest) {
       // For this tiniest object, the tiny list hasn't been searched yet.
       // Now searching the tiny list.
-      node = FindNodeIn(kTiny, size_in_bytes, node_size);
+      node = TryFindNodeIn(kTiny, size_in_bytes, node_size);
     }
 
     if (node.is_null()) {
@@ -3213,8 +3215,16 @@ void FreeList::PrintCategories(FreeListCategoryType type) {
   PrintF("null\n");
 }
 
+int MemoryChunk::FreeListsLength() {
+  int length = 0;
+  for (int cat = kFirstCategory; cat <= kLastCategory; cat++) {
+    if (categories_[cat] != nullptr) {
+      length += categories_[cat]->FreeListLength();
+    }
+  }
+  return length;
+}
 
-#ifdef DEBUG
 size_t FreeListCategory::SumFreeList() {
   size_t sum = 0;
   FreeSpace cur = top();
@@ -3229,17 +3239,7 @@ size_t FreeListCategory::SumFreeList() {
   return sum;
 }
 
-int FreeListCategory::FreeListLength() {
-  int length = 0;
-  FreeSpace cur = top();
-  while (!cur.is_null()) {
-    length++;
-    cur = cur.next();
-    if (length == kVeryLongFreeList) return length;
-  }
-  return length;
-}
-
+#ifdef DEBUG
 bool FreeList::IsVeryLong() {
   int len = 0;
   for (int i = kFirstCategory; i < kNumberOfCategories; i++) {
@@ -3444,7 +3444,7 @@ void ReadOnlySpace::RepairFreeListsAfterDeserialization() {
 void ReadOnlySpace::ClearStringPaddingIfNeeded() {
   if (is_string_padding_cleared_) return;
 
-  ReadOnlyHeapIterator iterator(this);
+  ReadOnlyHeapObjectIterator iterator(this);
   for (HeapObject o = iterator.Next(); !o.is_null(); o = iterator.Next()) {
     if (o.IsSeqOneByteString()) {
       SeqOneByteString::cast(o).clear_padding();
@@ -3502,13 +3502,14 @@ void LargePage::ClearOutOfLiveRangeSlots(Address free_start) {
 }
 
 // -----------------------------------------------------------------------------
-// LargeObjectIterator
+// LargeObjectSpaceObjectIterator
 
-LargeObjectIterator::LargeObjectIterator(LargeObjectSpace* space) {
+LargeObjectSpaceObjectIterator::LargeObjectSpaceObjectIterator(
+    LargeObjectSpace* space) {
   current_ = space->first_page();
 }
 
-HeapObject LargeObjectIterator::Next() {
+HeapObject LargeObjectSpaceObjectIterator::Next() {
   if (current_ == nullptr) return HeapObject();
 
   HeapObject object = current_->GetObject();
@@ -3606,7 +3607,7 @@ LargePage* CodeLargeObjectSpace::FindPage(Address a) {
 void LargeObjectSpace::ClearMarkingStateOfLiveObjects() {
   IncrementalMarking::NonAtomicMarkingState* marking_state =
       heap()->incremental_marking()->non_atomic_marking_state();
-  LargeObjectIterator it(this);
+  LargeObjectSpaceObjectIterator it(this);
   for (HeapObject obj = it.Next(); !obj.is_null(); obj = it.Next()) {
     if (marking_state->IsBlackOrGrey(obj)) {
       Marking::MarkWhite(marking_state->MarkBitFrom(obj));
@@ -3719,7 +3720,8 @@ bool LargeObjectSpace::ContainsSlow(Address addr) {
 }
 
 std::unique_ptr<ObjectIterator> LargeObjectSpace::GetObjectIterator() {
-  return std::unique_ptr<ObjectIterator>(new LargeObjectIterator(this));
+  return std::unique_ptr<ObjectIterator>(
+      new LargeObjectSpaceObjectIterator(this));
 }
 
 #ifdef VERIFY_HEAP
@@ -3808,7 +3810,7 @@ void LargeObjectSpace::Verify(Isolate* isolate) {
 #ifdef DEBUG
 void LargeObjectSpace::Print() {
   StdoutStream os;
-  LargeObjectIterator it(this);
+  LargeObjectSpaceObjectIterator it(this);
   for (HeapObject obj = it.Next(); !obj.is_null(); obj = it.Next()) {
     obj.Print(os);
   }
@@ -3819,7 +3821,7 @@ void Page::Print() {
   PrintF("Page@%p in %s\n", reinterpret_cast<void*>(this->address()),
          Heap::GetSpaceName(this->owner_identity()));
   printf(" --------------------------------------\n");
-  HeapObjectIterator objects(this);
+  PagedSpaceObjectIterator objects(this);
   unsigned mark_size = 0;
   for (HeapObject object = objects.Next(); !object.is_null();
        object = objects.Next()) {

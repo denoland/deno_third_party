@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tarfile
 
-from update import RELEASE_VERSION
+from update import RELEASE_VERSION, STAMP_FILE
 
 # Path constants.
 THIS_DIR = os.path.dirname(__file__)
@@ -30,7 +30,6 @@ LLVM_BUILD_DIR = os.path.join(THIRD_PARTY_DIR, 'llvm-build')
 LLVM_RELEASE_DIR = os.path.join(LLVM_BUILD_DIR, 'Release+Asserts')
 EU_STRIP = os.path.join(BUILDTOOLS_DIR, 'third_party', 'eu-strip', 'bin',
                         'eu-strip')
-STAMP_FILE = os.path.join(LLVM_BUILD_DIR, 'cr_build_revision')
 
 
 def Tee(output, logfile):
@@ -193,12 +192,14 @@ def main():
     shutil.rmtree(LLVM_BOOTSTRAP_INSTALL_DIR, ignore_errors=True)
     shutil.rmtree(LLVM_BUILD_DIR, ignore_errors=True)
 
-    opt_flags = []
-    if sys.platform.startswith('linux'):
-      opt_flags += ['--lto-lld']
     build_cmd = [sys.executable, os.path.join(THIS_DIR, 'build.py'),
                  '--bootstrap', '--disable-asserts',
-                 '--run-tests'] + opt_flags
+                 '--run-tests']
+    if sys.platform != 'win32':
+      # TODO(hans): Use --pgo for the Windows package too.
+      build_cmd.append('--pgo')
+    if sys.platform.startswith('linux'):
+      build_cmd.append('--lto-lld')
     TeeCmd(build_cmd, log)
 
   stamp = open(STAMP_FILE).read().rstrip()
@@ -258,6 +259,9 @@ def main():
 
       # Add llvm-ar for LTO.
       'bin/llvm-ar',
+
+      # Add llvm-objcopy for partition extraction on Android.
+      'bin/llvm-objcopy',
 
       # AddressSanitizer C runtime (pure C won't link with *_cxx).
       'lib/clang/$V/lib/linux/libclang_rt.asan-i386.a',
@@ -397,6 +401,7 @@ def main():
   if sys.platform.startswith('linux'):
     stripped_binaries.append('lld')
     stripped_binaries.append('llvm-ar')
+    stripped_binaries.append('llvm-objcopy')
   for f in stripped_binaries:
     if sys.platform != 'win32':
       subprocess.call(['strip', os.path.join(pdir, 'bin', f)])

@@ -164,7 +164,9 @@ icu::number::Notation ToICUNotation(Notation notation,
       return icu::number::Notation::scientific();
     case Notation::ENGINEERING:
       return icu::number::Notation::engineering();
+    // 29. If notation is "compact", then
     case Notation::COMPACT:
+      // 29. a. Set numberFormat.[[CompactDisplay]] to compactDisplay.
       if (compact_display == CompactDisplay::SHORT) {
         return icu::number::Notation::compactShort();
       }
@@ -639,6 +641,18 @@ icu::number::LocalizedNumberFormatter
 JSNumberFormat::SetDigitOptionsToFormatter(
     const icu::number::LocalizedNumberFormatter& icu_number_formatter,
     const Intl::NumberFormatDigitOptions& digit_options) {
+  icu::number::LocalizedNumberFormatter result = icu_number_formatter;
+  if (digit_options.minimum_integer_digits > 1) {
+    result = result.integerWidth(icu::number::IntegerWidth::zeroFillTo(
+        digit_options.minimum_integer_digits));
+  }
+  if (FLAG_harmony_intl_numberformat_unified) {
+    // Value -1 of minimum_significant_digits represent the roundingtype is
+    // "compact-rounding".
+    if (digit_options.minimum_significant_digits < 0) {
+      return result;
+    }
+  }
   icu::number::Precision precision =
       (digit_options.minimum_significant_digits > 0)
           ? icu::number::Precision::minMaxSignificantDigits(
@@ -648,13 +662,7 @@ JSNumberFormat::SetDigitOptionsToFormatter(
                 digit_options.minimum_fraction_digits,
                 digit_options.maximum_fraction_digits);
 
-  icu::number::LocalizedNumberFormatter result =
-      icu_number_formatter.precision(precision);
-  if (digit_options.minimum_integer_digits > 1) {
-    result = result.integerWidth(icu::number::IntegerWidth::zeroFillTo(
-        digit_options.minimum_integer_digits));
-  }
-  return result;
+  return result.precision(precision);
 }
 
 // static
@@ -851,10 +859,10 @@ MaybeHandle<JSNumberFormat> JSNumberFormat::UnwrapNumberFormat(
 }
 
 // static
-MaybeHandle<JSNumberFormat> JSNumberFormat::Initialize(
-    Isolate* isolate, Handle<JSNumberFormat> number_format,
-    Handle<Object> locales, Handle<Object> options_obj) {
-  number_format->set_flags(0);
+MaybeHandle<JSNumberFormat> JSNumberFormat::New(Isolate* isolate,
+                                                Handle<Map> map,
+                                                Handle<Object> locales,
+                                                Handle<Object> options_obj) {
   Factory* factory = isolate->factory();
 
   // 1. Let requestedLocales be ? CanonicalizeLocaleList(locales).
@@ -922,7 +930,6 @@ MaybeHandle<JSNumberFormat> JSNumberFormat::Initialize(
   // 9. Set numberFormat.[[Locale]] to r.[[locale]].
   Handle<String> locale_str =
       isolate->factory()->NewStringFromAsciiChecked(r.locale.c_str());
-  number_format->set_locale(*locale_str);
 
   // 11. Let dataLocale be r.[[dataLocale]].
 
@@ -1123,15 +1130,15 @@ MaybeHandle<JSNumberFormat> JSNumberFormat::Initialize(
     }
   }
 
-  // 20. If style is "currency", then
+  // 23. If style is "currency", then
   int mnfd_default, mxfd_default;
   if (style == Style::CURRENCY) {
     //  a. Let mnfdDefault be cDigits.
     //  b. Let mxfdDefault be cDigits.
     mnfd_default = c_digits;
     mxfd_default = c_digits;
+    // 24. Else,
   } else {
-    // 21. Else,
     // a. Let mnfdDefault be 0.
     mnfd_default = 0;
     // b. If style is "percent", then
@@ -1144,37 +1151,11 @@ MaybeHandle<JSNumberFormat> JSNumberFormat::Initialize(
       mxfd_default = 3;
     }
   }
-  // 22. Perform ? SetNumberFormatDigitOptions(numberFormat, options,
-  // mnfdDefault, mxfdDefault).
-  Maybe<Intl::NumberFormatDigitOptions> maybe_digit_options =
-      Intl::SetNumberFormatDigitOptions(isolate, options, mnfd_default,
-                                        mxfd_default);
-  MAYBE_RETURN(maybe_digit_options, Handle<JSNumberFormat>());
-  Intl::NumberFormatDigitOptions digit_options = maybe_digit_options.FromJust();
-  icu_number_formatter = JSNumberFormat::SetDigitOptionsToFormatter(
-      icu_number_formatter, digit_options);
 
-  if (digit_options.minimum_significant_digits > 0) {
-    // Currenct ECMA 402 spec mandate to record (Min|Max)imumFractionDigits
-    // uncondictionally while the unified number proposal eventually will only
-    // record either (Min|Max)imumFractionDigits or
-    // (Min|Max)imumSignaficantDigits Since LocalizedNumberFormatter can only
-    // remember one set, and during 2019-1-17 ECMA402 meeting that the committee
-    // decide not to take a PR to address that prior to the unified number
-    // proposal, we have to add these two 5 bits int into flags to remember the
-    // (Min|Max)imumFractionDigits while (Min|Max)imumSignaficantDigits is
-    // present.
-    // TODO(ftang) remove the following two lines once we ship
-    // int-number-format-unified
-    number_format->set_minimum_fraction_digits(
-        digit_options.minimum_fraction_digits);
-    number_format->set_maximum_fraction_digits(
-        digit_options.maximum_fraction_digits);
-  }
-
+  Notation notation = Notation::STANDARD;
   if (FLAG_harmony_intl_numberformat_unified) {
-    // Let notation be ? GetOption(options, "notation", "string", « "standard",
-    // "scientific",  "engineering", "compact" », "standard").
+    // 25. Let notation be ? GetOption(options, "notation", "string", «
+    // "standard", "scientific",  "engineering", "compact" », "standard").
     Maybe<Notation> maybe_notation = Intl::GetStringOption<Notation>(
         isolate, options, "notation", service,
         {"standard", "scientific", "engineering", "compact"},
@@ -1182,10 +1163,23 @@ MaybeHandle<JSNumberFormat> JSNumberFormat::Initialize(
          Notation::COMPACT},
         Notation::STANDARD);
     MAYBE_RETURN(maybe_notation, MaybeHandle<JSNumberFormat>());
-    Notation notation = maybe_notation.FromJust();
+    notation = maybe_notation.FromJust();
+  }
 
-    // Let compactDisplay be ? GetOption(options, "compactDisplay", "string", «
-    // "short", "long" »,  "short").
+  // 27. Perform ? SetNumberFormatDigitOptions(numberFormat, options,
+  // mnfdDefault, mxfdDefault).
+  Maybe<Intl::NumberFormatDigitOptions> maybe_digit_options =
+      Intl::SetNumberFormatDigitOptions(isolate, options, mnfd_default,
+                                        mxfd_default,
+                                        notation == Notation::COMPACT);
+  MAYBE_RETURN(maybe_digit_options, Handle<JSNumberFormat>());
+  Intl::NumberFormatDigitOptions digit_options = maybe_digit_options.FromJust();
+  icu_number_formatter = JSNumberFormat::SetDigitOptionsToFormatter(
+      icu_number_formatter, digit_options);
+
+  if (FLAG_harmony_intl_numberformat_unified) {
+    // 28. Let compactDisplay be ? GetOption(options, "compactDisplay",
+    // "string", « "short", "long" »,  "short").
     Maybe<CompactDisplay> maybe_compact_display =
         Intl::GetStringOption<CompactDisplay>(
             isolate, options, "compactDisplay", service, {"short", "long"},
@@ -1194,6 +1188,7 @@ MaybeHandle<JSNumberFormat> JSNumberFormat::Initialize(
     MAYBE_RETURN(maybe_compact_display, MaybeHandle<JSNumberFormat>());
     CompactDisplay compact_display = maybe_compact_display.FromJust();
 
+    // 26. Set numberFormat.[[Notation]] to notation.
     // The default notation in ICU is Simple, which mapped from STANDARD
     // so we can skip setting it.
     if (notation != Notation::STANDARD) {
@@ -1201,20 +1196,20 @@ MaybeHandle<JSNumberFormat> JSNumberFormat::Initialize(
           ToICUNotation(notation, compact_display));
     }
   }
-  // 23. Let useGrouping be ? GetOption(options, "useGrouping", "boolean",
+  // 30. Let useGrouping be ? GetOption(options, "useGrouping", "boolean",
   // undefined, true).
   bool use_grouping = true;
   Maybe<bool> found_use_grouping = Intl::GetBoolOption(
       isolate, options, "useGrouping", service, &use_grouping);
   MAYBE_RETURN(found_use_grouping, MaybeHandle<JSNumberFormat>());
-  // 24. Set numberFormat.[[UseGrouping]] to useGrouping.
+  // 31. Set numberFormat.[[UseGrouping]] to useGrouping.
   if (!use_grouping) {
     icu_number_formatter = icu_number_formatter.grouping(
         UNumberGroupingStrategy::UNUM_GROUPING_OFF);
   }
 
   if (FLAG_harmony_intl_numberformat_unified) {
-    // Let signDisplay be ? GetOption(options, "signDisplay", "string", «
+    // 32. Let signDisplay be ? GetOption(options, "signDisplay", "string", «
     // "auto", "never", "always",  "except-zero" », "auto").
     Maybe<SignDisplay> maybe_sign_display = Intl::GetStringOption<SignDisplay>(
         isolate, options, "signDisplay", service,
@@ -1225,6 +1220,7 @@ MaybeHandle<JSNumberFormat> JSNumberFormat::Initialize(
     MAYBE_RETURN(maybe_sign_display, MaybeHandle<JSNumberFormat>());
     SignDisplay sign_display = maybe_sign_display.FromJust();
 
+    // 33. Set numberFormat.[[SignDisplay]] to signDisplay.
     // The default sign in ICU is UNUM_SIGN_AUTO which is mapped from
     // SignDisplay::AUTO and CurrencySign::STANDARD so we can skip setting
     // under that values for optimization.
@@ -1254,6 +1250,32 @@ MaybeHandle<JSNumberFormat> JSNumberFormat::Initialize(
           Managed<icu::number::LocalizedNumberFormatter>::FromRawPtr(
               isolate, 0,
               new icu::number::LocalizedNumberFormatter(icu_number_formatter));
+
+  // Now all properties are ready, so we can allocate the result object.
+  Handle<JSNumberFormat> number_format = Handle<JSNumberFormat>::cast(
+      isolate->factory()->NewFastOrSlowJSObjectFromMap(map));
+  DisallowHeapAllocation no_gc;
+  number_format->set_flags(0);
+  number_format->set_locale(*locale_str);
+
+  if (digit_options.minimum_significant_digits > 0) {
+    // The current ECMA 402 spec mandates recording (Min|Max)imumFractionDigits
+    // unconditionally, while the unified number proposal eventually will only
+    // record either (Min|Max)imumFractionDigits or
+    // (Min|Max)imumSignificantDigits. Since LocalizedNumberFormatter can only
+    // remember one set, and during 2019-1-17 ECMA402 meeting the committee
+    // decided not to take a PR to address that prior to the unified number
+    // proposal, we have to add these two 5-bit ints into flags to remember the
+    // (Min|Max)imumFractionDigits while (Min|Max)imumSignificantDigits is
+    // present.
+    // TODO(ftang) remove the following two lines once we ship
+    // int-number-format-unified
+    number_format->set_minimum_fraction_digits(
+        digit_options.minimum_fraction_digits);
+    number_format->set_maximum_fraction_digits(
+        digit_options.maximum_fraction_digits);
+  }
+
   number_format->set_icu_number_formatter(*managed_number_formatter);
   number_format->set_bound_format(*factory->undefined_value());
 
@@ -1498,8 +1520,18 @@ MaybeHandle<JSArray> JSNumberFormat::FormatToParts(
   return result;
 }
 
+namespace {
+
+struct CheckNumberElements {
+  static const char* key() { return "NumberElements"; }
+  static const char* path() { return nullptr; }
+};
+
+}  // namespace
+
 const std::set<std::string>& JSNumberFormat::GetAvailableLocales() {
-  static base::LazyInstance<Intl::AvailableLocales<icu::NumberFormat>>::type
+  static base::LazyInstance<
+      Intl::AvailableLocales<icu::NumberFormat, CheckNumberElements>>::type
       available_locales = LAZY_INSTANCE_INITIALIZER;
   return available_locales.Pointer()->Get();
 }

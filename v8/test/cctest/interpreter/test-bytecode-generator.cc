@@ -131,21 +131,22 @@ std::string BuildActual(const BytecodeExpectationsPrinter& printer,
 }
 
 // inplace left trim
-static inline void ltrim(std::string& str) {
+static inline void ltrim(std::string& str) {  // NOLINT(runtime/references)
   str.erase(str.begin(),
             std::find_if(str.begin(), str.end(),
                          [](unsigned char ch) { return !std::isspace(ch); }));
 }
 
 // inplace right trim
-static inline void rtrim(std::string& str) {
+static inline void rtrim(std::string& str) {  // NOLINT(runtime/references)
   str.erase(std::find_if(str.rbegin(), str.rend(),
                          [](unsigned char ch) { return !std::isspace(ch); })
                 .base(),
             str.end());
 }
 
-static inline std::string trim(std::string& str) {
+static inline std::string trim(
+    std::string& str) {  // NOLINT(runtime/references)
   ltrim(str);
   rtrim(str);
   return str;
@@ -2764,26 +2765,29 @@ TEST(PrivateMethods) {
   BytecodeExpectationsPrinter printer(CcTest::isolate());
 
   const char* snippets[] = {
-      "{\n"
-      "  class A {\n"
-      "    #a() { return 1; }\n"
-      "  }\n"
-      "\n"
-      "  new A;\n"
-      "}\n",
+      R"({
+  class A {
+    #a() { return 1; }
+    callA() { return this.#a(); }
+  }
 
-      "{\n"
-      "  class D {\n"
-      "    #d() {}\n"
-      "  }\n"
-      "\n"
-      "  class E extends D {\n"
-      "    #e() {}\n"
-      "  }\n"
-      "\n"
-      "  new D;\n"
-      "  new E;\n"
-      "}\n"};
+  const a = new A;
+  a.callA();
+})",
+      R"({
+  class D {
+    #d() { return 1; }
+    callD() { return this.#d(); }
+  }
+
+  class E extends D {
+    #e() { return 2; }
+    callE() { return this.callD() + this.#e(); }
+  }
+
+  const e = new E;
+  e.callE();
+})"};
   CHECK(CompareTexts(BuildActual(printer, snippets),
                      LoadGolden("PrivateMethods.golden")));
   i::FLAG_harmony_private_methods = old_methods_flag;

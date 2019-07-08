@@ -233,7 +233,9 @@ class FeedbackVector : public HeapObject {
   // Conversion from an integer index to the underlying array to a slot.
   static inline FeedbackSlot ToSlot(int index);
   inline MaybeObject Get(FeedbackSlot slot) const;
+  inline MaybeObject Get(Isolate* isolate, FeedbackSlot slot) const;
   inline MaybeObject get(int index) const;
+  inline MaybeObject get(Isolate* isolate, int index) const;
   inline void Set(FeedbackSlot slot, MaybeObject value,
                   WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
   inline void set(int index, MaybeObject value,
@@ -322,10 +324,12 @@ class FeedbackVector : public HeapObject {
 
   class BodyDescriptor;
 
-  // Garbage collection support.
-  static constexpr int SizeFor(int length) {
-    return kFeedbackSlotsOffset + length * kTaggedSize;
+  static constexpr int OffsetOfElementAt(int index) {
+    return kFeedbackSlotsOffset + index * kTaggedSize;
   }
+
+  // Garbage collection support.
+  static constexpr int SizeFor(int length) { return OffsetOfElementAt(length); }
 
  private:
   static void AddToVectorsForProfilingTools(Isolate* isolate,
@@ -561,6 +565,7 @@ class FeedbackMetadata : public HeapObject {
 
 // Verify that an empty hash field looks like a tagged object, but can't
 // possibly be confused with a pointer.
+// NOLINTNEXTLINE(runtime/references) (false positive)
 STATIC_ASSERT((Name::kEmptyHashField & kHeapObjectTag) == kHeapObjectTag);
 STATIC_ASSERT(Name::kEmptyHashField == 0x3);
 // Verify that a set hash field will not look like a tagged object.

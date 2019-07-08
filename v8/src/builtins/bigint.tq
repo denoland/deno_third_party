@@ -44,6 +44,9 @@ namespace bigint {
       MutableBigInt, intptr, uintptr): void;
   extern macro CodeStubAssembler::LoadBigIntDigit(BigIntBase, intptr): uintptr;
 
+  @export  // Silence unused warning.
+           // TODO(szuend): Remove @export once macros that are only used in
+           //               asserts are no longer detected as unused.
   macro IsCanonicalized(bigint: BigIntBase): bool {
     const length = ReadBigIntLength(bigint);
 
@@ -58,19 +61,25 @@ namespace bigint {
     return sign == kPositiveSign ? kNegativeSign : kPositiveSign;
   }
 
-  macro WriteBigIntSign(bigint: MutableBigInt, sign: uint32): void {
-    WriteBigIntSignAndLength(bigint, sign, ReadBigIntLength(bigint));
+  macro AllocateEmptyBigIntNoThrow(implicit context: Context)(
+      sign: uint32, length: intptr): MutableBigInt labels BigIntTooBig {
+    if (length > kBigIntMaxLength) {
+      goto BigIntTooBig;
+    }
+    const result: MutableBigInt = AllocateBigInt(length);
+
+    WriteBigIntSignAndLength(result, sign, length);
+    return result;
   }
 
   macro AllocateEmptyBigInt(implicit context: Context)(
       sign: uint32, length: intptr): MutableBigInt {
-    if (length > kBigIntMaxLength) {
+    try {
+      return AllocateEmptyBigIntNoThrow(sign, length) otherwise BigIntTooBig;
+    }
+    label BigIntTooBig {
       ThrowRangeError(kBigIntTooBig);
     }
-    let result: MutableBigInt = AllocateBigInt(length);
-
-    WriteBigIntSignAndLength(result, sign, length);
-    return result;
   }
 
   macro MutableBigIntAbsoluteCompare(x: BigIntBase, y: BigIntBase): int32 {
@@ -93,13 +102,14 @@ namespace bigint {
       return resultSign == xsign ? x : BigIntUnaryMinus(x);
     }
 
-    let result = AllocateEmptyBigInt(resultSign, xlength);
+    const result = AllocateEmptyBigInt(resultSign, xlength);
     CppAbsoluteSubAndCanonicalize(result, x, y);
     return Convert<BigInt>(result);
   }
 
   macro MutableBigIntAbsoluteAdd(implicit context: Context)(
-      xBigint: BigInt, yBigint: BigInt, resultSign: uint32): BigInt {
+      xBigint: BigInt, yBigint: BigInt,
+      resultSign: uint32): BigInt labels BigIntTooBig {
     let xlength = ReadBigIntLength(xBigint);
     let ylength = ReadBigIntLength(yBigint);
 
@@ -126,9 +136,39 @@ namespace bigint {
     }
 
     // case: x + y
-    const result = AllocateEmptyBigInt(resultSign, xlength + 1);
+    const result = AllocateEmptyBigIntNoThrow(resultSign, xlength + 1)
+        otherwise BigIntTooBig;
     CppAbsoluteAddAndCanonicalize(result, x, y);
     return Convert<BigInt>(result);
+  }
+
+  macro BigIntAddImpl(implicit context: Context)(x: BigInt, y: BigInt): BigInt
+      labels BigIntTooBig {
+    const xsign = ReadBigIntSign(x);
+    const ysign = ReadBigIntSign(y);
+    if (xsign == ysign) {
+      // x + y == x + y
+      // -x + -y == -(x + y)
+      return MutableBigIntAbsoluteAdd(x, y, xsign) otherwise BigIntTooBig;
+    }
+
+    // x + -y == x - y == -(y - x)
+    // -x + y == y - x == -(x - y)
+    if (MutableBigIntAbsoluteCompare(x, y) >= 0) {
+      return MutableBigIntAbsoluteSub(x, y, xsign);
+    }
+    return MutableBigIntAbsoluteSub(y, x, InvertSign(xsign));
+  }
+
+  builtin BigIntAddNoThrow(implicit context: Context)(x: BigInt, y: BigInt):
+      Numeric {
+    try {
+      return BigIntAddImpl(x, y) otherwise BigIntTooBig;
+    }
+    label BigIntTooBig {
+      // Smi sentinal is used to signal BigIntTooBig exception.
+      return Convert<Smi>(0);
+    }
   }
 
   builtin BigIntAdd(implicit context: Context)(xNum: Numeric, yNum: Numeric):
@@ -137,23 +177,13 @@ namespace bigint {
       const x = Cast<BigInt>(xNum) otherwise MixedTypes;
       const y = Cast<BigInt>(yNum) otherwise MixedTypes;
 
-      const xsign = ReadBigIntSign(x);
-      const ysign = ReadBigIntSign(y);
-      if (xsign == ysign) {
-        // x + y == x + y
-        // -x + -y == -(x + y)
-        return MutableBigIntAbsoluteAdd(x, y, xsign);
-      }
-
-      // x + -y == x - y == -(y - x)
-      // -x + y == y - x == -(x - y)
-      if (MutableBigIntAbsoluteCompare(x, y) >= 0) {
-        return MutableBigIntAbsoluteSub(x, y, xsign);
-      }
-      return MutableBigIntAbsoluteSub(y, x, InvertSign(xsign));
+      return BigIntAddImpl(x, y) otherwise BigIntTooBig;
     }
     label MixedTypes {
       ThrowTypeError(kBigIntMixedTypes);
+    }
+    label BigIntTooBig {
+      ThrowRangeError(kBigIntTooBig);
     }
   }
 

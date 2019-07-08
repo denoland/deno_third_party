@@ -8,7 +8,7 @@
 #include "src/codegen/signature.h"
 #include "src/zone/zone-containers.h"
 
-#include "src/common/v8memory.h"
+#include "src/base/memory.h"
 #include "src/utils/vector.h"
 #include "src/wasm/leb-helper.h"
 #include "src/wasm/local-decl-encoder.h"
@@ -36,19 +36,19 @@ class ZoneBuffer : public ZoneObject {
 
   void write_u16(uint16_t x) {
     EnsureSpace(2);
-    WriteLittleEndianValue<uint16_t>(reinterpret_cast<Address>(pos_), x);
+    base::WriteLittleEndianValue<uint16_t>(reinterpret_cast<Address>(pos_), x);
     pos_ += 2;
   }
 
   void write_u32(uint32_t x) {
     EnsureSpace(4);
-    WriteLittleEndianValue<uint32_t>(reinterpret_cast<Address>(pos_), x);
+    base::WriteLittleEndianValue<uint32_t>(reinterpret_cast<Address>(pos_), x);
     pos_ += 4;
   }
 
   void write_u64(uint64_t x) {
     EnsureSpace(8);
-    WriteLittleEndianValue<uint64_t>(reinterpret_cast<Address>(pos_), x);
+    base::WriteLittleEndianValue<uint64_t>(reinterpret_cast<Address>(pos_), x);
     pos_ += 8;
   }
 
@@ -187,9 +187,9 @@ class V8_EXPORT_PRIVATE WasmFunctionBuilder : public ZoneObject {
   }
   void DeleteCodeAfter(size_t position);
 
-  void WriteSignature(ZoneBuffer& buffer) const;
-  void WriteBody(ZoneBuffer& buffer) const;
-  void WriteAsmWasmOffsetTable(ZoneBuffer& buffer) const;
+  void WriteSignature(ZoneBuffer* buffer) const;
+  void WriteBody(ZoneBuffer* buffer) const;
+  void WriteAsmWasmOffsetTable(ZoneBuffer* buffer) const;
 
   WasmModuleBuilder* builder() const { return builder_; }
   uint32_t func_index() { return func_index_; }
@@ -240,13 +240,14 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   void SetIndirectFunction(uint32_t indirect, uint32_t direct);
   void MarkStartFunction(WasmFunctionBuilder* builder);
   void AddExport(Vector<const char> name, WasmFunctionBuilder* builder);
+  void AddExportedImport(Vector<const char> name, int import_index);
   void SetMinMemorySize(uint32_t value);
   void SetMaxMemorySize(uint32_t value);
   void SetHasSharedMemory();
 
   // Writing methods.
-  void WriteTo(ZoneBuffer& buffer) const;
-  void WriteAsmJsOffsetTable(ZoneBuffer& buffer) const;
+  void WriteTo(ZoneBuffer* buffer) const;
+  void WriteAsmJsOffsetTable(ZoneBuffer* buffer) const;
 
   Zone* zone() { return zone_; }
 
@@ -260,7 +261,8 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
 
   struct WasmFunctionExport {
     Vector<const char> name;
-    uint32_t function_index;
+    // Can be negative for re-exported imported functions.
+    int function_index;
   };
 
   struct WasmGlobalImport {
@@ -296,6 +298,10 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   uint32_t max_memory_size_;
   bool has_max_memory_size_;
   bool has_shared_memory_;
+#if DEBUG
+  // Once AddExportedImport is called, no more imports can be added.
+  bool adding_imports_allowed_ = true;
+#endif
 };
 
 inline FunctionSig* WasmFunctionBuilder::signature() {

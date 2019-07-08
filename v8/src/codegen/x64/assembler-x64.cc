@@ -2883,6 +2883,18 @@ void Assembler::movd(Register dst, XMMRegister src) {
 }
 
 void Assembler::movq(XMMRegister dst, Register src) {
+  // Mixing AVX and non-AVX is expensive, catch those cases
+  DCHECK(!IsEnabled(AVX));
+  EnsureSpace ensure_space(this);
+  emit(0x66);
+  emit_rex_64(dst, src);
+  emit(0x0F);
+  emit(0x6E);
+  emit_sse_operand(dst, src);
+}
+
+void Assembler::movq(XMMRegister dst, Operand src) {
+  // Mixing AVX and non-AVX is expensive, catch those cases
   DCHECK(!IsEnabled(AVX));
   EnsureSpace ensure_space(this);
   emit(0x66);
@@ -2893,6 +2905,7 @@ void Assembler::movq(XMMRegister dst, Register src) {
 }
 
 void Assembler::movq(Register dst, XMMRegister src) {
+  // Mixing AVX and non-AVX is expensive, catch those cases
   DCHECK(!IsEnabled(AVX));
   EnsureSpace ensure_space(this);
   emit(0x66);
@@ -2903,6 +2916,7 @@ void Assembler::movq(Register dst, XMMRegister src) {
 }
 
 void Assembler::movq(XMMRegister dst, XMMRegister src) {
+  // Mixing AVX and non-AVX is expensive, catch those cases
   DCHECK(!IsEnabled(AVX));
   EnsureSpace ensure_space(this);
   if (dst.low_bits() == 4) {
@@ -3065,6 +3079,42 @@ void Assembler::pextrd(Operand dst, XMMRegister src, int8_t imm8) {
   emit(0x3A);
   emit(0x16);
   emit_sse_operand(src, dst);
+  emit(imm8);
+}
+
+void Assembler::pextrq(Register dst, XMMRegister src, int8_t imm8) {
+  DCHECK(IsEnabled(SSE4_1));
+  EnsureSpace ensure_space(this);
+  emit(0x66);
+  emit_rex_64(src, dst);
+  emit(0x0F);
+  emit(0x3A);
+  emit(0x16);
+  emit_sse_operand(src, dst);
+  emit(imm8);
+}
+
+void Assembler::pinsrq(XMMRegister dst, Register src, int8_t imm8) {
+  DCHECK(IsEnabled(SSE4_1));
+  EnsureSpace ensure_space(this);
+  emit(0x66);
+  emit_rex_64(dst, src);
+  emit(0x0F);
+  emit(0x3A);
+  emit(0x22);
+  emit_sse_operand(dst, src);
+  emit(imm8);
+}
+
+void Assembler::pinsrq(XMMRegister dst, Operand src, int8_t imm8) {
+  DCHECK(IsEnabled(SSE4_1));
+  EnsureSpace ensure_space(this);
+  emit(0x66);
+  emit_rex_64(dst, src);
+  emit(0x0F);
+  emit(0x3A);
+  emit(0x22);
+  emit_sse_operand(dst, src);
   emit(imm8);
 }
 

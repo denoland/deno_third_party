@@ -352,7 +352,8 @@ bool Code::Inlines(SharedFunctionInfo sfi) {
 Code::OptimizedCodeIterator::OptimizedCodeIterator(Isolate* isolate) {
   isolate_ = isolate;
   Object list = isolate->heap()->native_contexts_list();
-  next_context_ = list.IsUndefined(isolate_) ? Context() : Context::cast(list);
+  next_context_ =
+      list.IsUndefined(isolate_) ? NativeContext() : NativeContext::cast(list);
 }
 
 Code Code::OptimizedCodeIterator::Next() {
@@ -366,8 +367,8 @@ Code Code::OptimizedCodeIterator::Next() {
       next = next_context_.OptimizedCodeListHead();
       Object next_context = next_context_.next_context_link();
       next_context_ = next_context.IsUndefined(isolate_)
-                          ? Context()
-                          : Context::cast(next_context);
+                          ? NativeContext()
+                          : NativeContext::cast(next_context);
     } else {
       // Exhausted contexts.
       return Code();
@@ -857,7 +858,7 @@ void BytecodeArray::Disassemble(std::ostream& os) {
   os << "Constant pool (size = " << constant_pool().length() << ")\n";
 #ifdef OBJECT_PRINT
   if (constant_pool().length() > 0) {
-    constant_pool().Print();
+    constant_pool().Print(os);
   }
 #endif
 
@@ -1083,6 +1084,16 @@ const char* DependentCode::DependencyGroupName(DependencyGroup group) {
       return "allocation-site-transition-changed";
   }
   UNREACHABLE();
+}
+
+bool BytecodeArray::IsBytecodeEqual(const BytecodeArray other) const {
+  if (length() != other.length()) return false;
+
+  for (int i = 0; i < length(); ++i) {
+    if (get(i) != other.get(i)) return false;
+  }
+
+  return true;
 }
 
 }  // namespace internal

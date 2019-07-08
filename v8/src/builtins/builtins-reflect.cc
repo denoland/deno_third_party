@@ -119,42 +119,6 @@ BUILTIN(ReflectGetOwnPropertyDescriptor) {
   return *desc.ToObject(isolate);
 }
 
-// ES6 section 26.1.8 Reflect.getPrototypeOf
-BUILTIN(ReflectGetPrototypeOf) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(2, args.length());
-  Handle<Object> target = args.at(1);
-
-  if (!target->IsJSReceiver()) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kCalledOnNonObject,
-                              isolate->factory()->NewStringFromAsciiChecked(
-                                  "Reflect.getPrototypeOf")));
-  }
-  Handle<JSReceiver> receiver = Handle<JSReceiver>::cast(target);
-  RETURN_RESULT_OR_FAILURE(isolate,
-                           JSReceiver::GetPrototype(isolate, receiver));
-}
-
-// ES6 section 26.1.10 Reflect.isExtensible
-BUILTIN(ReflectIsExtensible) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(2, args.length());
-  Handle<Object> target = args.at(1);
-
-  if (!target->IsJSReceiver()) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kCalledOnNonObject,
-                              isolate->factory()->NewStringFromAsciiChecked(
-                                  "Reflect.isExtensible")));
-  }
-
-  Maybe<bool> result =
-      JSReceiver::IsExtensible(Handle<JSReceiver>::cast(target));
-  MAYBE_RETURN(result, ReadOnlyRoots(isolate).exception());
-  return *isolate->factory()->ToBoolean(result.FromJust());
-}
-
 // ES6 section 26.1.11 Reflect.ownKeys
 BUILTIN(ReflectOwnKeys) {
   HandleScope scope(isolate);
@@ -175,25 +139,6 @@ BUILTIN(ReflectOwnKeys) {
                               KeyCollectionMode::kOwnOnly, ALL_PROPERTIES,
                               GetKeysConversion::kConvertToString));
   return *isolate->factory()->NewJSArrayWithElements(keys);
-}
-
-// ES6 section 26.1.12 Reflect.preventExtensions
-BUILTIN(ReflectPreventExtensions) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(2, args.length());
-  Handle<Object> target = args.at(1);
-
-  if (!target->IsJSReceiver()) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kCalledOnNonObject,
-                              isolate->factory()->NewStringFromAsciiChecked(
-                                  "Reflect.preventExtensions")));
-  }
-
-  Maybe<bool> result = JSReceiver::PreventExtensions(
-      Handle<JSReceiver>::cast(target), kDontThrow);
-  MAYBE_RETURN(result, ReadOnlyRoots(isolate).exception());
-  return *isolate->factory()->ToBoolean(result.FromJust());
 }
 
 // ES6 section 26.1.13 Reflect.set
@@ -219,31 +164,6 @@ BUILTIN(ReflectSet) {
       isolate, receiver, name, Handle<JSReceiver>::cast(target));
   Maybe<bool> result = Object::SetSuperProperty(
       &it, value, StoreOrigin::kMaybeKeyed, Just(ShouldThrow::kDontThrow));
-  MAYBE_RETURN(result, ReadOnlyRoots(isolate).exception());
-  return *isolate->factory()->ToBoolean(result.FromJust());
-}
-
-// ES6 section 26.1.14 Reflect.setPrototypeOf
-BUILTIN(ReflectSetPrototypeOf) {
-  HandleScope scope(isolate);
-  DCHECK_EQ(3, args.length());
-  Handle<Object> target = args.at(1);
-  Handle<Object> proto = args.at(2);
-
-  if (!target->IsJSReceiver()) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kCalledOnNonObject,
-                              isolate->factory()->NewStringFromAsciiChecked(
-                                  "Reflect.setPrototypeOf")));
-  }
-
-  if (!proto->IsJSReceiver() && !proto->IsNull(isolate)) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kProtoObjectOrNull, proto));
-  }
-
-  Maybe<bool> result = JSReceiver::SetPrototype(
-      Handle<JSReceiver>::cast(target), proto, true, kDontThrow);
   MAYBE_RETURN(result, ReadOnlyRoots(isolate).exception());
   return *isolate->factory()->ToBoolean(result.FromJust());
 }

@@ -41,8 +41,7 @@ void MarkingBarrierForDescriptorArray(Heap* heap, HeapObject host,
                                       HeapObject descriptor_array,
                                       int number_of_own_descriptors);
 
-inline Heap* GetHeapFromWritableObject(HeapObject object);
-inline Isolate* GetIsolateFromWritableObject(HeapObject object);
+inline bool IsReadOnlyHeapObject(HeapObject object);
 
 }  // namespace internal
 }  // namespace v8

@@ -151,12 +151,14 @@ class FreeListCategory {
         page_(page),
         type_(kInvalidCategory),
         available_(0),
+        length_(0),
         prev_(nullptr),
         next_(nullptr) {}
 
   void Initialize(FreeListCategoryType type) {
     type_ = type;
     available_ = 0;
+    length_ = 0;
     prev_ = nullptr;
     next_ = nullptr;
   }
@@ -188,10 +190,8 @@ class FreeListCategory {
 
   void set_free_list(FreeList* free_list) { free_list_ = free_list; }
 
-#ifdef DEBUG
   size_t SumFreeList();
-  int FreeListLength();
-#endif
+  int FreeListLength() { return length_; }
 
  private:
   // For debug builds we accurately compute free lists lengths up until
@@ -217,6 +217,9 @@ class FreeListCategory {
   // |available_|: Total available bytes in all blocks of this free list
   // category.
   size_t available_;
+
+  // |length_|: Total blocks in this free list category.
+  int length_;
 
   // |top_|: Points to the top FreeSpace in the free list category.
   FreeSpace top_;
@@ -364,17 +367,6 @@ class MemoryChunk {
   static const Flags kSkipEvacuationSlotsRecordingMask =
       kEvacuationCandidateMask | kIsInYoungGenerationMask;
 
-  // |kSweepingDone|: The page state when sweeping is complete or sweeping must
-  //   not be performed on that page. Sweeper threads that are done with their
-  //   work will set this value and not touch the page anymore.
-  // |kSweepingPending|: This page is ready for parallel sweeping.
-  // |kSweepingInProgress|: This page is currently swept by a sweeper thread.
-  enum ConcurrentSweepingState {
-    kSweepingDone,
-    kSweepingPending,
-    kSweepingInProgress,
-  };
-
   static const intptr_t kAlignment =
       (static_cast<uintptr_t>(1) << kPageSizeBits);
 
@@ -389,8 +381,6 @@ class MemoryChunk {
       kReservationOffset + 3 * kSystemPointerSize;
   static const intptr_t kHeaderSentinelOffset =
       kHeapOffset + kSystemPointerSize;
-  static const intptr_t kOwnerOffset =
-      kHeaderSentinelOffset + kSystemPointerSize;
 
   static const size_t kHeaderSize =
       kSizeOffset               // NOLINT
@@ -411,8 +401,7 @@ class MemoryChunk {
       + kSystemPointerSize  // InvalidatedSlots* invalidated_slots_
       + kSystemPointerSize  // std::atomic<intptr_t> high_water_mark_
       + kSystemPointerSize  // base::Mutex* mutex_
-      + kSystemPointerSize  // std::atomic<ConcurrentSweepingState>
-                            // concurrent_sweeping_
+      + kUIntptrSize        // std::atomic<uintptr_t> mark_compact_epoch_
       + kSystemPointerSize  // base::Mutex* page_protection_change_mutex_
       + kSystemPointerSize  // unitptr_t write_unprotect_counter_
       + kSizetSize * ExternalBackingStoreType::kNumTypes
@@ -486,15 +475,10 @@ class MemoryChunk {
     return addr >= area_start() && addr <= area_end();
   }
 
-  void set_concurrent_sweeping_state(ConcurrentSweepingState state) {
-    concurrent_sweeping_ = state;
-  }
-
-  ConcurrentSweepingState concurrent_sweeping_state() {
-    return static_cast<ConcurrentSweepingState>(concurrent_sweeping_.load());
-  }
-
-  bool SweepingDone() { return concurrent_sweeping_ == kSweepingDone; }
+  V8_EXPORT_PRIVATE void InitializeSweepingState();
+  void MarkSwept() { mark_compact_epoch_++; }
+  V8_EXPORT_PRIVATE void MarkUnswept();
+  V8_EXPORT_PRIVATE bool SweepingDone();
 
   size_t size() const { return size_; }
   void set_size(size_t size) { size_ = size; }
@@ -563,6 +547,8 @@ class MemoryChunk {
   Address area_start() { return area_start_; }
   Address area_end() { return area_end_; }
   size_t area_size() { return static_cast<size_t>(area_end() - area_start()); }
+
+  int FreeListsLength();
 
   // Approximate amount of physical memory committed for this chunk.
   V8_EXPORT_PRIVATE size_t CommittedPhysicalMemory();
@@ -790,7 +776,7 @@ class MemoryChunk {
 
   base::Mutex* mutex_;
 
-  std::atomic<intptr_t> concurrent_sweeping_;
+  std::atomic<uintptr_t> mark_compact_epoch_;
 
   base::Mutex* page_protection_change_mutex_;
 
@@ -1147,7 +1133,6 @@ class V8_EXPORT_PRIVATE Space : public Malloced {
   // Tracks off-heap memory used by this space.
   std::atomic<size_t>* external_backing_store_bytes_;
 
- private:
   static const intptr_t kIdOffset = 9 * kSystemPointerSize;
 
   bool allocation_observers_paused_;
@@ -1626,17 +1611,17 @@ class PageRange {
 // -----------------------------------------------------------------------------
 // Heap object iterator in new/old/map spaces.
 //
-// A HeapObjectIterator iterates objects from the bottom of the given space
-// to its top or from the bottom of the given page to its top.
+// A PagedSpaceObjectIterator iterates objects from the bottom of the given
+// space to its top or from the bottom of the given page to its top.
 //
 // If objects are allocated in the page during iteration the iterator may
 // or may not iterate over those objects.  The caller must create a new
 // iterator in order to be sure to visit these new objects.
-class V8_EXPORT_PRIVATE HeapObjectIterator : public ObjectIterator {
+class V8_EXPORT_PRIVATE PagedSpaceObjectIterator : public ObjectIterator {
  public:
   // Creates a new object iterator in a given space.
-  explicit HeapObjectIterator(PagedSpace* space);
-  explicit HeapObjectIterator(Page* page);
+  explicit PagedSpaceObjectIterator(PagedSpace* space);
+  explicit PagedSpaceObjectIterator(Page* page);
 
   // Advance to the next object, skipping free spaces and other fillers and
   // skipping the special garbage section of which there is one per space.
@@ -1657,7 +1642,6 @@ class V8_EXPORT_PRIVATE HeapObjectIterator : public ObjectIterator {
   PageRange page_range_;
   PageRange::iterator current_page_;
 };
-
 
 // -----------------------------------------------------------------------------
 // A space has a circular list of pages. The next page can be accessed via
@@ -1956,11 +1940,6 @@ class FreeList {
   static const size_t kSmallAllocationMax = kTinyListMax;
   static const size_t kMediumAllocationMax = kSmallListMax;
   static const size_t kLargeAllocationMax = kMediumListMax;
-
-  // Walks all available categories for a given |type| and tries to retrieve
-  // a node. Returns nullptr if the category is empty.
-  FreeSpace FindNodeIn(FreeListCategoryType type, size_t minimum_size,
-                       size_t* node_size);
 
   // Tries to retrieve a node from the first category in a given |type|.
   // Returns nullptr if the category is empty or the top entry is smaller
@@ -2582,19 +2561,18 @@ class SemiSpace : public Space {
   int pages_used_;
 
   friend class NewSpace;
-  friend class SemiSpaceIterator;
+  friend class SemiSpaceObjectIterator;
 };
 
-
-// A SemiSpaceIterator is an ObjectIterator that iterates over the active
+// A SemiSpaceObjectIterator is an ObjectIterator that iterates over the active
 // semispace of the heap's new space.  It iterates over the objects in the
 // semispace from a given start address (defaulting to the bottom of the
 // semispace) to the top of the semispace.  New objects allocated after the
 // iterator is created are not iterated.
-class SemiSpaceIterator : public ObjectIterator {
+class SemiSpaceObjectIterator : public ObjectIterator {
  public:
   // Create an iterator over the allocated objects in the given to-space.
-  explicit SemiSpaceIterator(NewSpace* space);
+  explicit SemiSpaceObjectIterator(NewSpace* space);
 
   inline HeapObject Next() override;
 
@@ -2851,7 +2829,7 @@ class V8_EXPORT_PRIVATE NewSpace
   bool EnsureAllocation(int size_in_bytes, AllocationAlignment alignment);
   bool SupportsInlineAllocation() override { return true; }
 
-  friend class SemiSpaceIterator;
+  friend class SemiSpaceObjectIterator;
 };
 
 class V8_EXPORT_PRIVATE PauseAllocationObserversScope {
@@ -3089,7 +3067,7 @@ class LargeObjectSpace : public Space {
   size_t objects_size_;  // size of objects
 
  private:
-  friend class LargeObjectIterator;
+  friend class LargeObjectSpaceObjectIterator;
 };
 
 class NewLargeObjectSpace : public LargeObjectSpace {
@@ -3145,9 +3123,9 @@ class CodeLargeObjectSpace : public LargeObjectSpace {
   std::unordered_map<Address, LargePage*> chunk_map_;
 };
 
-class LargeObjectIterator : public ObjectIterator {
+class LargeObjectSpaceObjectIterator : public ObjectIterator {
  public:
-  explicit LargeObjectIterator(LargeObjectSpace* space);
+  explicit LargeObjectSpaceObjectIterator(LargeObjectSpace* space);
 
   HeapObject Next() override;
 

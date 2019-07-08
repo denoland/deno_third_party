@@ -80,50 +80,6 @@ LookupIterator LookupIterator::PropertyOrElement(Isolate* isolate,
   return LookupIterator(isolate, receiver, name, configuration);
 }
 
-// TODO(ishell): Consider removing this way of LookupIterator creation.
-// static
-LookupIterator LookupIterator::ForTransitionHandler(
-    Isolate* isolate, Handle<Object> receiver, Handle<Name> name,
-    Handle<Object> value, MaybeHandle<Map> maybe_transition_map) {
-  Handle<Map> transition_map;
-  if (!maybe_transition_map.ToHandle(&transition_map) ||
-      !transition_map->IsPrototypeValidityCellValid()) {
-    // This map is not a valid transition handler, so full lookup is required.
-    return LookupIterator(isolate, receiver, name);
-  }
-
-  PropertyDetails details = PropertyDetails::Empty();
-  bool has_property;
-  if (transition_map->is_dictionary_map()) {
-    details = PropertyDetails(kData, NONE, PropertyCellType::kNoCell);
-    has_property = false;
-  } else {
-    details = transition_map->GetLastDescriptorDetails();
-    has_property = true;
-  }
-#ifdef DEBUG
-  if (name->IsPrivate()) {
-    DCHECK_EQ(DONT_ENUM, details.attributes());
-  } else {
-    DCHECK_EQ(NONE, details.attributes());
-  }
-#endif
-  LookupIterator it(isolate, receiver, name, transition_map, details,
-                    has_property);
-
-  if (!transition_map->is_dictionary_map()) {
-    int descriptor_number = transition_map->LastAdded();
-    Handle<Map> new_map =
-        Map::PrepareForDataProperty(isolate, transition_map, descriptor_number,
-                                    PropertyConstness::kConst, value);
-    // Reload information; this is no-op if nothing changed.
-    it.property_details_ =
-        new_map->instance_descriptors().GetDetails(descriptor_number);
-    it.transition_ = new_map;
-  }
-  return it;
-}
-
 LookupIterator::LookupIterator(Isolate* isolate, Handle<Object> receiver,
                                Handle<Name> name, Handle<Map> transition_map,
                                PropertyDetails details, bool has_property)
@@ -224,7 +180,7 @@ Handle<JSReceiver> LookupIterator::GetRootForNonJSReceiver(
     // context, ensuring that we don't leak it into JS?
     Handle<JSFunction> constructor = isolate->string_function();
     Handle<JSObject> result = isolate->factory()->NewJSObject(constructor);
-    Handle<JSValue>::cast(result)->set_value(*receiver);
+    Handle<JSPrimitiveWrapper>::cast(result)->set_value(*receiver);
     return result;
   }
   auto root =
@@ -486,19 +442,27 @@ void LookupIterator::PrepareForDataProperty(Handle<Object> value) {
   }
 
   Handle<Map> old_map(holder_obj->map(), isolate_);
-  Handle<Map> new_map = Map::PrepareForDataProperty(
-      isolate(), old_map, descriptor_number(), new_constness, value);
+  DCHECK(!old_map->is_dictionary_map());
 
-  if (old_map.is_identical_to(new_map)) {
-    // Update the property details if the representation was None.
-    if (constness() != new_constness || representation().IsNone()) {
-      property_details_ =
-          new_map->instance_descriptors().GetDetails(descriptor_number());
+  Handle<Map> new_map = Map::Update(isolate_, old_map);
+  if (!new_map->is_dictionary_map()) {
+    new_map = Map::PrepareForDataProperty(
+        isolate(), new_map, descriptor_number(), new_constness, value);
+
+    if (old_map.is_identical_to(new_map)) {
+      // Update the property details if the representation was None.
+      if (constness() != new_constness || representation().IsNone()) {
+        property_details_ =
+            new_map->instance_descriptors().GetDetails(descriptor_number());
+      }
+      return;
     }
-    return;
   }
+  // We should only get here if the new_map is different from the old map,
+  // otherwise we would have falled through to the is_identical_to check above.
+  DCHECK_NE(*old_map, *new_map);
 
-  JSObject::MigrateToMap(holder_obj, new_map);
+  JSObject::MigrateToMap(isolate_, holder_obj, new_map);
   ReloadPropertyInformation<false>();
 }
 
@@ -525,14 +489,19 @@ void LookupIterator::ReconfigureDataProperty(Handle<Object> value,
     ReloadPropertyInformation<true>();
   } else if (holder_obj->HasFastProperties()) {
     Handle<Map> old_map(holder_obj->map(), isolate_);
-    Handle<Map> new_map = Map::ReconfigureExistingProperty(
-        isolate_, old_map, descriptor_number(), i::kData, attributes);
     // Force mutable to avoid changing constant value by reconfiguring
     // kData -> kAccessor -> kData.
-    new_map =
-        Map::PrepareForDataProperty(isolate(), new_map, descriptor_number(),
-                                    PropertyConstness::kMutable, value);
-    JSObject::MigrateToMap(holder_obj, new_map);
+    Handle<Map> new_map = Map::ReconfigureExistingProperty(
+        isolate_, old_map, descriptor_number(), i::kData, attributes,
+        PropertyConstness::kMutable);
+    if (!new_map->is_dictionary_map()) {
+      // Make sure that the data property has a compatible representation.
+      // TODO(leszeks): Do this as part of ReconfigureExistingProperty.
+      new_map =
+          Map::PrepareForDataProperty(isolate(), new_map, descriptor_number(),
+                                      PropertyConstness::kMutable, value);
+    }
+    JSObject::MigrateToMap(isolate_, holder_obj, new_map);
     ReloadPropertyInformation<false>();
   }
 
@@ -645,7 +614,7 @@ void LookupIterator::PrepareTransitionToDataProperty(
     property_details_ =
         PropertyDetails(kData, attributes, PropertyCellType::kNoCell);
   } else {
-    property_details_ = transition->GetLastDescriptorDetails();
+    property_details_ = transition->GetLastDescriptorDetails(isolate_);
     has_property_ = true;
   }
 }
@@ -674,13 +643,14 @@ void LookupIterator::ApplyTransitionToDataProperty(
   }
 
   if (!receiver->IsJSProxy()) {
-    JSObject::MigrateToMap(Handle<JSObject>::cast(receiver), transition);
+    JSObject::MigrateToMap(isolate_, Handle<JSObject>::cast(receiver),
+                           transition);
   }
 
   if (simple_transition) {
     int number = transition->LastAdded();
     number_ = static_cast<uint32_t>(number);
-    property_details_ = transition->GetLastDescriptorDetails();
+    property_details_ = transition->GetLastDescriptorDetails(isolate_);
     state_ = DATA;
   } else if (receiver->map().is_dictionary_map()) {
     Handle<NameDictionary> dictionary(receiver->property_dictionary(),
@@ -722,8 +692,8 @@ void LookupIterator::Delete() {
         is_prototype_map ? KEEP_INOBJECT_PROPERTIES : CLEAR_INOBJECT_PROPERTIES;
 
     if (holder->HasFastProperties()) {
-      JSObject::NormalizeProperties(Handle<JSObject>::cast(holder), mode, 0,
-                                    "DeletingProperty");
+      JSObject::NormalizeProperties(isolate_, Handle<JSObject>::cast(holder),
+                                    mode, 0, "DeletingProperty");
       ReloadPropertyInformation<false>();
     }
     JSReceiver::DeleteNormalizedProperty(holder, number_);
@@ -761,12 +731,12 @@ void LookupIterator::TransitionToAccessorProperty(
     Handle<Map> new_map = Map::TransitionToAccessorProperty(
         isolate_, old_map, name_, descriptor, getter, setter, attributes);
     bool simple_transition = new_map->GetBackPointer() == receiver->map();
-    JSObject::MigrateToMap(receiver, new_map);
+    JSObject::MigrateToMap(isolate_, receiver, new_map);
 
     if (simple_transition) {
       int number = new_map->LastAdded();
       number_ = static_cast<uint32_t>(number);
-      property_details_ = new_map->GetLastDescriptorDetails();
+      property_details_ = new_map->GetLastDescriptorDetails(isolate_);
       state_ = ACCESSOR;
       return;
     }
@@ -838,7 +808,7 @@ void LookupIterator::TransitionToAccessorPair(Handle<Object> pair,
     }
 
     // Normalize object to make this operation simple.
-    JSObject::NormalizeProperties(receiver, mode, 0,
+    JSObject::NormalizeProperties(isolate_, receiver, mode, 0,
                                   "TransitionToAccessorPair");
 
     JSObject::SetNormalizedProperty(receiver, name_, pair, details);

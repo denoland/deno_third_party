@@ -7,7 +7,7 @@
 
 #include "src/wasm/wasm-objects.h"
 
-#include "src/common/v8memory.h"
+#include "src/base/memory.h"
 #include "src/heap/heap-write-barrier-inl.h"
 #include "src/objects/contexts-inl.h"
 #include "src/objects/foreign-inl.h"
@@ -51,10 +51,11 @@ CAST_ACCESSOR(WasmModuleObject)
 CAST_ACCESSOR(WasmTableObject)
 CAST_ACCESSOR(AsmWasmData)
 
-#define OPTIONAL_ACCESSORS(holder, name, type, offset) \
-  bool holder::has_##name() {                          \
-    return !READ_FIELD(*this, offset).IsUndefined();   \
-  }                                                    \
+#define OPTIONAL_ACCESSORS(holder, name, type, offset)                \
+  DEF_GETTER(holder, has_##name, bool) {                              \
+    Object value = TaggedField<Object, offset>::load(isolate, *this); \
+    return !value.IsUndefined(GetReadOnlyRoots(isolate));             \
+  }                                                                   \
   ACCESSORS(holder, name, type, offset)
 
 #define PRIMITIVE_ACCESSORS(holder, name, type, offset)                       \
@@ -65,7 +66,7 @@ CAST_ACCESSOR(AsmWasmData)
       /* kTaggedSize aligned so we have to use unaligned pointer friendly  */ \
       /* way of accessing them in order to avoid undefined behavior in C++ */ \
       /* code. */                                                             \
-      return ReadUnalignedValue<type>(FIELD_ADDR(*this, offset));             \
+      return base::ReadUnalignedValue<type>(FIELD_ADDR(*this, offset));       \
     } else {                                                                  \
       return *reinterpret_cast<type const*>(FIELD_ADDR(*this, offset));       \
     }                                                                         \
@@ -77,7 +78,7 @@ CAST_ACCESSOR(AsmWasmData)
       /* kTaggedSize aligned so we have to use unaligned pointer friendly  */ \
       /* way of accessing them in order to avoid undefined behavior in C++ */ \
       /* code. */                                                             \
-      WriteUnalignedValue<type>(FIELD_ADDR(*this, offset), value);            \
+      base::WriteUnalignedValue<type>(FIELD_ADDR(*this, offset), value);      \
     } else {                                                                  \
       *reinterpret_cast<type*>(FIELD_ADDR(*this, offset)) = value;            \
     }                                                                         \
@@ -148,19 +149,19 @@ Address WasmGlobalObject::address() const {
 }
 
 int32_t WasmGlobalObject::GetI32() {
-  return ReadLittleEndianValue<int32_t>(address());
+  return base::ReadLittleEndianValue<int32_t>(address());
 }
 
 int64_t WasmGlobalObject::GetI64() {
-  return ReadLittleEndianValue<int64_t>(address());
+  return base::ReadLittleEndianValue<int64_t>(address());
 }
 
 float WasmGlobalObject::GetF32() {
-  return ReadLittleEndianValue<float>(address());
+  return base::ReadLittleEndianValue<float>(address());
 }
 
 double WasmGlobalObject::GetF64() {
-  return ReadLittleEndianValue<double>(address());
+  return base::ReadLittleEndianValue<double>(address());
 }
 
 Handle<Object> WasmGlobalObject::GetRef() {
@@ -170,19 +171,19 @@ Handle<Object> WasmGlobalObject::GetRef() {
 }
 
 void WasmGlobalObject::SetI32(int32_t value) {
-  WriteLittleEndianValue<int32_t>(address(), value);
+  base::WriteLittleEndianValue<int32_t>(address(), value);
 }
 
 void WasmGlobalObject::SetI64(int64_t value) {
-  WriteLittleEndianValue<int64_t>(address(), value);
+  base::WriteLittleEndianValue<int64_t>(address(), value);
 }
 
 void WasmGlobalObject::SetF32(float value) {
-  WriteLittleEndianValue<float>(address(), value);
+  base::WriteLittleEndianValue<float>(address(), value);
 }
 
 void WasmGlobalObject::SetF64(double value) {
-  WriteLittleEndianValue<double>(address(), value);
+  base::WriteLittleEndianValue<double>(address(), value);
 }
 
 void WasmGlobalObject::SetAnyRef(Handle<Object> value) {
@@ -194,7 +195,8 @@ void WasmGlobalObject::SetAnyRef(Handle<Object> value) {
 bool WasmGlobalObject::SetAnyFunc(Isolate* isolate, Handle<Object> value) {
   DCHECK_EQ(type(), wasm::kWasmAnyFunc);
   if (!value->IsNull(isolate) &&
-      !WasmExportedFunction::IsWasmExportedFunction(*value)) {
+      !WasmExportedFunction::IsWasmExportedFunction(*value) &&
+      !WasmCapiFunction::IsWasmCapiFunction(*value)) {
     return false;
   }
   tagged_buffer().set(offset(), *value);
@@ -249,6 +251,8 @@ OPTIONAL_ACCESSORS(WasmInstanceObject, imported_mutable_globals_buffers,
 OPTIONAL_ACCESSORS(WasmInstanceObject, debug_info, WasmDebugInfo,
                    kDebugInfoOffset)
 OPTIONAL_ACCESSORS(WasmInstanceObject, tables, FixedArray, kTablesOffset)
+OPTIONAL_ACCESSORS(WasmInstanceObject, indirect_function_tables, FixedArray,
+                   kIndirectFunctionTablesOffset)
 ACCESSORS(WasmInstanceObject, imported_function_refs, FixedArray,
           kImportedFunctionRefsOffset)
 OPTIONAL_ACCESSORS(WasmInstanceObject, indirect_function_table_refs, FixedArray,
@@ -263,10 +267,6 @@ ACCESSORS(WasmInstanceObject, centry_stub, Code, kCEntryStubOffset)
 OPTIONAL_ACCESSORS(WasmInstanceObject, wasm_exported_functions, FixedArray,
                    kWasmExportedFunctionsOffset)
 
-inline bool WasmInstanceObject::has_indirect_function_table() {
-  return indirect_function_table_sig_ids() != nullptr;
-}
-
 void WasmInstanceObject::clear_padding() {
   if (FIELD_SIZE(kOptionalPaddingOffset) != 0) {
     DCHECK_EQ(4, FIELD_SIZE(kOptionalPaddingOffset));
@@ -276,10 +276,29 @@ void WasmInstanceObject::clear_padding() {
 }
 
 IndirectFunctionTableEntry::IndirectFunctionTableEntry(
-    Handle<WasmInstanceObject> instance, int index)
-    : instance_(instance), index_(index) {
-  DCHECK_GE(index, 0);
-  DCHECK_LT(index, instance->indirect_function_table_size());
+    Handle<WasmInstanceObject> instance, int table_index, int entry_index)
+    : instance_(table_index == 0 ? instance
+                                 : Handle<WasmInstanceObject>::null()),
+      table_(table_index != 0
+                 ? handle(WasmIndirectFunctionTable::cast(
+                              instance->indirect_function_tables().get(
+                                  table_index)),
+                          instance->GetIsolate())
+                 : Handle<WasmIndirectFunctionTable>::null()),
+      index_(entry_index) {
+  DCHECK_GE(entry_index, 0);
+  DCHECK_LT(entry_index, table_index == 0
+                             ? instance->indirect_function_table_size()
+                             : table_->size());
+}
+
+IndirectFunctionTableEntry::IndirectFunctionTableEntry(
+    Handle<WasmIndirectFunctionTable> table, int entry_index)
+    : instance_(Handle<WasmInstanceObject>::null()),
+      table_(table),
+      index_(entry_index) {
+  DCHECK_GE(entry_index, 0);
+  DCHECK_LT(entry_index, table_->size());
 }
 
 ImportedFunctionEntry::ImportedFunctionEntry(
@@ -307,6 +326,10 @@ ACCESSORS(WasmExportedFunctionData, instance, WasmInstanceObject,
 SMI_ACCESSORS(WasmExportedFunctionData, jump_table_offset,
               kJumpTableOffsetOffset)
 SMI_ACCESSORS(WasmExportedFunctionData, function_index, kFunctionIndexOffset)
+ACCESSORS(WasmExportedFunctionData, c_wrapper_code, Object, kCWrapperCodeOffset)
+ACCESSORS(WasmExportedFunctionData, wasm_call_target, Smi,
+          kWasmCallTargetOffset)
+SMI_ACCESSORS(WasmExportedFunctionData, packed_args_size, kPackedArgsSizeOffset)
 
 // WasmJSFunction
 WasmJSFunction::WasmJSFunction(Address ptr) : JSFunction(ptr) {
@@ -323,6 +346,7 @@ SMI_ACCESSORS(WasmJSFunctionData, serialized_parameter_count,
               kSerializedParameterCountOffset)
 ACCESSORS(WasmJSFunctionData, serialized_signature, PodArray<wasm::ValueType>,
           kSerializedSignatureOffset)
+ACCESSORS(WasmJSFunctionData, callable, JSReceiver, kCallableOffset)
 ACCESSORS(WasmJSFunctionData, wrapper_code, Code, kWrapperCodeOffset)
 
 // WasmCapiFunction
@@ -341,6 +365,18 @@ PRIMITIVE_ACCESSORS(WasmCapiFunctionData, embedder_data, void*,
 ACCESSORS(WasmCapiFunctionData, wrapper_code, Code, kWrapperCodeOffset)
 ACCESSORS(WasmCapiFunctionData, serialized_signature, PodArray<wasm::ValueType>,
           kSerializedSignatureOffset)
+
+// WasmIndirectFunctionTable
+OBJECT_CONSTRUCTORS_IMPL(WasmIndirectFunctionTable, Struct)
+CAST_ACCESSOR(WasmIndirectFunctionTable)
+PRIMITIVE_ACCESSORS(WasmIndirectFunctionTable, size, uint32_t, kSizeOffset)
+PRIMITIVE_ACCESSORS(WasmIndirectFunctionTable, sig_ids, uint32_t*,
+                    kSigIdsOffset)
+PRIMITIVE_ACCESSORS(WasmIndirectFunctionTable, targets, Address*,
+                    kTargetsOffset)
+OPTIONAL_ACCESSORS(WasmIndirectFunctionTable, managed_native_allocations,
+                   Foreign, kManagedNativeAllocationsOffset)
+ACCESSORS(WasmIndirectFunctionTable, refs, FixedArray, kRefsOffset)
 
 // WasmDebugInfo
 ACCESSORS(WasmDebugInfo, wasm_instance, WasmInstanceObject, kInstanceOffset)

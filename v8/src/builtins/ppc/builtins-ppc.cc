@@ -1532,12 +1532,14 @@ void Generate_ContinueToBuiltinHelper(MacroAssembler* masm,
   __ LoadP(
       fp,
       MemOperand(sp, BuiltinContinuationFrameConstants::kFixedFrameSizeFromFp));
+  // Load builtin index (stored as a Smi) and use it to get the builtin start
+  // address from the builtins table.
   __ Pop(ip);
   __ addi(sp, sp,
           Operand(BuiltinContinuationFrameConstants::kFixedFrameSizeFromFp));
   __ Pop(r0);
   __ mtlr(r0);
-  __ addi(ip, ip, Operand(Code::kHeaderSize - kHeapObjectTag));
+  __ LoadEntryFromBuiltinIndex(ip);
   __ Jump(ip);
 }
 }  // namespace
@@ -2394,7 +2396,7 @@ void Builtins::Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm) {
   __ cmpli(r5, Operand(SharedFunctionInfo::kDontAdaptArgumentsSentinel));
   __ beq(&dont_adapt_arguments);
   __ LoadP(r7, FieldMemOperand(r4, JSFunction::kSharedFunctionInfoOffset));
-  __ LoadP(r7, FieldMemOperand(r7, SharedFunctionInfo::kFlagsOffset));
+  __ lwz(r7, FieldMemOperand(r7, SharedFunctionInfo::kFlagsOffset));
   __ TestBitMask(r7, SharedFunctionInfo::IsSafeToSkipArgumentsAdaptorBit::kMask,
                  r0);
   __ bne(&skip_adapt_arguments, cr0);
@@ -2967,13 +2969,22 @@ static void CallApiFunctionAndReturn(MacroAssembler* masm,
     __ Move(scratch, thunk_ref);
     __ isel(eq, scratch, function_address, scratch);
   } else {
-    Label profiler_disabled;
-    Label end_profiler_check;
-    __ beq(&profiler_disabled);
-    __ Move(scratch, thunk_ref);
-    __ b(&end_profiler_check);
-    __ bind(&profiler_disabled);
-    __ mr(scratch, function_address);
+    Label profiler_enabled, end_profiler_check;
+    __ bne(&profiler_enabled);
+    __ Move(scratch, ExternalReference::address_of_runtime_stats_flag());
+    __ lwz(scratch, MemOperand(scratch, 0));
+    __ cmpi(scratch, Operand::Zero());
+    __ bne(&profiler_enabled);
+    {
+      // Call the api function directly.
+      __ mr(scratch, function_address);
+      __ b(&end_profiler_check);
+    }
+    __ bind(&profiler_enabled);
+    {
+      // Additional parameter is the address of the actual callback.
+      __ Move(scratch, thunk_ref);
+    }
     __ bind(&end_profiler_check);
   }
 

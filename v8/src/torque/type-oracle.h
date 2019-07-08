@@ -107,6 +107,10 @@ class TypeOracle : public ContextualClass<TypeOracle> {
     return Get().GetBuiltinType(CONSTEXPR_INTPTR_TYPE_STRING);
   }
 
+  static const Type* GetConstexprInstanceTypeType() {
+    return Get().GetBuiltinType(CONSTEXPR_INSTANCE_TYPE_TYPE_STRING);
+  }
+
   static const Type* GetVoidType() {
     return Get().GetBuiltinType(VOID_TYPE_STRING);
   }
@@ -133,6 +137,10 @@ class TypeOracle : public ContextualClass<TypeOracle> {
 
   static const Type* GetTaggedType() {
     return Get().GetBuiltinType(TAGGED_TYPE_STRING);
+  }
+
+  static const Type* GetUninitializedType() {
+    return Get().GetBuiltinType(UNINITIALIZED_TYPE_STRING);
   }
 
   static const Type* GetSmiType() {
@@ -201,6 +209,14 @@ class TypeOracle : public ContextualClass<TypeOracle> {
 
   static const Type* GetConstInt32Type() {
     return Get().GetBuiltinType(CONST_INT32_TYPE_STRING);
+  }
+
+  static const Type* GetContextType() {
+    return Get().GetBuiltinType(CONTEXT_TYPE_STRING);
+  }
+
+  static const Type* GetJSFunctionType() {
+    return Get().GetBuiltinType(JS_FUNCTION_TYPE_STRING);
   }
 
   static bool IsImplicitlyConvertableFrom(const Type* to, const Type* from) {

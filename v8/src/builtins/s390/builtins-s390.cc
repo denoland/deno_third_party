@@ -1582,12 +1582,14 @@ void Generate_ContinueToBuiltinHelper(MacroAssembler* masm,
   __ LoadP(
       fp,
       MemOperand(sp, BuiltinContinuationFrameConstants::kFixedFrameSizeFromFp));
+  // Load builtin index (stored as a Smi) and use it to get the builtin start
+  // address from the builtins table.
   __ Pop(ip);
   __ AddP(sp, sp,
           Operand(BuiltinContinuationFrameConstants::kFixedFrameSizeFromFp));
   __ Pop(r0);
   __ LoadRR(r14, r0);
-  __ AddP(ip, ip, Operand(Code::kHeaderSize - kHeapObjectTag));
+  __ LoadEntryFromBuiltinIndex(ip);
   __ Jump(ip);
 }
 }  // namespace
@@ -3004,13 +3006,22 @@ static void CallApiFunctionAndReturn(MacroAssembler* masm,
   __ LoadlB(scratch, MemOperand(scratch, 0));
   __ CmpP(scratch, Operand::Zero());
 
-  Label profiler_disabled;
-  Label end_profiler_check;
-  __ beq(&profiler_disabled, Label::kNear);
-  __ Move(scratch, thunk_ref);
-  __ b(&end_profiler_check, Label::kNear);
-  __ bind(&profiler_disabled);
-  __ LoadRR(scratch, function_address);
+  Label profiler_enabled, end_profiler_check;
+  __ bne(&profiler_enabled, Label::kNear);
+  __ Move(scratch, ExternalReference::address_of_runtime_stats_flag());
+  __ LoadlW(scratch, MemOperand(scratch, 0));
+  __ CmpP(scratch, Operand::Zero());
+  __ bne(&profiler_enabled, Label::kNear);
+  {
+    // Call the api function directly.
+    __ LoadRR(scratch, function_address);
+    __ b(&end_profiler_check, Label::kNear);
+  }
+  __ bind(&profiler_enabled);
+  {
+    // Additional parameter is the address of the actual callback.
+    __ Move(scratch, thunk_ref);
+  }
   __ bind(&end_profiler_check);
 
   // Allocate HandleScope in callee-save registers.

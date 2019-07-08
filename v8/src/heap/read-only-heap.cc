@@ -28,18 +28,42 @@ ReadOnlyHeap* ReadOnlyHeap::shared_ro_heap_ = nullptr;
 void ReadOnlyHeap::SetUp(Isolate* isolate, ReadOnlyDeserializer* des) {
   DCHECK_NOT_NULL(isolate);
 #ifdef V8_SHARED_RO_HEAP
-  // Make sure we are only sharing read-only space when deserializing. Otherwise
-  // we would be trying to create heap objects inside an already initialized
-  // read-only space. Use ClearSharedHeapForTest if you need a new read-only
-  // space.
-  DCHECK_IMPLIES(shared_ro_heap_ != nullptr, des != nullptr);
+  bool call_once_ran = false;
+  base::Optional<Checksum> des_checksum;
+#ifdef DEBUG
+  if (des != nullptr) des_checksum = des->GetChecksum();
+#endif  // DEBUG
 
-  base::CallOnce(&setup_ro_heap_once, [isolate, des]() {
-    shared_ro_heap_ = CreateAndAttachToIsolate(isolate);
-    if (des != nullptr) shared_ro_heap_->DeseralizeIntoIsolate(isolate, des);
-  });
+  base::CallOnce(&setup_ro_heap_once,
+                 [isolate, des, des_checksum, &call_once_ran]() {
+                   USE(des_checksum);
+                   shared_ro_heap_ = CreateAndAttachToIsolate(isolate);
+                   if (des != nullptr) {
+#ifdef DEBUG
+                     shared_ro_heap_->read_only_blob_checksum_ = des_checksum;
+#endif  // DEBUG
+                     shared_ro_heap_->DeseralizeIntoIsolate(isolate, des);
+                   }
+                   call_once_ran = true;
+                 });
 
-  isolate->heap()->SetUpFromReadOnlyHeap(shared_ro_heap_);
+  USE(call_once_ran);
+  USE(des_checksum);
+#ifdef DEBUG
+  const base::Optional<Checksum> last_checksum =
+      shared_ro_heap_->read_only_blob_checksum_;
+  if (last_checksum || des_checksum) {
+    // The read-only heap was set up from a snapshot. Make sure it's the always
+    // the same snapshot.
+    CHECK_EQ(last_checksum, des_checksum);
+  } else {
+    // The read-only heap objects were created. Make sure this happens only
+    // once, during this call.
+    CHECK(call_once_ran);
+  }
+#endif  // DEBUG
+
+  isolate->SetUpFromReadOnlyHeap(shared_ro_heap_);
   if (des != nullptr) {
     void* const isolate_ro_roots = reinterpret_cast<void*>(
         isolate->roots_table().read_only_roots_begin().address());
@@ -67,7 +91,7 @@ void ReadOnlyHeap::OnCreateHeapObjectsComplete(Isolate* isolate) {
 // static
 ReadOnlyHeap* ReadOnlyHeap::CreateAndAttachToIsolate(Isolate* isolate) {
   auto* ro_heap = new ReadOnlyHeap(new ReadOnlySpace(isolate->heap()));
-  isolate->heap()->SetUpFromReadOnlyHeap(ro_heap);
+  isolate->SetUpFromReadOnlyHeap(ro_heap);
   return ro_heap;
 }
 
@@ -125,15 +149,15 @@ bool ReadOnlyHeap::read_only_object_cache_is_initialized() const {
   return read_only_object_cache_.size() > 0;
 }
 
-ReadOnlyHeapIterator::ReadOnlyHeapIterator(ReadOnlyHeap* ro_heap)
-    : ReadOnlyHeapIterator(ro_heap->read_only_space()) {}
+ReadOnlyHeapObjectIterator::ReadOnlyHeapObjectIterator(ReadOnlyHeap* ro_heap)
+    : ReadOnlyHeapObjectIterator(ro_heap->read_only_space()) {}
 
-ReadOnlyHeapIterator::ReadOnlyHeapIterator(ReadOnlySpace* ro_space)
+ReadOnlyHeapObjectIterator::ReadOnlyHeapObjectIterator(ReadOnlySpace* ro_space)
     : ro_space_(ro_space),
       current_page_(ro_space->first_page()),
       current_addr_(current_page_->area_start()) {}
 
-HeapObject ReadOnlyHeapIterator::Next() {
+HeapObject ReadOnlyHeapObjectIterator::Next() {
   if (current_page_ == nullptr) {
     return HeapObject();
   }

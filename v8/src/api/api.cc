@@ -237,17 +237,9 @@ namespace v8 {
 #define RETURN_ON_FAILED_EXECUTION_PRIMITIVE(T) \
   EXCEPTION_BAILOUT_CHECK_SCOPED_DO_NOT_USE(isolate, Nothing<T>())
 
-#define RETURN_TO_LOCAL_UNCHECKED(maybe_local, T) \
-  return maybe_local.FromMaybe(Local<T>());
-
 #define RETURN_ESCAPED(value) return handle_scope.Escape(value);
 
 namespace {
-
-Local<Context> ContextFromNeverReadOnlySpaceObject(
-    i::Handle<i::JSReceiver> obj) {
-  return reinterpret_cast<v8::Isolate*>(obj->GetIsolate())->GetCurrentContext();
-}
 
 class InternalEscapableScope : public v8::EscapableHandleScope {
  public:
@@ -447,7 +439,7 @@ void i::V8::FatalProcessOutOfMemory(i::Isolate* isolate, const char* location,
   heap_stats.end_marker = &end_marker;
   if (isolate->heap()->HasBeenSetUp()) {
     // BUG(1718): Don't use the take_snapshot since we don't support
-    // HeapIterator here without doing a special GC.
+    // HeapObjectIterator here without doing a special GC.
     isolate->heap()->RecordStats(&heap_stats, false);
     char* first_newline = strchr(last_few_messages, '\n');
     if (first_newline == nullptr || first_newline[1] == '\0')
@@ -764,7 +756,7 @@ StartupData SnapshotCreator::CreateBlob(
     std::vector<i::Handle<i::SharedFunctionInfo>> sfis_to_clear;
 
     {  // Heap allocation is disallowed within this scope.
-      i::HeapIterator heap_iterator(isolate->heap());
+      i::HeapObjectIterator heap_iterator(isolate->heap());
       for (i::HeapObject current_obj = heap_iterator.Next();
            !current_obj.is_null(); current_obj = heap_iterator.Next()) {
         if (current_obj.IsSharedFunctionInfo()) {
@@ -810,7 +802,7 @@ StartupData SnapshotCreator::CreateBlob(
   i::SerializedHandleChecker handle_checker(isolate, &contexts);
   CHECK(handle_checker.CheckGlobalAndEternalHandles());
 
-  i::HeapIterator heap_iterator(isolate->heap());
+  i::HeapObjectIterator heap_iterator(isolate->heap());
   for (i::HeapObject current_obj = heap_iterator.Next(); !current_obj.is_null();
        current_obj = heap_iterator.Next()) {
     if (current_obj.IsJSFunction()) {
@@ -1434,17 +1426,21 @@ static Local<FunctionTemplate> FunctionTemplateNew(
       i::FUNCTION_TEMPLATE_INFO_TYPE, i::AllocationType::kOld);
   i::Handle<i::FunctionTemplateInfo> obj =
       i::Handle<i::FunctionTemplateInfo>::cast(struct_obj);
-  InitializeFunctionTemplate(obj);
-  obj->set_do_not_cache(do_not_cache);
-  int next_serial_number = i::FunctionTemplateInfo::kInvalidSerialNumber;
-  if (!do_not_cache) {
-    next_serial_number = isolate->heap()->GetNextTemplateSerialNumber();
+  {
+    // Disallow GC until all fields of obj have acceptable types.
+    i::DisallowHeapAllocation no_gc;
+    InitializeFunctionTemplate(obj);
+    obj->set_length(length);
+    obj->set_do_not_cache(do_not_cache);
+    int next_serial_number = i::FunctionTemplateInfo::kInvalidSerialNumber;
+    if (!do_not_cache) {
+      next_serial_number = isolate->heap()->GetNextTemplateSerialNumber();
+    }
+    obj->set_serial_number(i::Smi::FromInt(next_serial_number));
   }
-  obj->set_serial_number(i::Smi::FromInt(next_serial_number));
   if (callback != nullptr) {
     Utils::ToLocal(obj)->SetCallHandler(callback, data, side_effect_type);
   }
-  obj->set_length(length);
   obj->set_undetectable(false);
   obj->set_needs_access_check(false);
   obj->set_accept_any_receiver(true);
@@ -2237,15 +2233,21 @@ Local<Value> Module::GetException() const {
 
 int Module::GetModuleRequestsLength() const {
   i::Handle<i::Module> self = Utils::OpenHandle(this);
-  return self->info().module_requests().length();
+  if (self->IsSyntheticModule()) return 0;
+  return i::Handle<i::SourceTextModule>::cast(self)
+      ->info()
+      .module_requests()
+      .length();
 }
 
 Local<String> Module::GetModuleRequest(int i) const {
   CHECK_GE(i, 0);
   i::Handle<i::Module> self = Utils::OpenHandle(this);
+  CHECK(self->IsSourceTextModule());
   i::Isolate* isolate = self->GetIsolate();
-  i::Handle<i::FixedArray> module_requests(self->info().module_requests(),
-                                           isolate);
+  i::Handle<i::FixedArray> module_requests(
+      i::Handle<i::SourceTextModule>::cast(self)->info().module_requests(),
+      isolate);
   CHECK_LT(i, module_requests->length());
   return ToApiHandle<String>(i::handle(module_requests->get(i), isolate));
 }
@@ -2255,11 +2257,16 @@ Location Module::GetModuleRequestLocation(int i) const {
   i::Handle<i::Module> self = Utils::OpenHandle(this);
   i::Isolate* isolate = self->GetIsolate();
   i::HandleScope scope(isolate);
+  CHECK(self->IsSourceTextModule());
   i::Handle<i::FixedArray> module_request_positions(
-      self->info().module_request_positions(), isolate);
+      i::Handle<i::SourceTextModule>::cast(self)
+          ->info()
+          .module_request_positions(),
+      isolate);
   CHECK_LT(i, module_request_positions->length());
   int position = i::Smi::ToInt(module_request_positions->get(i));
-  i::Handle<i::Script> script(self->script(), isolate);
+  i::Handle<i::Script> script(
+      i::Handle<i::SourceTextModule>::cast(self)->script(), isolate);
   i::Script::PositionInfo info;
   i::Script::GetPositionInfo(script, position, &info, i::Script::WITH_OFFSET);
   return v8::Location(info.line, info.column);
@@ -2280,8 +2287,10 @@ Local<UnboundModuleScript> Module::GetUnboundModuleScript() {
       GetStatus() < kEvaluating, "v8::Module::GetUnboundScript",
       "v8::Module::GetUnboundScript must be used on an unevaluated module");
   i::Handle<i::Module> self = Utils::OpenHandle(this);
+  CHECK(self->IsSourceTextModule());
   return ToApiHandle<UnboundModuleScript>(i::Handle<i::SharedFunctionInfo>(
-      self->GetSharedFunctionInfo(), self->GetIsolate()));
+      i::Handle<i::SourceTextModule>::cast(self)->GetSharedFunctionInfo(),
+      self->GetIsolate()));
 }
 
 int Module::GetIdentityHash() const { return Utils::OpenHandle(this)->hash(); }
@@ -2314,6 +2323,37 @@ MaybeLocal<Value> Module::Evaluate(Local<Context> context) {
   has_pending_exception = !ToLocal(i::Module::Evaluate(isolate, self), &result);
   RETURN_ON_FAILED_EXECUTION(Value);
   RETURN_ESCAPED(result);
+}
+
+Local<Module> Module::CreateSyntheticModule(
+    Isolate* isolate, Local<String> module_name,
+    const std::vector<Local<v8::String>>& export_names,
+    v8::Module::SyntheticModuleEvaluationSteps evaluation_steps) {
+  auto i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+  i::Handle<i::String> i_module_name = Utils::OpenHandle(*module_name);
+  i::Handle<i::FixedArray> i_export_names = i_isolate->factory()->NewFixedArray(
+      static_cast<int>(export_names.size()));
+  for (int i = 0; i < i_export_names->length(); ++i) {
+    i::Handle<i::String> str = Utils::OpenHandle(*export_names[i]);
+    i_export_names->set(i, *str);
+  }
+  return v8::Utils::ToLocal(
+      i::Handle<i::Module>(i_isolate->factory()->NewSyntheticModule(
+          i_module_name, i_export_names, evaluation_steps)));
+}
+
+void Module::SetSyntheticModuleExport(Local<String> export_name,
+                                      Local<v8::Value> export_value) {
+  i::Handle<i::String> i_export_name = Utils::OpenHandle(*export_name);
+  i::Handle<i::Object> i_export_value = Utils::OpenHandle(*export_value);
+  i::Handle<i::Module> self = Utils::OpenHandle(this);
+  Utils::ApiCheck(self->IsSyntheticModule(),
+                  "v8::Module::SetSyntheticModuleExport",
+                  "v8::Module::SetSyntheticModuleExport must only be called on "
+                  "a SyntheticModule");
+  i::SyntheticModule::SetExport(self->GetIsolate(),
+                                i::Handle<i::SyntheticModule>::cast(self),
+                                i_export_name, i_export_value);
 }
 
 namespace {
@@ -2426,7 +2466,7 @@ MaybeLocal<Module> ScriptCompiler::CompileModule(
   if (!maybe.ToLocal(&unbound)) return MaybeLocal<Module>();
 
   i::Handle<i::SharedFunctionInfo> shared = Utils::OpenHandle(*unbound);
-  return ToApiHandle<Module>(i_isolate->factory()->NewModule(shared));
+  return ToApiHandle<Module>(i_isolate->factory()->NewSourceTextModule(shared));
 }
 
 namespace {
@@ -2905,11 +2945,11 @@ Local<StackTrace> StackTrace::CurrentStackTrace(Isolate* isolate,
 // --- S t a c k F r a m e ---
 
 int StackFrame::GetLineNumber() const {
-  return i::StackTraceFrame::GetLineNumber(Utils::OpenHandle(this));
+  return i::StackTraceFrame::GetOneBasedLineNumber(Utils::OpenHandle(this));
 }
 
 int StackFrame::GetColumn() const {
-  return i::StackTraceFrame::GetColumnNumber(Utils::OpenHandle(this));
+  return i::StackTraceFrame::GetOneBasedColumnNumber(Utils::OpenHandle(this));
 }
 
 int StackFrame::GetScriptId() const {
@@ -3521,8 +3561,7 @@ MaybeLocal<Uint32> Value::ToUint32(Local<Context> context) const {
 }
 
 i::Isolate* i::IsolateFromNeverReadOnlySpaceObject(i::Address obj) {
-  return i::NeverReadOnlySpaceObject::GetIsolate(
-      i::HeapObject::cast(i::Object(obj)));
+  return i::GetIsolateFromWritableObject(i::HeapObject::cast(i::Object(obj)));
 }
 
 bool i::ShouldThrowOnError(i::Isolate* isolate) {
@@ -3869,11 +3908,6 @@ Maybe<bool> v8::Object::Set(v8::Local<v8::Context> context,
   return Just(true);
 }
 
-bool v8::Object::Set(v8::Local<Value> key, v8::Local<Value> value) {
-  auto context = ContextFromNeverReadOnlySpaceObject(Utils::OpenHandle(this));
-  return Set(context, key, value).FromMaybe(false);
-}
-
 Maybe<bool> v8::Object::Set(v8::Local<v8::Context> context, uint32_t index,
                             v8::Local<Value> value) {
   auto isolate = reinterpret_cast<i::Isolate*>(context->GetIsolate());
@@ -3885,11 +3919,6 @@ Maybe<bool> v8::Object::Set(v8::Local<v8::Context> context, uint32_t index,
                               .is_null();
   RETURN_ON_FAILED_EXECUTION_PRIMITIVE(bool);
   return Just(true);
-}
-
-bool v8::Object::Set(uint32_t index, v8::Local<Value> value) {
-  auto context = ContextFromNeverReadOnlySpaceObject(Utils::OpenHandle(this));
-  return Set(context, index, value).FromMaybe(false);
 }
 
 Maybe<bool> v8::Object::CreateDataProperty(v8::Local<v8::Context> context,
@@ -4109,11 +4138,6 @@ MaybeLocal<Value> v8::Object::Get(Local<v8::Context> context,
   RETURN_ESCAPED(Utils::ToLocal(result));
 }
 
-Local<Value> v8::Object::Get(v8::Local<Value> key) {
-  auto context = ContextFromNeverReadOnlySpaceObject(Utils::OpenHandle(this));
-  RETURN_TO_LOCAL_UNCHECKED(Get(context, key), Value);
-}
-
 MaybeLocal<Value> v8::Object::Get(Local<Context> context, uint32_t index) {
   PREPARE_FOR_EXECUTION(context, Object, Get, Value);
   auto self = Utils::OpenHandle(this);
@@ -4122,11 +4146,6 @@ MaybeLocal<Value> v8::Object::Get(Local<Context> context, uint32_t index) {
       !i::JSReceiver::GetElement(isolate, self, index).ToHandle(&result);
   RETURN_ON_FAILED_EXECUTION(Value);
   RETURN_ESCAPED(Utils::ToLocal(result));
-}
-
-Local<Value> v8::Object::Get(uint32_t index) {
-  auto context = ContextFromNeverReadOnlySpaceObject(Utils::OpenHandle(this));
-  RETURN_TO_LOCAL_UNCHECKED(Get(context, index), Value);
 }
 
 MaybeLocal<Value> v8::Object::GetPrivate(Local<Context> context,
@@ -4257,10 +4276,10 @@ MaybeLocal<String> v8::Object::ObjectProtoToString(Local<Context> context) {
   PREPARE_FOR_EXECUTION(context, Object, ObjectProtoToString, String);
   auto self = Utils::OpenHandle(this);
   Local<Value> result;
-  has_pending_exception =
-      !ToLocal<Value>(i::Execution::Call(isolate, isolate->object_to_string(),
-                                         self, 0, nullptr),
-                      &result);
+  has_pending_exception = !ToLocal<Value>(
+      i::Execution::CallBuiltin(isolate, isolate->object_to_string(), self, 0,
+                                nullptr),
+      &result);
   RETURN_ON_FAILED_EXECUTION(String);
   RETURN_ESCAPED(Local<String>::Cast(result));
 }
@@ -5361,20 +5380,15 @@ Local<Value> Symbol::Name() const {
   i::Handle<i::Symbol> sym = Utils::OpenHandle(this);
 
   i::Isolate* isolate;
-  if (!i::GetIsolateFromWritableObject(*sym, &isolate)) {
-    // If the Symbol is in RO_SPACE, then its name must be too. Since RO_SPACE
-    // objects are immovable we can use the Handle(Address*) constructor with
-    // the address of the name field in the Symbol object without needing an
-    // isolate.
-#ifdef V8_COMPRESS_POINTERS
-    // Compressed fields can't serve as handle locations.
-    // TODO(ishell): get Isolate as a parameter.
-    isolate = i::Isolate::Current();
-#else
+  if (!i::GetIsolateFromHeapObject(*sym, &isolate)) {
+    // Symbol is in RO_SPACE, which means that its name is also in RO_SPACE.
+    // Since RO_SPACE objects are immovable we can use the Handle(Address*)
+    // constructor with the address of the name field in the Symbol object
+    // without needing an isolate.
+    DCHECK(!COMPRESS_POINTERS_BOOL);
     i::Handle<i::HeapObject> ro_name(reinterpret_cast<i::Address*>(
         sym->GetFieldAddress(i::Symbol::kNameOffset)));
     return Utils::ToLocal(ro_name);
-#endif
   }
 
   i::Handle<i::Object> name(sym->name(), isolate);
@@ -6234,8 +6248,7 @@ bool v8::String::MakeExternal(v8::String::ExternalStringResource* resource) {
 
   // It is safe to call GetIsolateFromWritableHeapObject because
   // SupportsExternalization already checked that the object is writable.
-  i::Isolate* isolate;
-  i::GetIsolateFromWritableObject(obj, &isolate);
+  i::Isolate* isolate = i::GetIsolateFromWritableObject(obj);
   ENTER_V8_NO_SCRIPT_NO_EXCEPTION(isolate);
 
   CHECK(resource && resource->data());
@@ -6262,8 +6275,7 @@ bool v8::String::MakeExternal(
 
   // It is safe to call GetIsolateFromWritableHeapObject because
   // SupportsExternalization already checked that the object is writable.
-  i::Isolate* isolate;
-  i::GetIsolateFromWritableObject(obj, &isolate);
+  i::Isolate* isolate = i::GetIsolateFromWritableObject(obj);
   ENTER_V8_NO_SCRIPT_NO_EXCEPTION(isolate);
 
   CHECK(resource && resource->data());
@@ -6380,10 +6392,11 @@ Local<v8::Value> v8::NumberObject::New(Isolate* isolate, double value) {
 
 double v8::NumberObject::ValueOf() const {
   i::Handle<i::Object> obj = Utils::OpenHandle(this);
-  i::Handle<i::JSValue> jsvalue = i::Handle<i::JSValue>::cast(obj);
-  i::Isolate* isolate = jsvalue->GetIsolate();
+  i::Handle<i::JSPrimitiveWrapper> js_primitive_wrapper =
+      i::Handle<i::JSPrimitiveWrapper>::cast(obj);
+  i::Isolate* isolate = js_primitive_wrapper->GetIsolate();
   LOG_API(isolate, NumberObject, NumberValue);
-  return jsvalue->value().Number();
+  return js_primitive_wrapper->value().Number();
 }
 
 Local<v8::Value> v8::BigIntObject::New(Isolate* isolate, int64_t value) {
@@ -6398,11 +6411,12 @@ Local<v8::Value> v8::BigIntObject::New(Isolate* isolate, int64_t value) {
 
 Local<v8::BigInt> v8::BigIntObject::ValueOf() const {
   i::Handle<i::Object> obj = Utils::OpenHandle(this);
-  i::Handle<i::JSValue> jsvalue = i::Handle<i::JSValue>::cast(obj);
-  i::Isolate* isolate = jsvalue->GetIsolate();
+  i::Handle<i::JSPrimitiveWrapper> js_primitive_wrapper =
+      i::Handle<i::JSPrimitiveWrapper>::cast(obj);
+  i::Isolate* isolate = js_primitive_wrapper->GetIsolate();
   LOG_API(isolate, BigIntObject, BigIntValue);
-  return Utils::ToLocal(
-      i::Handle<i::BigInt>(i::BigInt::cast(jsvalue->value()), isolate));
+  return Utils::ToLocal(i::Handle<i::BigInt>(
+      i::BigInt::cast(js_primitive_wrapper->value()), isolate));
 }
 
 Local<v8::Value> v8::BooleanObject::New(Isolate* isolate, bool value) {
@@ -6420,10 +6434,11 @@ Local<v8::Value> v8::BooleanObject::New(Isolate* isolate, bool value) {
 
 bool v8::BooleanObject::ValueOf() const {
   i::Handle<i::Object> obj = Utils::OpenHandle(this);
-  i::Handle<i::JSValue> jsvalue = i::Handle<i::JSValue>::cast(obj);
-  i::Isolate* isolate = jsvalue->GetIsolate();
+  i::Handle<i::JSPrimitiveWrapper> js_primitive_wrapper =
+      i::Handle<i::JSPrimitiveWrapper>::cast(obj);
+  i::Isolate* isolate = js_primitive_wrapper->GetIsolate();
   LOG_API(isolate, BooleanObject, BooleanValue);
-  return jsvalue->value().IsTrue(isolate);
+  return js_primitive_wrapper->value().IsTrue(isolate);
 }
 
 Local<v8::Value> v8::StringObject::New(Isolate* v8_isolate,
@@ -6439,11 +6454,12 @@ Local<v8::Value> v8::StringObject::New(Isolate* v8_isolate,
 
 Local<v8::String> v8::StringObject::ValueOf() const {
   i::Handle<i::Object> obj = Utils::OpenHandle(this);
-  i::Handle<i::JSValue> jsvalue = i::Handle<i::JSValue>::cast(obj);
-  i::Isolate* isolate = jsvalue->GetIsolate();
+  i::Handle<i::JSPrimitiveWrapper> js_primitive_wrapper =
+      i::Handle<i::JSPrimitiveWrapper>::cast(obj);
+  i::Isolate* isolate = js_primitive_wrapper->GetIsolate();
   LOG_API(isolate, StringObject, StringValue);
-  return Utils::ToLocal(
-      i::Handle<i::String>(i::String::cast(jsvalue->value()), isolate));
+  return Utils::ToLocal(i::Handle<i::String>(
+      i::String::cast(js_primitive_wrapper->value()), isolate));
 }
 
 Local<v8::Value> v8::SymbolObject::New(Isolate* isolate, Local<Symbol> value) {
@@ -6458,11 +6474,12 @@ Local<v8::Value> v8::SymbolObject::New(Isolate* isolate, Local<Symbol> value) {
 
 Local<v8::Symbol> v8::SymbolObject::ValueOf() const {
   i::Handle<i::Object> obj = Utils::OpenHandle(this);
-  i::Handle<i::JSValue> jsvalue = i::Handle<i::JSValue>::cast(obj);
-  i::Isolate* isolate = jsvalue->GetIsolate();
+  i::Handle<i::JSPrimitiveWrapper> js_primitive_wrapper =
+      i::Handle<i::JSPrimitiveWrapper>::cast(obj);
+  i::Isolate* isolate = js_primitive_wrapper->GetIsolate();
   LOG_API(isolate, SymbolObject, SymbolValue);
-  return Utils::ToLocal(
-      i::Handle<i::Symbol>(i::Symbol::cast(jsvalue->value()), isolate));
+  return Utils::ToLocal(i::Handle<i::Symbol>(
+      i::Symbol::cast(js_primitive_wrapper->value()), isolate));
 }
 
 MaybeLocal<v8::Value> v8::Date::New(Local<Context> context, double time) {
@@ -6599,8 +6616,8 @@ MaybeLocal<Value> Map::Get(Local<Context> context, Local<Value> key) {
   Local<Value> result;
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*key)};
   has_pending_exception =
-      !ToLocal<Value>(i::Execution::Call(isolate, isolate->map_get(), self,
-                                         arraysize(argv), argv),
+      !ToLocal<Value>(i::Execution::CallBuiltin(isolate, isolate->map_get(),
+                                                self, arraysize(argv), argv),
                       &result);
   RETURN_ON_FAILED_EXECUTION(Value);
   RETURN_ESCAPED(result);
@@ -6613,9 +6630,10 @@ MaybeLocal<Map> Map::Set(Local<Context> context, Local<Value> key,
   i::Handle<i::Object> result;
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*key),
                                  Utils::OpenHandle(*value)};
-  has_pending_exception = !i::Execution::Call(isolate, isolate->map_set(), self,
-                                              arraysize(argv), argv)
-                               .ToHandle(&result);
+  has_pending_exception =
+      !i::Execution::CallBuiltin(isolate, isolate->map_set(), self,
+                                 arraysize(argv), argv)
+           .ToHandle(&result);
   RETURN_ON_FAILED_EXECUTION(Map);
   RETURN_ESCAPED(Local<Map>::Cast(Utils::ToLocal(result)));
 }
@@ -6626,9 +6644,10 @@ Maybe<bool> Map::Has(Local<Context> context, Local<Value> key) {
   auto self = Utils::OpenHandle(this);
   i::Handle<i::Object> result;
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*key)};
-  has_pending_exception = !i::Execution::Call(isolate, isolate->map_has(), self,
-                                              arraysize(argv), argv)
-                               .ToHandle(&result);
+  has_pending_exception =
+      !i::Execution::CallBuiltin(isolate, isolate->map_has(), self,
+                                 arraysize(argv), argv)
+           .ToHandle(&result);
   RETURN_ON_FAILED_EXECUTION_PRIMITIVE(bool);
   return Just(result->IsTrue(isolate));
 }
@@ -6639,9 +6658,10 @@ Maybe<bool> Map::Delete(Local<Context> context, Local<Value> key) {
   auto self = Utils::OpenHandle(this);
   i::Handle<i::Object> result;
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*key)};
-  has_pending_exception = !i::Execution::Call(isolate, isolate->map_delete(),
-                                              self, arraysize(argv), argv)
-                               .ToHandle(&result);
+  has_pending_exception =
+      !i::Execution::CallBuiltin(isolate, isolate->map_delete(), self,
+                                 arraysize(argv), argv)
+           .ToHandle(&result);
   RETURN_ON_FAILED_EXECUTION_PRIMITIVE(bool);
   return Just(result->IsTrue(isolate));
 }
@@ -6727,9 +6747,10 @@ MaybeLocal<Set> Set::Add(Local<Context> context, Local<Value> key) {
   auto self = Utils::OpenHandle(this);
   i::Handle<i::Object> result;
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*key)};
-  has_pending_exception = !i::Execution::Call(isolate, isolate->set_add(), self,
-                                              arraysize(argv), argv)
-                               .ToHandle(&result);
+  has_pending_exception =
+      !i::Execution::CallBuiltin(isolate, isolate->set_add(), self,
+                                 arraysize(argv), argv)
+           .ToHandle(&result);
   RETURN_ON_FAILED_EXECUTION(Set);
   RETURN_ESCAPED(Local<Set>::Cast(Utils::ToLocal(result)));
 }
@@ -6740,9 +6761,10 @@ Maybe<bool> Set::Has(Local<Context> context, Local<Value> key) {
   auto self = Utils::OpenHandle(this);
   i::Handle<i::Object> result;
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*key)};
-  has_pending_exception = !i::Execution::Call(isolate, isolate->set_has(), self,
-                                              arraysize(argv), argv)
-                               .ToHandle(&result);
+  has_pending_exception =
+      !i::Execution::CallBuiltin(isolate, isolate->set_has(), self,
+                                 arraysize(argv), argv)
+           .ToHandle(&result);
   RETURN_ON_FAILED_EXECUTION_PRIMITIVE(bool);
   return Just(result->IsTrue(isolate));
 }
@@ -6753,9 +6775,10 @@ Maybe<bool> Set::Delete(Local<Context> context, Local<Value> key) {
   auto self = Utils::OpenHandle(this);
   i::Handle<i::Object> result;
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*key)};
-  has_pending_exception = !i::Execution::Call(isolate, isolate->set_delete(),
-                                              self, arraysize(argv), argv)
-                               .ToHandle(&result);
+  has_pending_exception =
+      !i::Execution::CallBuiltin(isolate, isolate->set_delete(), self,
+                                 arraysize(argv), argv)
+           .ToHandle(&result);
   RETURN_ON_FAILED_EXECUTION_PRIMITIVE(bool);
   return Just(result->IsTrue(isolate));
 }
@@ -6856,9 +6879,10 @@ MaybeLocal<Promise> Promise::Catch(Local<Context> context,
   auto self = Utils::OpenHandle(this);
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*handler)};
   i::Handle<i::Object> result;
-  has_pending_exception = !i::Execution::Call(isolate, isolate->promise_catch(),
-                                              self, arraysize(argv), argv)
-                               .ToHandle(&result);
+  has_pending_exception =
+      !i::Execution::CallBuiltin(isolate, isolate->promise_catch(), self,
+                                 arraysize(argv), argv)
+           .ToHandle(&result);
   RETURN_ON_FAILED_EXECUTION(Promise);
   RETURN_ESCAPED(Local<Promise>::Cast(Utils::ToLocal(result)));
 }
@@ -6869,9 +6893,10 @@ MaybeLocal<Promise> Promise::Then(Local<Context> context,
   auto self = Utils::OpenHandle(this);
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*handler)};
   i::Handle<i::Object> result;
-  has_pending_exception = !i::Execution::Call(isolate, isolate->promise_then(),
-                                              self, arraysize(argv), argv)
-                               .ToHandle(&result);
+  has_pending_exception =
+      !i::Execution::CallBuiltin(isolate, isolate->promise_then(), self,
+                                 arraysize(argv), argv)
+           .ToHandle(&result);
   RETURN_ON_FAILED_EXECUTION(Promise);
   RETURN_ESCAPED(Local<Promise>::Cast(Utils::ToLocal(result)));
 }
@@ -6884,9 +6909,10 @@ MaybeLocal<Promise> Promise::Then(Local<Context> context,
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*on_fulfilled),
                                  Utils::OpenHandle(*on_rejected)};
   i::Handle<i::Object> result;
-  has_pending_exception = !i::Execution::Call(isolate, isolate->promise_then(),
-                                              self, arraysize(argv), argv)
-                               .ToHandle(&result);
+  has_pending_exception =
+      !i::Execution::CallBuiltin(isolate, isolate->promise_then(), self,
+                                 arraysize(argv), argv)
+           .ToHandle(&result);
   RETURN_ON_FAILED_EXECUTION(Promise);
   RETURN_ESCAPED(Local<Promise>::Cast(Utils::ToLocal(result)));
 }
@@ -8303,7 +8329,7 @@ void Isolate::LowMemoryNotification() {
         i::GarbageCollectionReason::kLowMemoryNotification);
   }
   {
-    i::HeapIterator iterator(isolate->heap());
+    i::HeapObjectIterator iterator(isolate->heap());
     for (i::HeapObject obj = iterator.Next(); !obj.is_null();
          obj = iterator.Next()) {
       if (obj.IsAbstractCode()) {
@@ -8420,6 +8446,9 @@ CALLBACK_SETTER(FatalErrorHandler, FatalErrorCallback, exception_behavior)
 CALLBACK_SETTER(OOMErrorHandler, OOMErrorCallback, oom_behavior)
 CALLBACK_SETTER(AllowCodeGenerationFromStringsCallback,
                 AllowCodeGenerationFromStringsCallback, allow_code_gen_callback)
+CALLBACK_SETTER(ModifyCodeGenerationFromStringsCallback,
+                ModifyCodeGenerationFromStringsCallback,
+                modify_code_gen_callback)
 CALLBACK_SETTER(AllowWasmCodeGenerationCallback,
                 AllowWasmCodeGenerationCallback, allow_wasm_code_gen_callback)
 
@@ -9580,8 +9609,8 @@ v8::MaybeLocal<v8::Value> debug::WeakMap::Get(v8::Local<v8::Context> context,
   Local<Value> result;
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*key)};
   has_pending_exception =
-      !ToLocal<Value>(i::Execution::Call(isolate, isolate->weakmap_get(), self,
-                                         arraysize(argv), argv),
+      !ToLocal<Value>(i::Execution::CallBuiltin(isolate, isolate->weakmap_get(),
+                                                self, arraysize(argv), argv),
                       &result);
   RETURN_ON_FAILED_EXECUTION(Value);
   RETURN_ESCAPED(result);
@@ -9595,9 +9624,10 @@ v8::MaybeLocal<debug::WeakMap> debug::WeakMap::Set(
   i::Handle<i::Object> result;
   i::Handle<i::Object> argv[] = {Utils::OpenHandle(*key),
                                  Utils::OpenHandle(*value)};
-  has_pending_exception = !i::Execution::Call(isolate, isolate->weakmap_set(),
-                                              self, arraysize(argv), argv)
-                               .ToHandle(&result);
+  has_pending_exception =
+      !i::Execution::CallBuiltin(isolate, isolate->weakmap_set(), self,
+                                 arraysize(argv), argv)
+           .ToHandle(&result);
   RETURN_ON_FAILED_EXECUTION(WeakMap);
   RETURN_ESCAPED(Local<WeakMap>::Cast(Utils::ToLocal(result)));
 }
@@ -10382,8 +10412,7 @@ void InvokeAccessorGetterCallback(
 void InvokeFunctionCallback(const v8::FunctionCallbackInfo<v8::Value>& info,
                             v8::FunctionCallback callback) {
   Isolate* isolate = reinterpret_cast<Isolate*>(info.GetIsolate());
-  RuntimeCallTimerScope timer(isolate,
-                              RuntimeCallCounterId::kInvokeFunctionCallback);
+  RuntimeCallTimerScope timer(isolate, RuntimeCallCounterId::kFunctionCallback);
   Address callback_address = reinterpret_cast<Address>(callback);
   VMState<EXTERNAL> state(isolate);
   ExternalCallbackScope call_scope(isolate, callback_address);
@@ -10404,7 +10433,6 @@ void InvokeFunctionCallback(const v8::FunctionCallbackInfo<v8::Value>& info,
 #undef EXCEPTION_BAILOUT_CHECK_SCOPED_DO_NOT_USE
 #undef RETURN_ON_FAILED_EXECUTION
 #undef RETURN_ON_FAILED_EXECUTION_PRIMITIVE
-#undef RETURN_TO_LOCAL_UNCHECKED
 #undef RETURN_ESCAPED
 #undef SET_FIELD_WRAPPED
 #undef NEW_STRING

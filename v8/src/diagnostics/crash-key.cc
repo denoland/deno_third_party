@@ -5,8 +5,9 @@
 #include "src/diagnostics/crash-key.h"
 #include "components/crash/core/common/crash_key.h"
 
-#include <string>
+#include <atomic>
 #include <sstream>
+#include <string>
 
 namespace v8 {
 namespace internal {
@@ -33,7 +34,9 @@ static CrashKeyInstance crash_keys[] = {
 };
 
 void AddCrashKey(int id, const char* name, uintptr_t value) {
-  static int current = 0;
+  static std::atomic<int> last{-1};
+  const int current = ++last;
+
   if (current > kMaxCrashKeysCount) {
     return;
   }
@@ -41,7 +44,6 @@ void AddCrashKey(int id, const char* name, uintptr_t value) {
   if (current == kMaxCrashKeysCount) {
     static crash_reporter::CrashKeyString<1> over("v8-too-many-keys");
     over.Set("1");
-    current++;
     return;
   }
 
@@ -50,8 +52,6 @@ void AddCrashKey(int id, const char* name, uintptr_t value) {
   std::stringstream stream;
   stream << name << " " << id << " 0x" << std::hex << value;
   trace_key.Set(stream.str().substr(0, kKeySize));
-
-  current++;
 }
 
 }  // namespace crash

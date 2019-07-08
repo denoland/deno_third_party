@@ -11,9 +11,6 @@
 #include "src/heap/heap-write-barrier.h"
 
 #include "src/common/globals.h"
-// TODO(jkummerow): Get rid of this by moving GetIsolateFromWritableObject
-// elsewhere.
-#include "src/execution/isolate.h"
 #include "src/objects/code.h"
 #include "src/objects/compressed-slots-inl.h"
 #include "src/objects/fixed-array.h"
@@ -41,6 +38,9 @@ V8_EXPORT_PRIVATE void Heap_MarkingBarrierForCodeSlow(Code host,
 V8_EXPORT_PRIVATE void Heap_MarkingBarrierForDescriptorArraySlow(
     Heap* heap, HeapObject host, HeapObject descriptor_array,
     int number_of_own_descriptors);
+
+V8_EXPORT_PRIVATE void Heap_GenerationalEphemeronKeyBarrierSlow(
+    Heap* heap, EphemeronHashTable table, Address slot);
 
 // Do not use these internal details anywhere outside of this file. These
 // internals are only intended to shortcut write barrier checks.
@@ -112,8 +112,7 @@ inline void GenerationalEphemeronKeyBarrierInternal(EphemeronHashTable table,
     return;
   }
 
-  Heap* heap = GetHeapFromWritableObject(table);
-  heap->RecordEphemeronKeyWrite(table, slot);
+  Heap_GenerationalEphemeronKeyBarrierSlow(table_chunk->GetHeap(), table, slot);
 }
 
 inline void MarkingBarrierInternal(HeapObject object, Address slot,
@@ -227,38 +226,10 @@ inline bool ObjectInYoungGeneration(Object object) {
       ->InYoungGeneration();
 }
 
-inline Heap* GetHeapFromWritableObject(HeapObject object) {
-#ifdef V8_COMPRESS_POINTERS
-  return GetIsolateFromWritableObject(object)->heap();
-#else
+inline bool IsReadOnlyHeapObject(HeapObject object) {
   heap_internals::MemoryChunk* chunk =
       heap_internals::MemoryChunk::FromHeapObject(object);
-  return chunk->GetHeap();
-#endif  // V8_COMPRESS_POINTERS
-}
-
-inline Isolate* GetIsolateFromWritableObject(HeapObject object) {
-#ifdef V8_COMPRESS_POINTERS
-  return Isolate::FromRoot(GetIsolateRoot(object.ptr()));
-#else
-  return Isolate::FromHeap(GetHeapFromWritableObject(object));
-#endif  // V8_COMPRESS_POINTERS
-}
-
-inline bool GetIsolateFromWritableObject(HeapObject obj, Isolate** isolate) {
-#ifdef V8_COMPRESS_POINTERS
-  *isolate = GetIsolateFromWritableObject(obj);
-  return true;
-#else
-  heap_internals::MemoryChunk* chunk =
-      heap_internals::MemoryChunk::FromHeapObject(obj);
-  if (chunk->InReadOnlySpace()) {
-    *isolate = nullptr;
-    return false;
-  }
-  *isolate = Isolate::FromHeap(chunk->GetHeap());
-  return true;
-#endif  // V8_COMPRESS_POINTERS
+  return chunk->InReadOnlySpace();
 }
 
 }  // namespace internal

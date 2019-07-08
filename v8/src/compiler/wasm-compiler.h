@@ -20,6 +20,7 @@
 namespace v8 {
 namespace internal {
 struct AssemblerOptions;
+class OptimizedCompilationJob;
 
 namespace compiler {
 // Forward declarations for some compiler data structures.
@@ -123,11 +124,9 @@ wasm::WasmCode* CompileWasmCapiCallWrapper(wasm::WasmEngine*,
                                            wasm::NativeModule*,
                                            wasm::FunctionSig*, Address address);
 
-// Creates a code object calling a wasm function with the given signature,
-// callable from JS.
-V8_EXPORT_PRIVATE MaybeHandle<Code> CompileJSToWasmWrapper(Isolate*,
-                                                           wasm::FunctionSig*,
-                                                           bool is_import);
+// Returns an OptimizedCompilationJob object for a JS to Wasm wrapper.
+std::unique_ptr<OptimizedCompilationJob> NewJSToWasmCompilationJob(
+    Isolate* isolate, wasm::FunctionSig* sig, bool is_import);
 
 // Compiles a stub that redirects a call to a wasm function to the wasm
 // interpreter. It's ABI compatible with the compiled wasm function.
@@ -139,13 +138,13 @@ enum CWasmEntryParameters {
   kCodeEntry,
   kObjectRef,
   kArgumentsBuffer,
+  kCEntryFp,
   // marker:
   kNumParameters
 };
 
-// Compiles a stub with JS linkage, taking parameters as described by
-// {CWasmEntryParameters}. It loads the wasm parameters from the argument
-// buffer and calls the wasm function given as first parameter.
+// Compiles a stub with C++ linkage, to be called from Execution::CallWasm,
+// which knows how to feed it its parameters.
 MaybeHandle<Code> CompileCWasmEntry(Isolate* isolate, wasm::FunctionSig* sig);
 
 // Values from the instance object are cached between WASM-level function calls.
@@ -286,9 +285,9 @@ class WasmGraphBuilder {
 
   Node* GetGlobal(uint32_t index);
   Node* SetGlobal(uint32_t index, Node* val);
-  Node* GetTable(uint32_t table_index, Node* index,
+  Node* TableGet(uint32_t table_index, Node* index,
                  wasm::WasmCodePosition position);
-  Node* SetTable(uint32_t table_index, Node* index, Node* val,
+  Node* TableSet(uint32_t table_index, Node* index, Node* val,
                  wasm::WasmCodePosition position);
   //-----------------------------------------------------------------------
   // Operations that concern the linear memory.
@@ -491,10 +490,10 @@ class WasmGraphBuilder {
   Node* BuildCallNode(wasm::FunctionSig* sig, Node** args,
                       wasm::WasmCodePosition position, Node* instance_node,
                       const Operator* op);
-  // Special implementation for CallIndirect for table 0.
-  Node* BuildIndirectCall(uint32_t sig_index, Node** args, Node*** rets,
-                          wasm::WasmCodePosition position,
-                          IsReturnCall continuation);
+  // Helper function for {BuildIndirectCall}.
+  void LoadIndirectFunctionTable(uint32_t table_index, Node** ift_size,
+                                 Node** ift_sig_ids, Node** ift_targets,
+                                 Node** ift_instances);
   Node* BuildIndirectCall(uint32_t table_index, uint32_t sig_index, Node** args,
                           Node*** rets, wasm::WasmCodePosition position,
                           IsReturnCall continuation);

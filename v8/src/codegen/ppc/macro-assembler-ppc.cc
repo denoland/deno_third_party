@@ -2454,27 +2454,24 @@ void TurboAssembler::LoadP(Register dst, const MemOperand& mem,
                            Register scratch) {
   DCHECK_EQ(mem.rb(), no_reg);
   int offset = mem.offset();
+  int misaligned = (offset & 3);
+  int adj = (offset & 3) - 4;
+  int alignedOffset = (offset & ~3) + 4;
 
-  if (!is_int16(offset)) {
+  if (!is_int16(offset) || (misaligned && !is_int16(alignedOffset))) {
     /* cannot use d-form */
-    DCHECK_NE(scratch, no_reg);
     mov(scratch, Operand(offset));
     LoadPX(dst, MemOperand(mem.ra(), scratch));
   } else {
-#if V8_TARGET_ARCH_PPC64
-    int misaligned = (offset & 3);
     if (misaligned) {
       // adjust base to conform to offset alignment requirements
       // Todo: enhance to use scratch if dst is unsuitable
-      DCHECK(dst != r0);
-      addi(dst, mem.ra(), Operand((offset & 3) - 4));
-      ld(dst, MemOperand(dst, (offset & ~3) + 4));
+      DCHECK_NE(dst, r0);
+      addi(dst, mem.ra(), Operand(adj));
+      ld(dst, MemOperand(dst, alignedOffset));
     } else {
       ld(dst, mem);
     }
-#else
-    lwz(dst, mem);
-#endif
   }
 }
 
@@ -2934,20 +2931,24 @@ void TurboAssembler::JumpIfLessThan(Register x, int32_t y, Label* dest) {
   blt(dest);
 }
 
-void TurboAssembler::CallBuiltinPointer(Register builtin_pointer) {
+void TurboAssembler::LoadEntryFromBuiltinIndex(Register builtin_index) {
   STATIC_ASSERT(kSystemPointerSize == 8);
   STATIC_ASSERT(kSmiShiftSize == 31);
   STATIC_ASSERT(kSmiTagSize == 1);
   STATIC_ASSERT(kSmiTag == 0);
 
-  // The builtin_pointer register contains the builtin index as a Smi.
+  // The builtin_index register contains the builtin index as a Smi.
   // Untagging is folded into the indexing operand below.
-  ShiftRightArithImm(builtin_pointer, builtin_pointer,
+  ShiftRightArithImm(builtin_index, builtin_index,
                      kSmiShift - kSystemPointerSizeLog2);
-  addi(builtin_pointer, builtin_pointer,
+  addi(builtin_index, builtin_index,
        Operand(IsolateData::builtin_entry_table_offset()));
-  LoadPX(builtin_pointer, MemOperand(kRootRegister, builtin_pointer));
-  Call(builtin_pointer);
+  LoadPX(builtin_index, MemOperand(kRootRegister, builtin_index));
+}
+
+void TurboAssembler::CallBuiltinByIndex(Register builtin_index) {
+  LoadEntryFromBuiltinIndex(builtin_index);
+  Call(builtin_index);
 }
 
 void TurboAssembler::LoadCodeObjectEntry(Register destination,

@@ -6,7 +6,7 @@
 #define V8_PARSING_EXPRESSION_SCOPE_H_
 
 #include "src/ast/scopes.h"
-#include "src/execution/message-template.h"
+#include "src/common/message-template.h"
 #include "src/objects/function-kind.h"
 #include "src/parsing/scanner.h"
 #include "src/zone/zone.h"  // For ScopedPtrList.
@@ -330,7 +330,7 @@ class VariableDeclarationParsingScope : public ExpressionScope<Types> {
         // This also handles marking of loop variables in for-in and for-of
         // loops, as determined by loop-nesting-depth.
         DCHECK_NOT_NULL(var);
-        var->set_maybe_assigned();
+        var->SetMaybeAssigned();
       }
     }
     return var;
@@ -437,8 +437,7 @@ class ExpressionParsingScope : public ExpressionScope<Types> {
     }
     this->mark_verified();
     return this->parser()->RewriteInvalidReferenceExpression(
-        expression, beg_pos, end_pos, MessageTemplate::kInvalidLhsInFor,
-        kSyntaxError);
+        expression, beg_pos, end_pos, MessageTemplate::kInvalidLhsInFor);
   }
 
   void RecordExpressionError(const Scanner::Location& loc,
@@ -695,9 +694,15 @@ class ArrowHeadParsingScope : public ExpressionParsingScope<Types> {
       }
     }
 
-    int initializer_position = this->parser()->end_position();
+    auto var_it = this->variable_list()->begin();
     for (auto declaration : *result->declarations()) {
-      declaration->var()->set_initializer_position(initializer_position);
+      // If it's not the last variable, then use the position of the next
+      // variable. For the last one, use the end position of the arrow head.
+      int end_position = var_it + 1 == this->variable_list()->end()
+                             ? this->parser()->end_position()
+                             : (*(var_it + 1))->position();
+      declaration->var()->set_initializer_position(end_position);
+      var_it++;
     }
     if (uses_this_) result->UsesThis();
     return result;

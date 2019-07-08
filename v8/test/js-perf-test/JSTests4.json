@@ -35,7 +35,13 @@
         {"name": "SetSymbolWithTrap"},
         {"name": "HasInIdiom"},
         {"name": "IsExtensibleWithoutTrap"},
-        {"name": "IsExtensibleWithTrap"}
+        {"name": "IsExtensibleWithTrap"},
+        {"name": "PreventExtensionsWithoutTrap"},
+        {"name": "PreventExtensionsWithTrap"},
+        {"name": "GetPrototypeOfWithoutTrap"},
+        {"name": "GetPrototypeOfWithTrap"},
+        {"name": "SetPrototypeOfWithoutTrap"},
+        {"name": "SetPrototypeOfWithTrap"}
       ]
     },
     {

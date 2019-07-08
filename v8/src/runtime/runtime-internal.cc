@@ -8,11 +8,11 @@
 #include "src/ast/ast-traversal-visitor.h"
 #include "src/ast/prettyprinter.h"
 #include "src/builtins/builtins.h"
+#include "src/common/message-template.h"
 #include "src/debug/debug.h"
 #include "src/execution/arguments-inl.h"
 #include "src/execution/frames-inl.h"
 #include "src/execution/isolate-inl.h"
-#include "src/execution/message-template.h"
 #include "src/init/bootstrapper.h"
 #include "src/logging/counters.h"
 #include "src/numbers/conversions.h"
@@ -695,7 +695,8 @@ RUNTIME_FUNCTION(Runtime_GetTemplateObject) {
   CONVERT_ARG_HANDLE_CHECKED(SharedFunctionInfo, shared_info, 1);
   CONVERT_SMI_ARG_CHECKED(slot_id, 2);
 
-  Handle<Context> native_context(isolate->context().native_context(), isolate);
+  Handle<NativeContext> native_context(isolate->context().native_context(),
+                                       isolate);
   return *TemplateObjectDescription::GetTemplateObject(
       isolate, native_context, description, shared_info, slot_id);
 }

@@ -112,6 +112,9 @@ MachineRepresentation AtomicStoreRepresentationOf(Operator const* op)
 
 MachineType AtomicOpType(Operator const* op) V8_WARN_UNUSED_RESULT;
 
+V8_EXPORT_PRIVATE const uint8_t* S8x16ShuffleOf(Operator const* op)
+    V8_WARN_UNUSED_RESULT;
+
 // Interface for building machine-level operators. These operators are
 // machine-level but machine-independent and thus define a language suitable
 // for generating code to run on architectures such as ia32, x64, arm, etc.
@@ -465,6 +468,7 @@ class V8_EXPORT_PRIVATE MachineOperatorBuilder final
   const Operator* Float64SilenceNaN();
 
   // SIMD operators.
+  const Operator* F64x2Splat();
   const Operator* F32x4Splat();
   const Operator* F32x4ExtractLane(int32_t);
   const Operator* F32x4ReplaceLane(int32_t);
@@ -485,6 +489,18 @@ class V8_EXPORT_PRIVATE MachineOperatorBuilder final
   const Operator* F32x4Ne();
   const Operator* F32x4Lt();
   const Operator* F32x4Le();
+
+  const Operator* I64x2Splat();
+  const Operator* I64x2ExtractLane(int32_t);
+  const Operator* I64x2ReplaceLane(int32_t);
+  const Operator* I64x2Neg();
+  const Operator* I64x2Shl(int32_t);
+  const Operator* I64x2ShrS(int32_t);
+  const Operator* I64x2Add();
+  const Operator* I64x2Sub();
+  const Operator* I64x2Eq();
+  const Operator* I64x2Ne();
+  const Operator* I64x2ShrU(int32_t);
 
   const Operator* I32x4Splat();
   const Operator* I32x4ExtractLane(int32_t);

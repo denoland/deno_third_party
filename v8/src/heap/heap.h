@@ -44,29 +44,20 @@ class HeapTester;
 class TestMemoryAllocatorScope;
 }  // namespace heap
 
-class ObjectBoilerplateDescription;
-class BytecodeArray;
-class CodeDataContainer;
-class DeoptimizationData;
-class HandlerTable;
 class IncrementalMarking;
 class JSArrayBuffer;
-class ExternalString;
 using v8::MemoryPressureLevel;
 
 class AllocationObserver;
 class ArrayBufferCollector;
-class ArrayBufferTracker;
 class CodeLargeObjectSpace;
 class ConcurrentMarking;
 class GCIdleTimeHandler;
 class GCIdleTimeHeapState;
 class GCTracer;
-class HeapController;
 class HeapObjectAllocationTracker;
 class HeapObjectsFilter;
 class HeapStats;
-class HistogramTimer;
 class Isolate;
 class JSFinalizationGroup;
 class LocalEmbedderHeapTracer;
@@ -86,7 +77,6 @@ class Space;
 class StoreBuffer;
 class StressScavengeObserver;
 class TimedHistogram;
-class TracePossibleWrapperReporter;
 class WeakObjectRetainer;
 
 enum ArrayStorageAllocationMode {
@@ -371,8 +361,8 @@ class Heap {
   V8_EXPORT_PRIVATE static void GenerationalBarrierSlow(HeapObject object,
                                                         Address slot,
                                                         HeapObject value);
-  V8_EXPORT_PRIVATE void RecordEphemeronKeyWrite(EphemeronHashTable table,
-                                                 Address key_slot);
+  V8_EXPORT_PRIVATE inline void RecordEphemeronKeyWrite(
+      EphemeronHashTable table, Address key_slot);
   V8_EXPORT_PRIVATE static void EphemeronKeyWriteBarrierFromCode(
       Address raw_object, Address address, Isolate* isolate);
   V8_EXPORT_PRIVATE static void GenerationalBarrierForCodeSlow(
@@ -482,6 +472,12 @@ class Heap {
 
   // Print short heap statistics.
   void PrintShortHeapStatistics();
+
+  // Print statistics of freelists of old_space:
+  //  with FLAG_trace_gc_freelists: summary of each FreeListCategory.
+  //  with FLAG_trace_gc_freelists_verbose: also prints the statistics of each
+  //  FreeListCategory of each page.
+  void PrintFreeListsStats();
 
   // Dump heap statistics in JSON format.
   void DumpJSONHeapStatistics(std::stringstream& stream);
@@ -681,8 +677,6 @@ class Heap {
   // Getters to other components. ==============================================
   // ===========================================================================
 
-  ReadOnlyHeap* read_only_heap() const { return read_only_heap_; }
-
   GCTracer* tracer() { return tracer_.get(); }
 
   MemoryAllocator* memory_allocator() { return memory_allocator_.get(); }
@@ -748,8 +742,8 @@ class Heap {
       std::function<void(HeapObject object, ObjectSlot slot, Object target)>
           gc_notify_updated_slot);
 
-  V8_EXPORT_PRIVATE void AddKeepDuringJobTarget(Handle<JSReceiver> target);
-  void ClearKeepDuringJobSet();
+  V8_EXPORT_PRIVATE void KeepDuringJob(Handle<JSReceiver> target);
+  void ClearKeptObjects();
 
   // ===========================================================================
   // Inline allocation. ========================================================
@@ -1707,6 +1701,8 @@ class Heap {
     return old_generation_allocation_limit_;
   }
 
+  size_t global_allocation_limit() const { return global_allocation_limit_; }
+
   bool always_allocate() { return always_allocate_scope_count_ != 0; }
 
   V8_EXPORT_PRIVATE bool CanExpandOldGeneration(size_t size);
@@ -1865,8 +1861,6 @@ class Heap {
   // This separates maps in the retained_maps array that were created before
   // and after context disposal.
   int number_of_disposed_maps_ = 0;
-
-  ReadOnlyHeap* read_only_heap_ = nullptr;
 
   NewSpace* new_space_ = nullptr;
   OldSpace* old_space_ = nullptr;
@@ -2087,7 +2081,7 @@ class Heap {
   friend class ConcurrentMarking;
   friend class GCCallbacksScope;
   friend class GCTracer;
-  friend class HeapIterator;
+  friend class HeapObjectIterator;
   friend class IdleScavengeObserver;
   friend class IncrementalMarking;
   friend class IncrementalMarkingJob;
@@ -2120,9 +2114,6 @@ class Heap {
   // Used in cctest.
   friend class heap::HeapTester;
 
-  FRIEND_TEST(HeapControllerTest, OldGenerationAllocationLimit);
-  FRIEND_TEST(HeapTest, ExternalLimitDefault);
-  FRIEND_TEST(HeapTest, ExternalLimitStaysAboveDefaultForExplicitHandling);
   DISALLOW_COPY_AND_ASSIGN(Heap);
 };
 
@@ -2252,9 +2243,9 @@ class VerifySmisVisitor : public RootVisitor {
 // Space iterator for iterating over all the paged spaces of the heap: Map
 // space, old space and code space. Returns each space in turn, and null when it
 // is done.
-class V8_EXPORT_PRIVATE PagedSpaces {
+class V8_EXPORT_PRIVATE PagedSpaceIterator {
  public:
-  explicit PagedSpaces(Heap* heap) : heap_(heap), counter_(OLD_SPACE) {}
+  explicit PagedSpaceIterator(Heap* heap) : heap_(heap), counter_(OLD_SPACE) {}
   PagedSpace* Next();
 
  private:
@@ -2275,28 +2266,29 @@ class V8_EXPORT_PRIVATE SpaceIterator : public Malloced {
   int current_space_;         // from enum AllocationSpace.
 };
 
-// A HeapIterator provides iteration over the entire non-read-only heap. It
-// aggregates the specific iterators for the different spaces as these can only
-// iterate over one space only.
+// A HeapObjectIterator provides iteration over the entire non-read-only heap.
+// It aggregates the specific iterators for the different spaces as these can
+// only iterate over one space only.
 //
-// HeapIterator ensures there is no allocation during its lifetime (using an
-// embedded DisallowHeapAllocation instance).
+// HeapObjectIterator ensures there is no allocation during its lifetime (using
+// an embedded DisallowHeapAllocation instance).
 //
-// HeapIterator can skip free list nodes (that is, de-allocated heap objects
-// that still remain in the heap). As implementation of free nodes filtering
-// uses GC marks, it can't be used during MS/MC GC phases. Also, it is forbidden
-// to interrupt iteration in this mode, as this will leave heap objects marked
-// (and thus, unusable).
+// HeapObjectIterator can skip free list nodes (that is, de-allocated heap
+// objects that still remain in the heap). As implementation of free nodes
+// filtering uses GC marks, it can't be used during MS/MC GC phases. Also, it is
+// forbidden to interrupt iteration in this mode, as this will leave heap
+// objects marked (and thus, unusable).
 //
-// See ReadOnlyHeapIterator if you need to iterate over read-only space objects,
-// or CombinedHeapIterator if you need to iterate over both heaps.
-class V8_EXPORT_PRIVATE HeapIterator {
+// See ReadOnlyHeapObjectIterator if you need to iterate over read-only space
+// objects, or CombinedHeapObjectIterator if you need to iterate over both
+// heaps.
+class V8_EXPORT_PRIVATE HeapObjectIterator {
  public:
   enum HeapObjectsFiltering { kNoFiltering, kFilterUnreachable };
 
-  explicit HeapIterator(Heap* heap,
-                        HeapObjectsFiltering filtering = kNoFiltering);
-  ~HeapIterator();
+  explicit HeapObjectIterator(Heap* heap,
+                              HeapObjectsFiltering filtering = kNoFiltering);
+  ~HeapObjectIterator();
 
   HeapObject Next();
 

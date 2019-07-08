@@ -60,9 +60,11 @@ class V8_EXPORT_PRIVATE OptimizedCompilationInfo final {
     kTraceTurboJson = 1 << 14,
     kTraceTurboGraph = 1 << 15,
     kTraceTurboScheduled = 1 << 16,
-    kWasmRuntimeExceptionSupport = 1 << 17,
-    kTurboControlFlowAwareAllocation = 1 << 18,
-    kTurboPreprocessRanges = 1 << 19
+    kTraceTurboAllocation = 1 << 17,
+    kTraceHeapBroker = 1 << 18,
+    kWasmRuntimeExceptionSupport = 1 << 19,
+    kTurboControlFlowAwareAllocation = 1 << 20,
+    kTurboPreprocessRanges = 1 << 21
   };
 
   // Construct a compilation info for optimized compilation.
@@ -189,9 +191,15 @@ class V8_EXPORT_PRIVATE OptimizedCompilationInfo final {
 
   bool trace_turbo_graph_enabled() const { return GetFlag(kTraceTurboGraph); }
 
+  bool trace_turbo_allocation_enabled() const {
+    return GetFlag(kTraceTurboAllocation);
+  }
+
   bool trace_turbo_scheduled_enabled() const {
     return GetFlag(kTraceTurboScheduled);
   }
+
+  bool trace_heap_broker_enabled() const { return GetFlag(kTraceHeapBroker); }
 
   // Code getters and setters.
 
@@ -204,7 +212,7 @@ class V8_EXPORT_PRIVATE OptimizedCompilationInfo final {
   Context context() const;
 
   bool has_native_context() const;
-  Context native_context() const;
+  NativeContext native_context() const;
 
   bool has_global_object() const;
   JSGlobalObject global_object() const;

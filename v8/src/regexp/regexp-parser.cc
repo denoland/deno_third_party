@@ -9,8 +9,9 @@
 #include "src/execution/isolate.h"
 #include "src/heap/factory.h"
 #include "src/objects/objects-inl.h"
-#include "src/regexp/jsregexp.h"
 #include "src/regexp/property-sequences.h"
+#include "src/regexp/regexp-macro-assembler.h"
+#include "src/regexp/regexp.h"
 #include "src/strings/char-predicates-inl.h"
 #include "src/utils/ostreams.h"
 #include "src/utils/utils.h"
@@ -1963,12 +1964,6 @@ void RegExpBuilder::AddTerm(RegExpTree* term) {
 
 void RegExpBuilder::AddAssertion(RegExpTree* assert) {
   FlushText();
-  if (terms_.length() > 0 && terms_.last()->IsAssertion()) {
-    // Omit repeated assertions of the same type.
-    RegExpAssertion* last = terms_.last()->AsAssertion();
-    RegExpAssertion* next = assert->AsAssertion();
-    if (last->assertion_type() == next->assertion_type()) return;
-  }
   terms_.Add(assert, zone());
   LAST(ADD_ASSERT);
 }

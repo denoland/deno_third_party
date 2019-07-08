@@ -1,4 +1,6 @@
+## Google Mock Cookbook
 
+<!-- GOOGLETEST_CM0011 DO NOT DELETE -->
 
 You can find recipes for using Google Mock here. If you haven't yet,
 please read the [ForDummies](ForDummies.md) document first to make sure you understand
@@ -70,7 +72,7 @@ class Foo {
 class MockFoo : public Foo {
   ...
   MOCK_METHOD1(Add, int(Element x));
-  MOCK_METHOD2(Add, int(int times, Element x);
+  MOCK_METHOD2(Add, int(int times, Element x));
 
   MOCK_METHOD0(GetBar, Bar&());
   MOCK_CONST_METHOD0(GetBar, const Bar&());
@@ -2820,9 +2822,7 @@ and you should see an `OUTPUT_DIR` directory being created with files
 `gtest/gtest.h`, `gmock/gmock.h`, and `gmock-gtest-all.cc` in it.
 These three files contain everything you need to use Google Mock (and
 Google Test).  Just copy them to anywhere you want and you are ready
-to write tests and use mocks.  You can use the
-[make/Makefile](../make/Makefile) file as an example on how to compile your tests
-against them.
+to write tests and use mocks.
 
 # Extending Google Mock #
 

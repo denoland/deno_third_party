@@ -317,7 +317,7 @@ void TurboAssembler::DecompressTaggedPointer(Register destination,
 
 void TurboAssembler::DecompressRegisterAnyTagged(Register destination,
                                                  Register scratch) {
-  if (kUseBranchlessPtrDecompression) {
+  if (kUseBranchlessPtrDecompressionInGeneratedCode) {
     // Branchlessly compute |masked_root|:
     // masked_root = HAS_SMI_TAG(destination) ? 0 : kRootRegister;
     STATIC_ASSERT((kSmiTagSize == 1) && (kSmiTag < 32));
@@ -917,7 +917,7 @@ void TurboAssembler::Cvtqui2ss(XMMRegister dst, Register src) {
   orq(kScratchRegister, Immediate(1));
   bind(&msb_not_set);
   Cvtqsi2ss(dst, kScratchRegister);
-  addss(dst, dst);
+  Addss(dst, dst);
   bind(&done);
 }
 
@@ -941,7 +941,7 @@ void TurboAssembler::Cvtqui2sd(XMMRegister dst, Register src) {
   orq(kScratchRegister, Immediate(1));
   bind(&msb_not_set);
   Cvtqsi2sd(dst, kScratchRegister);
-  addsd(dst, dst);
+  Addsd(dst, dst);
   bind(&done);
 }
 
@@ -1042,11 +1042,11 @@ void ConvertFloatToUint64(TurboAssembler* tasm, Register dst,
   // and convert it again to see if it is within the uint64 range.
   if (is_double) {
     tasm->Move(kScratchDoubleReg, -9223372036854775808.0);
-    tasm->addsd(kScratchDoubleReg, src);
+    tasm->Addsd(kScratchDoubleReg, src);
     tasm->Cvttsd2siq(dst, kScratchDoubleReg);
   } else {
     tasm->Move(kScratchDoubleReg, -9223372036854775808.0f);
-    tasm->addss(kScratchDoubleReg, src);
+    tasm->Addss(kScratchDoubleReg, src);
     tasm->Cvttss2siq(dst, kScratchDoubleReg);
   }
   tasm->testq(dst, dst);
@@ -1468,8 +1468,9 @@ void TurboAssembler::Move(Register result, Handle<HeapObject> object,
     }
   }
   if (RelocInfo::IsCompressedEmbeddedObject(rmode)) {
-    int compressed_embedded_object_index = AddCompressedEmbeddedObject(object);
-    movl(result, Immediate(compressed_embedded_object_index, rmode));
+    EmbeddedObjectIndex index = AddEmbeddedObject(object);
+    DCHECK(is_uint32(index));
+    movl(result, Immediate(static_cast<int>(index), rmode));
   } else {
     DCHECK(RelocInfo::IsFullEmbeddedObject(rmode));
     movq(result, Immediate64(object.address(), rmode));
@@ -1607,27 +1608,31 @@ void TurboAssembler::Call(Handle<Code> code_object, RelocInfo::Mode rmode) {
   call(code_object, rmode);
 }
 
-void TurboAssembler::CallBuiltinPointer(Register builtin_pointer) {
+Operand TurboAssembler::EntryFromBuiltinIndexAsOperand(Register builtin_index) {
 #if defined(V8_COMPRESS_POINTERS) || defined(V8_31BIT_SMIS_ON_64BIT_ARCH)
   STATIC_ASSERT(kSmiShiftSize == 0);
   STATIC_ASSERT(kSmiTagSize == 1);
   STATIC_ASSERT(kSmiTag == 0);
 
-  // The builtin_pointer register contains the builtin index as a Smi.
+  // The builtin_index register contains the builtin index as a Smi.
   // Untagging is folded into the indexing operand below (we use times_4 instead
   // of times_8 since smis are already shifted by one).
-  Call(Operand(kRootRegister, builtin_pointer, times_4,
-               IsolateData::builtin_entry_table_offset()));
+  return Operand(kRootRegister, builtin_index, times_4,
+                 IsolateData::builtin_entry_table_offset());
 #else   // defined(V8_COMPRESS_POINTERS) || defined(V8_31BIT_SMIS_ON_64BIT_ARCH)
   STATIC_ASSERT(kSmiShiftSize == 31);
   STATIC_ASSERT(kSmiTagSize == 1);
   STATIC_ASSERT(kSmiTag == 0);
 
-  // The builtin_pointer register contains the builtin index as a Smi.
-  SmiUntag(builtin_pointer, builtin_pointer);
-  Call(Operand(kRootRegister, builtin_pointer, times_8,
-               IsolateData::builtin_entry_table_offset()));
+  // The builtin_index register contains the builtin index as a Smi.
+  SmiUntag(builtin_index, builtin_index);
+  return Operand(kRootRegister, builtin_index, times_8,
+                 IsolateData::builtin_entry_table_offset());
 #endif  // defined(V8_COMPRESS_POINTERS) || defined(V8_31BIT_SMIS_ON_64BIT_ARCH)
+}
+
+void TurboAssembler::CallBuiltinByIndex(Register builtin_index) {
+  Call(EntryFromBuiltinIndexAsOperand(builtin_index));
 }
 
 void TurboAssembler::LoadCodeObjectEntry(Register destination,

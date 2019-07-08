@@ -681,17 +681,14 @@ MaybeHandle<String> JSDateTimeFormat::ToLocaleDateTime(
       JSFunction::cast(
           isolate->context().native_context().intl_date_time_format_function()),
       isolate);
-  Handle<JSObject> obj;
+  Handle<Map> map;
   ASSIGN_RETURN_ON_EXCEPTION(
-      isolate, obj,
-      JSObject::New(constructor, constructor, Handle<AllocationSite>::null()),
-      String);
+      isolate, map,
+      JSFunction::GetDerivedMap(isolate, constructor, constructor), String);
   Handle<JSDateTimeFormat> date_time_format;
   ASSIGN_RETURN_ON_EXCEPTION(
       isolate, date_time_format,
-      JSDateTimeFormat::Initialize(isolate, Handle<JSDateTimeFormat>::cast(obj),
-                                   locales, internal_options),
-      String);
+      JSDateTimeFormat::New(isolate, map, locales, internal_options), String);
 
   if (can_cache) {
     isolate->set_icu_object_in_cache(
@@ -941,7 +938,7 @@ icu::Calendar* CreateCalendar(Isolate* isolate, const icu::Locale& icu_locale,
 
 std::unique_ptr<icu::SimpleDateFormat> CreateICUDateFormat(
     const icu::Locale& icu_locale, const icu::UnicodeString& skeleton,
-    icu::DateTimePatternGenerator& generator) {
+    icu::DateTimePatternGenerator& generator) {  // NOLINT(runtime/references)
   // See https://github.com/tc39/ecma402/issues/225 . The best pattern
   // generation needs to be done in the base locale according to the
   // current spec however odd it may be. See also crbug.com/826549 .
@@ -971,9 +968,9 @@ std::unique_ptr<icu::SimpleDateFormat> CreateICUDateFormat(
 
 class DateFormatCache {
  public:
-  icu::SimpleDateFormat* Create(const icu::Locale& icu_locale,
-                                const icu::UnicodeString& skeleton,
-                                icu::DateTimePatternGenerator& generator) {
+  icu::SimpleDateFormat* Create(
+      const icu::Locale& icu_locale, const icu::UnicodeString& skeleton,
+      icu::DateTimePatternGenerator& generator) {  // NOLINT(runtime/references)
     std::string key;
     skeleton.toUTF8String<std::string>(key);
     key += ":";
@@ -1002,7 +999,7 @@ class DateFormatCache {
 
 std::unique_ptr<icu::SimpleDateFormat> CreateICUDateFormatFromCache(
     const icu::Locale& icu_locale, const icu::UnicodeString& skeleton,
-    icu::DateTimePatternGenerator& generator) {
+    icu::DateTimePatternGenerator& generator) {  // NOLINT(runtime/references)
   static base::LazyInstance<DateFormatCache>::type cache =
       LAZY_INSTANCE_INITIALIZER;
   return std::unique_ptr<icu::SimpleDateFormat>(
@@ -1138,7 +1135,8 @@ icu::UnicodeString ReplaceSkeleton(const icu::UnicodeString input,
 std::unique_ptr<icu::SimpleDateFormat> DateTimeStylePattern(
     JSDateTimeFormat::DateTimeStyle date_style,
     JSDateTimeFormat::DateTimeStyle time_style, const icu::Locale& icu_locale,
-    Intl::HourCycle hc, icu::DateTimePatternGenerator& generator) {
+    Intl::HourCycle hc,
+    icu::DateTimePatternGenerator& generator) {  // NOLINT(runtime/references)
   std::unique_ptr<icu::SimpleDateFormat> result;
   if (date_style != JSDateTimeFormat::DateTimeStyle::kUndefined) {
     if (time_style != JSDateTimeFormat::DateTimeStyle::kUndefined) {
@@ -1207,10 +1205,9 @@ class DateTimePatternGeneratorCache {
 enum FormatMatcherOption { kBestFit, kBasic };
 
 // ecma402/#sec-initializedatetimeformat
-MaybeHandle<JSDateTimeFormat> JSDateTimeFormat::Initialize(
-    Isolate* isolate, Handle<JSDateTimeFormat> date_time_format,
-    Handle<Object> locales, Handle<Object> input_options) {
-  date_time_format->set_flags(0);
+MaybeHandle<JSDateTimeFormat> JSDateTimeFormat::New(
+    Isolate* isolate, Handle<Map> map, Handle<Object> locales,
+    Handle<Object> input_options) {
   Factory* factory = isolate->factory();
   // 1. Let requestedLocales be ? CanonicalizeLocaleList(locales).
   Maybe<std::vector<std::string>> maybe_requested_locales =
@@ -1398,7 +1395,6 @@ MaybeHandle<JSDateTimeFormat> JSDateTimeFormat::Initialize(
       }
     }
   }
-  date_time_format->set_hour_cycle(hc);
 
   DateTimeStyle date_style = DateTimeStyle::kUndefined;
   DateTimeStyle time_style = DateTimeStyle::kUndefined;
@@ -1418,9 +1414,6 @@ MaybeHandle<JSDateTimeFormat> JSDateTimeFormat::Initialize(
     // 29. If dateStyle is not undefined, set dateTimeFormat.[[DateStyle]] to
     // dateStyle.
     date_style = maybe_date_style.FromJust();
-    if (date_style != DateTimeStyle::kUndefined) {
-      date_time_format->set_date_style(date_style);
-    }
 
     // 30. Let timeStyle be ? GetOption(options, "timeStyle", "string", «
     // "full", "long", "medium", "short" »).
@@ -1436,9 +1429,6 @@ MaybeHandle<JSDateTimeFormat> JSDateTimeFormat::Initialize(
     // 31. If timeStyle is not undefined, set dateTimeFormat.[[TimeStyle]] to
     // timeStyle.
     time_style = maybe_time_style.FromJust();
-    if (time_style != DateTimeStyle::kUndefined) {
-      date_time_format->set_time_style(time_style);
-    }
 
     // 32. If dateStyle or timeStyle are not undefined, then
     if (date_style != DateTimeStyle::kUndefined ||
@@ -1512,7 +1502,7 @@ MaybeHandle<JSDateTimeFormat> JSDateTimeFormat::Initialize(
     // g. If dateTimeFormat.[[Hour]] is not undefined, then
     if (!has_hour_option) {
       // h. Else, i. Set dateTimeFormat.[[HourCycle]] to undefined.
-      date_time_format->set_hour_cycle(Intl::HourCycle::kUndefined);
+      hc = Intl::HourCycle::kUndefined;
     }
   }
 
@@ -1538,8 +1528,7 @@ MaybeHandle<JSDateTimeFormat> JSDateTimeFormat::Initialize(
       maybe_hour_cycle.FromJust() != Intl::HourCycle::kUndefined) {
     auto hc_extension_it = r.extensions.find("hc");
     if (hc_extension_it != r.extensions.end()) {
-      if (date_time_format->hour_cycle() !=
-          Intl::ToHourCycle(hc_extension_it->second.c_str())) {
+      if (hc != Intl::ToHourCycle(hc_extension_it->second.c_str())) {
         // Remove -hc- if it does not agree with what we used.
         UErrorCode status = U_ZERO_ERROR;
         icu_locale.setUnicodeKeywordValue("hc", nullptr, status);
@@ -1551,16 +1540,28 @@ MaybeHandle<JSDateTimeFormat> JSDateTimeFormat::Initialize(
   Handle<Managed<icu::Locale>> managed_locale =
       Managed<icu::Locale>::FromRawPtr(isolate, 0, icu_locale.clone());
 
-  date_time_format->set_icu_locale(*managed_locale);
   Handle<Managed<icu::SimpleDateFormat>> managed_format =
       Managed<icu::SimpleDateFormat>::FromUniquePtr(isolate, 0,
                                                     std::move(icu_date_format));
-  date_time_format->set_icu_simple_date_format(*managed_format);
 
   Handle<Managed<icu::DateIntervalFormat>> managed_interval_format =
       Managed<icu::DateIntervalFormat>::FromRawPtr(isolate, 0, nullptr);
-  date_time_format->set_icu_date_interval_format(*managed_interval_format);
 
+  // Now all properties are ready, so we can allocate the result object.
+  Handle<JSDateTimeFormat> date_time_format = Handle<JSDateTimeFormat>::cast(
+      isolate->factory()->NewFastOrSlowJSObjectFromMap(map));
+  DisallowHeapAllocation no_gc;
+  date_time_format->set_flags(0);
+  date_time_format->set_hour_cycle(hc);
+  if (date_style != DateTimeStyle::kUndefined) {
+    date_time_format->set_date_style(date_style);
+  }
+  if (time_style != DateTimeStyle::kUndefined) {
+    date_time_format->set_time_style(time_style);
+  }
+  date_time_format->set_icu_locale(*managed_locale);
+  date_time_format->set_icu_simple_date_format(*managed_format);
+  date_time_format->set_icu_date_interval_format(*managed_interval_format);
   return date_time_format;
 }
 

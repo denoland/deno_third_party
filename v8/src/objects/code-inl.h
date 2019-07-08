@@ -7,8 +7,8 @@
 
 #include "src/objects/code.h"
 
+#include "src/base/memory.h"
 #include "src/codegen/code-desc.h"
-#include "src/common/v8memory.h"
 #include "src/execution/isolate.h"
 #include "src/interpreter/bytecode-register.h"
 #include "src/objects/dictionary.h"
@@ -331,7 +331,9 @@ int Code::SizeIncludingMetadata() const {
 }
 
 ByteArray Code::unchecked_relocation_info() const {
-  return ByteArray::unchecked_cast(READ_FIELD(*this, kRelocationInfoOffset));
+  Isolate* isolate = GetIsolateForPtrCompr(*this);
+  return ByteArray::unchecked_cast(
+      TaggedField<HeapObject, kRelocationInfoOffset>::load(isolate, *this));
 }
 
 byte* Code::relocation_start() const {
@@ -575,7 +577,7 @@ Code Code::GetCodeFromTargetAddress(Address address) {
 }
 
 Code Code::GetObjectFromEntryAddress(Address location_of_address) {
-  Address code_entry = Memory<Address>(location_of_address);
+  Address code_entry = base::Memory<Address>(location_of_address);
   HeapObject code = HeapObject::FromAddress(code_entry - Code::kHeaderSize);
   // Unchecked cast because we can't rely on the map currently
   // not being a forwarding pointer.

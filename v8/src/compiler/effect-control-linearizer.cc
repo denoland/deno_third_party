@@ -58,6 +58,7 @@ class EffectControlLinearizer {
   Node* LowerChangeUint64ToTagged(Node* node);
   Node* LowerChangeFloat64ToTagged(Node* node);
   Node* LowerChangeFloat64ToTaggedPointer(Node* node);
+  Node* LowerChangeCompressedSignedToInt32(Node* node);
   Node* LowerChangeTaggedSignedToInt32(Node* node);
   Node* LowerChangeTaggedSignedToInt64(Node* node);
   Node* LowerChangeTaggedToBit(Node* node);
@@ -75,6 +76,7 @@ class EffectControlLinearizer {
   Node* LowerCheckReceiver(Node* node, Node* frame_state);
   Node* LowerCheckReceiverOrNullOrUndefined(Node* node, Node* frame_state);
   Node* LowerCheckString(Node* node, Node* frame_state);
+  Node* LowerCheckBigInt(Node* node, Node* frame_state);
   Node* LowerCheckSymbol(Node* node, Node* frame_state);
   void LowerCheckIf(Node* node, Node* frame_state);
   Node* LowerCheckedInt32Add(Node* node, Node* frame_state);
@@ -101,6 +103,9 @@ class EffectControlLinearizer {
   Node* LowerCheckedTaggedToFloat64(Node* node, Node* frame_state);
   Node* LowerCheckedTaggedToTaggedSigned(Node* node, Node* frame_state);
   Node* LowerCheckedTaggedToTaggedPointer(Node* node, Node* frame_state);
+  Node* LowerBigIntAsUintN(Node* node, Node* frame_state);
+  Node* LowerChangeUint64ToBigInt(Node* node);
+  Node* LowerTruncateBigIntToUint64(Node* node);
   Node* LowerCheckedCompressedToTaggedSigned(Node* node, Node* frame_state);
   Node* LowerCheckedCompressedToTaggedPointer(Node* node, Node* frame_state);
   Node* LowerCheckedTaggedToCompressedSigned(Node* node, Node* frame_state);
@@ -150,17 +155,19 @@ class EffectControlLinearizer {
   Node* LowerStringConcat(Node* node);
   Node* LowerStringToNumber(Node* node);
   Node* LowerStringCharCodeAt(Node* node);
-  Node* LowerStringCodePointAt(Node* node, UnicodeEncoding encoding);
+  Node* LowerStringCodePointAt(Node* node);
   Node* LowerStringToLowerCaseIntl(Node* node);
   Node* LowerStringToUpperCaseIntl(Node* node);
   Node* LowerStringFromSingleCharCode(Node* node);
   Node* LowerStringFromSingleCodePoint(Node* node);
   Node* LowerStringIndexOf(Node* node);
   Node* LowerStringSubstring(Node* node);
+  Node* LowerStringFromCodePointAt(Node* node);
   Node* LowerStringLength(Node* node);
   Node* LowerStringEqual(Node* node);
   Node* LowerStringLessThan(Node* node);
   Node* LowerStringLessThanOrEqual(Node* node);
+  Node* LowerSpeculativeBigIntAdd(Node* node, Node* frame_state);
   Node* LowerCheckFloat64Hole(Node* node, Node* frame_state);
   Node* LowerCheckNotTaggedHole(Node* node, Node* frame_state);
   Node* LowerConvertTaggedHoleToUndefined(Node* node);
@@ -222,6 +229,7 @@ class EffectControlLinearizer {
   Node* ChangeUint32ToUintPtr(Node* value);
   Node* ChangeUint32ToSmi(Node* value);
   Node* ChangeSmiToIntPtr(Node* value);
+  Node* ChangeCompressedSmiToInt32(Node* value);
   Node* ChangeSmiToInt32(Node* value);
   Node* ChangeSmiToInt64(Node* value);
   Node* ObjectIsSmi(Node* value);
@@ -848,6 +856,9 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
     case IrOpcode::kChangeFloat64ToTaggedPointer:
       result = LowerChangeFloat64ToTaggedPointer(node);
       break;
+    case IrOpcode::kChangeCompressedSignedToInt32:
+      result = LowerChangeCompressedSignedToInt32(node);
+      break;
     case IrOpcode::kChangeTaggedSignedToInt32:
       result = LowerChangeTaggedSignedToInt32(node);
       break;
@@ -910,6 +921,9 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
       break;
     case IrOpcode::kCheckString:
       result = LowerCheckString(node, frame_state);
+      break;
+    case IrOpcode::kCheckBigInt:
+      result = LowerCheckBigInt(node, frame_state);
       break;
     case IrOpcode::kCheckInternalizedString:
       result = LowerCheckInternalizedString(node, frame_state);
@@ -992,6 +1006,15 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
       break;
     case IrOpcode::kCheckedTaggedToTaggedPointer:
       result = LowerCheckedTaggedToTaggedPointer(node, frame_state);
+      break;
+    case IrOpcode::kBigIntAsUintN:
+      result = LowerBigIntAsUintN(node, frame_state);
+      break;
+    case IrOpcode::kChangeUint64ToBigInt:
+      result = LowerChangeUint64ToBigInt(node);
+      break;
+    case IrOpcode::kTruncateBigIntToUint64:
+      result = LowerTruncateBigIntToUint64(node);
       break;
     case IrOpcode::kCheckedCompressedToTaggedSigned:
       result = LowerCheckedCompressedToTaggedSigned(node, frame_state);
@@ -1110,6 +1133,9 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
     case IrOpcode::kStringIndexOf:
       result = LowerStringIndexOf(node);
       break;
+    case IrOpcode::kStringFromCodePointAt:
+      result = LowerStringFromCodePointAt(node);
+      break;
     case IrOpcode::kStringLength:
       result = LowerStringLength(node);
       break;
@@ -1120,7 +1146,7 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
       result = LowerStringCharCodeAt(node);
       break;
     case IrOpcode::kStringCodePointAt:
-      result = LowerStringCodePointAt(node, UnicodeEncodingOf(node->op()));
+      result = LowerStringCodePointAt(node);
       break;
     case IrOpcode::kStringToLowerCaseIntl:
       result = LowerStringToLowerCaseIntl(node);
@@ -1139,6 +1165,9 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
       break;
     case IrOpcode::kStringLessThanOrEqual:
       result = LowerStringLessThanOrEqual(node);
+      break;
+    case IrOpcode::kSpeculativeBigIntAdd:
+      result = LowerSpeculativeBigIntAdd(node, frame_state);
       break;
     case IrOpcode::kNumberIsFloat64Hole:
       result = LowerNumberIsFloat64Hole(node);
@@ -1459,6 +1488,11 @@ Node* EffectControlLinearizer::LowerChangeUint64ToTagged(Node* node) {
 Node* EffectControlLinearizer::LowerChangeTaggedSignedToInt32(Node* node) {
   Node* value = node->InputAt(0);
   return ChangeSmiToInt32(value);
+}
+
+Node* EffectControlLinearizer::LowerChangeCompressedSignedToInt32(Node* node) {
+  Node* value = node->InputAt(0);
+  return ChangeCompressedSmiToInt32(value);
 }
 
 Node* EffectControlLinearizer::LowerChangeTaggedSignedToInt64(Node* node) {
@@ -2651,6 +2685,111 @@ Node* EffectControlLinearizer::LowerCheckedTaggedToTaggedPointer(
   return value;
 }
 
+Node* EffectControlLinearizer::LowerCheckBigInt(Node* node, Node* frame_state) {
+  Node* value = node->InputAt(0);
+  const CheckParameters& params = CheckParametersOf(node->op());
+
+  // Check for Smi.
+  Node* smi_check = ObjectIsSmi(value);
+  __ DeoptimizeIf(DeoptimizeReason::kSmi, params.feedback(), smi_check,
+                  frame_state);
+
+  // Check for BigInt.
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* bi_check = __ WordEqual(value_map, __ BigIntMapConstant());
+  __ DeoptimizeIfNot(DeoptimizeReason::kWrongInstanceType, params.feedback(),
+                     bi_check, frame_state);
+
+  return value;
+}
+
+Node* EffectControlLinearizer::LowerBigIntAsUintN(Node* node,
+                                                  Node* frame_state) {
+  DCHECK(machine()->Is64());
+
+  const int bits = OpParameter<int>(node->op());
+  DCHECK(0 <= bits && bits <= 64);
+
+  if (bits == 64) {
+    // Reduce to nop.
+    return node->InputAt(0);
+  } else {
+    const uint64_t msk = (1ULL << bits) - 1ULL;
+    return __ Word64And(node->InputAt(0), __ Int64Constant(msk));
+  }
+}
+
+Node* EffectControlLinearizer::LowerChangeUint64ToBigInt(Node* node) {
+  DCHECK(machine()->Is64());
+
+  Node* value = node->InputAt(0);
+  Node* map = jsgraph()->HeapConstant(factory()->bigint_map());
+  // BigInts with value 0 must be of size 0 (canonical form).
+  auto if_zerodigits = __ MakeLabel();
+  auto if_onedigit = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kTagged);
+
+  __ GotoIf(__ Word64Equal(value, __ IntPtrConstant(0)), &if_zerodigits);
+  __ Goto(&if_onedigit);
+
+  __ Bind(&if_onedigit);
+  {
+    Node* result = __ Allocate(AllocationType::kYoung,
+                               __ IntPtrConstant(BigInt::SizeFor(1)));
+    const auto bitfield = BigInt::LengthBits::update(0, 1);
+    __ StoreField(AccessBuilder::ForMap(), result, map);
+    __ StoreField(AccessBuilder::ForBigIntBitfield(), result,
+                  __ IntPtrConstant(bitfield));
+    __ StoreField(AccessBuilder::ForBigIntLeastSignificantDigit64(), result,
+                  value);
+    __ Goto(&done, result);
+  }
+
+  __ Bind(&if_zerodigits);
+  {
+    Node* result = __ Allocate(AllocationType::kYoung,
+                               __ IntPtrConstant(BigInt::SizeFor(0)));
+    const auto bitfield = BigInt::LengthBits::update(0, 0);
+    __ StoreField(AccessBuilder::ForMap(), result, map);
+    __ StoreField(AccessBuilder::ForBigIntBitfield(), result,
+                  __ IntPtrConstant(bitfield));
+    __ Goto(&done, result);
+  }
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerTruncateBigIntToUint64(Node* node) {
+  DCHECK(machine()->Is64());
+
+  auto done = __ MakeLabel(MachineRepresentation::kWord64);
+  auto if_neg = __ MakeLabel();
+  auto if_not_zero = __ MakeLabel();
+
+  Node* value = node->InputAt(0);
+
+  Node* bitfield = __ LoadField(AccessBuilder::ForBigIntBitfield(), value);
+  __ GotoIfNot(__ Word32Equal(bitfield, __ Int32Constant(0)), &if_not_zero);
+  __ Goto(&done, __ Int64Constant(0));
+
+  __ Bind(&if_not_zero);
+  {
+    Node* lsd =
+        __ LoadField(AccessBuilder::ForBigIntLeastSignificantDigit64(), value);
+    Node* sign =
+        __ Word32And(bitfield, __ Int32Constant(BigInt::SignBits::kMask));
+    __ GotoIf(__ Word32Equal(sign, __ Int32Constant(1)), &if_neg);
+    __ Goto(&done, lsd);
+
+    __ Bind(&if_neg);
+    __ Goto(&done, __ Int64Sub(__ Int64Constant(0), lsd));
+  }
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
 Node* EffectControlLinearizer::LowerCheckedCompressedToTaggedSigned(
     Node* node, Node* frame_state) {
   Node* value = node->InputAt(0);
@@ -3726,16 +3865,12 @@ Node* EffectControlLinearizer::LowerStringCharCodeAt(Node* node) {
   return loop_done.PhiAt(0);
 }
 
-Node* EffectControlLinearizer::LowerStringCodePointAt(
-    Node* node, UnicodeEncoding encoding) {
+Node* EffectControlLinearizer::LowerStringCodePointAt(Node* node) {
   Node* receiver = node->InputAt(0);
   Node* position = node->InputAt(1);
 
-  Builtins::Name builtin = encoding == UnicodeEncoding::UTF16
-                               ? Builtins::kStringCodePointAtUTF16
-                               : Builtins::kStringCodePointAtUTF32;
-
-  Callable const callable = Builtins::CallableFor(isolate(), builtin);
+  Callable const callable =
+      Builtins::CallableFor(isolate(), Builtins::kStringCodePointAt);
   Operator::Properties properties = Operator::kNoThrow | Operator::kNoWrite;
   CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
   auto call_descriptor = Linkage::GetStubCallDescriptor(
@@ -3968,31 +4103,23 @@ Node* EffectControlLinearizer::LowerStringFromSingleCodePoint(Node* node) {
   __ Bind(&if_not_single_code);
   // Generate surrogate pair string
   {
-    switch (UnicodeEncodingOf(node->op())) {
-      case UnicodeEncoding::UTF16:
-        break;
+    // Convert UTF32 to UTF16 code units, and store as a 32 bit word.
+    Node* lead_offset = __ Int32Constant(0xD800 - (0x10000 >> 10));
 
-      case UnicodeEncoding::UTF32: {
-        // Convert UTF32 to UTF16 code units, and store as a 32 bit word.
-        Node* lead_offset = __ Int32Constant(0xD800 - (0x10000 >> 10));
+    // lead = (codepoint >> 10) + LEAD_OFFSET
+    Node* lead =
+        __ Int32Add(__ Word32Shr(code, __ Int32Constant(10)), lead_offset);
 
-        // lead = (codepoint >> 10) + LEAD_OFFSET
-        Node* lead =
-            __ Int32Add(__ Word32Shr(code, __ Int32Constant(10)), lead_offset);
+    // trail = (codepoint & 0x3FF) + 0xDC00;
+    Node* trail = __ Int32Add(__ Word32And(code, __ Int32Constant(0x3FF)),
+                              __ Int32Constant(0xDC00));
 
-        // trail = (codepoint & 0x3FF) + 0xDC00;
-        Node* trail = __ Int32Add(__ Word32And(code, __ Int32Constant(0x3FF)),
-                                  __ Int32Constant(0xDC00));
-
-        // codpoint = (trail << 16) | lead;
+    // codpoint = (trail << 16) | lead;
 #if V8_TARGET_BIG_ENDIAN
-        code = __ Word32Or(__ Word32Shl(lead, __ Int32Constant(16)), trail);
+    code = __ Word32Or(__ Word32Shl(lead, __ Int32Constant(16)), trail);
 #else
-        code = __ Word32Or(__ Word32Shl(trail, __ Int32Constant(16)), lead);
+    code = __ Word32Or(__ Word32Shl(trail, __ Int32Constant(16)), lead);
 #endif
-        break;
-      }
-    }
 
     // Allocate a new SeqTwoByteString for {code}.
     Node* vfalse0 =
@@ -4030,6 +4157,21 @@ Node* EffectControlLinearizer::LowerStringIndexOf(Node* node) {
       callable.descriptor().GetStackParameterCount(), flags, properties);
   return __ Call(call_descriptor, __ HeapConstant(callable.code()), subject,
                  search_string, position, __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerStringFromCodePointAt(Node* node) {
+  Node* string = node->InputAt(0);
+  Node* index = node->InputAt(1);
+
+  Callable callable =
+      Builtins::CallableFor(isolate(), Builtins::kStringFromCodePointAt);
+  Operator::Properties properties = Operator::kEliminatable;
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(),
+      callable.descriptor().GetStackParameterCount(), flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), string,
+                 index, __ NoContextConstant());
 }
 
 Node* EffectControlLinearizer::LowerStringLength(Node* node) {
@@ -4081,6 +4223,28 @@ Node* EffectControlLinearizer::LowerStringLessThan(Node* node) {
 Node* EffectControlLinearizer::LowerStringLessThanOrEqual(Node* node) {
   return LowerStringComparison(
       Builtins::CallableFor(isolate(), Builtins::kStringLessThanOrEqual), node);
+}
+
+Node* EffectControlLinearizer::LowerSpeculativeBigIntAdd(Node* node,
+                                                         Node* frame_state) {
+  Node* lhs = node->InputAt(0);
+  Node* rhs = node->InputAt(1);
+
+  Callable const callable =
+      Builtins::CallableFor(isolate(), Builtins::kBigIntAddNoThrow);
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(),
+      callable.descriptor().GetStackParameterCount(), CallDescriptor::kNoFlags,
+      Operator::kFoldable | Operator::kNoThrow);
+  Node* value =
+      __ Call(call_descriptor, jsgraph()->HeapConstant(callable.code()), lhs,
+              rhs, __ NoContextConstant());
+
+  // Check for exception sentinel: Smi is returned to signal BigIntTooBig.
+  __ DeoptimizeIf(DeoptimizeReason::kBigIntTooBig, VectorSlotPair{},
+                  ObjectIsSmi(value), frame_state);
+
+  return value;
 }
 
 Node* EffectControlLinearizer::LowerCheckFloat64Hole(Node* node,
@@ -4303,6 +4467,11 @@ Node* EffectControlLinearizer::ChangeSmiToInt32(Node* value) {
     return __ TruncateInt64ToInt32(ChangeSmiToIntPtr(value));
   }
   return ChangeSmiToIntPtr(value);
+}
+
+Node* EffectControlLinearizer::ChangeCompressedSmiToInt32(Node* value) {
+  CHECK(machine()->Is64() && SmiValuesAre31Bits());
+  return __ Word32Sar(value, SmiShiftBitsConstant());
 }
 
 Node* EffectControlLinearizer::ChangeSmiToInt64(Node* value) {
@@ -5187,7 +5356,7 @@ Node* EffectControlLinearizer::LowerConvertReceiver(Node* node) {
       __ GotoIf(check, &convert_to_object);
       __ Goto(&done_convert, value);
 
-      // Wrap the primitive {value} into a JSValue.
+      // Wrap the primitive {value} into a JSPrimitiveWrapper.
       __ Bind(&convert_to_object);
       Operator::Properties properties = Operator::kEliminatable;
       Callable callable = Builtins::CallableFor(isolate(), Builtins::kToObject);
@@ -5220,7 +5389,7 @@ Node* EffectControlLinearizer::LowerConvertReceiver(Node* node) {
       __ GotoIf(check, &convert_to_object);
       __ Goto(&done_convert, value);
 
-      // Wrap the primitive {value} into a JSValue.
+      // Wrap the primitive {value} into a JSPrimitiveWrapper.
       __ Bind(&convert_to_object);
       __ GotoIf(__ WordEqual(value, __ UndefinedConstant()),
                 &convert_global_proxy);

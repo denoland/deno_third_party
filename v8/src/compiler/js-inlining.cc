@@ -12,6 +12,7 @@
 #include "src/compiler/common-operator.h"
 #include "src/compiler/compiler-source-position-table.h"
 #include "src/compiler/graph-reducer.h"
+#include "src/compiler/js-heap-broker.h"
 #include "src/compiler/js-operator.h"
 #include "src/compiler/node-matchers.h"
 #include "src/compiler/node-properties.h"
@@ -466,13 +467,12 @@ Reduction JSInliner::ReduceJSCall(Node* node) {
       AllowHandleAllocation allow_handle_alloc;
       AllowHeapAllocation allow_heap_alloc;
       AllowCodeDependencyChange allow_code_dep_change;
-      Handle<Context> native_context =
-          handle(info_->native_context(), isolate());
-
+      CallFrequency frequency = call.frequency();
+      Handle<NativeContext> native_context(info_->native_context(), isolate());
       BuildGraphFromBytecode(broker(), zone(), bytecode_array.object(),
                              shared_info.value().object(),
                              feedback_vector.object(), BailoutId::None(),
-                             jsgraph(), call.frequency(), source_positions_,
+                             jsgraph(), frequency, source_positions_,
                              native_context, inlining_id, flags);
     }
 

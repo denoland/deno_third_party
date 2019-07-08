@@ -22,6 +22,7 @@
 #include "src/ic/stub-cache.h"
 #include "src/logging/counters.h"
 #include "src/objects/heap-object-inl.h"
+#include "src/objects/js-array-inl.h"
 #include "src/objects/smi.h"
 #include "src/snapshot/natives.h"
 #include "src/trap-handler/trap-handler.h"
@@ -280,6 +281,16 @@ RUNTIME_FUNCTION(Runtime_OptimizeFunctionOnNextCall) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
 
+  if (function->HasOptimizedCode()) {
+    DCHECK(function->IsOptimized() || function->ChecksOptimizationMarker());
+    // If function is already optimized, remove the bytecode array from the
+    // pending optimize for test table and return. It is OK if there is no
+    // entry in the table since if the function got optimized before executing
+    // %OptimizeFunctionOnNextCall the entry would have been removed.
+    RemoveBytecodeFromPendingOptimizeTable(isolate, function);
+    return ReadOnlyRoots(isolate).undefined_value();
+  }
+
   // Check we called PrepareFunctionForOptimization and hold the bytecode
   // array to prevent it from getting flushed.
   // TODO(mythria): Enable this check once we add PrepareForOptimization in all
@@ -288,14 +299,6 @@ RUNTIME_FUNCTION(Runtime_OptimizeFunctionOnNextCall) {
   //          isolate->heap()->pending_optimize_for_test_bytecode())
   //          ->Lookup(handle(function->shared(), isolate))
   //          ->IsTheHole());
-
-  if (function->HasOptimizedCode()) {
-    DCHECK(function->IsOptimized() || function->ChecksOptimizationMarker());
-    // If function is already optimized, remove the bytecode array from the
-    // pending optimize for test table and return.
-    RemoveBytecodeFromPendingOptimizeTable(isolate, function);
-    return ReadOnlyRoots(isolate).undefined_value();
-  }
 
   ConcurrencyMode concurrency_mode = ConcurrencyMode::kNotConcurrent;
   if (args.length() == 2) {
@@ -358,8 +361,10 @@ bool EnsureFeedbackVector(Handle<JSFunction> function) {
 RUNTIME_FUNCTION(Runtime_EnsureFeedbackVectorForFunction) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
+  if (!args[0].IsJSFunction()) {
+    return ReadOnlyRoots(isolate).undefined_value();
+  }
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
-
   EnsureFeedbackVector(function);
   return ReadOnlyRoots(isolate).undefined_value();
 }
@@ -367,6 +372,9 @@ RUNTIME_FUNCTION(Runtime_EnsureFeedbackVectorForFunction) {
 RUNTIME_FUNCTION(Runtime_PrepareFunctionForOptimization) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
+  if (!args[0].IsJSFunction()) {
+    return ReadOnlyRoots(isolate).undefined_value();
+  }
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
 
   if (!EnsureFeedbackVector(function)) {
@@ -592,14 +600,11 @@ RUNTIME_FUNCTION(Runtime_GetUndetectable) {
 }
 
 static void call_as_function(const v8::FunctionCallbackInfo<v8::Value>& args) {
-  double v1 = args[0]
-                  ->NumberValue(v8::Isolate::GetCurrent()->GetCurrentContext())
-                  .ToChecked();
-  double v2 = args[1]
-                  ->NumberValue(v8::Isolate::GetCurrent()->GetCurrentContext())
-                  .ToChecked();
-  args.GetReturnValue().Set(
-      v8::Number::New(v8::Isolate::GetCurrent(), v1 - v2));
+  double v1 =
+      args[0]->NumberValue(args.GetIsolate()->GetCurrentContext()).ToChecked();
+  double v2 =
+      args[1]->NumberValue(args.GetIsolate()->GetCurrentContext()).ToChecked();
+  args.GetReturnValue().Set(v8::Number::New(args.GetIsolate(), v1 - v2));
 }
 
 // Returns a callable object. The object returns the difference of its two
@@ -623,6 +628,9 @@ RUNTIME_FUNCTION(Runtime_GetCallable) {
 RUNTIME_FUNCTION(Runtime_ClearFunctionFeedback) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
+  if (!args[0].IsJSFunction()) {
+    return ReadOnlyRoots(isolate).undefined_value();
+  }
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
   function->ClearTypeFeedbackInfo();
   return ReadOnlyRoots(isolate).undefined_value();
@@ -914,8 +922,17 @@ RUNTIME_FUNCTION(Runtime_HaveSameMap) {
   return isolate->heap()->ToBoolean(obj1.map() == obj2.map());
 }
 
+RUNTIME_FUNCTION(Runtime_HasElementsInALargeObjectSpace) {
+  SealHandleScope shs(isolate);
+  DCHECK_EQ(1, args.length());
+  CONVERT_ARG_CHECKED(JSArray, array, 0);
+  FixedArrayBase elements = array.elements();
+  return isolate->heap()->ToBoolean(
+      isolate->heap()->new_lo_space()->Contains(elements) ||
+      isolate->heap()->lo_space()->Contains(elements));
+}
 
-RUNTIME_FUNCTION(Runtime_InNewSpace) {
+RUNTIME_FUNCTION(Runtime_InYoungGeneration) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_CHECKED(Object, obj, 0);
@@ -1141,6 +1158,19 @@ RUNTIME_FUNCTION(Runtime_DeserializeWasmModule) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
   return *module_object;
+}
+
+// Create a new Module object using the same NativeModule.
+RUNTIME_FUNCTION(Runtime_CloneWasmModule) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+  CONVERT_ARG_HANDLE_CHECKED(WasmModuleObject, module_object, 0);
+
+  Handle<WasmModuleObject> new_module_object =
+      wasm::WasmEngine::GetWasmEngine()->ImportNativeModule(
+          isolate, module_object->shared_native_module());
+
+  return *new_module_object;
 }
 
 RUNTIME_FUNCTION(Runtime_HeapObjectVerify) {

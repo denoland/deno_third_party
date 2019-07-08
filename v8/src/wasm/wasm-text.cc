@@ -105,7 +105,7 @@ void PrintWasmText(const WasmModule* module, const ModuleWireBytes& wire_bytes,
         BlockTypeImmediate<Decoder::kNoValidate> imm(kAllWasmFeatures, &i,
                                                      i.pc());
         os << WasmOpcodes::OpcodeName(opcode);
-        if (imm.type == kWasmVar) {
+        if (imm.type == kWasmBottom) {
           os << " (type " << imm.sig_index << ")";
         } else if (imm.out_arity() > 0) {
           os << " " << ValueTypes::TypeName(imm.out_type(0));
@@ -172,8 +172,8 @@ void PrintWasmText(const WasmModule* module, const ModuleWireBytes& wire_bytes,
         os << WasmOpcodes::OpcodeName(opcode) << ' ' << imm.index;
         break;
       }
-      case kExprGetTable:
-      case kExprSetTable: {
+      case kExprTableGet:
+      case kExprTableSet: {
         TableIndexImmediate<Decoder::kNoValidate> imm(&i, i.pc());
         os << WasmOpcodes::OpcodeName(opcode) << ' ' << imm.index;
         break;
@@ -307,10 +307,12 @@ void PrintWasmText(const WasmModule* module, const ModuleWireBytes& wire_bytes,
           case kExprI8x16ExtractLane:
           case kExprI16x8ExtractLane:
           case kExprI32x4ExtractLane:
+          case kExprI64x2ExtractLane:
           case kExprF32x4ExtractLane:
           case kExprI8x16ReplaceLane:
           case kExprI16x8ReplaceLane:
           case kExprI32x4ReplaceLane:
+          case kExprI64x2ReplaceLane:
           case kExprF32x4ReplaceLane: {
             SimdLaneImmediate<Decoder::kNoValidate> imm(&i, i.pc());
             os << WasmOpcodes::OpcodeName(opcode) << ' ' << imm.lane;
@@ -325,7 +327,10 @@ void PrintWasmText(const WasmModule* module, const ModuleWireBytes& wire_bytes,
           case kExprI16x8ShrU:
           case kExprI32x4Shl:
           case kExprI32x4ShrS:
-          case kExprI32x4ShrU: {
+          case kExprI32x4ShrU:
+          case kExprI64x2Shl:
+          case kExprI64x2ShrS:
+          case kExprI64x2ShrU: {
             SimdShiftImmediate<Decoder::kNoValidate> imm(&i, i.pc());
             os << WasmOpcodes::OpcodeName(opcode) << ' ' << imm.shift;
             break;

@@ -367,6 +367,7 @@ class ScriptContextTable : public FixedArray {
     VariableMode mode;
     InitializationFlag init_flag;
     MaybeAssignedFlag maybe_assigned_flag;
+    RequiresBrandCheckFlag requires_brand_check;
   };
 
   inline int used() const;
@@ -454,6 +455,7 @@ class Context : public HeapObject {
 
   // Setter and getter for elements.
   V8_INLINE Object get(int index) const;
+  V8_INLINE Object get(Isolate* isolate, int index) const;
   V8_INLINE void set(int index, Object value);
   // Setter with explicit barrier mode.
   V8_INLINE void set(int index, Object value, WriteBarrierMode mode);
@@ -532,10 +534,6 @@ class Context : public HeapObject {
   static const int kNoContext = 0;
   static const int kInvalidContext = 1;
 
-  void ResetErrorsThrown();
-  void IncrementErrorsThrown();
-  int GetErrorsThrown();
-
   // Direct slot access.
   inline void set_scope_info(ScopeInfo scope_info);
 
@@ -554,7 +552,7 @@ class Context : public HeapObject {
 
   // Find the module context (assuming there is one) and return the associated
   // module object.
-  Module module();
+  SourceTextModule module();
 
   // Get the context where var declarations will be hoisted to, which
   // may be the context itself.
@@ -591,14 +589,6 @@ class Context : public HeapObject {
   inline bool IsScriptContext() const;
 
   inline bool HasSameSecurityTokenAs(Context that) const;
-
-  // The native context also stores a list of all optimized code and a
-  // list of all deoptimized code, which are needed by the deoptimizer.
-  V8_EXPORT_PRIVATE void AddOptimizedCode(Code code);
-  void SetOptimizedCodeListHead(Object head);
-  Object OptimizedCodeListHead();
-  void SetDeoptimizedCodeListHead(Object head);
-  Object DeoptimizedCodeListHead();
 
   Handle<Object> ErrorMessageForCodeGenerationFromStrings();
 
@@ -703,6 +693,18 @@ class NativeContext : public Context {
 #undef NATIVE_CONTEXT_FIELDS_DEF
 
   class BodyDescriptor;
+
+  // The native context stores a list of all optimized code and a list of all
+  // deoptimized code, which are needed by the deoptimizer.
+  V8_EXPORT_PRIVATE void AddOptimizedCode(Code code);
+  void SetOptimizedCodeListHead(Object head);
+  Object OptimizedCodeListHead();
+  void SetDeoptimizedCodeListHead(Object head);
+  Object DeoptimizedCodeListHead();
+
+  void ResetErrorsThrown();
+  void IncrementErrorsThrown();
+  int GetErrorsThrown();
 
  private:
   STATIC_ASSERT(OffsetOfElementAt(EMBEDDER_DATA_INDEX) ==

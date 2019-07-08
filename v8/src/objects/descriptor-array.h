@@ -73,14 +73,18 @@ class DescriptorArray : public HeapObject {
 
   // Accessors for fetching instance descriptor at descriptor number.
   inline Name GetKey(int descriptor_number) const;
+  inline Name GetKey(Isolate* isolate, int descriptor_number) const;
   inline Object GetStrongValue(int descriptor_number);
-  inline void SetValue(int descriptor_number, Object value);
+  inline Object GetStrongValue(Isolate* isolate, int descriptor_number);
   inline MaybeObject GetValue(int descriptor_number);
+  inline MaybeObject GetValue(Isolate* isolate, int descriptor_number);
   inline PropertyDetails GetDetails(int descriptor_number);
   inline int GetFieldIndex(int descriptor_number);
   inline FieldType GetFieldType(int descriptor_number);
+  inline FieldType GetFieldType(Isolate* isolate, int descriptor_number);
 
   inline Name GetSortedKey(int descriptor_number);
+  inline Name GetSortedKey(Isolate* isolate, int descriptor_number);
   inline int GetSortedKeyIndex(int descriptor_number);
   inline void SetSortedKey(int pointer, int descriptor_number);
 
@@ -149,19 +153,17 @@ class DescriptorArray : public HeapObject {
   // Atomic compare-and-swap operation on the raw_number_of_marked_descriptors.
   int16_t CompareAndSwapRawNumberOfMarkedDescriptors(int16_t expected,
                                                      int16_t value);
-  int16_t UpdateNumberOfMarkedDescriptors(unsigned mark_compact_epoch,
+  int16_t UpdateNumberOfMarkedDescriptors(uintptr_t mark_compact_epoch,
                                           int16_t number_of_marked_descriptors);
 
   static constexpr int SizeFor(int number_of_all_descriptors) {
-    return offset(number_of_all_descriptors * kEntrySize);
+    return OffsetOfDescriptorAt(number_of_all_descriptors);
   }
   static constexpr int OffsetOfDescriptorAt(int descriptor) {
-    return offset(descriptor * kEntrySize);
+    return kHeaderSize + descriptor * kEntrySize * kTaggedSize;
   }
   inline ObjectSlot GetFirstPointerSlot();
   inline ObjectSlot GetDescriptorSlot(int descriptor);
-  inline ObjectSlot GetKeySlot(int descriptor);
-  inline MaybeObjectSlot GetValueSlot(int descriptor);
 
   static_assert(kEndOfStrongFieldsOffset == kStartOfWeakFieldsOffset,
                 "Weak fields follow strong fields.");
@@ -177,6 +179,10 @@ class DescriptorArray : public HeapObject {
   static const int kEntryDetailsIndex = 1;
   static const int kEntryValueIndex = 2;
   static const int kEntrySize = 3;
+
+  static const int kEntryKeyOffset = kEntryKeyIndex * kTaggedSize;
+  static const int kEntryDetailsOffset = kEntryDetailsIndex * kTaggedSize;
+  static const int kEntryValueOffset = kEntryValueIndex * kTaggedSize;
 
   // Print all the descriptors.
   void PrintDescriptors(std::ostream& os);
@@ -207,15 +213,16 @@ class DescriptorArray : public HeapObject {
     return (descriptor_number * kEntrySize) + kEntryValueIndex;
   }
 
+  using EntryKeyField = TaggedField<HeapObject, kEntryKeyOffset>;
+  using EntryDetailsField = TaggedField<Smi, kEntryDetailsOffset>;
+  using EntryValueField = TaggedField<MaybeObject, kEntryValueOffset>;
+
  private:
   DECL_INT16_ACCESSORS(filler16bits)
-  // Low-level per-element accessors.
-  static constexpr int offset(int index) {
-    return kHeaderSize + index * kTaggedSize;
-  }
-  inline int length() const;
-  inline MaybeObject get(int index) const;
-  inline void set(int index, MaybeObject value);
+
+  inline void SetKey(int descriptor_number, Name key);
+  inline void SetValue(int descriptor_number, MaybeObject value);
+  inline void SetDetails(int descriptor_number, PropertyDetails details);
 
   // Transfer a complete descriptor from the src descriptor array to this
   // descriptor array.
@@ -238,11 +245,12 @@ class NumberOfMarkedDescriptors {
   static const int kMaxNumberOfMarkedDescriptors = Marked::kMax;
   // Decodes the raw value of the number of marked descriptors for the
   // given mark compact garbage collection epoch.
-  static inline int16_t decode(unsigned mark_compact_epoch, int16_t raw_value) {
+  static inline int16_t decode(uintptr_t mark_compact_epoch,
+                               int16_t raw_value) {
     unsigned epoch_from_value = Epoch::decode(static_cast<uint16_t>(raw_value));
     int16_t marked_from_value =
         Marked::decode(static_cast<uint16_t>(raw_value));
-    unsigned actual_epoch = mark_compact_epoch & Epoch::kMask;
+    uintptr_t actual_epoch = mark_compact_epoch & Epoch::kMask;
     if (actual_epoch == epoch_from_value) return marked_from_value;
     // If the epochs do not match, then either the raw_value is zero (freshly
     // allocated descriptor array) or the epoch from value lags by 1.
@@ -255,7 +263,7 @@ class NumberOfMarkedDescriptors {
 
   // Encodes the number of marked descriptors for the given mark compact
   // garbage collection epoch.
-  static inline int16_t encode(unsigned mark_compact_epoch, int16_t value) {
+  static inline int16_t encode(uintptr_t mark_compact_epoch, int16_t value) {
     // TODO(ulan): avoid casting to int16_t by adding support for uint16_t
     // atomics.
     return static_cast<int16_t>(

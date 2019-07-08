@@ -12,9 +12,9 @@
 #include "src/codegen/compiler.h"
 #include "src/codegen/unoptimized-compilation-info.h"
 #include "src/common/assert-scope.h"
+#include "src/common/message-template.h"
 #include "src/execution/execution.h"
 #include "src/execution/isolate.h"
-#include "src/execution/message-template.h"
 #include "src/handles/handles.h"
 #include "src/heap/factory.h"
 #include "src/logging/counters.h"
@@ -249,9 +249,9 @@ UnoptimizedCompilationJob::Status AsmJsCompilationJob::ExecuteJobImpl() {
     return FAILED;
   }
   module_ = new (compile_zone) wasm::ZoneBuffer(compile_zone);
-  parser.module_builder()->WriteTo(*module_);
+  parser.module_builder()->WriteTo(module_);
   asm_offsets_ = new (compile_zone) wasm::ZoneBuffer(compile_zone);
-  parser.module_builder()->WriteAsmJsOffsetTable(*asm_offsets_);
+  parser.module_builder()->WriteAsmJsOffsetTable(asm_offsets_);
   stdlib_uses_ = *parser.stdlib_uses();
 
   size_t compile_zone_size =
@@ -319,10 +319,10 @@ void AsmJsCompilationJob::RecordHistograms(Isolate* isolate) {
       translation_throughput);
 }
 
-UnoptimizedCompilationJob* AsmJs::NewCompilationJob(
+std::unique_ptr<UnoptimizedCompilationJob> AsmJs::NewCompilationJob(
     ParseInfo* parse_info, FunctionLiteral* literal,
     AccountingAllocator* allocator) {
-  return new AsmJsCompilationJob(parse_info, literal, allocator);
+  return base::make_unique<AsmJsCompilationJob>(parse_info, literal, allocator);
 }
 
 namespace {

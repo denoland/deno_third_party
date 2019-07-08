@@ -42,6 +42,7 @@
 #include "src/codegen/macro-assembler.h"
 #include "src/diagnostics/arm64/disasm-arm64.h"
 #include "src/execution/arm64/simulator-arm64.h"
+#include "src/execution/simulator.h"
 #include "src/heap/factory.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/test-utils-arm64.h"
@@ -117,22 +118,23 @@ static void InitializeVM() {
 #ifdef USE_SIMULATOR
 
 // Run tests with the simulator.
-#define SETUP_SIZE(buf_size)                                           \
-  Isolate* isolate = CcTest::i_isolate();                              \
-  HandleScope scope(isolate);                                          \
-  CHECK_NOT_NULL(isolate);                                             \
-  std::unique_ptr<byte[]> owned_buf{new byte[buf_size]};               \
-  byte* buf = owned_buf.get();                                         \
-  MacroAssembler masm(isolate, v8::internal::CodeObjectRequired::kYes, \
-                      ExternalAssemblerBuffer(buf, buf_size));         \
-  Decoder<DispatchingDecoderVisitor>* decoder =                        \
-      new Decoder<DispatchingDecoderVisitor>();                        \
-  Simulator simulator(decoder);                                        \
-  std::unique_ptr<PrintDisassembler> pdis;                             \
-  RegisterDump core;                                                   \
-  if (i::FLAG_trace_sim) {                                             \
-    pdis.reset(new PrintDisassembler(stdout));                         \
-    decoder->PrependVisitor(pdis.get());                               \
+#define SETUP_SIZE(buf_size)                                               \
+  Isolate* isolate = CcTest::i_isolate();                                  \
+  HandleScope scope(isolate);                                              \
+  CHECK_NOT_NULL(isolate);                                                 \
+  std::unique_ptr<byte[]> owned_buf{new byte[buf_size]};                   \
+  MacroAssembler masm(isolate, v8::internal::CodeObjectRequired::kYes,     \
+                      ExternalAssemblerBuffer(owned_buf.get(), buf_size)); \
+  Decoder<DispatchingDecoderVisitor>* decoder =                            \
+      new Decoder<DispatchingDecoderVisitor>();                            \
+  Simulator simulator(decoder);                                            \
+  std::unique_ptr<PrintDisassembler> pdis;                                 \
+  RegisterDump core;                                                       \
+  HandleScope handle_scope(isolate);                                       \
+  Handle<Code> code;                                                       \
+  if (i::FLAG_trace_sim) {                                                 \
+    pdis.reset(new PrintDisassembler(stdout));                             \
+    decoder->PrependVisitor(pdis.get());                                   \
   }
 
 // Reset the assembler and simulator, so that instructions can be generated,
@@ -154,17 +156,18 @@ static void InitializeVM() {
   RESET();                                                                     \
   START_AFTER_RESET();
 
-#define RUN()                                                                  \
-  simulator.RunFrom(reinterpret_cast<Instruction*>(buf))
+#define RUN() simulator.RunFrom(reinterpret_cast<Instruction*>(code->entry()))
 
-#define END()                                               \
-  __ Debug("End test.", __LINE__, TRACE_DISABLE | LOG_ALL); \
-  core.Dump(&masm);                                         \
-  __ PopCalleeSavedRegisters();                             \
-  __ Ret();                                                 \
-  {                                                         \
-    CodeDesc desc;                                          \
-    __ GetCode(masm.isolate(), &desc);                      \
+#define END()                                                       \
+  __ Debug("End test.", __LINE__, TRACE_DISABLE | LOG_ALL);         \
+  core.Dump(&masm);                                                 \
+  __ PopCalleeSavedRegisters();                                     \
+  __ Ret();                                                         \
+  {                                                                 \
+    CodeDesc desc;                                                  \
+    __ GetCode(masm.isolate(), &desc);                              \
+    code = Factory::CodeBuilder(isolate, desc, Code::STUB).Build(); \
+    if (FLAG_print_code) code->Print();                             \
   }
 
 #else  // ifdef USE_SIMULATOR.
@@ -176,8 +179,8 @@ static void InitializeVM() {
   auto owned_buf = AllocateAssemblerBuffer(buf_size);                  \
   MacroAssembler masm(isolate, v8::internal::CodeObjectRequired::kYes, \
                       owned_buf->CreateView());                        \
-  uint8_t* buf = owned_buf->start();                                   \
-  USE(buf);                                                            \
+  HandleScope handle_scope(isolate);                                   \
+  Handle<Code> code;                                                   \
   RegisterDump core;
 
 #define RESET()                                                \
@@ -194,20 +197,21 @@ static void InitializeVM() {
   RESET();                                                                     \
   START_AFTER_RESET();
 
-#define RUN()                                        \
-  owned_buf->MakeExecutable();                       \
-  {                                                  \
-    auto* test_function = bit_cast<void (*)()>(buf); \
-    test_function();                                 \
+#define RUN()                                      \
+  {                                                \
+    auto f = GeneratedCode<void>::FromCode(*code); \
+    f.Call();                                      \
   }
 
-#define END()                          \
-  core.Dump(&masm);                    \
-  __ PopCalleeSavedRegisters();        \
-  __ Ret();                            \
-  {                                    \
-    CodeDesc desc;                     \
-    __ GetCode(masm.isolate(), &desc); \
+#define END()                                                       \
+  core.Dump(&masm);                                                 \
+  __ PopCalleeSavedRegisters();                                     \
+  __ Ret();                                                         \
+  {                                                                 \
+    CodeDesc desc;                                                  \
+    __ GetCode(masm.isolate(), &desc);                              \
+    code = Factory::CodeBuilder(isolate, desc, Code::STUB).Build(); \
+    if (FLAG_print_code) code->Print();                             \
   }
 
 #endif  // ifdef USE_SIMULATOR.
@@ -226,6 +230,9 @@ static void InitializeVM() {
 
 #define CHECK_EQUAL_64(expected, result)                                      \
   CHECK(Equal64(expected, &core, result))
+
+#define CHECK_FULL_HEAP_OBJECT_IN_REGISTER(expected, result) \
+  CHECK(Equal64(expected->ptr(), &core, result))
 
 #define CHECK_EQUAL_FP64(expected, result)                                    \
   CHECK(EqualFP64(expected, &core, result))
@@ -6436,23 +6443,13 @@ TEST(ldur_stur) {
   CHECK_EQUAL_64(dst_base + 32, x20);
 }
 
-namespace {
-
-void LoadLiteral(MacroAssembler* masm, Register reg, uint64_t imm) {
-  // Since we do not allow non-relocatable entries in the literal pool, we need
-  // to fake a relocation mode that is not NONE here.
-  masm->Ldr(reg, Immediate(imm, RelocInfo::FULL_EMBEDDED_OBJECT));
-}
-
-}  // namespace
-
 TEST(ldr_pcrel_large_offset) {
   INIT_V8();
   SETUP_SIZE(1 * MB);
 
   START();
 
-  LoadLiteral(&masm, x1, 0x1234567890ABCDEFUL);
+  __ Ldr(x1, isolate->factory()->undefined_value());
 
   {
     v8::internal::PatchingAssembler::BlockPoolsScope scope(&masm);
@@ -6462,14 +6459,14 @@ TEST(ldr_pcrel_large_offset) {
     }
   }
 
-  LoadLiteral(&masm, x2, 0x1234567890ABCDEFUL);
+  __ Ldr(x2, isolate->factory()->undefined_value());
 
   END();
 
   RUN();
 
-  CHECK_EQUAL_64(0x1234567890ABCDEFUL, x1);
-  CHECK_EQUAL_64(0x1234567890ABCDEFUL, x2);
+  CHECK_FULL_HEAP_OBJECT_IN_REGISTER(isolate->factory()->undefined_value(), x1);
+  CHECK_FULL_HEAP_OBJECT_IN_REGISTER(isolate->factory()->undefined_value(), x2);
 }
 
 TEST(ldr_literal) {
@@ -6477,132 +6474,159 @@ TEST(ldr_literal) {
   SETUP();
 
   START();
-  LoadLiteral(&masm, x2, 0x1234567890ABCDEFUL);
+  __ Ldr(x2, isolate->factory()->undefined_value());
 
   END();
 
   RUN();
 
-  CHECK_EQUAL_64(0x1234567890ABCDEFUL, x2);
+  CHECK_FULL_HEAP_OBJECT_IN_REGISTER(isolate->factory()->undefined_value(), x2);
 }
 
 #ifdef DEBUG
 // These tests rely on functions available in debug mode.
 enum LiteralPoolEmitOutcome { EmitExpected, NoEmitExpected };
+enum LiteralPoolEmissionAlignment { EmitAtUnaligned, EmitAtAligned };
 
-static void LdrLiteralRangeHelper(size_t range, LiteralPoolEmitOutcome outcome,
-                                  size_t prepadding = 0) {
+static void LdrLiteralRangeHelper(
+    size_t range, LiteralPoolEmitOutcome outcome,
+    LiteralPoolEmissionAlignment unaligned_emission) {
   SETUP_SIZE(static_cast<int>(range + 1024));
 
-  size_t code_size = 0;
-  const size_t pool_entries = 2;
-  const size_t kEntrySize = 8;
+  const size_t first_pool_entries = 2;
+  const size_t first_pool_size_bytes = first_pool_entries * kInt64Size;
 
   START();
   // Force a pool dump so the pool starts off empty.
-  __ CheckConstPool(true, true);
+  __ ForceConstantPoolEmissionWithJump();
   CHECK_CONSTANT_POOL_SIZE(0);
 
-  // Emit prepadding to influence alignment of the pool; we don't count this
-  // into code size.
-  for (size_t i = 0; i < prepadding; ++i) __ Nop();
+  // Emit prepadding to influence alignment of the pool.
+  bool currently_aligned = IsAligned(__ pc_offset(), kInt64Size);
+  if ((unaligned_emission == EmitAtUnaligned && currently_aligned) ||
+      (unaligned_emission == EmitAtAligned && !currently_aligned)) {
+    __ Nop();
+  }
 
-  LoadLiteral(&masm, x0, 0x1234567890ABCDEFUL);
-  LoadLiteral(&masm, x1, 0xABCDEF1234567890UL);
-  code_size += 2 * kInstrSize;
-  CHECK_CONSTANT_POOL_SIZE(pool_entries * kEntrySize);
+  int initial_pc_offset = __ pc_offset();
+  __ Ldr(x0, isolate->factory()->undefined_value());
+  __ Ldr(x1, isolate->factory()->the_hole_value());
+  CHECK_CONSTANT_POOL_SIZE(first_pool_size_bytes);
 
-  // Check that the requested range (allowing space for a branch over the pool)
-  // can be handled by this test.
-  CHECK_LE(code_size, range);
+  size_t expected_pool_size = 0;
 
 #if defined(_M_ARM64) && !defined(__clang__)
   auto PoolSizeAt = [pool_entries, kEntrySize](int pc_offset) {
 #else
-  auto PoolSizeAt = [](int pc_offset) {
+  auto PoolSizeAt = [unaligned_emission](int pc_offset) {
 #endif
     // To determine padding, consider the size of the prologue of the pool,
     // and the jump around the pool, which we always need.
     size_t prologue_size = 2 * kInstrSize + kInstrSize;
     size_t pc = pc_offset + prologue_size;
-    const size_t padding = IsAligned(pc, 8) ? 0 : 4;
-    return prologue_size + pool_entries * kEntrySize + padding;
+    const size_t padding = IsAligned(pc, kInt64Size) ? 0 : kInt32Size;
+    CHECK_EQ(padding == 0, unaligned_emission == EmitAtAligned);
+    return prologue_size + first_pool_size_bytes + padding;
   };
 
   int pc_offset_before_emission = -1;
-  // Emit NOPs up to 'range'.
-  while (code_size < range) {
+  bool pool_was_emitted = false;
+  while (__ pc_offset() - initial_pc_offset < static_cast<intptr_t>(range)) {
     pc_offset_before_emission = __ pc_offset() + kInstrSize;
     __ Nop();
-    code_size += kInstrSize;
+    if (__ GetConstantPoolEntriesSizeForTesting() == 0) {
+      pool_was_emitted = true;
+      break;
+    }
   }
-  CHECK_EQ(code_size, range);
 
   if (outcome == EmitExpected) {
-    CHECK_CONSTANT_POOL_SIZE(0);
+    if (!pool_was_emitted) {
+      FATAL(
+          "Pool was not emitted up to pc_offset %d which corresponds to a "
+          "distance to the first constant of %d bytes",
+          __ pc_offset(), __ pc_offset() - initial_pc_offset);
+    }
     // Check that the size of the emitted constant pool is as expected.
-    size_t pool_size = PoolSizeAt(pc_offset_before_emission);
-    CHECK_EQ(pc_offset_before_emission + pool_size, __ pc_offset());
-    byte* pool_start = buf + pc_offset_before_emission;
-    Instruction* branch = reinterpret_cast<Instruction*>(pool_start);
-    CHECK(branch->IsImmBranch());
-    CHECK_EQ(pool_size, branch->ImmPCOffset());
-    Instruction* marker =
-        reinterpret_cast<Instruction*>(pool_start + kInstrSize);
-    CHECK(marker->IsLdrLiteralX());
-    const size_t padding =
-        IsAligned(pc_offset_before_emission + kInstrSize, kEntrySize) ? 0 : 1;
-    CHECK_EQ(pool_entries * 2 + 1 + padding, marker->ImmLLiteral());
-
+    expected_pool_size = PoolSizeAt(pc_offset_before_emission);
+    CHECK_EQ(pc_offset_before_emission + expected_pool_size, __ pc_offset());
   } else {
     CHECK_EQ(outcome, NoEmitExpected);
-    CHECK_CONSTANT_POOL_SIZE(pool_entries * kEntrySize);
+    if (pool_was_emitted) {
+      FATAL("Pool was unexpectedly emitted at pc_offset %d ",
+            pc_offset_before_emission);
+    }
+    CHECK_CONSTANT_POOL_SIZE(first_pool_size_bytes);
     CHECK_EQ(pc_offset_before_emission, __ pc_offset());
   }
 
   // Force a pool flush to check that a second pool functions correctly.
-  __ CheckConstPool(true, true);
+  __ ForceConstantPoolEmissionWithJump();
   CHECK_CONSTANT_POOL_SIZE(0);
 
   // These loads should be after the pool (and will require a new one).
-  LoadLiteral(&masm, x4, 0x34567890ABCDEF12UL);
-  LoadLiteral(&masm, x5, 0xABCDEF0123456789UL);
-  CHECK_CONSTANT_POOL_SIZE(pool_entries * kEntrySize);
+  const int second_pool_entries = 2;
+  __ Ldr(x4, isolate->factory()->true_value());
+  __ Ldr(x5, isolate->factory()->false_value());
+  CHECK_CONSTANT_POOL_SIZE(second_pool_entries * kInt64Size);
+
   END();
+
+  if (outcome == EmitExpected) {
+    Address pool_start = code->InstructionStart() + pc_offset_before_emission;
+    Instruction* branch = reinterpret_cast<Instruction*>(pool_start);
+    CHECK(branch->IsImmBranch());
+    CHECK_EQ(expected_pool_size, branch->ImmPCOffset());
+    Instruction* marker =
+        reinterpret_cast<Instruction*>(pool_start + kInstrSize);
+    CHECK(marker->IsLdrLiteralX());
+    size_t pool_data_start_offset = pc_offset_before_emission + kInstrSize;
+    size_t padding =
+        IsAligned(pool_data_start_offset, kInt64Size) ? 0 : kInt32Size;
+    size_t marker_size = kInstrSize;
+    CHECK_EQ((first_pool_size_bytes + marker_size + padding) / kInt32Size,
+             marker->ImmLLiteral());
+  }
 
   RUN();
 
   // Check that the literals loaded correctly.
-  CHECK_EQUAL_64(0x1234567890ABCDEFUL, x0);
-  CHECK_EQUAL_64(0xABCDEF1234567890UL, x1);
-  CHECK_EQUAL_64(0x34567890ABCDEF12UL, x4);
-  CHECK_EQUAL_64(0xABCDEF0123456789UL, x5);
+  CHECK_FULL_HEAP_OBJECT_IN_REGISTER(isolate->factory()->undefined_value(), x0);
+  CHECK_FULL_HEAP_OBJECT_IN_REGISTER(isolate->factory()->the_hole_value(), x1);
+  CHECK_FULL_HEAP_OBJECT_IN_REGISTER(isolate->factory()->true_value(), x4);
+  CHECK_FULL_HEAP_OBJECT_IN_REGISTER(isolate->factory()->false_value(), x5);
 }
 
 TEST(ldr_literal_range_max_dist_emission_1) {
   INIT_V8();
-  LdrLiteralRangeHelper(MacroAssembler::GetApproxMaxDistToConstPoolForTesting(),
-                        EmitExpected);
+  LdrLiteralRangeHelper(
+      MacroAssembler::GetApproxMaxDistToConstPoolForTesting() +
+          MacroAssembler::GetCheckConstPoolIntervalForTesting(),
+      EmitExpected, EmitAtAligned);
 }
 
 TEST(ldr_literal_range_max_dist_emission_2) {
   INIT_V8();
-  LdrLiteralRangeHelper(MacroAssembler::GetApproxMaxDistToConstPoolForTesting(),
-                        EmitExpected, 1);
+  LdrLiteralRangeHelper(
+      MacroAssembler::GetApproxMaxDistToConstPoolForTesting() +
+          MacroAssembler::GetCheckConstPoolIntervalForTesting(),
+      EmitExpected, EmitAtUnaligned);
 }
 
 TEST(ldr_literal_range_max_dist_no_emission_1) {
   INIT_V8();
   LdrLiteralRangeHelper(
-      MacroAssembler::GetApproxMaxDistToConstPoolForTesting() - kInstrSize,
-      NoEmitExpected);
+      MacroAssembler::GetApproxMaxDistToConstPoolForTesting() -
+          MacroAssembler::GetCheckConstPoolIntervalForTesting(),
+      NoEmitExpected, EmitAtUnaligned);
 }
 
 TEST(ldr_literal_range_max_dist_no_emission_2) {
   INIT_V8();
   LdrLiteralRangeHelper(
-      MacroAssembler::GetApproxMaxDistToConstPoolForTesting() - kInstrSize,
-      NoEmitExpected, 1);
+      MacroAssembler::GetApproxMaxDistToConstPoolForTesting() -
+          MacroAssembler::GetCheckConstPoolIntervalForTesting(),
+      NoEmitExpected, EmitAtAligned);
 }
 
 #endif
@@ -14297,12 +14321,11 @@ TEST(default_nan_double) {
   DefaultNaNHelper(qn, qm, qa);
 }
 
-TEST(call_no_relocation) {
+TEST(near_call_no_relocation) {
   INIT_V8();
   SETUP();
 
   START();
-  Address buf_addr = reinterpret_cast<Address>(buf);
 
   Label function;
   Label test;
@@ -14318,7 +14341,8 @@ TEST(call_no_relocation) {
   __ Push(lr, xzr);
   {
     Assembler::BlockConstPoolScope scope(&masm);
-    __ Call(buf_addr + function.pos(), RelocInfo::NONE);
+    int offset = (function.pos() - __ pc_offset()) / kInstrSize;
+    __ near_call(offset, RelocInfo::NONE);
   }
   __ Pop(xzr, lr);
   END();
@@ -14327,7 +14351,6 @@ TEST(call_no_relocation) {
 
   CHECK_EQUAL_64(1, x0);
 }
-
 
 static void AbsHelperX(int64_t value) {
   int64_t expected;
@@ -14476,12 +14499,11 @@ TEST(pool_size) {
 
   __ bind(&exit);
 
-  HandleScope handle_scope(isolate);
   CodeDesc desc;
   masm.GetCode(isolate, &desc);
-  Handle<Code> code = Factory::CodeBuilder(isolate, desc, Code::STUB)
-                          .set_self_reference(masm.CodeObject())
-                          .Build();
+  code = Factory::CodeBuilder(isolate, desc, Code::STUB)
+             .set_self_reference(masm.CodeObject())
+             .Build();
 
   unsigned pool_count = 0;
   int pool_mask = RelocInfo::ModeMask(RelocInfo::CONST_POOL) |
@@ -14680,6 +14702,7 @@ TEST(internal_reference_linked) {
 #undef CHECK_EQUAL_32
 #undef CHECK_EQUAL_FP32
 #undef CHECK_EQUAL_64
+#undef CHECK_FULL_HEAP_OBJECT_IN_REGISTER
 #undef CHECK_EQUAL_FP64
 #undef CHECK_EQUAL_128
 #undef CHECK_CONSTANT_POOL_SIZE

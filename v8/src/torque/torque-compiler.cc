@@ -57,11 +57,11 @@ void CompileCurrentAst(TorqueCompilerOptions options) {
 
   // Two-step process of predeclaration + resolution allows to resolve type
   // declarations independent of the order they are given.
-  PredeclarationVisitor::Predeclare(GlobalContext::Get().ast());
+  PredeclarationVisitor::Predeclare(GlobalContext::ast());
   PredeclarationVisitor::ResolvePredeclarations();
 
   // Process other declarations.
-  DeclarationVisitor::Visit(GlobalContext::Get().ast());
+  DeclarationVisitor::Visit(GlobalContext::ast());
 
   // A class types' fields are resolved here, which allows two class fields to
   // mutually refer to each others.
@@ -76,6 +76,8 @@ void CompileCurrentAst(TorqueCompilerOptions options) {
 
   implementation_visitor.VisitAllDeclarables();
 
+  ReportAllUnusedMacros();
+
   implementation_visitor.GenerateBuiltinDefinitions(output_directory);
   implementation_visitor.GenerateClassFieldOffsets(output_directory);
   implementation_visitor.GeneratePrintDefinitions(output_directory);
@@ -83,6 +85,8 @@ void CompileCurrentAst(TorqueCompilerOptions options) {
   implementation_visitor.GenerateClassVerifiers(output_directory);
   implementation_visitor.GenerateExportedMacrosAssembler(output_directory);
   implementation_visitor.GenerateCSATypes(output_directory);
+  implementation_visitor.GenerateInstanceTypes(output_directory);
+  implementation_visitor.GenerateCppForInternalClasses(output_directory);
 
   implementation_visitor.EndCSAFiles();
   implementation_visitor.GenerateImplementation(output_directory);
@@ -97,7 +101,7 @@ void CompileCurrentAst(TorqueCompilerOptions options) {
 
 TorqueCompilerResult CompileTorque(const std::string& source,
                                    TorqueCompilerOptions options) {
-  SourceFileMap::Scope source_map_scope("");
+  SourceFileMap::Scope source_map_scope(options.v8_root);
   CurrentSourceFile::Scope no_file_scope(
       SourceFileMap::AddSource("dummy-filename.tq"));
   CurrentAst::Scope ast_scope;
