@@ -1,0 +1,44 @@
+[package]
+name = "futures-preview"
+edition = "2018"
+version = "0.3.0-alpha.17"
+authors = ["Alex Crichton <alex@alexcrichton.com>"]
+license = "MIT OR Apache-2.0"
+readme = "../README.md"
+keywords = ["futures", "async", "future"]
+repository = "https://github.com/rust-lang-nursery/futures-rs"
+homepage = "https://rust-lang-nursery.github.io/futures-rs"
+documentation = "https://rust-lang-nursery.github.io/futures-api-docs/0.3.0-alpha.17/futures"
+description = """
+An implementation of futures and streams featuring zero allocations,
+composability, and iterator-like interfaces.
+"""
+categories = ["asynchronous"]
+
+[lib]
+name = "futures"
+
+[badges]
+travis-ci = { repository = "rust-lang-nursery/futures-rs" }
+appveyor = { repository = "rust-lang-nursery/futures-rs" }
+
+[dependencies]
+futures-core-preview = { path = "../futures-core", version = "=0.3.0-alpha.17", default-features = false }
+futures-channel-preview = { path = "../futures-channel", version = "=0.3.0-alpha.17", default-features = false, features = ["sink"] }
+futures-executor-preview = { path = "../futures-executor", version = "=0.3.0-alpha.17", default-features = false }
+futures-io-preview = { path = "../futures-io", version = "=0.3.0-alpha.17", default-features = false }
+futures-sink-preview = { path = "../futures-sink", version = "=0.3.0-alpha.17", default-features = false }
+futures-util-preview = { path = "../futures-util", version = "=0.3.0-alpha.17", default-features = false, features = ["sink"] }
+
+[features]
+nightly = ["futures-core-preview/nightly", "futures-util-preview/nightly"]
+std = ["alloc", "futures-core-preview/std", "futures-executor-preview/std", "futures-io-preview/std", "futures-sink-preview/std", "futures-util-preview/std", "futures-util-preview/io", "futures-util-preview/channel"]
+async-await = ["futures-util-preview/async-await", "futures-util-preview/select-macro"]
+default = ["std"]
+compat = ["std", "futures-util-preview/compat"]
+io-compat = ["compat", "futures-util-preview/io-compat"]
+cfg-target-has-atomic = ["futures-core-preview/cfg-target-has-atomic", "futures-util-preview/cfg-target-has-atomic"]
+alloc = ["futures-core-preview/alloc", "futures-sink-preview/alloc", "futures-util-preview/alloc"]
+
+[package.metadata.docs.rs]
+all-features = true

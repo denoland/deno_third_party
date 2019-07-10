@@ -1,0 +1,24 @@
+[package]
+name = "futures-channel-preview"
+edition = "2018"
+version = "0.3.0-alpha.17"
+authors = ["Alex Crichton <alex@alexcrichton.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang-nursery/futures-rs"
+homepage = "https://rust-lang-nursery.github.io/futures-rs"
+documentation = "https://rust-lang-nursery.github.io/futures-api-docs/0.3.0-alpha.17/futures_channel"
+description = """
+Channels for asynchronous communication using futures-rs.
+"""
+
+[lib]
+name = "futures_channel"
+
+[features]
+std = ["futures-core-preview/std"]
+sink = ["futures-sink-preview"]
+default = ["std"]
+
+[dependencies]
+futures-core-preview = { path = "../futures-core", version = "=0.3.0-alpha.17", default-features = false }
+futures-sink-preview = { path = "../futures-sink", version = "=0.3.0-alpha.17", default-features = false, optional = true }
