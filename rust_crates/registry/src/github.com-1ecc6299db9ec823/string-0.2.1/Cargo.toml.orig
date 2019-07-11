@@ -1,0 +1,28 @@
+[package]
+name = "string"
+# When releasing to crates.io:
+# - Update html_root_url.
+# - Update CHANGELOG.md.
+# - Update README.md.
+# - Update doc URL.
+# - Create "v0.1.x" git tag.
+version = "0.2.1"
+license = "MIT"
+authors = ["Carl Lerche <me@carllerche.com>"]
+description = "A UTF-8 encoded string with configurable byte storage."
+documentation = "https://docs.rs/string/0.2.1/string/"
+homepage = "https://github.com/carllerche/string"
+repository = "https://github.com/carllerche/string"
+readme = "README.md"
+keywords = ["string"]
+categories = ["data-structures"]
+
+[features]
+default = ["bytes"]
+
+[badges.travis-ci]
+repository = "carllerche/string"
+branch = "master"
+
+[dependencies]
+bytes = { version = "0.4", optional = true }

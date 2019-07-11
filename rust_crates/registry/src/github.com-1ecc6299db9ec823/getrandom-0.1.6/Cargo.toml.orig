@@ -1,0 +1,40 @@
+[package]
+name = "getrandom"
+version = "0.1.6"
+edition = "2018"
+authors = ["The Rand Project Developers"]
+license = "MIT OR Apache-2.0"
+description = "A small cross-platform library for retrieving random data from system source"
+documentation = "https://docs.rs/getrandom"
+repository = "https://github.com/rust-random/getrandom"
+categories = ["os", "no-std"]
+exclude = ["utils/*", ".*", "appveyor.yml"]
+
+[badges]
+travis-ci = { repository = "rust-random/getrandom" }
+appveyor = { repository = "rust-random/getrandom" }
+
+[workspace]
+members = ["tests/wasm_bindgen"]
+
+[dependencies]
+log = { version = "0.4", optional = true }
+
+[target.'cfg(any(unix, target_os = "wasi"))'.dependencies]
+libc = "0.2.54"
+
+# For holding file descriptors
+[target.'cfg(any(unix, target_os = "redox"))'.dependencies]
+lazy_static = "1.3.0"
+
+# For caching result of CPUID check for RDRAND
+[target.'cfg(target_os = "uefi")'.dependencies]
+lazy_static = { version = "1.3.0", features = ["spin_no_std"] }
+
+[target.wasm32-unknown-unknown.dependencies]
+wasm-bindgen = { version = "0.2.29", optional = true }
+stdweb = { version = "0.4.9", optional = true }
+lazy_static = "1.3.0"
+
+[features]
+std = []

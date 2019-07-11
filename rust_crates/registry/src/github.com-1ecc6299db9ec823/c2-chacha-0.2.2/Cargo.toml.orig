@@ -1,0 +1,30 @@
+[package]
+name = "c2-chacha"
+version = "0.2.2"
+authors = ["The CryptoCorrosion Contributors"]
+license = "MIT/Apache-2.0"
+edition = "2018"
+description = "The ChaCha family of stream ciphers"
+repository = "https://github.com/cryptocorrosion/cryptocorrosion"
+keywords = ["chacha", "chacha20", "xchacha20", "cipher", "crypto"]
+categories = ["cryptography", "no-std"]
+readme = "README.md"
+documentation = "https://docs.rs/c2-chacha"
+
+[dependencies]
+byteorder = { version = "1.3", optional = true }
+lazy_static = { version = "1.2", optional = true }
+ppv-lite86 = { package = "ppv-lite86", version = "0.2.1" }
+stream-cipher = { version = "0.3", optional = true }
+
+[dev-dependencies]
+hex-literal = "0.1"
+
+[features]
+default = ["std", "simd", "rustcrypto_api"]
+std = ["lazy_static"]
+rustcrypto_api = ["stream-cipher", "byteorder"]
+simd = ["ppv-lite86/simd"]
+
+[badges]
+travis-ci = { repository = "cryptocorrosion/cryptocorrosion" }
