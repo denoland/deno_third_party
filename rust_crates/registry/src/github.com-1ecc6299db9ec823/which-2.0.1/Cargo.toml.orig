@@ -1,0 +1,22 @@
+[package]
+name = "which"
+version = "2.0.1"
+authors = ["Harry Fei <tiziyuanfang@gmail.com>"]
+repository = "https://github.com/harryfei/which-rs.git"
+documentation = "https://docs.rs/which/"
+license = "MIT"
+description = "A Rust equivalent of Unix command \"which\". Locate installed execuable in cross platforms."
+readme = "README.md"
+categories = ["os", "filesystem"]
+keywords = ["which", "which-rs", "unix", "command"]
+
+[dependencies]
+libc = "0.2.10"
+
+[dependencies.failure]
+version = "0.1.1"
+default-features = false
+features = ["std"]
+
+[dev-dependencies]
+tempdir = "0.3.4"

@@ -1,0 +1,34 @@
+variables:
+  RUST_BACKTRACE: full
+
+pool:
+  vmImage: 'ubuntu-16.04'
+
+steps:
+  - checkout: self
+    submodules: true
+
+  - script: |
+      curl https://sh.rustup.rs -sSf | sh -s -- -y
+      echo "##vso[task.setvariable variable=PATH;]$PATH:$HOME/.cargo/bin"
+    displayName: Install rust
+
+  - script: |
+      git clone https://github.com/ninja-build/ninja.git --depth=1
+      cd ninja
+      python ./bootstrap.py
+      echo "##vso[task.prependpath]$(system.defaultWorkingDirectory)/ninja"
+    displayName: Install ninja
+
+  - script: |
+      git clone https://gn.googlesource.com/gn
+      cd gn
+      python build/gen.py
+      ninja -C out gn
+      echo "##vso[task.prependpath]$(system.defaultWorkingDirectory)/gn/out"
+    displayName: build gn
+
+  - script: |
+      echo "ninja $(which ninja) gn $(which gn)"
+      cargo test -vv --all
+    displayName: Cargo test
