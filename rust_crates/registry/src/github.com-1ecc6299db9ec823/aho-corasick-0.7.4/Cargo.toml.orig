@@ -1,0 +1,39 @@
+[package]
+name = "aho-corasick"
+version = "0.7.4"  #:version
+authors = ["Andrew Gallant <jamslam@gmail.com>"]
+description = "Fast multiple substring searching."
+homepage = "https://github.com/BurntSushi/aho-corasick"
+repository = "https://github.com/BurntSushi/aho-corasick"
+readme = "README.md"
+keywords = ["string", "search", "text", "aho", "multi"]
+license = "Unlicense/MIT"
+categories = ["text-processing"]
+autotests = false
+exclude = ["/aho-corasick-debug", "/bench", "/ci/*", "/.travis.yml"]
+
+[badges]
+travis-ci = { repository = "BurntSushi/aho-corasick" }
+appveyor = { repository = "BurntSushi/regex-automata" }
+
+[workspace]
+members = ["bench", "aho-corasick-debug"]
+
+[lib]
+name = "aho_corasick"
+
+[features]
+default = ["std"]
+std = ["memchr/use_std"]
+
+[dependencies]
+memchr = { version = "2.2.0", default-features = false }
+
+[dev-dependencies]
+doc-comment = "0.3.1"
+
+[profile.release]
+debug = true
+
+[profile.bench]
+debug = true
