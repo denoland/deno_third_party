@@ -1,0 +1,15 @@
+[package]
+name = "input_buffer"
+description = "A peekable FIFO-like buffer for receiving network data efficiently"
+authors = ["Alexey Galakhov <agalakhov@snapview.de>"]
+categories = ["network-programming"]
+keywords = ["io"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/snapview/input_buffer"
+repository = "https://github.com/snapview/input_buffer"
+documentation = "https://docs.rs/input_buffer/0.2.0"
+version = "0.2.0"
+
+[dependencies]
+bytes = "0.4.5"
