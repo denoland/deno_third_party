@@ -1,0 +1,36 @@
+[package]
+name = "tungstenite"
+description = "Lightweight stream-based WebSocket implementation"
+categories = ["web-programming::websocket", "network-programming"]
+keywords = ["websocket", "io", "web"]
+authors = ["Alexey Galakhov"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/snapview/tungstenite-rs"
+documentation = "https://docs.rs/tungstenite/0.8.1"
+repository = "https://github.com/snapview/tungstenite-rs"
+version = "0.8.1"
+
+[features]
+default = ["tls"]
+tls = ["native-tls"]
+
+[dependencies]
+base64 = "0.10.0"
+byteorder = "1.2.3"
+bytes = "0.4.8"
+http = "0.1.17"
+httparse = "1.3.1"
+input_buffer = "0.2.0"
+log = "0.4.2"
+rand = "0.6.4"
+sha-1 = "0.8"
+url = "1.7.0"
+utf-8 = "0.7.2"
+
+[dependencies.native-tls]
+optional = true
+version = "0.2"
+
+[dev-dependencies]
+env_logger = "0.6.1"

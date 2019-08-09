@@ -1,0 +1,15 @@
+[package]
+name = "enclose"
+version = "1.1.7"
+authors = ["Denis Kotlyarov (Денис Котляров) <denis2005991@gmail.com>"]
+repository = "https://github.com/clucompany/Enclose.git"
+homepage = "https://crates.io/crates/enclose"
+license = "MIT"
+readme = "README.md"
+edition = "2018"
+
+description = "A convenient macro for cloning values into a closure."
+keywords = ["enclose", "enclose_macro", "macro", "clucompany"]
+categories = ["development-tools"]
+
+[dependencies]
