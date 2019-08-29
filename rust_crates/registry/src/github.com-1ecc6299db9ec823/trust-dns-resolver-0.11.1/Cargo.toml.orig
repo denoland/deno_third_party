@@ -1,0 +1,87 @@
+[package]
+name = "trust-dns-resolver"
+version = "0.11.1"
+authors = ["Benjamin Fry <benjaminfry@me.com>"]
+
+# A short blurb about the package. This is not rendered in any format when
+# uploaded to crates.io (aka this is not markdown)
+description = """
+Trust-DNS is a safe and secure DNS library. This Resolver library  uses the Client library to perform all DNS queries. The Resolver is intended to be a high-level library for any DNS record resolution see Resolver and ResolverFuture for supported resolution types. The Client can be used for other queries.
+"""
+
+# These URLs point to more information about the repository
+documentation = "https://docs.rs/trust-dns-resolver"
+homepage = "http://www.trust-dns.org/index.html"
+repository = "https://github.com/bluejekyll/trust-dns"
+
+# This points to a file in the repository (relative to this Cargo.toml). The
+# contents of this file are stored and indexed in the registry.
+readme = "README.md"
+
+# This is a small list of keywords used to categorize and search for this
+# package.
+keywords = ["DNS", "BIND", "dig", "named", "dnssec"]
+categories = ["network-programming"]
+
+# This is a string description of the license for this package. Currently
+# crates.io will validate the license provided against a whitelist of known
+# license identifiers from http://spdx.org/licenses/. Multiple licenses can
+# be separated with a `/`
+license = "MIT/Apache-2.0"
+
+[badges]
+travis-ci = { repository = "bluejekyll/trust-dns" }
+appveyor = { repository = "bluejekyll/trust-dns", branch = "master", service = "github" }
+codecov = { repository = "bluejekyll/trust-dns", branch = "master", service = "github" }
+
+[features]
+default = ["tokio"]
+dns-over-native-tls = ["dns-over-tls", "trust-dns-native-tls"]
+# DNS over TLS with OpenSSL currently needs a good way to set default CAs, use rustls or native-tls
+dns-over-openssl = ["dns-over-tls", "trust-dns-openssl"]
+dns-over-rustls = ["dns-over-tls", "rustls", "trust-dns-rustls", "webpki-roots"]
+dns-over-tls = []
+
+# This requires some TLS library, currently only rustls is supported
+dns-over-https-rustls = ["trust-dns-https", "dns-over-rustls", "dns-over-https"]
+dns-over-https = []
+
+dnssec-openssl = ["dnssec", "trust-dns-proto/dnssec-openssl"]
+dnssec-ring = ["dnssec", "trust-dns-proto/dnssec-ring"]
+dnssec = []
+
+serde-config = ["serde", "trust-dns-proto/serde-config"]
+
+mdns = ["trust-dns-proto/mdns"]
+
+[lib]
+name = "trust_dns_resolver"
+path = "src/lib.rs"
+
+[dependencies]
+cfg-if = "0.1"
+failure = "0.1"
+futures = "^0.1.27"
+lazy_static = "^1.0"
+log = "^0.4.1"
+lru-cache = "^0.1.2"
+resolv-conf = { version = "0.6.0", features = ["system"] }
+rustls = {version  = "0.15", optional = true}
+serde = { version = "1.0", features = ["derive"], optional = true }
+smallvec = "^0.6"
+tokio = { version = "^0.1.15", optional = true }
+tokio-executor = "^0.1.7"
+trust-dns-https = { version = "0.3.0", path = "../https", optional = true }
+trust-dns-native-tls = { version = "0.6.0", path = "../native-tls", optional = true }
+trust-dns-openssl = { version = "0.6.0", path = "../openssl", optional = true }
+trust-dns-proto = { version = "0.7.3", path = "../proto" }
+trust-dns-rustls = { version = "0.6.0", path = "../rustls", optional = true }
+webpki-roots = { version = "^0.16", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+ipconfig = { version = "^0.2.0" }
+
+[dev-dependencies]
+env_logger = "^0.6"
+tokio-io = "^0.1"
+tokio = "^0.1.15"

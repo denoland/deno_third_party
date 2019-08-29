@@ -1,0 +1,16 @@
+.DS_Store
+*~
+*#
+*.o
+*.so
+*.swp
+*.dylib
+*.dSYM
+*.dll
+*.rlib
+*.dummy
+*.exe
+*-test
+target/
+Cargo.lock
+.vscode

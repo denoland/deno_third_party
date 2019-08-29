@@ -1,0 +1,10 @@
+[package]
+name = "winutil"
+version = "0.1.1"
+authors = ["Dave Lancaster <lancaster.dave@gmail.com>"]
+description = "Simple library providing wrappers around a handful of useful winapi calls."
+readme = "README.md"
+license = "MIT"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["wow64apiset", "processthreadsapi", "winbase"] }
