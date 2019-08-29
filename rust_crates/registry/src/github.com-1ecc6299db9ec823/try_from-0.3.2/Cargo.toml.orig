@@ -1,0 +1,14 @@
+[package]
+name = "try_from"
+version = "0.3.2"
+authors = ["Derek Williams <derek@fyrie.net>"]
+description = "TryFrom and TryInto traits for failable conversions that return a Result."
+repository = "https://github.com/derekjw/try_from"
+readme = "README.md"
+license = "MIT"
+
+[dependencies]
+cfg-if = "0.1"
+
+[features]
+no_std = []
