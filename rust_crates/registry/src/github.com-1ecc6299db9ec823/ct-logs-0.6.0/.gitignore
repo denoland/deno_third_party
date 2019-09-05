@@ -1,5 +1,0 @@
-target
-Cargo.lock
-log_list.json
-log_list.sig
-*.pyc

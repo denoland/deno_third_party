@@ -1,4 +1,0 @@
-wrap_comments = true
-format_strings = true
-error_on_unformatted = false
-reorder_impl_items = true
