@@ -5,6 +5,8 @@
 
 """Change the upstream of the current branch."""
 
+from __future__ import print_function
+
 import argparse
 import sys
 
@@ -12,6 +14,7 @@ import subprocess2
 
 from git_common import upstream, current_branch, run, tags, set_branch_config
 from git_common import get_or_create_merge_base, root, manual_merge_base
+from git_common import get_branch_tree, topo_iter
 
 import git_rebase_update
 
@@ -54,7 +57,7 @@ def main(args):
       "`git branch --set-upstream-to` to assign it one.\n\nPlease assign an "
       "upstream branch and then run this command again."
     )
-    print >> sys.stderr, msg % branch
+    print(msg % branch, file=sys.stderr)
     return 1
 
   mbase = get_or_create_merge_base(branch, cur_parent)
@@ -66,23 +69,28 @@ def main(args):
   try:
     run('show-ref', new_parent)
   except subprocess2.CalledProcessError:
-    print >> sys.stderr, 'fatal: invalid reference: %s' % new_parent
+    print('fatal: invalid reference: %s' % new_parent, file=sys.stderr)
     return 1
 
   if new_parent in all_tags:
-    print ("Reparenting %s to track %s [tag] (was %s)"
-           % (branch, new_parent, cur_parent))
+    print("Reparenting %s to track %s [tag] (was %s)" % (branch, new_parent,
+                                                         cur_parent))
     set_branch_config(branch, 'remote', '.')
     set_branch_config(branch, 'merge', new_parent)
   else:
-    print ("Reparenting %s to track %s (was %s)"
-           % (branch, new_parent, cur_parent))
+    print("Reparenting %s to track %s (was %s)" % (branch, new_parent,
+                                                   cur_parent))
     run('branch', '--set-upstream-to', new_parent, branch)
 
   manual_merge_base(branch, mbase, new_parent)
 
-  # TODO(iannucci): ONLY rebase-update the branch which moved (and dependants)
-  return git_rebase_update.main(['--no-fetch'])
+  # ONLY rebase-update the branch which moved (and dependants)
+  _, branch_tree = get_branch_tree()
+  branches = [branch]
+  for branch, parent in topo_iter(branch_tree):
+    if parent in branches:
+      branches.append(branch)
+  return git_rebase_update.main(['--no-fetch'] + branches)
 
 
 if __name__ == '__main__':  # pragma: no cover

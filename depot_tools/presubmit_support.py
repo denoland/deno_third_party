@@ -6,6 +6,8 @@
 """Enables directory-specific presubmit checks to run at upload and/or commit.
 """
 
+from __future__ import print_function
+
 __version__ = '1.8.0'
 
 # TODO(joi) Add caching where appropriate/needed. The API is designed to allow
@@ -44,7 +46,8 @@ from warnings import warn
 
 # Local imports.
 import fix_encoding
-import gclient_utils  # Exposed through the API
+import gclient_paths  # Exposed through the API
+import gclient_utils
 import git_footers
 import gerrit_util
 import owners
@@ -63,16 +66,17 @@ class PresubmitFailure(Exception):
 
 
 class CommandData(object):
-  def __init__(self, name, cmd, kwargs, message):
+  def __init__(self, name, cmd, kwargs, message, python3=False):
     self.name = name
     self.cmd = cmd
     self.stdin = kwargs.get('stdin', None)
-    self.kwargs = kwargs
+    self.kwargs = kwargs.copy()
     self.kwargs['stdout'] = subprocess.PIPE
     self.kwargs['stderr'] = subprocess.STDOUT
     self.kwargs['stdin'] = subprocess.PIPE
     self.message = message
     self.info = None
+    self.python3 = python3
 
 
 # Adapted from
@@ -149,7 +153,11 @@ class ThreadPool(object):
     This function converts invocation of .py files and invocations of "python"
     to vpython invocations.
     """
-    vpython = 'vpython.bat' if sys.platform == 'win32' else 'vpython'
+    vpython = 'vpython'
+    if test.python3:
+      vpython += '3'
+    if sys.platform == 'win32':
+      vpython += '.bat'
 
     cmd = test.cmd
     if cmd[0] == 'python':
@@ -300,6 +308,14 @@ class _PresubmitResult(object):
     if self.fatal:
       output.fail()
 
+  def json_format(self):
+    return {
+        'message': self._message,
+        'items': [str(item) for item in self._items],
+        'long_text': self._long_text,
+        'fatal': self.fatal
+    }
+
 
 # Top level object so multiprocessing can pickle
 # Public access through OutputApi object.
@@ -437,39 +453,6 @@ class OutputApi(object):
       return self.PresubmitNotifyResult(*args, **kwargs)
     return self.PresubmitPromptWarning(*args, **kwargs)
 
-  def EnsureCQIncludeTrybotsAreAdded(self, cl, bots_to_include, message):
-    """Helper for any PostUploadHook wishing to add CQ_INCLUDE_TRYBOTS.
-
-    Merges the bots_to_include into the current CQ_INCLUDE_TRYBOTS list,
-    keeping it alphabetically sorted. Returns the results that should be
-    returned from the PostUploadHook.
-
-    Args:
-      cl: The git_cl.Changelist object.
-      bots_to_include: A list of strings of bots to include, in the form
-        "master:slave".
-      message: A message to be printed in the case that
-        CQ_INCLUDE_TRYBOTS was updated.
-    """
-    description = cl.GetDescription(force=True)
-    trybot_footers = git_footers.parse_footers(description).get(
-        git_footers.normalize_name('Cq-Include-Trybots'), [])
-    prior_bots = []
-    for f in trybot_footers:
-      prior_bots += [b.strip() for b in f.split(';') if b.strip()]
-
-    if set(prior_bots) >= set(bots_to_include):
-      return []
-    all_bots = ';'.join(sorted(set(prior_bots) | set(bots_to_include)))
-
-    description = git_footers.remove_footer(description, 'Cq-Include-Trybots')
-    description = git_footers.add_footer(
-        description, 'Cq-Include-Trybots', all_bots,
-        before_keys=['Change-Id'])
-
-    cl.UpdateDescription(description, force=True)
-    return [self.PresubmitNotifyResult(message)]
-
 
 class InputApi(object):
   """An instance of this object is passed to presubmit scripts so they can
@@ -549,7 +532,10 @@ class InputApi(object):
     self.cpplint = cpplint
     self.cStringIO = cStringIO
     self.fnmatch = fnmatch
-    self.gclient_utils = gclient_utils
+    self.gclient_paths = gclient_paths
+    # TODO(yyanagisawa): stop exposing this when python3 become default.
+    # Since python3's tempfile has TemporaryDirectory, we do not need this.
+    self.temporary_directory = gclient_utils.temporary_directory
     self.glob = glob.glob
     self.json = json
     self.logging = logging.getLogger('PRESUBMIT')
@@ -758,8 +744,6 @@ class InputApi(object):
     return 'TBR' in self.change.tags or self.change.TBRsFromDescription()
 
   def RunTests(self, tests_mix, parallel=True):
-    # RunTests doesn't actually run tests. It adds them to a ThreadPool that
-    # will run all tests once all PRESUBMIT files are processed.
     tests = []
     msgs = []
     for t in tests_mix:
@@ -773,6 +757,10 @@ class InputApi(object):
         if not t.kwargs.get('cwd'):
           t.kwargs['cwd'] = self.PresubmitLocalPath()
     self.thread_pool.AddTests(tests, parallel)
+    # When self.parallel is True (i.e. --parallel is passed as an option)
+    # RunTests doesn't actually run tests. It adds them to a ThreadPool that
+    # will run all tests once all PRESUBMIT files are processed.
+    # Otherwise, it will run them and return the results.
     if not self.parallel:
       msgs.extend(self.thread_pool.RunAsync())
     return msgs
@@ -1064,7 +1052,11 @@ class Change(object):
   def BugsFromDescription(self):
     """Returns all bugs referenced in the commit description."""
     tags = [b.strip() for b in self.tags.get('BUG', '').split(',') if b.strip()]
-    footers = git_footers.parse_footers(self._full_description).get('Bug', [])
+    footers = []
+    unsplit_footers = git_footers.parse_footers(self._full_description).get(
+        'Bug', [])
+    for unsplit_footer in unsplit_footers:
+      footers += [b.strip() for b in unsplit_footer.split(',')]
     return sorted(set(tags + footers))
 
   def ReviewersFromDescription(self):
@@ -1240,8 +1232,9 @@ class GetTryMastersExecuter(object):
     """
     context = {}
     try:
-      exec script_text in context
-    except Exception, e:
+      exec(compile(script_text, 'PRESUBMIT.py', 'exec', dont_inherit=True),
+           context)
+    except Exception as e:
       raise PresubmitFailure('"%s" had an exception.\n%s'
                              % (presubmit_path, e))
 
@@ -1271,8 +1264,9 @@ class GetPostUploadExecuter(object):
     """
     context = {}
     try:
-      exec script_text in context
-    except Exception, e:
+      exec(compile(script_text, 'PRESUBMIT.py', 'exec', dont_inherit=True),
+           context)
+    except Exception as e:
       raise PresubmitFailure('"%s" had an exception.\n%s'
                              % (presubmit_path, e))
 
@@ -1436,8 +1430,9 @@ class PresubmitExecuter(object):
     output_api = OutputApi(self.committing)
     context = {}
     try:
-      exec script_text in context
-    except Exception, e:
+      exec(compile(script_text, 'PRESUBMIT.py', 'exec', dont_inherit=True),
+           context)
+    except Exception as e:
       raise PresubmitFailure('"%s" had an exception.\n%s' % (presubmit_path, e))
 
     # These function names must change if we make substantial changes to
@@ -1480,7 +1475,8 @@ def DoPresubmitChecks(change,
                       may_prompt,
                       gerrit_obj,
                       dry_run=None,
-                      parallel=False):
+                      parallel=False,
+                      json_output=None):
   """Runs all presubmit checks that apply to the files in the change.
 
   This finds all PRESUBMIT.py files in directories enclosing the files in the
@@ -1519,6 +1515,7 @@ def DoPresubmitChecks(change,
     os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 
     output = PresubmitOutput(input_stream, output_stream)
+
     if committing:
       output.write("Running presubmit commit checks ...\n")
     else:
@@ -1530,8 +1527,8 @@ def DoPresubmitChecks(change,
       output.write("Warning, no PRESUBMIT.py found.\n")
     results = []
     thread_pool = ThreadPool()
-    executer = PresubmitExecuter(change, committing, verbose,
-                                 gerrit_obj, dry_run, thread_pool)
+    executer = PresubmitExecuter(change, committing, verbose, gerrit_obj,
+                                 dry_run, thread_pool, parallel)
     if default_presubmit:
       if verbose:
         output.write("Running default presubmit script.\n")
@@ -1558,6 +1555,22 @@ def DoPresubmitChecks(change,
         warnings.append(result)
       else:
         notifications.append(result)
+
+    if json_output:
+      # Write the presubmit results to json output
+      presubmit_results = {
+        'errors': [
+            error.json_format() for error in errors
+        ],
+        'notifications': [
+            notification.json_format() for notification in notifications
+        ],
+        'warnings': [
+            warning.json_format() for warning in warnings
+        ]
+      }
+
+      gclient_utils.FileWrite(json_output, json.dumps(presubmit_results))
 
     output.write('\n')
     for name, items in (('Messages', notifications),
@@ -1692,6 +1705,8 @@ def main(argv=None):
   parser.add_option('--parallel', action='store_true',
                     help='Run all tests specified by input_api.RunTests in all '
                          'PRESUBMIT files in parallel.')
+  parser.add_option('--json_output',
+                    help='Write presubmit errors to json output.')
 
   options, args = parser.parse_args(argv)
 
@@ -1736,11 +1751,12 @@ def main(argv=None):
           options.may_prompt,
           gerrit_obj,
           options.dry_run,
-          options.parallel)
+          options.parallel,
+          options.json_output)
     return not results.should_continue()
-  except PresubmitFailure, e:
-    print >> sys.stderr, e
-    print >> sys.stderr, 'Maybe your depot_tools is out of date?'
+  except PresubmitFailure as e:
+    print(e, file=sys.stderr)
+    print('Maybe your depot_tools is out of date?', file=sys.stderr)
     return 2
 
 

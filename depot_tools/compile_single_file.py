@@ -3,6 +3,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+
 import argparse
 import os
 import subprocess
@@ -38,7 +40,10 @@ def main():
       required=True)
   parser.add_argument(
       '--build-dir',
-      help='The build directory, relative to the source directory.',
+      help='The build directory, relative to the source directory. Jumbo '
+           'builds aren\'t supported but you can create a non-jumbo build '
+           'config just for this script and keep using jumbo in your regular '
+           'builds.',
       required=True)
 
   options = parser.parse_args()
@@ -47,7 +52,7 @@ def main():
   abs_build_dir = os.path.join(src_dir, options.build_dir)
   src_relpath = os.path.relpath(options.file_path, abs_build_dir)
 
-  print 'Building %s' % options.file_path
+  print('Building %s' % options.file_path)
 
   ninja_exec = 'ninja'
   carets = '^'

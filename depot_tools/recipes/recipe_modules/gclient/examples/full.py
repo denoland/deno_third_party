@@ -18,10 +18,14 @@ TEST_CONFIGS = [
   'build_internal',
   'build_internal_scripts_slave',
   'catapult',
+  'celab',
   'crashpad',
   'custom_tabs_client',
   'dart',
+  'dawn',
   'disable_syntax_validation',
+  'emscripten_releases',
+  'expect_tests',
   'gerrit_test_cq_normal',
   'gyp',
   'infra',
@@ -32,8 +36,9 @@ TEST_CONFIGS = [
   'luci_go',
   'luci_py',
   'master_deps',
-  'mojo',
   'nacl',
+  'devtools',
+  'openscreen',
   'pdfium',
   'recipes_py',
   'recipes_py_bare',
@@ -78,8 +83,6 @@ def RunSteps(api):
   del api.gclient.spec_alias
 
   api.gclient.runhooks()
-
-  assert not api.gclient.is_blink_mode
 
 
 def GenTests(api):

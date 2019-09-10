@@ -13,8 +13,15 @@ class GitApi(recipe_api.RecipeApi):
   def __call__(self, *args, **kwargs):
     """Return a git command step."""
     name = kwargs.pop('name', 'git ' + args[0])
+
     infra_step = kwargs.pop('infra_step', True)
     git_cmd = ['git']
+
+    if kwargs.pop('add_retry', False) and not self.m.runtime.is_luci:
+      # On LUCI, the `git` binary is a go wrapper which already implements all
+      # the git-retry logic.
+      git_cmd += ['retry']
+
     options = kwargs.pop('git_config_options', {})
     for k, v in sorted(options.iteritems()):
       git_cmd.extend(['-c', '%s=%s' % (k, v)])
@@ -114,7 +121,7 @@ class GitApi(recipe_api.RecipeApi):
                set_got_revision=False, remote_name=None,
                display_fetch_size=None, file_name=None,
                submodule_update_recursive=True,
-               use_git_cache=False, progress=True):
+               use_git_cache=False, progress=True, tags=False):
     """Performs a full git checkout and returns sha1 of checked out revision.
 
     Args:
@@ -147,6 +154,7 @@ class GitApi(recipe_api.RecipeApi):
              "git fetch origin" or "git push origin".
            * arbitrary refs such refs/whatever/not-fetched-by-default-to-cache
        progress (bool): wether to show progress for fetch or not
+      tags (bool): Also fetch tags.
 
     Returns: If the checkout was successful, this returns the commit hash of
       the checked-out-repo. Otherwise this returns None.
@@ -186,16 +194,17 @@ class GitApi(recipe_api.RecipeApi):
 
     # Some of the commands below require depot_tools to be in PATH.
     path = self.m.path.pathsep.join([
-        str(self.package_repo_resource()), '%(PATH)s'])
+        str(self.repo_resource()), '%(PATH)s'])
 
     with self.m.context(cwd=dir_path):
       if use_git_cache:
         with self.m.context(env={'PATH': path}):
-          self('retry', 'cache', 'populate', '-c',
+          self('cache', 'populate', '-c',
                self.m.infra_paths.default_git_cache_dir, url,
 
                name='populate cache',
-               can_fail_build=can_fail_build)
+               can_fail_build=can_fail_build,
+               add_retry=True)
           dir_cmd = self(
               'cache', 'exists', '--quiet',
               '--cache-dir', self.m.infra_paths.default_git_cache_dir, url,
@@ -208,29 +217,28 @@ class GitApi(recipe_api.RecipeApi):
                can_fail_build=can_fail_build)
 
       # There are five kinds of refs we can be handed:
-      # 0) None. In this case, we default to properties['branch'].
-      # 1) A 40-character SHA1 hash.
-      # 2) A fully-qualifed arbitrary ref, e.g. 'refs/foo/bar/baz'.
-      # 3) A fully qualified branch name, e.g. 'refs/heads/master'.
-      #    Chop off 'refs/heads' and now it matches case (4).
+      # 0) None. In this case, we default to api.buildbucket.gitiles_commit.ref.
+      # 1) A fully qualified branch name, e.g. 'refs/heads/master'.
+      #    Chop off 'refs/heads/' and now it matches case (4).
+      # 2) A 40-character SHA1 hash.
+      # 3) A fully-qualifed arbitrary ref, e.g. 'refs/foo/bar/baz'.
       # 4) A branch name, e.g. 'master'.
       # Note that 'FETCH_HEAD' can be many things (and therefore not a valid
       # checkout target) if many refs are fetched, but we only explicitly fetch
       # one ref here, so this is safe.
+      if not ref:                                  # Case 0.
+        ref = self.m.buildbucket.gitiles_commit.ref or 'master'
+
+      # If it's a fully-qualified branch name, trim the 'refs/heads/' prefix.
+      if ref.startswith('refs/heads/'):            # Case 1.
+        ref = ref[len('refs/heads/'):]
+
       fetch_args = []
-      if not ref:                                  # Case 0
-        fetch_remote = remote_name
-        fetch_ref = self.m.properties.get('branch') or 'master'
-        checkout_ref = 'FETCH_HEAD'
-      elif self._GIT_HASH_RE.match(ref):        # Case 1.
+      if self._GIT_HASH_RE.match(ref):             # Case 2.
         fetch_remote = remote_name
         fetch_ref = ''
         checkout_ref = ref
-      elif ref.startswith('refs/heads/'):       # Case 3.
-        fetch_remote = remote_name
-        fetch_ref = ref[len('refs/heads/'):]
-        checkout_ref = 'FETCH_HEAD'
-      else:                                     # Cases 2 and 4.
+      else:                                        # Cases 3 and 4.
         fetch_remote = remote_name
         fetch_ref = ref
         checkout_ref = 'FETCH_HEAD'
@@ -248,6 +256,9 @@ class GitApi(recipe_api.RecipeApi):
         fetch_env['GIT_CURL_VERBOSE'] = '1'
         fetch_stderr = self.m.raw_io.output(leak_to=curl_trace_file)
 
+      if tags:
+        fetch_args.append('--tags')
+
       fetch_step_name = 'git fetch%s' % step_suffix
       if display_fetch_size:
         count_objects_before_fetch = self.count_objects(
@@ -255,10 +266,11 @@ class GitApi(recipe_api.RecipeApi):
             step_test_data=lambda: self.m.raw_io.test_api.stream_output(
                 self.test_api.count_objects_output(1000)))
       with self.m.context(env=fetch_env):
-        self('retry', 'fetch', *fetch_args,
+        self('fetch', *fetch_args,
           name=fetch_step_name,
           stderr=fetch_stderr,
-          can_fail_build=can_fail_build)
+          can_fail_build=can_fail_build,
+          add_retry=True)
       if display_fetch_size:
         self.count_objects(
             name='count-objects after %s' % fetch_step_name,
@@ -391,7 +403,7 @@ class GitApi(recipe_api.RecipeApi):
     """
     env = self.m.context.env
     env['PATH'] = self.m.path.pathsep.join([
-        str(self.package_repo_resource()), '%(PATH)s'])
+        str(self.repo_resource()), '%(PATH)s'])
     args = ['new-branch', branch]
     if upstream:
       args.extend(['--upstream', upstream])

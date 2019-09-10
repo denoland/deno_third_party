@@ -1,7 +1,7 @@
 [
   {
     "cmd": [
-      "RECIPE_PACKAGE_REPO[depot_tools]/git_cl.py",
+      "RECIPE_REPO[depot_tools]/git_cl.py",
       "upload",
       "--message-file",
       "Do the thing foobar\nNow with emoji: \ud83d\ude04"
@@ -10,26 +10,24 @@
   },
   {
     "cmd": [
-      "RECIPE_PACKAGE_REPO[depot_tools]/git_cl.py",
+      "RECIPE_REPO[depot_tools]/git_cl.py",
       "issue"
     ],
-    "name": "git_cl issue",
-    "stdout": "/path/to/tmp/"
+    "name": "git_cl issue"
   },
   {
     "cmd": [
-      "RECIPE_PACKAGE_REPO[depot_tools]/git_cl.py",
+      "RECIPE_REPO[depot_tools]/git_cl.py",
       "description",
       "-d",
       "--rietveld",
       "https://code.review/123"
     ],
-    "name": "git_cl description (build)",
-    "stdout": "/path/to/tmp/"
+    "name": "git_cl description (build)"
   },
   {
     "cmd": [
-      "RECIPE_PACKAGE_REPO[depot_tools]/git_cl.py",
+      "RECIPE_REPO[depot_tools]/git_cl.py",
       "description",
       "-n",
       "-",
@@ -37,8 +35,7 @@
       "--rietveld"
     ],
     "name": "git_cl set description",
-    "stdin": "bammmm",
-    "stdout": "/path/to/tmp/"
+    "stdin": "bammmm"
   },
   {
     "cmd": [
@@ -49,13 +46,12 @@
   },
   {
     "cmd": [
-      "RECIPE_PACKAGE_REPO[depot_tools]/git_cl.py",
+      "RECIPE_REPO[depot_tools]/git_cl.py",
       "description",
       "-d"
     ],
-    "cwd": "[TMP_BASE]/fakerepo_tmp_1",
-    "name": "git_cl description",
-    "stdout": "/path/to/tmp/"
+    "cwd": "[CLEANUP]/fakerepo_tmp_1",
+    "name": "git_cl description"
   },
   {
     "cmd": [
@@ -66,25 +62,23 @@
   },
   {
     "cmd": [
-      "RECIPE_PACKAGE_REPO[depot_tools]/git_cl.py",
+      "RECIPE_REPO[depot_tools]/git_cl.py",
       "description",
       "-n",
       "-"
     ],
-    "cwd": "[TMP_BASE]/fakerepo_tmp_1",
+    "cwd": "[CLEANUP]/fakerepo_tmp_1",
     "name": "git_cl set description (2)",
-    "stdin": "new description woo",
-    "stdout": "/path/to/tmp/"
+    "stdin": "new description woo"
   },
   {
     "cmd": [
-      "RECIPE_PACKAGE_REPO[depot_tools]/git_cl.py",
+      "RECIPE_REPO[depot_tools]/git_cl.py",
       "description",
       "-d"
     ],
-    "cwd": "[TMP_BASE]/fakerepo_tmp_1",
-    "name": "git_cl description (2)",
-    "stdout": "/path/to/tmp/"
+    "cwd": "[CLEANUP]/fakerepo_tmp_1",
+    "name": "git_cl description (2)"
   },
   {
     "cmd": [
@@ -94,8 +88,6 @@
     "name": "echo (3)"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "name": "$result"
   }
 ]

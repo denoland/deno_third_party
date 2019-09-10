@@ -2,6 +2,18 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+"""API for interacting with CIPD.
+
+Depends on 'cipd' binary available in PATH:
+https://godoc.org/go.chromium.org/luci/cipd/client/cmd/cipd
+
+WARNING: There is an alternative cipd recipe_module in recipes-py.git:
+https://codesearch.chromium.org/chromium/infra/recipes-py/recipe_modules/cipd/
+
+Consider using that one instead.
+TODO(crbug.com/875523): Delete this module.
+"""
+
 import re
 
 from collections import namedtuple
@@ -290,8 +302,8 @@ class CIPDApi(recipe_api.RecipeApi):
         'result': self.test_api.make_pin(pkg_name),
       }))
     ret_data = result.json.output['result']
-    result.presentation.step_text = '</br>pkg: %(package)s' % ret_data
-    result.presentation.step_text += '</br>id: %(instance_id)s' % ret_data
+    result.presentation.links[ret_data['instance_id']] = (
+        'https://chrome-infra-packages.appspot.com/p/%(package)s/+/%(instance_id)s' % ret_data)
     return ret_data
 
   def create_from_yaml(self, pkg_def, refs=None, tags=None):

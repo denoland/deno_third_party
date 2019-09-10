@@ -14,7 +14,10 @@
 $VerifiedPlatform windows-386 windows-amd64
 
 @Subdir python
-infra/python/cpython/windows-386 version:2.7.6
+infra/python/cpython/${platform} version:2.7.15.chromium14
+
+@Subdir python3
+infra/python/cpython3/${os}-${arch=amd64} version:3.8.0b1.chromium.1
 
 @Subdir git
-infra/git/windows-${arch} version:2.17.1.chromium15
+infra/git/windows-${arch} version:2.21.0.chromium16

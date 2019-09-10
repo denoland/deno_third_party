@@ -10,11 +10,13 @@ dartfmt binaries are pulled down during gclient sync in the mojo repo.
 This tool is named dart_format.py instead of dartfmt to parallel
 clang_format.py, which is in this same repository."""
 
+from __future__ import print_function
+
 import os
 import subprocess
 import sys
 
-import gclient_utils
+import gclient_paths
 
 class NotFoundError(Exception):
   """A file could not be found."""
@@ -26,7 +28,7 @@ class NotFoundError(Exception):
 
 def FindDartFmtToolInChromiumTree():
   """Return a path to the dartfmt executable, or die trying."""
-  primary_solution_path = gclient_utils.GetPrimarySolutionPath()
+  primary_solution_path = gclient_paths.GetPrimarySolutionPath()
   if not primary_solution_path:
     raise NotFoundError(
         'Could not find checkout in any parent of the current path.')
@@ -41,15 +43,15 @@ def FindDartFmtToolInChromiumTree():
 def main(args):
   try:
     tool = FindDartFmtToolInChromiumTree()
-  except NotFoundError, e:
-    print >> sys.stderr, e
+  except NotFoundError as e:
+    print(e, file=sys.stderr)
     sys.exit(1)
 
   # Add some visibility to --help showing where the tool lives, since this
   # redirection can be a little opaque.
   help_syntax = ('-h', '--help', '-help', '-help-list', '--help-list')
   if any(match in args for match in help_syntax):
-    print '\nDepot tools redirects you to the dartfmt at:\n    %s\n' % tool
+    print('\nDepot tools redirects you to the dartfmt at:\n    %s\n' % tool)
 
   return subprocess.call([tool] + sys.argv[1:])
 

@@ -24,6 +24,8 @@ Branches are colorized as follows:
     upstream, then you will see this.
 """
 
+from __future__ import print_function
+
 import argparse
 import collections
 import os
@@ -150,6 +152,8 @@ class BranchMapper(object):
         continue
 
       parent = branch_info.upstream
+      if self.__check_cycle(branch):
+        continue
       if not self.__branches_info[parent]:
         branch_upstream = upstream(branch)
         # If git can't find the upstream, mark the upstream as gone.
@@ -173,6 +177,20 @@ class BranchMapper(object):
       no_branches = OutputLine()
       no_branches.append('No User Branches')
       self.output.append(no_branches)
+
+  def __check_cycle(self, branch):
+    # Maximum length of the cycle is `num_branches`. This limit avoids running
+    # into a cycle which does *not* contain `branch`.
+    num_branches = len(self.__branches_info)
+    cycle = [branch]
+    while len(cycle) < num_branches and self.__branches_info[cycle[-1]]:
+      parent = self.__branches_info[cycle[-1]].upstream
+      cycle.append(parent)
+      if parent == branch:
+        print('Warning: Detected cycle in branches: {}'.format(
+            ' -> '.join(cycle)), file=sys.stderr)
+        return True
+    return False
 
   def __is_invalid_parent(self, parent):
     return not parent or parent in self.__gone_branches
@@ -296,19 +314,20 @@ def print_desc():
 def main(argv):
   setup_color.init()
   if get_git_version() < MIN_UPSTREAM_TRACK_GIT_VERSION:
-    print >> sys.stderr, (
+    print(
         'This tool will not show all tracking information for git version '
         'earlier than ' +
         '.'.join(str(x) for x in MIN_UPSTREAM_TRACK_GIT_VERSION) +
-        '. Please consider upgrading.')
+        '. Please consider upgrading.', file=sys.stderr)
 
   if '-h' in argv:
     print_desc()
 
   parser = argparse.ArgumentParser()
   parser.add_argument('-v', action='count',
-                      help=('Pass once to show tracking info; '
-                           'twice for hash and review url'))
+                      help=('Pass once to show tracking info, '
+                            'twice for hash and review url, '
+                            'thrice for review status'))
   parser.add_argument('--no-color', action='store_true', dest='nocolor',
                       help='Turn off colors.')
   parser.add_argument(
@@ -325,7 +344,7 @@ def main(argv):
   mapper.maxjobs = opts.maxjobs
   mapper.show_subject = opts.show_subject
   mapper.start()
-  print mapper.output.as_formatted_string()
+  print(mapper.output.as_formatted_string())
   return 0
 
 if __name__ == '__main__':
