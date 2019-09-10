@@ -6,6 +6,8 @@
 multiple platforms with python.
 """
 
+from __future__ import print_function
+
 import codecs
 import locale
 import os
@@ -22,8 +24,9 @@ def complain(message):
   to our wrapper. So be paranoid about catching errors and reporting them
   to sys.__stderr__, so that the user has a higher chance to see them.
   """
-  print >> sys.__stderr__, (
-      isinstance(message, str) and message or repr(message))
+  print(
+      isinstance(message, str) and message or repr(message),
+      file=sys.__stderr__)
 
 
 def fix_default_encoding():
@@ -95,8 +98,8 @@ def fix_win_sys_argv(encoding):
   argc = c_int(0)
   argv_unicode = CommandLineToArgvW(GetCommandLineW(), byref(argc))
   argv = [
-      argv_unicode[i].encode(encoding, 'replace')
-      for i in xrange(0, argc.value)]
+      argv_unicode[i].encode(encoding, 'replace') for i in range(0, argc.value)
+  ]
 
   if not hasattr(sys, 'frozen'):
     # If this is an executable produced by py2exe or bbfreeze, then it
@@ -107,7 +110,7 @@ def fix_win_sys_argv(encoding):
     # Also skip option arguments to the Python interpreter.
     while len(argv) > 0:
       arg = argv[0]
-      if not arg.startswith(u'-') or arg == u'-':
+      if not arg.startswith(b'-') or arg == b'-':
         break
       argv = argv[1:]
       if arg == u'-m':
@@ -209,7 +212,7 @@ class WinUnicodeConsoleOutput(WinUnicodeOutputBase):
 
   def write(self, text):
     try:
-      if not isinstance(text, unicode):
+      if sys.version_info.major == 2 and not isinstance(text, unicode):
         # Convert to unicode.
         text = str(text).decode(self.encoding, 'replace')
       remaining = len(text)
@@ -259,7 +262,7 @@ class WinUnicodeOutput(WinUnicodeOutputBase):
 
   def write(self, text):
     try:
-      if isinstance(text, unicode):
+      if sys.version_info.major == 2 and isinstance(text, unicode):
         # Replace characters that cannot be printed instead of failing.
         text = text.encode(self.encoding, 'replace')
       self._stream.write(text)

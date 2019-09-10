@@ -18,7 +18,11 @@ import sys
 import tempfile
 import threading
 import traceback
-import urlparse
+
+try:
+  import urlparse
+except ImportError:  # For Py3 compatibility
+  import urllib.parse as urlparse
 
 import download_from_google_storage
 import gclient_utils
@@ -92,7 +96,6 @@ class SCMWrapper(object):
 
   This is the abstraction layer to bind to different SCM.
   """
-
   def __init__(self, url=None, root_dir=None, relpath=None, out_fh=None,
                out_cb=None, print_outbuf=False):
     self.url = url
@@ -219,7 +222,8 @@ class GitWrapper(SCMWrapper):
 
   def __init__(self, url=None, *args, **kwargs):
     """Removes 'git+' fake prefix from git URL."""
-    if url.startswith('git+http://') or url.startswith('git+https://'):
+    if url and (url.startswith('git+http://') or
+                url.startswith('git+https://')):
       url = url[4:]
     SCMWrapper.__init__(self, url, *args, **kwargs)
     filter_kwargs = { 'time_throttle': 1, 'out_fh': self.out_fh }
@@ -252,9 +256,10 @@ class GitWrapper(SCMWrapper):
   def _GetDiffFilenames(self, base):
     """Returns the names of files modified since base."""
     return self._Capture(
-      # Filter to remove base if it is None.
-      filter(bool, ['-c', 'core.quotePath=false', 'diff', '--name-only', base])
-    ).split()
+        # Filter to remove base if it is None.
+        list(filter(bool, ['-c', 'core.quotePath=false', 'diff', '--name-only',
+                           base])
+        )).split()
 
   def diff(self, options, _args, _file_list):
     _, revision = gclient_utils.SplitUrlRevision(self.url)
@@ -312,7 +317,8 @@ class GitWrapper(SCMWrapper):
     if file_list is not None:
       files = self._Capture(
           ['-c', 'core.quotePath=false', 'ls-files']).splitlines()
-      file_list.extend([os.path.join(self.checkout_path, f) for f in files])
+      file_list.extend(
+          [os.path.join(self.checkout_path, f) for f in files])
 
   def _DisableHooks(self):
     hook_dir = os.path.join(self.checkout_path, '.git', 'hooks')
@@ -345,29 +351,117 @@ class GitWrapper(SCMWrapper):
               self.Print('FAILED to break lock: %s: %s' % (to_break, ex))
               raise
 
-  def apply_patch_ref(self, patch_repo, patch_ref, options, file_list):
-    base_rev = self._Capture(['rev-parse', 'HEAD'])
-    self.Print('===Applying patch ref===')
-    self.Print('Repo is %r @ %r, ref is %r, root is %r' % (
-        patch_repo, patch_ref, base_rev, self.checkout_path))
-    self._Capture(['reset', '--hard'])
-    self._Capture(['fetch', patch_repo, patch_ref])
-    if file_list is not None:
-      file_list.extend(self._GetDiffFilenames('FETCH_HEAD'))
-    self._Capture(['checkout', 'FETCH_HEAD'])
+  def apply_patch_ref(self, patch_repo, patch_rev, target_rev, options,
+                      file_list):
+    """Apply a patch on top of the revision we're synced at.
 
-    if options.rebase_patch_ref:
+    The patch ref is given by |patch_repo|@|patch_rev|.
+    |target_rev| is usually the branch that the |patch_rev| was uploaded against
+    (e.g. 'refs/heads/master'), but this is not required.
+
+    We cherry-pick all commits reachable from |patch_rev| on top of the curret
+    HEAD, excluding those reachable from |target_rev|
+    (i.e. git cherry-pick target_rev..patch_rev).
+
+    Graphically, it looks like this:
+
+     ... -> o -> [possibly already landed commits] -> target_rev
+             \
+              -> [possibly not yet landed dependent CLs] -> patch_rev
+
+    The final checkout state is then:
+
+     ... -> HEAD -> [possibly not yet landed dependent CLs] -> patch_rev
+
+    After application, if |options.reset_patch_ref| is specified, we soft reset
+    the cherry-picked changes, keeping them in git index only.
+
+    Args:
+      patch_repo: The patch origin.
+          e.g. 'https://foo.googlesource.com/bar'
+      patch_rev: The revision to patch.
+          e.g. 'refs/changes/1234/34/1'.
+      target_rev: The revision to use when finding the merge base.
+          Typically, the branch that the patch was uploaded against.
+          e.g. 'refs/heads/master' or 'refs/heads/infra/config'.
+      options: The options passed to gclient.
+      file_list: A list where modified files will be appended.
+    """
+
+    # Abort any cherry-picks in progress.
+    try:
+      self._Capture(['cherry-pick', '--abort'])
+    except subprocess2.CalledProcessError:
+      pass
+
+    base_rev = self._Capture(['rev-parse', 'HEAD'])
+
+    if not target_rev:
+      raise gclient_utils.Error('A target revision for the patch must be given')
+    elif target_rev.startswith('refs/heads/'):
+      # If |target_rev| is in refs/heads/**, try first to find the corresponding
+      # remote ref for it, since |target_rev| might point to a local ref which
+      # is not up to date with the corresponding remote ref.
+      remote_ref = ''.join(scm.GIT.RefToRemoteRef(target_rev, self.remote))
+      self.Print('Trying the correspondig remote ref for %r: %r\n' % (
+          target_rev, remote_ref))
+      if scm.GIT.IsValidRevision(self.checkout_path, remote_ref):
+        target_rev = remote_ref
+    elif not scm.GIT.IsValidRevision(self.checkout_path, target_rev):
+      # Fetch |target_rev| if it's not already available.
+      url, _ = gclient_utils.SplitUrlRevision(self.url)
+      mirror = self._GetMirror(url, options, target_rev)
+      if mirror:
+        rev_type = 'branch' if target_rev.startswith('refs/') else 'hash'
+        self._UpdateMirrorIfNotContains(mirror, options, rev_type, target_rev)
+      self._Fetch(options, refspec=target_rev)
+
+    self.Print('===Applying patch===')
+    self.Print('Revision to patch is %r @ %r.' % (patch_repo, patch_rev))
+    self.Print('Will cherrypick %r .. %r on top of %r.' % (
+        target_rev, patch_rev, base_rev))
+    self.Print('Current dir is %r' % self.checkout_path)
+    self._Capture(['reset', '--hard'])
+    self._Capture(['fetch', patch_repo, patch_rev])
+    patch_rev = self._Capture(['rev-parse', 'FETCH_HEAD'])
+
+    if not options.rebase_patch_ref:
+      self._Capture(['checkout', patch_rev])
+    else:
       try:
-        # TODO(ehmaldonado): Look into cherry-picking to avoid an expensive
-        # checkout + rebase.
-        self._Capture(['rebase', base_rev])
+        if scm.GIT.IsAncestor(self.checkout_path, patch_rev, target_rev):
+          # If |patch_rev| is an ancestor of |target_rev|, check it out.
+          self._Capture(['checkout', patch_rev])
+        else:
+          # If a change was uploaded on top of another change, which has already
+          # landed, one of the commits in the cherry-pick range will be
+          # redundant, since it has already landed and its changes incorporated
+          # in the tree.
+          # We pass '--keep-redundant-commits' to ignore those changes.
+          self._Capture(['cherry-pick', target_rev + '..' + patch_rev,
+                         '--keep-redundant-commits'])
+
       except subprocess2.CalledProcessError as e:
-        self.Print('Failed to apply %r @ %r to %r at %r' % (
-                patch_repo, patch_ref, base_rev, self.checkout_path))
+        self.Print('Failed to apply patch.')
+        self.Print('Revision to patch was %r @ %r.' % (patch_repo, patch_rev))
+        self.Print('Tried to cherrypick %r .. %r on top of %r.' % (
+            target_rev, patch_rev, base_rev))
+        self.Print('Current dir is %r' % self.checkout_path)
         self.Print('git returned non-zero exit status %s:\n%s' % (
-            e.returncode, e.stderr))
-        self._Capture(['rebase', '--abort'])
+            e.returncode, e.stderr.decode('utf-8')))
+        # Print the current status so that developers know what changes caused
+        # the patch failure, since git cherry-pick doesn't show that
+        # information.
+        self.Print(self._Capture(['status']))
+        try:
+          self._Capture(['cherry-pick', '--abort'])
+        except subprocess2.CalledProcessError:
+          pass
         raise
+
+    if file_list is not None:
+      file_list.extend(self._GetDiffFilenames(base_rev))
+
     if options.reset_patch_ref:
       self._Capture(['reset', '--soft', base_rev])
 
@@ -410,6 +504,14 @@ class GitWrapper(SCMWrapper):
       verbose = ['--verbose']
       printed_path = True
 
+    revision_ref = revision
+    if ':' in revision:
+      revision_ref, _, revision = revision.partition(':')
+
+    mirror = self._GetMirror(url, options, revision_ref)
+    if mirror:
+      url = mirror.mirror_path
+
     remote_ref = scm.GIT.RefToRemoteRef(revision, self.remote)
     if remote_ref:
       # Rewrite remote refs to their local equivalents.
@@ -422,10 +524,6 @@ class GitWrapper(SCMWrapper):
     else:
       # hash is also a tag, only make a distinction at checkout
       rev_type = "hash"
-
-    mirror = self._GetMirror(url, options)
-    if mirror:
-      url = mirror.mirror_path
 
     # If we are going to introduce a new project, there is a possibility that
     # we are syncing back to a state where the project was originally a
@@ -453,13 +551,21 @@ class GitWrapper(SCMWrapper):
         self._Clone(revision, url, options)
       if file_list is not None:
         files = self._Capture(
-          ['-c', 'core.quotePath=false', 'ls-files']).splitlines()
-        file_list.extend([os.path.join(self.checkout_path, f) for f in files])
+            ['-c', 'core.quotePath=false', 'ls-files']).splitlines()
+        file_list.extend(
+            [os.path.join(self.checkout_path, f) for f in files])
+      if mirror:
+        self._Capture(
+            ['remote', 'set-url', '--push', 'origin', mirror.url])
       if not verbose:
         # Make the output a little prettier. It's nice to have some whitespace
         # between projects when cloning.
         self.Print('')
       return self._Capture(['rev-parse', '--verify', 'HEAD'])
+
+    if mirror:
+      self._Capture(
+          ['remote', 'set-url', '--push', 'origin', mirror.url])
 
     if not managed:
       self._SetFetchConfig(options)
@@ -480,8 +586,7 @@ class GitWrapper(SCMWrapper):
     # Skip url auto-correction if remote.origin.gclient-auto-fix-url is set.
     # This allows devs to use experimental repos which have a different url
     # but whose branch(s) are the same as official repos.
-    if (current_url.rstrip('/') != url.rstrip('/') and
-        url != 'git://foo' and
+    if (current_url.rstrip('/') != url.rstrip('/') and url != 'git://foo' and
         subprocess2.capture(
             ['git', 'config', 'remote.%s.gclient-auto-fix-url' % self.remote],
             cwd=self.checkout_path).strip() != 'False'):
@@ -548,14 +653,18 @@ class GitWrapper(SCMWrapper):
         raise gclient_utils.Error('Invalid Upstream: %s' % upstream_branch)
 
     self._SetFetchConfig(options)
-    self._Fetch(options, prune=options.force)
 
+    # Fetch upstream if we don't already have |revision|.
     if not scm.GIT.IsValidRevision(self.checkout_path, revision, sha_only=True):
-      # Update the remotes first so we have all the refs.
-      remote_output = scm.GIT.Capture(['remote'] + verbose + ['update'],
-              cwd=self.checkout_path)
-      if verbose:
-        self.Print(remote_output)
+      self._Fetch(options, prune=options.force)
+
+      if not scm.GIT.IsValidRevision(self.checkout_path, revision,
+                                     sha_only=True):
+        # Update the remotes first so we have all the refs.
+        remote_output = scm.GIT.Capture(['remote'] + verbose + ['update'],
+                cwd=self.checkout_path)
+        if verbose:
+          self.Print(remote_output)
 
     revision = self._AutoFetchRef(options, revision)
 
@@ -652,7 +761,8 @@ class GitWrapper(SCMWrapper):
         merge_output = self._Capture(merge_args)
       except subprocess2.CalledProcessError as e:
         rebase_files = []
-        if re.match('fatal: Not possible to fast-forward, aborting.', e.stderr):
+        if re.match(b'fatal: Not possible to fast-forward, aborting.',
+                    e.stderr):
           if not printed_path:
             self.Print('_____ %s at %s' % (self.relpath, revision),
                        timestamp=False)
@@ -682,19 +792,19 @@ class GitWrapper(SCMWrapper):
               return
             else:
               self.Print('Input not recognized')
-        elif re.match("error: Your local changes to '.*' would be "
-                      "overwritten by merge.  Aborting.\nPlease, commit your "
-                      "changes or stash them before you can merge.\n",
+        elif re.match(b"error: Your local changes to '.*' would be "
+                      b"overwritten by merge.  Aborting.\nPlease, commit your "
+                      b"changes or stash them before you can merge.\n",
                       e.stderr):
           if not printed_path:
             self.Print('_____ %s at %s' % (self.relpath, revision),
                        timestamp=False)
             printed_path = True
-          raise gclient_utils.Error(e.stderr)
+          raise gclient_utils.Error(e.stderr.decode('utf-8'))
         else:
           # Some other problem happened with the merge
           logging.error("Error during fast-forward merge in %s!" % self.relpath)
-          self.Print(e.stderr)
+          self.Print(e.stderr.decode('utf-8'))
           raise
       else:
         # Fast-forward merge was successful
@@ -803,7 +913,7 @@ class GitWrapper(SCMWrapper):
         merge_base = []
       self._Run(
           ['-c', 'core.quotePath=false', 'diff', '--name-status'] + merge_base,
-          options, stdout=self.out_fh, always=options.verbose)
+          options, always_show_header=options.verbose)
       if file_list is not None:
         files = self._GetDiffFilenames(merge_base[0] if merge_base else None)
         file_list.extend([os.path.join(self.checkout_path, f) for f in files])
@@ -836,7 +946,7 @@ class GitWrapper(SCMWrapper):
     return os.path.join(self._root_dir,
                         'old_' + self.relpath.replace(os.sep, '_')) + '.git'
 
-  def _GetMirror(self, url, options):
+  def _GetMirror(self, url, options, revision_ref=None):
     """Get a git_cache.Mirror object for the argument url."""
     if not self.cache_dir:
       return None
@@ -846,8 +956,12 @@ class GitWrapper(SCMWrapper):
     }
     if hasattr(options, 'with_branch_heads') and options.with_branch_heads:
       mirror_kwargs['refs'].append('refs/branch-heads/*')
+    elif revision_ref and revision_ref.startswith('refs/branch-heads/'):
+      mirror_kwargs['refs'].append(revision_ref)
     if hasattr(options, 'with_tags') and options.with_tags:
       mirror_kwargs['refs'].append('refs/tags/*')
+    elif revision_ref and revision_ref.startswith('refs/tags/'):
+      mirror_kwargs['refs'].append(revision_ref)
     return git_cache.Mirror(url, **mirror_kwargs)
 
   def _UpdateMirrorIfNotContains(self, mirror, options, rev_type, revision):
@@ -924,12 +1038,12 @@ class GitWrapper(SCMWrapper):
       clone_cmd.append(tmp_dir)
       if self.print_outbuf:
         print_stdout = True
-        stdout = gclient_utils.WriteToStdout(self.out_fh)
+        filter_fn = None
       else:
         print_stdout = False
-        stdout = self.out_fh
+        filter_fn = self.filter
       self._Run(clone_cmd, options, cwd=self._root_dir, retry=True,
-                print_stdout=print_stdout, stdout=stdout)
+                print_stdout=print_stdout, filter_fn=filter_fn)
       gclient_utils.safe_makedirs(self.checkout_path)
       gclient_utils.safe_rename(os.path.join(tmp_dir, '.git'),
                                 os.path.join(self.checkout_path, '.git'))
@@ -1003,9 +1117,9 @@ class GitWrapper(SCMWrapper):
 
     try:
       rebase_output = scm.GIT.Capture(rebase_cmd, cwd=self.checkout_path)
-    except subprocess2.CalledProcessError, e:
-      if (re.match(r'cannot rebase: you have unstaged changes', e.stderr) or
-          re.match(r'cannot rebase: your index contains uncommitted changes',
+    except subprocess2.CalledProcessError as e:
+      if (re.match(br'cannot rebase: you have unstaged changes', e.stderr) or
+          re.match(br'cannot rebase: your index contains uncommitted changes',
                    e.stderr)):
         while True:
           rebase_action = self._AskForData(
@@ -1023,18 +1137,19 @@ class GitWrapper(SCMWrapper):
                                       "cd %s && git " % self.checkout_path
                                       + "%s" % ' '.join(rebase_cmd))
           elif re.match(r'show|s', rebase_action, re.I):
-            self.Print('%s' % e.stderr.strip())
+            self.Print('%s' % e.stderr.decode('utf-8').strip())
             continue
           else:
             gclient_utils.Error("Input not recognized")
             continue
-      elif re.search(r'^CONFLICT', e.stdout, re.M):
+      elif re.search(br'^CONFLICT', e.stdout, re.M):
         raise gclient_utils.Error("Conflict while rebasing this branch.\n"
                                   "Fix the conflict and run gclient again.\n"
                                   "See 'man git-rebase' for details.\n")
       else:
-        self.Print(e.stdout.strip())
-        self.Print('Rebase produced error output:\n%s' % e.stderr.strip())
+        self.Print(e.stdout.decode('utf-8').strip())
+        self.Print('Rebase produced error output:\n%s' %
+        e.stderr.decode('utf-8').strip())
         raise gclient_utils.Error("Unrecognized error, please merge or rebase "
                                   "manually.\ncd %s && git " %
                                   self.checkout_path
@@ -1064,7 +1179,7 @@ class GitWrapper(SCMWrapper):
     try:
       self._Capture(['rev-list', '-n', '1', 'HEAD'])
     except subprocess2.CalledProcessError as e:
-      if ('fatal: bad object HEAD' in e.stderr
+      if (b'fatal: bad object HEAD' in e.stderr
           and self.cache_dir and self.cache_dir in url):
         self.Print((
           'Likely due to DEPS change with git cache_dir, '
@@ -1149,7 +1264,8 @@ class GitWrapper(SCMWrapper):
     kwargs.setdefault('stderr', subprocess2.PIPE)
     strip = kwargs.pop('strip', True)
     env = scm.GIT.ApplyEnvVars(kwargs)
-    ret = subprocess2.check_output(['git'] + args, env=env, **kwargs)
+    ret = subprocess2.check_output(
+        ['git'] + args, env=env, **kwargs).decode('utf-8')
     if strip:
       ret = ret.strip()
     return ret
@@ -1177,17 +1293,19 @@ class GitWrapper(SCMWrapper):
   def _Fetch(self, options, remote=None, prune=False, quiet=False,
              refspec=None):
     cfg = gclient_utils.DefaultIndexPackConfig(self.url)
-    # When a mirror is configured, it fetches only the refs/heads, and possibly
-    # the refs/branch-heads and refs/tags, but not the refs/changes. So, if
-    # we're asked to fetch a refs/changes ref from the mirror, it won't have it.
-    # This makes sure that we always fetch refs/changes directly from the
-    # repository and not from the mirror.
-    if refspec and refspec.startswith('refs/changes'):
-      remote, _ = gclient_utils.SplitUrlRevision(self.url)
-      # Make sure that we fetch the (remote) refs/changes/xx ref to the (local)
-      # refs/changes/xx ref.
-      if ':' not in refspec:
-        refspec += ':' + refspec
+    # When updating, the ref is modified to be a remote ref .
+    # (e.g. refs/heads/NAME becomes refs/remotes/REMOTE/NAME).
+    # Try to reverse that mapping.
+    original_ref = scm.GIT.RemoteRefToRef(refspec, self.remote)
+    if original_ref:
+      refspec = original_ref + ':' + refspec
+      # When a mirror is configured, it only fetches
+      # refs/{heads,branch-heads,tags}/*.
+      # If asked to fetch other refs, we must fetch those directly from the
+      # repository, and not from the mirror.
+      if not original_ref.startswith(
+          ('refs/heads/', 'refs/branch-heads/', 'refs/tags/')):
+        remote, _ = gclient_utils.SplitUrlRevision(self.url)
     fetch_cmd =  cfg + [
         'fetch',
         remote or self.remote,
@@ -1242,18 +1360,14 @@ class GitWrapper(SCMWrapper):
       revision = self._Capture(['rev-parse', 'FETCH_HEAD'])
     return revision
 
-  def _Run(self, args, options, show_header=True, **kwargs):
+  def _Run(self, args, options, **kwargs):
     # Disable 'unused options' warning | pylint: disable=unused-argument
     kwargs.setdefault('cwd', self.checkout_path)
-    kwargs.setdefault('stdout', self.out_fh)
-    kwargs['filter_fn'] = self.filter
-    kwargs.setdefault('print_stdout', False)
+    kwargs.setdefault('filter_fn', self.filter)
+    kwargs.setdefault('show_header', True)
     env = scm.GIT.ApplyEnvVars(kwargs)
     cmd = ['git'] + args
-    if show_header:
-      gclient_utils.CheckCallAndFilterAndHeader(cmd, env=env, **kwargs)
-    else:
-      gclient_utils.CheckCallAndFilter(cmd, env=env, **kwargs)
+    gclient_utils.CheckCallAndFilter(cmd, env=env, **kwargs)
 
 
 class CipdPackage(object):
@@ -1342,8 +1456,9 @@ class CipdRoot(object):
     try:
       ensure_file = None
       with tempfile.NamedTemporaryFile(
-          suffix='.ensure', delete=False) as ensure_file:
-        for subdir, packages in sorted(self._packages_by_subdir.iteritems()):
+          suffix='.ensure', delete=False, mode='w') as ensure_file:
+        ensure_file.write('$ParanoidMode CheckPresence\n\n')
+        for subdir, packages in sorted(self._packages_by_subdir.items()):
           ensure_file.write('@Subdir %s\n' % subdir)
           for package in sorted(packages, key=lambda p: p.name):
             ensure_file.write('%s %s\n' % (package.name, package.version))
@@ -1363,7 +1478,8 @@ class CipdRoot(object):
             '-root', self.root_dir,
             '-ensure-file', ensure_file,
         ]
-        gclient_utils.CheckCallAndFilterAndHeader(cmd)
+        gclient_utils.CheckCallAndFilter(
+            cmd, print_stdout=True, show_header=True)
 
   def run(self, command):
     if command == 'update':
@@ -1448,8 +1564,7 @@ class CipdWrapper(SCMWrapper):
           '-version', self._package.version,
           '-json-output', describe_json_path
       ]
-      gclient_utils.CheckCallAndFilter(
-          cmd, filter_fn=lambda _line: None, print_stdout=False)
+      gclient_utils.CheckCallAndFilter(cmd)
       with open(describe_json_path) as f:
         describe_json = json.load(f)
       return describe_json.get('result', {}).get('pin', {}).get('instance_id')

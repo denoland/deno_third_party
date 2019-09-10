@@ -1,9 +1,12 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 # Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """Generate fake repositories for testing."""
+
+from __future__ import print_function
 
 import atexit
 import datetime
@@ -27,7 +30,7 @@ import subprocess2
 
 def write(path, content):
   f = open(path, 'wb')
-  f.write(content)
+  f.write(content.encode())
   f.close()
 
 
@@ -43,18 +46,18 @@ def read_tree(tree_root):
     for f in [join(root, f) for f in files if not f.startswith('.')]:
       filepath = f[len(tree_root) + 1:].replace(os.sep, '/')
       assert len(filepath), f
-      tree[filepath] = open(join(root, f), 'rU').read()
+      tree[filepath] = gclient_utils.FileRead(join(root, f))
   return tree
 
 
 def dict_diff(dict1, dict2):
   diff = {}
-  for k, v in dict1.iteritems():
+  for k, v in dict1.items():
     if k not in dict2:
       diff[k] = v
     elif v != dict2[k]:
       diff[k] = (v, dict2[k])
-  for k, v in dict2.iteritems():
+  for k, v in dict2.items():
     if k not in dict1:
       diff[k] = v
   return diff
@@ -65,7 +68,8 @@ def commit_git(repo):
   subprocess2.check_call(['git', 'add', '-A', '-f'], cwd=repo)
   subprocess2.check_call(['git', 'commit', '-q', '--message', 'foo'], cwd=repo)
   rev = subprocess2.check_output(
-      ['git', 'show-ref', '--head', 'HEAD'], cwd=repo).split(' ', 1)[0]
+      ['git', 'show-ref', '--head', 'HEAD'], cwd=repo).split(b' ', 1)[0]
+  rev = rev.decode('utf-8')
   logging.debug('At revision %s' % rev)
   return rev
 
@@ -88,31 +92,26 @@ def find_free_port(host, base_port):
 
 
 def wait_for_port_to_bind(host, port, process):
-  sock = socket.socket()
-
-  if sys.platform == 'darwin':
-    # On Mac SnowLeopard, if we attempt to connect to the socket
-    # immediately, it fails with EINVAL and never gets a chance to
-    # connect (putting us into a hard spin and then failing).
-    # Linux doesn't need this.
-    time.sleep(0.2)
-
   try:
     start = datetime.datetime.utcnow()
     maxdelay = datetime.timedelta(seconds=30)
     while (datetime.datetime.utcnow() - start) < maxdelay:
+      sock = socket.socket()
       try:
         sock.connect((host, port))
         logging.debug('%d is now bound' % port)
         return
       except (socket.error, EnvironmentError):
-        pass
+        # Sleep a little bit to avoid spinning too much.
+        time.sleep(0.2)
       logging.debug('%d is still not bound' % port)
   finally:
     sock.close()
   # The process failed to bind. Kill it and dump its ouput.
   process.kill()
-  logging.error('%s' % process.communicate()[0])
+  stdout, stderr = process.communicate()
+  logging.debug('%s' % stdout)
+  logging.error('%s' % stderr)
   assert False, '%d is still not bound' % port
 
 
@@ -145,7 +144,7 @@ class FakeReposBase(object):
   # Hostname
   NB_GIT_REPOS = 1
   USERS = [
-      ('user1@example.com', 'foo'),
+      ('user1@example.com', 'foo Fuß'),
       ('user2@example.com', 'bar'),
   ]
 
@@ -158,7 +157,7 @@ class FakeReposBase(object):
     # It is 1-based too.
     self.git_hashes = {}
     self.gitdaemon = None
-    self.git_pid_file = None
+    self.git_pid_file_name = None
     self.git_root = None
     self.git_dirty = False
     self.git_port = None
@@ -198,16 +197,16 @@ class FakeReposBase(object):
       logging.debug('Killing git-daemon pid %s' % self.gitdaemon.pid)
       self.gitdaemon.kill()
       self.gitdaemon = None
-      if self.git_pid_file:
-        pid = int(self.git_pid_file.read())
-        self.git_pid_file.close()
+      if self.git_pid_file_name:
+        pid = int(open(self.git_pid_file_name).read())
         logging.debug('Killing git daemon pid %s' % pid)
         try:
           subprocess2.kill_pid(pid)
         except OSError as e:
           if e.errno != errno.ESRCH:  # no such process
             raise
-        self.git_pid_file = None
+        os.remove(self.git_pid_file_name)
+        self.git_pid_file_name = None
       wait_for_port_to_free(self.host, self.git_port)
       self.git_port = None
       self.git_base = None
@@ -223,7 +222,7 @@ class FakeReposBase(object):
     """For a dictionary of file contents, generate a filesystem."""
     if not os.path.isdir(root):
       os.makedirs(root)
-    for (k, v) in tree_dict.iteritems():
+    for (k, v) in tree_dict.items():
       k_os = k.replace('/', os.sep)
       k_arr = k_os.split(os.sep)
       if len(k_arr) > 1:
@@ -240,7 +239,7 @@ class FakeReposBase(object):
     self.set_up()
     if self.gitdaemon:
       return True
-    assert self.git_pid_file == None
+    assert self.git_pid_file_name == None
     try:
       subprocess2.check_output(['git', '--version'])
     except (OSError, subprocess2.CalledProcessError):
@@ -251,12 +250,14 @@ class FakeReposBase(object):
     self.git_port = find_free_port(self.host, 20000)
     self.git_base = 'git://%s:%d/git/' % (self.host, self.git_port)
     # Start the daemon.
-    self.git_pid_file = tempfile.NamedTemporaryFile()
+    git_pid_file = tempfile.NamedTemporaryFile(delete=False)
+    self.git_pid_file_name = git_pid_file.name
+    git_pid_file.close()
     cmd = ['git', 'daemon',
         '--export-all',
         '--reuseaddr',
         '--base-path=' + self.root_dir,
-        '--pid-file=' + self.git_pid_file.name,
+        '--pid-file=' + self.git_pid_file_name,
         '--port=%d' % self.git_port]
     if self.host == '127.0.0.1':
       cmd.append('--listen=' + self.host)
@@ -301,7 +302,7 @@ class FakeReposBase(object):
     repo_root = join(self.git_root, repo)
     logging.debug('%s: fast-import %s', repo, data)
     subprocess2.check_call(
-        ['git', 'fast-import', '--quiet'], cwd=repo_root, stdin=data)
+        ['git', 'fast-import', '--quiet'], cwd=repo_root, stdin=data.encode())
 
   def check_port_is_free(self, port):
     sock = socket.socket()
@@ -320,7 +321,7 @@ class FakeReposBase(object):
 
 class FakeRepos(FakeReposBase):
   """Implements populateGit()."""
-  NB_GIT_REPOS = 14
+  NB_GIT_REPOS = 16
 
   def populateGit(self):
     # Testing:
@@ -550,6 +551,8 @@ deps = {
     'url': None,
   },
   'src/repo8': '/repo_8',
+  'src/repo15': '/repo_15',
+  'src/repo16': '/repo_16',
 }
 deps_os ={
   'mac': {
@@ -592,6 +595,8 @@ hooks_os = {
 recursedeps = [
   'src/repo2',
   'src/repo8',
+  'src/repo15',
+  'src/repo16',
 ]""" % {
         'git_base': self.git_base,
         'hash': self.git_hashes['repo_2'][1][0][:7]
@@ -739,6 +744,28 @@ deps = {
       'origin': 'git/repo_13@2\n',
     })
 
+    # src/repo12 is now a CIPD dependency.
+    self._commit_git('repo_13', {
+      'DEPS': """
+deps = {
+  'src/repo12': {
+    'packages': [
+      {
+        'package': 'foo',
+        'version': '1.3',
+      },
+    ],
+    'dep_type': 'cipd',
+  },
+}
+hooks = [{
+  # make sure src/repo12 exists and is a CIPD dir.
+  'action': ['python', '-c', 'with open("src/repo12/_cipd"): pass'],
+}]
+""",
+      'origin': 'git/repo_13@3\n'
+    })
+
     self._commit_git('repo_14', {
       'DEPS': textwrap.dedent("""\
         vars = {}
@@ -778,6 +805,29 @@ deps = {
       'origin': 'git/repo_14@2\n'
     })
 
+    # A repo with a hook to be recursed in, without use_relative_hooks
+    self._commit_git('repo_15', {
+      'DEPS': textwrap.dedent("""\
+        hooks = [{
+          "name": "absolute_cwd",
+          "pattern": ".",
+          "action": ["python", "-c", "pass"]
+        }]"""),
+      'origin': 'git/repo_15@2\n'
+    })
+    # A repo with a hook to be recursed in, with use_relative_hooks
+    self._commit_git('repo_16', {
+      'DEPS': textwrap.dedent("""\
+        use_relative_paths=True
+        use_relative_hooks=True
+        hooks = [{
+          "name": "relative_cwd",
+          "pattern": ".",
+          "action": ["python", "relative.py"]
+        }]"""),
+      'relative.py': 'pass',
+      'origin': 'git/repo_16@2\n'
+    })
 
 class FakeRepoSkiaDEPS(FakeReposBase):
   """Simulates the Skia DEPS transition in Chrome."""
@@ -881,7 +931,7 @@ class FakeReposTestBase(trial_dir.TestCase):
 
   def checkString(self, expected, result, msg=None):
     """Prints the diffs to ease debugging."""
-    self.assertEquals(expected.splitlines(), result.splitlines(), msg)
+    self.assertEqual(expected.splitlines(), result.splitlines(), msg)
     if expected != result:
       # Strip the begining
       while expected and result and expected[0] == result[0]:
@@ -889,14 +939,14 @@ class FakeReposTestBase(trial_dir.TestCase):
         result = result[1:]
       # The exception trace makes it hard to read so dump it too.
       if '\n' in result:
-        print result
-    self.assertEquals(expected, result, msg)
+        print(result)
+    self.assertEqual(expected, result, msg)
 
   def check(self, expected, results):
     """Checks stdout, stderr, returncode."""
     self.checkString(expected[0], results[0])
     self.checkString(expected[1], results[1])
-    self.assertEquals(expected[2], results[2])
+    self.assertEqual(expected[2], results[2])
 
   def assertTree(self, tree, tree_root=None):
     """Diff the checkout tree with a dict."""
@@ -905,10 +955,10 @@ class FakeReposTestBase(trial_dir.TestCase):
     actual = read_tree(tree_root)
     diff = dict_diff(tree, actual)
     if diff:
-      logging.debug('Actual %s\n%s' % (tree_root, pprint.pformat(actual)))
-      logging.debug('Expected\n%s' % pprint.pformat(tree))
-      logging.debug('Diff\n%s' % pprint.pformat(diff))
-    self.assertEquals(diff, {})
+      logging.error('Actual %s\n%s' % (tree_root, pprint.pformat(actual)))
+      logging.error('Expected\n%s' % pprint.pformat(tree))
+      logging.error('Diff\n%s' % pprint.pformat(diff))
+    self.assertEqual(diff, {})
 
   def mangle_git_tree(self, *args):
     """Creates a 'virtual directory snapshot' to compare with the actual result
@@ -917,7 +967,7 @@ class FakeReposTestBase(trial_dir.TestCase):
     for item, new_root in args:
       repo, rev = item.split('@', 1)
       tree = self.gittree(repo, rev)
-      for k, v in tree.iteritems():
+      for k, v in tree.items():
         result[join(new_root, k)] = v
     return result
 
@@ -931,12 +981,12 @@ class FakeReposTestBase(trial_dir.TestCase):
 
   def gitrevparse(self, repo):
     """Returns the actual revision for a given repo."""
-    return self.FAKE_REPOS._git_rev_parse(repo)
+    return self.FAKE_REPOS._git_rev_parse(repo).decode('utf-8')
 
 
 def main(argv):
   fake = FakeRepos()
-  print 'Using %s' % fake.root_dir
+  print('Using %s' % fake.root_dir)
   try:
     fake.set_up_git()
     print('Fake setup, press enter to quit or Ctrl-C to keep the checkouts.')

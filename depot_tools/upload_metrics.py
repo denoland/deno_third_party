@@ -4,17 +4,19 @@
 # found in the LICENSE file.
 
 import sys
-import urllib2
 
+from third_party.six.moves import urllib
+from third_party.six.moves import input # pylint: disable=redefined-builtin
 
-APP_URL = 'https://cit-cli-metrics.appspot.com'
+import metrics_utils
 
 
 def main():
-  metrics = raw_input()
+  metrics = input()
   try:
-    urllib2.urlopen(APP_URL + '/upload', metrics)
-  except urllib2.HTTPError:
+    urllib.request.urlopen(
+        metrics_utils.APP_URL + '/upload', metrics.encode('utf-8'))
+  except (urllib.error.HTTPError, urllib.error.URLError):
     pass
 
   return 0

@@ -48,10 +48,13 @@ def test_repo():
     '/chrome/browser/defaults.h': '',
     '/chrome/gpu/OWNERS': owners_file(ken),
     '/chrome/gpu/gpu_channel.h': '',
+    '/chrome/comment/OWNERS': owners_file(file='//content/comment/OWNERS'),
     '/chrome/renderer/OWNERS': owners_file(peter),
     '/chrome/renderer/gpu/gpu_channel_host.h': '',
     '/chrome/renderer/safe_browsing/scorer.h': '',
     '/content/OWNERS': owners_file(john, darin, comment='foo', noparent=True),
+    '/content/comment/OWNERS': owners_file(john + '  # for comments',
+                                           darin + '  # for everything else'),
     '/content/content.gyp': '',
     '/content/bar/foo.cc': '',
     '/content/baz/OWNERS': owners_file(brett),
@@ -306,11 +309,24 @@ class OwnersDatabaseTest(_BaseTestCase):
     self.test_file_include_absolute_path()
 
   def test_file_include_different_filename(self):
-    self.files['/owners/garply'] = owners_file(peter)
+    self.files['/owners/GARPLY_OWNERS'] = owners_file(peter)
     self.files['/content/garply/OWNERS'] = owners_file(john,
-        lines=['per-file foo.*=file://owners/garply'])
+        lines=['per-file foo.*=file://owners/GARPLY_OWNERS'])
 
     self.assert_files_not_covered_by(['content/garply/foo.cc'], [peter], [])
+
+  def test_file_include_invalid_filename(self):
+    self.files['/base/SECURITY_REVIEWERS'] = owners_file(peter)
+    self.files['/ipc/OWNERS'] = owners_file(file='//base/SECURITY_REVIEWERS')
+    try:
+      self.db().reviewers_for(['ipc/ipc_message_utils.h'], None)
+      self.fail()  # pragma: no cover
+    except owners.SyntaxErrorInOwnersFile as e:
+      self.assertTrue(str(e).startswith('/ipc/OWNERS:1'))
+
+  def test_file_include_with_comment(self):
+    # See crbug.com/995474 for context.
+    self.assert_files_not_covered_by(['chrome/comment/comment.cc'], [darin], [])
 
   def assert_syntax_error(self, owners_file_contents):
     db = self.db()
@@ -319,7 +335,7 @@ class OwnersDatabaseTest(_BaseTestCase):
     try:
       db.reviewers_for(['foo/DEPS'], None)
       self.fail()  # pragma: no cover
-    except owners.SyntaxErrorInOwnersFile, e:
+    except owners.SyntaxErrorInOwnersFile as e:
       self.assertTrue(str(e).startswith('/foo/OWNERS:1'))
 
   def test_syntax_error__unknown_token(self):
@@ -332,10 +348,10 @@ class OwnersDatabaseTest(_BaseTestCase):
     self.assert_syntax_error('ben\n')
 
   def test_syntax_error__invalid_absolute_file(self):
-    self.assert_syntax_error('file://foo/bar/baz\n')
+    self.assert_syntax_error('file://foo/bar/OWNERS\n')
 
   def test_syntax_error__invalid_relative_file(self):
-    self.assert_syntax_error('file:foo/bar/baz\n')
+    self.assert_syntax_error('file:foo/bar/OWNERS\n')
 
   def test_non_existant_status_file(self):
     db = self.db()
@@ -371,6 +387,14 @@ class OwnersDatabaseTest(_BaseTestCase):
         jochen: {'bar.*': 'comment preceeded by empty line'},
         john: {'': 'comment preceeded by empty line'},
         peter: {'': 'comment in the middle'}})
+
+  def test_owners_rooted_at_file(self):
+    self.files['/foo/OWNERS'] = owners_file(darin, file='//bar/OWNERS')
+    self.files['/bar/OWNERS'] = owners_file(john,
+        lines=['per-file nope.cc=' + ben])
+    db = self.db()
+    self.assertEqual(db.owners_rooted_at_file('foo/OWNERS'),
+                     set([john, darin]))
 
 
 class ReviewersForTest(_BaseTestCase):

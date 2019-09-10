@@ -4,6 +4,8 @@
 
 """Generic presubmit checks that can be reused by other presubmit checks."""
 
+from __future__ import print_function
+
 import os as _os
 _HERE = _os.path.dirname(_os.path.abspath(__file__))
 
@@ -248,7 +250,63 @@ def _ReportErrorFileAndLine(filename, line_num, dummy_line):
   return '%s:%s' % (filename, line_num)
 
 
-def _FindNewViolationsOfRule(callable_rule, input_api, source_file_filter=None,
+def _GenerateAffectedFileExtList(input_api, source_file_filter):
+  """Generate a list of (file, extension) tuples from affected files.
+
+  The result can be fed to _FindNewViolationsOfRule() directly, or
+  could be filtered before doing that.
+
+  Args:
+    input_api: object to enumerate the affected files.
+    source_file_filter: a filter to be passed to the input api.
+  Yields:
+    A list of (file, extension) tuples, where |file| is an affected
+      file, and |extension| its file path extension.
+  """
+  for f in input_api.AffectedFiles(
+      include_deletes=False, file_filter=source_file_filter):
+    extension = str(f.LocalPath()).rsplit('.', 1)[-1]
+    yield (f, extension)
+
+
+def _FindNewViolationsOfRuleForList(callable_rule,
+                                    file_ext_list,
+                                    error_formatter=_ReportErrorFileAndLine):
+  """Find all newly introduced violations of a per-line rule (a callable).
+
+  Prefer calling _FindNewViolationsOfRule() instead of this function, unless
+  the list of affected files need to be filtered in a special way.
+
+  Arguments:
+    callable_rule: a callable taking a file extension and line of input and
+      returning True if the rule is satisfied and False if there was a problem.
+    file_ext_list: a list of input (file, extension) tuples, as returned by
+      _GenerateAffectedFileExtList().
+    error_formatter: a callable taking (filename, line_number, line) and
+      returning a formatted error string.
+
+  Returns:
+    A list of the newly-introduced violations reported by the rule.
+  """
+  errors = []
+  for f, extension in file_ext_list:
+    # For speed, we do two passes, checking first the full file.  Shelling out
+    # to the SCM to determine the changed region can be quite expensive on
+    # Win32.  Assuming that most files will be kept problem-free, we can
+    # skip the SCM operations most of the time.
+    if all(callable_rule(extension, line) for line in f.NewContents()):
+      continue  # No violation found in full text: can skip considering diff.
+
+    for line_num, line in f.ChangedContents():
+      if not callable_rule(extension, line):
+        errors.append(error_formatter(f.LocalPath(), line_num, line))
+
+  return errors
+
+
+def _FindNewViolationsOfRule(callable_rule,
+                             input_api,
+                             source_file_filter=None,
                              error_formatter=_ReportErrorFileAndLine):
   """Find all newly introduced violations of a per-line rule (a callable).
 
@@ -263,22 +321,9 @@ def _FindNewViolationsOfRule(callable_rule, input_api, source_file_filter=None,
   Returns:
     A list of the newly-introduced violations reported by the rule.
   """
-  errors = []
-  for f in input_api.AffectedFiles(include_deletes=False,
-                                   file_filter=source_file_filter):
-    # For speed, we do two passes, checking first the full file.  Shelling out
-    # to the SCM to determine the changed region can be quite expensive on
-    # Win32.  Assuming that most files will be kept problem-free, we can
-    # skip the SCM operations most of the time.
-    extension = str(f.LocalPath()).rsplit('.', 1)[-1]
-    if all(callable_rule(extension, line) for line in f.NewContents()):
-      continue  # No violation found in full text: can skip considering diff.
-
-    for line_num, line in f.ChangedContents():
-      if not callable_rule(extension, line):
-        errors.append(error_formatter(f.LocalPath(), line_num, line))
-
-  return errors
+  return _FindNewViolationsOfRuleForList(
+      callable_rule, _GenerateAffectedFileExtList(
+          input_api, source_file_filter), error_formatter)
 
 
 def CheckChangeHasNoTabs(input_api, output_api, source_file_filter=None):
@@ -385,11 +430,6 @@ def CheckLongLines(input_api, output_api, maxlen, source_file_filter=None):
     if any((url in line) for url in ('file://', 'http://', 'https://')):
       return True
 
-    # If 'line-too-long' is explicitly suppressed for the line, any length is
-    # acceptable.
-    if 'pylint: disable=line-too-long' in line and file_extension == 'py':
-      return True
-
     if line_len > extra_maxlen:
       return False
 
@@ -402,12 +442,64 @@ def CheckLongLines(input_api, output_api, maxlen, source_file_filter=None):
     return input_api.re.match(
         r'.*[A-Za-z][A-Za-z_0-9]{%d,}.*' % long_symbol, line)
 
+  def is_global_pylint_directive(line, pos):
+    """True iff the pylint directive starting at line[pos] is global."""
+    # Any character before |pos| that is not whitespace or '#' indidcates
+    # this is a local directive.
+    return not any([c not in " \t#" for c in line[:pos]])
+
+  def check_python_long_lines(affected_files, error_formatter):
+    errors = []
+    global_check_enabled = True
+
+    for f in affected_files:
+      file_path = f.LocalPath()
+      for idx, line in enumerate(f.NewContents()):
+        line_num = idx + 1
+        line_is_short = no_long_lines(PY_FILE_EXTS[0], line)
+
+        pos = line.find('pylint: disable=line-too-long')
+        if pos >= 0:
+          if is_global_pylint_directive(line, pos):
+            global_check_enabled = False  # Global disable
+          else:
+            continue  # Local disable.
+
+        do_check = global_check_enabled
+
+        pos = line.find('pylint: enable=line-too-long')
+        if pos >= 0:
+          if is_global_pylint_directive(line, pos):
+            global_check_enabled = True  # Global enable
+            do_check = True  # Ensure it applies to current line as well.
+          else:
+            do_check = True  # Local enable
+
+        if do_check and not line_is_short:
+          errors.append(error_formatter(file_path, line_num, line))
+
+    return errors
+
   def format_error(filename, line_num, line):
     return '%s, line %s, %s chars' % (filename, line_num, len(line))
 
-  errors = _FindNewViolationsOfRule(no_long_lines, input_api,
-                                    source_file_filter,
-                                    error_formatter=format_error)
+  file_ext_list = list(
+      _GenerateAffectedFileExtList(input_api, source_file_filter))
+
+  errors = []
+
+  # For non-Python files, a simple line-based rule check is enough.
+  non_py_file_ext_list = [x for x in file_ext_list if x[1] not in PY_FILE_EXTS]
+  if non_py_file_ext_list:
+    errors += _FindNewViolationsOfRuleForList(
+        no_long_lines, non_py_file_ext_list, error_formatter=format_error)
+
+  # However, Python files need more sophisticated checks that need parsing
+  # the whole source file.
+  py_file_list = [x[0] for x in file_ext_list if x[1] in PY_FILE_EXTS]
+  if py_file_list:
+    errors += check_python_long_lines(
+        py_file_list, error_formatter=format_error)
   if errors:
     msg = 'Found lines longer than %s characters (first 5 shown).' % maxlen
     return [output_api.PresubmitPromptWarning(msg, items=errors[:5])]
@@ -484,7 +576,8 @@ def CheckTreeIsOpen(input_api, output_api,
   return []
 
 def GetUnitTestsInDirectory(
-    input_api, output_api, directory, whitelist=None, blacklist=None, env=None):
+    input_api, output_api, directory, whitelist=None, blacklist=None, env=None,
+    run_on_python2=True, run_on_python3=True):
   """Lists all files in a directory and runs them. Doesn't recurse.
 
   It's mainly a wrapper for RunUnitTests. Use whitelist and blacklist to filter
@@ -517,14 +610,24 @@ def GetUnitTestsInDirectory(
           'Out of %d files, found none that matched w=%r, b=%r in directory %s'
           % (found, whitelist, blacklist, directory))
     ]
-  return GetUnitTests(input_api, output_api, unit_tests, env)
+  return GetUnitTests(
+      input_api, output_api, unit_tests, env, run_on_python2, run_on_python3)
 
 
-def GetUnitTests(input_api, output_api, unit_tests, env=None):
+def GetUnitTests(
+    input_api, output_api, unit_tests, env=None, run_on_python2=True,
+    run_on_python3=True):
   """Runs all unit tests in a directory.
 
   On Windows, sys.executable is used for unit tests ending with ".py".
   """
+  assert run_on_python3 or run_on_python2, (
+      'At least one of "run_on_python2" or "run_on_python3" must be set.')
+  def has_py3_shebang(test):
+    with open(test) as f:
+      maybe_shebang = f.readline()
+    return maybe_shebang.startswith('#!') and 'python3' in maybe_shebang
+
   # We don't want to hinder users from uploading incomplete patches.
   if input_api.is_committing:
     message_type = output_api.PresubmitError
@@ -539,11 +642,26 @@ def GetUnitTests(input_api, output_api, unit_tests, env=None):
     kwargs = {'cwd': input_api.PresubmitLocalPath()}
     if env:
       kwargs['env'] = env
-    results.append(input_api.Command(
-        name=unit_test,
-        cmd=cmd,
-        kwargs=kwargs,
-        message=message_type))
+    if not unit_test.endswith('.py'):
+      results.append(input_api.Command(
+          name=unit_test,
+          cmd=cmd,
+          kwargs=kwargs,
+          message=message_type))
+    else:
+      if has_py3_shebang(unit_test) and run_on_python3:
+        results.append(input_api.Command(
+            name=unit_test,
+            cmd=cmd,
+            kwargs=kwargs,
+            message=message_type,
+            python3=True))
+      if run_on_python2:
+        results.append(input_api.Command(
+            name=unit_test,
+            cmd=cmd,
+            kwargs=kwargs,
+            message=message_type))
   return results
 
 
@@ -742,9 +860,10 @@ def GetPylint(input_api, output_api, white_list=None, black_list=None,
     # Windows needs help running python files so we explicitly specify
     # the interpreter to use. It also has limitations on the size of
     # the command-line, so we pass arguments via a pipe.
-    cmd = [input_api.python_executable,
-           input_api.os_path.join(_HERE, 'third_party', 'pylint.py'),
-           '--args-on-stdin']
+    tool = input_api.os_path.join(_HERE, 'pylint')
+    if input_api.platform == 'win32':
+      tool += '.bat'
+    cmd = [tool, '--args-on-stdin']
     if len(flist) == 1:
       description = flist[0]
     else:
@@ -840,7 +959,9 @@ def CheckOwnersFormat(input_api, output_api):
   if not affected_files:
     return []
   try:
-    input_api.owners_db.load_data_needed_for(affected_files)
+    owners_db = input_api.owners_db
+    owners_db.override_files = {}
+    owners_db.load_data_needed_for(affected_files)
     return []
   except Exception as e:
     return [output_api.PresubmitError(
@@ -892,8 +1013,8 @@ def CheckOwners(input_api, output_api, source_file_filter=None):
         output_fn('Missing %s for these files:\n    %s' %
                   (needed, '\n    '.join(sorted(missing_files))))]
     if input_api.tbr and affects_owners:
-      output_list.append(output_fn('Note that TBR does not apply to changes '
-                                   'that affect OWNERS files.'))
+      output_list.append(output_fn('The CL affects an OWNERS file, so TBR will '
+                                   'be ignored.'))
     if not input_api.is_committing:
       suggested_owners = owners_db.reviewers_for(missing_files, owner_email)
       owners_with_comments = []
@@ -1019,7 +1140,7 @@ def PanProjectChecks(input_api, output_api,
     if snapshot_memory:
       delta_ms = int(1000*(dt2 - snapshot_memory[0]))
       if delta_ms > 500:
-        print "  %s took a long time: %dms" % (snapshot_memory[1], delta_ms)
+        print("  %s took a long time: %dms" % (snapshot_memory[1], delta_ms))
     snapshot_memory[:] = (dt2, msg)
 
   snapshot("checking owners files format")
@@ -1060,18 +1181,27 @@ def PanProjectChecks(input_api, output_api,
   return results
 
 
-def CheckPatchFormatted(
-    input_api, output_api, check_js=False, check_python=False,
-    result_factory=None):
+def CheckPatchFormatted(input_api,
+                        output_api,
+                        bypass_warnings=True,
+                        check_js=False,
+                        check_python=None,
+                        result_factory=None):
   result_factory = result_factory or output_api.PresubmitPromptWarning
   import git_cl
 
   display_args = []
   if check_js:
     display_args.append('--js')
-  if check_python:
-    # --python requires --full
-    display_args.extend(['--python', '--full'])
+
+  # Explicitly setting check_python to will enable/disable python formatting
+  # on all files. Leaving it as None will enable checking patch formatting
+  # on files that have a .style.yapf file in a parent directory.
+  if check_python is not None:
+    if check_python:
+      display_args.append('--python')
+    else:
+      display_args.append('--no-python')
 
   cmd = ['-C', input_api.change.RepositoryRoot(),
          'cl', 'format', '--dry-run', '--presubmit'] + display_args
@@ -1084,8 +1214,11 @@ def CheckPatchFormatted(
   # contains the PRESUBMIT.py.
   if presubmit_subdir:
     cmd.append(input_api.PresubmitLocalPath())
-  code, _ = git_cl.RunGitWithCode(cmd, suppress_stderr=True)
-  if code == 2:
+  code, _ = git_cl.RunGitWithCode(cmd, suppress_stderr=bypass_warnings)
+  # bypass_warnings? Only fail with code 2.
+  # As this is just a warning, ignore all other errors if the user
+  # happens to have a broken clang-format, doesn't use git, etc etc.
+  if code == 2 or (code and not bypass_warnings):
     if presubmit_subdir:
       short_path = presubmit_subdir
     else:
@@ -1095,8 +1228,6 @@ def CheckPatchFormatted(
       'The %s directory requires source formatting. '
       'Please run: git cl format %s' %
       (short_path, ' '.join(display_args)))]
-  # As this is just a warning, ignore all other errors if the user
-  # happens to have a broken clang-format, doesn't use git, etc etc.
   return []
 
 
@@ -1179,6 +1310,29 @@ def CheckCIPDPackages(input_api, output_api, platforms, packages):
   for k, v in packages.iteritems():
     manifest.append('%s %s' % (k, v))
   return CheckCIPDManifest(input_api, output_api, content='\n'.join(manifest))
+
+
+def CheckCIPDClientDigests(input_api, output_api, client_version_file):
+  """Verifies that *.digests file was correctly regenerated.
+
+  <client_version_file>.digests file contains pinned hashes of the CIPD client.
+  It is consulted during CIPD client bootstrap and self-update. It should be
+  regenerated each time CIPD client version file changes.
+
+  Args:
+    client_version_file (str): Path to a text file with CIPD client version.
+  """
+  cmd = [
+    'cipd' if not input_api.is_windows else 'cipd.bat',
+    'selfupdate-roll', '-check', '-version-file', client_version_file,
+  ]
+  if input_api.verbose:
+    cmd += ['-log-level', 'debug']
+  return input_api.Command(
+      'Check CIPD client_version_file.digests file',
+      cmd,
+      {'shell': True} if input_api.is_windows else {},  # to resolve cipd.bat
+      output_api.PresubmitError)
 
 
 def CheckVPythonSpec(input_api, output_api, file_filter=None):
@@ -1267,7 +1421,7 @@ def CheckChangedLUCIConfigs(input_api, output_api):
     return [output_api.PresubmitError(
         'Config set request to luci-config failed', long_text=str(e))]
   if not config_sets:
-    return [output_api.PresubmitWarning('No config_sets were returned')]
+    return [output_api.PresubmitPromptWarning('No config_sets were returned')]
   loc_pref = '%s/+/%s/' % (remote_host_url, remote_branch)
   logging.debug('Derived location prefix: %s', loc_pref)
   dir_to_config_set = {
@@ -1276,8 +1430,23 @@ def CheckChangedLUCIConfigs(input_api, output_api):
     if cs['location'].startswith(loc_pref) or
     ('%s/' % cs['location']) == loc_pref
   }
+  if not dir_to_config_set:
+    warning_long_text_lines = [
+        'No config_set found for %s.' % loc_pref,
+        'Found the following:',
+    ]
+    for loc in sorted(cs['location'] for cs in config_sets):
+      warning_long_text_lines.append('  %s' % loc)
+    warning_long_text_lines.append('')
+    warning_long_text_lines.append(
+        'If the requested location is internal,'
+        ' the requester may not have access.')
+
+    return [output_api.PresubmitPromptWarning(
+        warning_long_text_lines[0],
+        long_text='\n'.join(warning_long_text_lines))]
   cs_to_files = collections.defaultdict(list)
-  for f in input_api.AffectedFiles():
+  for f in input_api.AffectedFiles(include_deletes=False):
     # windows
     file_path = f.LocalPath().replace(_os.sep, '/')
     logging.debug('Affected file path: %s', file_path)
@@ -1307,3 +1476,55 @@ def CheckChangedLUCIConfigs(input_api, output_api):
         out_f = output_api.PresubmitNotifyResult
       outputs.append(out_f('Config validation: %s' % msg['text']))
   return outputs
+
+
+def CheckLucicfgGenOutput(input_api, output_api, entry_script):
+  """Verifies configs produced by `lucicfg` are up-to-date and pass validation.
+
+  Runs the check unconditionally, regardless of what files are modified. Examine
+  input_api.AffectedFiles() yourself before using CheckLucicfgGenOutput if this
+  is a concern.
+
+  Assumes `lucicfg` binary is in PATH and the user is logged in.
+
+  Args:
+    entry_script: path to the entry-point *.star script responsible for
+        generating a single config set. Either absolute or relative to the
+        currently running PRESUBMIT.py script.
+
+  Returns:
+    A list of input_api.Command objects containing verification commands.
+  """
+  return [
+      input_api.Command(
+        'lucicfg validate "%s"' % entry_script,
+        [
+            'lucicfg' if not input_api.is_windows else 'lucicfg.bat',
+            'validate', entry_script,
+            '-log-level', 'debug' if input_api.verbose else 'warning',
+        ],
+        {
+          'stderr': input_api.subprocess.STDOUT,
+          'shell': input_api.is_windows,  # to resolve *.bat
+          'cwd': input_api.PresubmitLocalPath(),
+        },
+        output_api.PresubmitError)
+  ]
+
+# TODO(agable): Add this to PanProjectChecks.
+def CheckJsonParses(input_api, output_api):
+  """Verifies that all JSON files at least parse as valid JSON."""
+  import json
+  affected_files = input_api.AffectedFiles(
+      include_deletes=False,
+      file_filter=lambda x: x.LocalPath().endswith('.json'))
+  warnings = []
+  for f in affected_files:
+    with open(f.AbsoluteLocalPath()) as j:
+      try:
+        json.load(j)
+      except ValueError:
+        # Just a warning for now, in case people are using JSON5 somewhere.
+        warnings.append(output_api.PresubmitPromptWarning(
+            '%s does not appear to be valid JSON.' % f.LocalPath()))
+  return warnings

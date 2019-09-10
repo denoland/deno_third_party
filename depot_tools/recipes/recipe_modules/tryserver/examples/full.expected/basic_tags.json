@@ -3,7 +3,7 @@
     "cmd": [
       "python",
       "-u",
-      "RECIPE_PACKAGE_REPO[depot_tools]/git_footers.py",
+      "RECIPE_REPO[depot_tools]/git_footers.py",
       "--json",
       "/path/to/tmp/json"
     ],
@@ -29,7 +29,7 @@
     "cmd": [
       "python",
       "-u",
-      "RECIPE_PACKAGE_REPO[depot_tools]/git_footers.py",
+      "RECIPE_REPO[depot_tools]/git_footers.py",
       "--json",
       "/path/to/tmp/json"
     ],
@@ -52,8 +52,6 @@
     "name": "patch_text test (2)"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "name": "$result"
   }
 ]

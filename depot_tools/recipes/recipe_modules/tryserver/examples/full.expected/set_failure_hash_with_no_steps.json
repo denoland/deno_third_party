@@ -1,8 +1,9 @@
 [
   {
-    "name": "$result",
-    "reason": "boom!",
-    "recipe_result": null,
-    "status_code": 1
+    "failure": {
+      "failure": {},
+      "humanReason": "boom!"
+    },
+    "name": "$result"
   }
 ]

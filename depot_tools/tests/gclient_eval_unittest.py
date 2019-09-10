@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env vpython3
 # Copyright 2017 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -86,7 +86,7 @@ class GClientEvalTest(unittest.TestCase):
       input_data = ['{'] + ['"%s": "%s",' % (n, n) for n in test_case] + ['}']
       expected = [(str(n), str(n)) for n in test_case]
       result = gclient_eval._gclient_eval(''.join(input_data))
-      self.assertEqual(expected, result.items())
+      self.assertEqual(expected, list(result.items()))
 
 
 class ExecTest(unittest.TestCase):
@@ -265,6 +265,21 @@ class EvaluateConditionTest(unittest.TestCase):
             '(inside \'false_var_str and true_var\')',
         str(cm.exception))
 
+  def test_tuple_presence(self):
+    self.assertTrue(gclient_eval.EvaluateCondition(
+      'foo in ("bar", "baz")', {'foo': 'bar'}))
+    self.assertFalse(gclient_eval.EvaluateCondition(
+      'foo in ("bar", "baz")', {'foo': 'not_bar'}))
+
+  def test_unsupported_tuple_operation(self):
+    with self.assertRaises(ValueError) as cm:
+      gclient_eval.EvaluateCondition('foo == ("bar", "baz")', {'foo': 'bar'})
+    self.assertIn('unexpected AST node', str(cm.exception))
+
+    with self.assertRaises(ValueError) as cm:
+      gclient_eval.EvaluateCondition('(foo,) == "bar"', {'foo': 'bar'})
+    self.assertIn('unexpected AST node', str(cm.exception))
+
 
 class VarTest(unittest.TestCase):
   def assert_adds_var(self, before, after):
@@ -324,6 +339,26 @@ class VarTest(unittest.TestCase):
         '  "foo": "baz",',
         '}',
     ]))
+
+  def test_gets_and_sets_var_non_string(self):
+    local_scope = gclient_eval.Exec('\n'.join([
+        'vars = {',
+        '  "foo": True,',
+        '}',
+    ]))
+
+    result = gclient_eval.GetVar(local_scope, 'foo')
+    self.assertEqual(result, True)
+
+    gclient_eval.SetVar(local_scope, 'foo', 'False')
+    result = gclient_eval.RenderDEPSFile(local_scope)
+
+    self.assertEqual(result, '\n'.join([
+        'vars = {',
+        '  "foo": False,',
+        '}',
+    ]))
+
 
   def test_add_preserves_formatting(self):
     before = [
@@ -426,6 +461,71 @@ class CipdTest(unittest.TestCase):
         '            {',
         '                "package": "another/cipd/package",',
         '                "version": "version:6789",',
+        '            },',
+        '        ],',
+        '        "condition": "checkout_android",',
+        '        "dep_type": "cipd",',
+        '    },',
+        '}',
+    ]))
+
+  def test_gets_and_sets_cipd_vars(self):
+    local_scope = gclient_eval.Exec('\n'.join([
+        'vars = {',
+        '    "cipd-rev": "git_revision:deadbeef",',
+        '    "another-cipd-rev": "version:1.0.3",',
+        '}',
+        'deps = {',
+        '    "src/cipd/package": {',
+        '        "packages": [',
+        '            {',
+        '                "package": "some/cipd/package",',
+        '                "version": Var("cipd-rev"),',
+        '            },',
+        '            {',
+        '                "package": "another/cipd/package",',
+        '                "version": "{another-cipd-rev}",',
+        '            },',
+        '        ],',
+        '        "condition": "checkout_android",',
+        '        "dep_type": "cipd",',
+        '    },',
+        '}',
+    ]))
+
+    self.assertEqual(
+        gclient_eval.GetCIPD(
+            local_scope, 'src/cipd/package', 'some/cipd/package'),
+        'git_revision:deadbeef')
+
+    self.assertEqual(
+        gclient_eval.GetCIPD(
+            local_scope, 'src/cipd/package', 'another/cipd/package'),
+        'version:1.0.3')
+
+    gclient_eval.SetCIPD(
+        local_scope, 'src/cipd/package', 'another/cipd/package',
+        'version:1.1.0')
+    gclient_eval.SetCIPD(
+        local_scope, 'src/cipd/package', 'some/cipd/package',
+        'git_revision:foobar')
+    result = gclient_eval.RenderDEPSFile(local_scope)
+
+    self.assertEqual(result, '\n'.join([
+        'vars = {',
+        '    "cipd-rev": "git_revision:foobar",',
+        '    "another-cipd-rev": "version:1.1.0",',
+        '}',
+        'deps = {',
+        '    "src/cipd/package": {',
+        '        "packages": [',
+        '            {',
+        '                "package": "some/cipd/package",',
+        '                "version": Var("cipd-rev"),',
+        '            },',
+        '            {',
+        '                "package": "another/cipd/package",',
+        '                "version": "{another-cipd-rev}",',
         '            },',
         '        ],',
         '        "condition": "checkout_android",',
@@ -681,6 +781,55 @@ class ParseTest(unittest.TestCase):
                                'condition': 'baz'}},
       }, local_scope)
 
+  def test_has_builtin_vars(self):
+    builtin_vars = {'builtin_var': 'foo'}
+    deps_file = '\n'.join([
+      'deps = {',
+      '  "a_dep": "a{builtin_var}b",',
+      '}',
+    ])
+    for validate_syntax in False, True:
+      local_scope = gclient_eval.Parse(
+          deps_file, validate_syntax, '<unknown>', None, builtin_vars)
+      self.assertEqual({
+        'deps': {'a_dep': {'url': 'afoob',
+                           'dep_type': 'git'}},
+      }, local_scope)
+
+  def test_declaring_builtin_var_has_no_effect(self):
+    builtin_vars = {'builtin_var': 'foo'}
+    deps_file = '\n'.join([
+        'vars = {',
+        '  "builtin_var": "bar",',
+        '}',
+        'deps = {',
+        '  "a_dep": "a{builtin_var}b",',
+        '}',
+    ])
+    for validate_syntax in False, True:
+      local_scope = gclient_eval.Parse(
+          deps_file, validate_syntax, '<unknown>', None, builtin_vars)
+      self.assertEqual({
+        'vars': {'builtin_var': 'bar'},
+        'deps': {'a_dep': {'url': 'afoob',
+                           'dep_type': 'git'}},
+      }, local_scope)
+
+  def test_override_builtin_var(self):
+    builtin_vars = {'builtin_var': 'foo'}
+    vars_override = {'builtin_var': 'override'}
+    deps_file = '\n'.join([
+      'deps = {',
+      '  "a_dep": "a{builtin_var}b",',
+      '}',
+    ])
+    for validate_syntax in False, True:
+      local_scope = gclient_eval.Parse(
+          deps_file, validate_syntax, '<unknown>', vars_override, builtin_vars)
+      self.assertEqual({
+        'deps': {'a_dep': {'url': 'aoverrideb',
+                           'dep_type': 'git'}},
+      }, local_scope, str(local_scope))
 
   def test_expands_vars(self):
     for validate_syntax in True, False:
