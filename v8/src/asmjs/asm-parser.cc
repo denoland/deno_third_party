@@ -253,7 +253,7 @@ void AsmJsParser::DeclareGlobal(VarInfo* info, bool mutable_variable,
                                 const WasmInitExpr& init) {
   info->kind = VarKind::kGlobal;
   info->type = type;
-  info->index = module_builder_->AddGlobal(vtype, false, true, init);
+  info->index = module_builder_->AddGlobal(vtype, true, init);
   info->mutable_variable = mutable_variable;
 }
 
@@ -385,7 +385,8 @@ void AsmJsParser::ValidateModule() {
   module_builder_->MarkStartFunction(start);
   for (auto& global_import : global_imports_) {
     uint32_t import_index = module_builder_->AddGlobalImport(
-        global_import.import_name, global_import.value_type);
+        global_import.import_name, global_import.value_type,
+        false /* mutability */);
     start->EmitWithI32V(kExprGetGlobal, import_index);
     start->EmitWithI32V(kExprSetGlobal, VarIndex(global_import.var_info));
   }

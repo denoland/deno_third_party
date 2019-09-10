@@ -20,9 +20,12 @@
 #include "src/base/platform/platform.h"
 #include "src/base/v8-fallthrough.h"
 #include "src/common/globals.h"
-#include "src/third_party/siphash/halfsiphash.h"
 #include "src/utils/allocation.h"
 #include "src/utils/vector.h"
+
+#if defined(V8_USE_SIPHASH)
+#include "src/third_party/siphash/halfsiphash.h"
+#endif
 
 #if defined(V8_OS_AIX)
 #include <fenv.h>  // NOLINT(build/c++11)
@@ -302,28 +305,35 @@ T SaturateSub(T a, T b) {
 // ----------------------------------------------------------------------------
 // BitField is a help template for encoding and decode bitfield with
 // unsigned content.
+// Instantiate them via 'using', which is cheaper than deriving a new class:
+// using MyBitField = BitField<int, 4, 2, MyEnum>;
+// The BitField class is final to enforce this style over derivation.
 
 template <class T, int shift, int size, class U = uint32_t>
-class BitField {
+class BitField final {
  public:
   STATIC_ASSERT(std::is_unsigned<U>::value);
   STATIC_ASSERT(shift < 8 * sizeof(U));  // Otherwise shifts by {shift} are UB.
   STATIC_ASSERT(size < 8 * sizeof(U));   // Otherwise shifts by {size} are UB.
   STATIC_ASSERT(shift + size <= 8 * sizeof(U));
+  STATIC_ASSERT(size > 0);
 
   using FieldType = T;
 
   // A type U mask of bit field.  To use all bits of a type U of x bits
   // in a bitfield without compiler warnings we have to compute 2^x
   // without using a shift count of x in the computation.
-  static constexpr U kShift = shift;
-  static constexpr U kSize = size;
+  static constexpr int kShift = shift;
+  static constexpr int kSize = size;
   static constexpr U kMask = ((U{1} << kShift) << kSize) - (U{1} << kShift);
-  static constexpr U kNext = kShift + kSize;
+  static constexpr int kLastUsedBit = kShift + kSize - 1;
   static constexpr U kNumValues = U{1} << kSize;
 
   // Value for the field with all bits set.
   static constexpr T kMax = static_cast<T>(kNumValues - 1);
+
+  template <class T2, int size2>
+  using Next = BitField<T2, kShift + kSize, size2, U>;
 
   // Tells whether the provided value fits into the bit field.
   static constexpr bool is_valid(T value) {
@@ -777,36 +787,16 @@ inline T truncate_to_intn(T x, unsigned n) {
   return (x & ((static_cast<T>(1) << n) - 1));
 }
 
-#define INT_1_TO_63_LIST(V)                                                   \
-  V(1)                                                                        \
-  V(2)                                                                        \
-  V(3)                                                                        \
-  V(4)                                                                        \
-  V(5)                                                                        \
-  V(6)                                                                        \
-  V(7)                                                                        \
-  V(8)                                                                        \
-  V(9)                                                                        \
-  V(10)                                                                       \
-  V(11)                                                                       \
-  V(12)                                                                       \
-  V(13)                                                                       \
-  V(14)                                                                       \
-  V(15)                                                                       \
-  V(16)                                                                       \
-  V(17)                                                                       \
-  V(18)                                                                       \
-  V(19)                                                                       \
-  V(20)                                                                       \
-  V(21)                                                                       \
-  V(22)                                                                       \
-  V(23)                                                                       \
-  V(24)                                                                       \
-  V(25)                                                                       \
-  V(26) V(27) V(28) V(29) V(30) V(31) V(32) V(33) V(34) V(35) V(36) V(37)     \
-      V(38) V(39) V(40) V(41) V(42) V(43) V(44) V(45) V(46) V(47) V(48) V(49) \
-          V(50) V(51) V(52) V(53) V(54) V(55) V(56) V(57) V(58) V(59) V(60)   \
-              V(61) V(62) V(63)
+// clang-format off
+#define INT_1_TO_63_LIST(V)                                   \
+  V(1) V(2) V(3) V(4) V(5) V(6) V(7) V(8) V(9) V(10)          \
+  V(11) V(12) V(13) V(14) V(15) V(16) V(17) V(18) V(19) V(20) \
+  V(21) V(22) V(23) V(24) V(25) V(26) V(27) V(28) V(29) V(30) \
+  V(31) V(32) V(33) V(34) V(35) V(36) V(37) V(38) V(39) V(40) \
+  V(41) V(42) V(43) V(44) V(45) V(46) V(47) V(48) V(49) V(50) \
+  V(51) V(52) V(53) V(54) V(55) V(56) V(57) V(58) V(59) V(60) \
+  V(61) V(62) V(63)
+// clang-format on
 
 #define DECLARE_IS_INT_N(N) \
   inline bool is_int##N(int64_t x) { return is_intn(x, N); }
@@ -912,7 +902,8 @@ class BailoutId {
 
 // Our version of printf().
 V8_EXPORT_PRIVATE void PRINTF_FORMAT(1, 2) PrintF(const char* format, ...);
-void PRINTF_FORMAT(2, 3) PrintF(FILE* out, const char* format, ...);
+V8_EXPORT_PRIVATE void PRINTF_FORMAT(2, 3)
+    PrintF(FILE* out, const char* format, ...);
 
 // Prepends the current process ID to the output.
 void PRINTF_FORMAT(1, 2) PrintPID(const char* format, ...);

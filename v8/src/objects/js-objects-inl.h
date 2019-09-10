@@ -30,30 +30,24 @@ namespace v8 {
 namespace internal {
 
 OBJECT_CONSTRUCTORS_IMPL(JSReceiver, HeapObject)
-OBJECT_CONSTRUCTORS_IMPL(JSObject, JSReceiver)
-OBJECT_CONSTRUCTORS_IMPL(JSAsyncFromSyncIterator, JSObject)
-OBJECT_CONSTRUCTORS_IMPL(JSBoundFunction, JSObject)
-OBJECT_CONSTRUCTORS_IMPL(JSDate, JSObject)
+TQ_OBJECT_CONSTRUCTORS_IMPL(JSObject)
+TQ_OBJECT_CONSTRUCTORS_IMPL(JSAsyncFromSyncIterator)
+TQ_OBJECT_CONSTRUCTORS_IMPL(JSBoundFunction)
+TQ_OBJECT_CONSTRUCTORS_IMPL(JSDate)
 OBJECT_CONSTRUCTORS_IMPL(JSFunction, JSObject)
 OBJECT_CONSTRUCTORS_IMPL(JSGlobalObject, JSObject)
-OBJECT_CONSTRUCTORS_IMPL(JSGlobalProxy, JSObject)
+TQ_OBJECT_CONSTRUCTORS_IMPL(JSGlobalProxy)
 JSIteratorResult::JSIteratorResult(Address ptr) : JSObject(ptr) {}
 OBJECT_CONSTRUCTORS_IMPL(JSMessageObject, JSObject)
-OBJECT_CONSTRUCTORS_IMPL(JSPrimitiveWrapper, JSObject)
+TQ_OBJECT_CONSTRUCTORS_IMPL(JSPrimitiveWrapper)
 OBJECT_CONSTRUCTORS_IMPL(JSStringIterator, JSObject)
 
 NEVER_READ_ONLY_SPACE_IMPL(JSReceiver)
 
-CAST_ACCESSOR(JSAsyncFromSyncIterator)
-CAST_ACCESSOR(JSBoundFunction)
-CAST_ACCESSOR(JSDate)
 CAST_ACCESSOR(JSFunction)
 CAST_ACCESSOR(JSGlobalObject)
-CAST_ACCESSOR(JSGlobalProxy)
 CAST_ACCESSOR(JSIteratorResult)
 CAST_ACCESSOR(JSMessageObject)
-CAST_ACCESSOR(JSObject)
-CAST_ACCESSOR(JSPrimitiveWrapper)
 CAST_ACCESSOR(JSReceiver)
 CAST_ACCESSOR(JSStringIterator)
 
@@ -130,8 +124,6 @@ bool JSObject::PrototypeHasNoElements(Isolate* isolate, JSObject object) {
 }
 
 ACCESSORS(JSReceiver, raw_properties_or_hash, Object, kPropertiesOrHashOffset)
-
-ACCESSORS(JSObject, elements, FixedArrayBase, kElementsOffset)
 
 void JSObject::EnsureCanContainHeapObjectElements(Handle<JSObject> object) {
   JSObject::ValidateElements(*object);
@@ -241,17 +233,16 @@ void JSObject::initialize_elements() {
   set_elements(elements, SKIP_WRITE_BARRIER);
 }
 
-InterceptorInfo JSObject::GetIndexedInterceptor() {
-  return map().GetIndexedInterceptor();
+DEF_GETTER(JSObject, GetIndexedInterceptor, InterceptorInfo) {
+  return map(isolate).GetIndexedInterceptor(isolate);
 }
 
-InterceptorInfo JSObject::GetNamedInterceptor() {
-  return map().GetNamedInterceptor();
+DEF_GETTER(JSObject, GetNamedInterceptor, InterceptorInfo) {
+  return map(isolate).GetNamedInterceptor(isolate);
 }
 
-int JSObject::GetHeaderSize() const { return GetHeaderSize(map()); }
-
-int JSObject::GetHeaderSize(const Map map) {
+// static
+int JSObject::GetHeaderSize(Map map) {
   // Check for the most common kind of JavaScript object before
   // falling into the generic switch. This speeds up the internal
   // field operations considerably on average.
@@ -262,7 +253,7 @@ int JSObject::GetHeaderSize(const Map map) {
 }
 
 // static
-int JSObject::GetEmbedderFieldsStartOffset(const Map map) {
+int JSObject::GetEmbedderFieldsStartOffset(Map map) {
   // Embedder fields are located after the object header.
   return GetHeaderSize(map);
 }
@@ -272,7 +263,7 @@ int JSObject::GetEmbedderFieldsStartOffset() {
 }
 
 // static
-int JSObject::GetEmbedderFieldCount(const Map map) {
+int JSObject::GetEmbedderFieldCount(Map map) {
   int instance_size = map.instance_size();
   if (instance_size == kVariableSizeSentinel) return 0;
   // Embedder fields are located after the object header, whereas in-object
@@ -375,10 +366,10 @@ void JSObject::RawFastDoublePropertyAsBitsAtPut(FieldIndex index,
 
 void JSObject::FastPropertyAtPut(FieldIndex index, Object value) {
   if (IsUnboxedDoubleField(index)) {
-    DCHECK(value.IsMutableHeapNumber());
+    DCHECK(value.IsHeapNumber());
     // Ensure that all bits of the double value are preserved.
-    RawFastDoublePropertyAsBitsAtPut(
-        index, MutableHeapNumber::cast(value).value_as_bits());
+    RawFastDoublePropertyAsBitsAtPut(index,
+                                     HeapNumber::cast(value).value_as_bits());
   } else {
     RawFastPropertyAtPut(index, value);
   }
@@ -407,7 +398,7 @@ void JSObject::WriteToField(int descriptor, PropertyDetails details,
     if (IsUnboxedDoubleField(index)) {
       RawFastDoublePropertyAsBitsAtPut(index, bits);
     } else {
-      auto box = MutableHeapNumber::cast(RawFastPropertyAt(index));
+      auto box = HeapNumber::cast(RawFastPropertyAt(index));
       box.set_value_as_bits(bits);
     }
   } else {
@@ -456,17 +447,10 @@ void JSObject::InitializeBody(Map map, int start_offset,
   }
 }
 
-ACCESSORS(JSBoundFunction, bound_target_function, JSReceiver,
-          kBoundTargetFunctionOffset)
-ACCESSORS(JSBoundFunction, bound_this, Object, kBoundThisOffset)
-ACCESSORS(JSBoundFunction, bound_arguments, FixedArray, kBoundArgumentsOffset)
-
 ACCESSORS(JSFunction, raw_feedback_cell, FeedbackCell, kFeedbackCellOffset)
 
 ACCESSORS(JSGlobalObject, native_context, NativeContext, kNativeContextOffset)
 ACCESSORS(JSGlobalObject, global_proxy, JSGlobalProxy, kGlobalProxyOffset)
-
-ACCESSORS(JSGlobalProxy, native_context, Object, kNativeContextOffset)
 
 FeedbackVector JSFunction::feedback_vector() const {
   DCHECK(has_feedback_vector());
@@ -626,7 +610,7 @@ void JSFunction::set_context(HeapObject value) {
   WRITE_BARRIER(*this, kContextOffset, value);
 }
 
-ACCESSORS_CHECKED(JSFunction, prototype_or_initial_map, Object,
+ACCESSORS_CHECKED(JSFunction, prototype_or_initial_map, HeapObject,
                   kPrototypeOrInitialMapOffset, map().has_prototype_slot())
 
 DEF_GETTER(JSFunction, has_prototype_slot, bool) {
@@ -720,18 +704,6 @@ void JSFunction::ResetIfBytecodeFlushed() {
   }
 }
 
-ACCESSORS(JSPrimitiveWrapper, value, Object, kValueOffset)
-
-ACCESSORS(JSDate, value, Object, kValueOffset)
-ACCESSORS(JSDate, cache_stamp, Object, kCacheStampOffset)
-ACCESSORS(JSDate, year, Object, kYearOffset)
-ACCESSORS(JSDate, month, Object, kMonthOffset)
-ACCESSORS(JSDate, day, Object, kDayOffset)
-ACCESSORS(JSDate, weekday, Object, kWeekdayOffset)
-ACCESSORS(JSDate, hour, Object, kHourOffset)
-ACCESSORS(JSDate, min, Object, kMinOffset)
-ACCESSORS(JSDate, sec, Object, kSecOffset)
-
 bool JSMessageObject::DidEnsureSourcePositionsAvailable() const {
   return shared_info().IsUndefined();
 }
@@ -784,7 +756,8 @@ DEF_GETTER(JSObject, GetElementsKind, ElementsKind) {
       DCHECK(fixed_array.IsFixedArray(isolate));
       DCHECK(fixed_array.IsNumberDictionary(isolate));
     } else {
-      DCHECK(kind > DICTIONARY_ELEMENTS || IsFrozenOrSealedElementsKind(kind));
+      DCHECK(kind > DICTIONARY_ELEMENTS ||
+             IsAnyNonextensibleElementsKind(kind));
     }
     DCHECK(
         !IsSloppyArgumentsElementsKind(kind) ||
@@ -834,12 +807,16 @@ DEF_GETTER(JSObject, HasPackedElements, bool) {
   return GetElementsKind(isolate) == PACKED_ELEMENTS;
 }
 
-DEF_GETTER(JSObject, HasFrozenOrSealedElements, bool) {
-  return IsFrozenOrSealedElementsKind(GetElementsKind(isolate));
+DEF_GETTER(JSObject, HasAnyNonextensibleElements, bool) {
+  return IsAnyNonextensibleElementsKind(GetElementsKind(isolate));
 }
 
 DEF_GETTER(JSObject, HasSealedElements, bool) {
   return IsSealedElementsKind(GetElementsKind(isolate));
+}
+
+DEF_GETTER(JSObject, HasNonextensibleElements, bool) {
+  return IsNonextensibleElementsKind(GetElementsKind(isolate));
 }
 
 DEF_GETTER(JSObject, HasFastArgumentsElements, bool) {
@@ -1029,10 +1006,6 @@ inline int JSGlobalProxy::SizeWithEmbedderFields(int embedder_field_count) {
 
 ACCESSORS(JSIteratorResult, value, Object, kValueOffset)
 ACCESSORS(JSIteratorResult, done, Object, kDoneOffset)
-
-ACCESSORS(JSAsyncFromSyncIterator, sync_iterator, JSReceiver,
-          kSyncIteratorOffset)
-ACCESSORS(JSAsyncFromSyncIterator, next, Object, kNextOffset)
 
 ACCESSORS(JSStringIterator, string, String, kStringOffset)
 SMI_ACCESSORS(JSStringIterator, index, kNextIndexOffset)

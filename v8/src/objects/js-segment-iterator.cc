@@ -37,9 +37,8 @@ Handle<String> JSSegmentIterator::GranularityAsString() const {
       return GetReadOnlyRoots().word_string_handle();
     case JSSegmenter::Granularity::SENTENCE:
       return GetReadOnlyRoots().sentence_string_handle();
-    case JSSegmenter::Granularity::COUNT:
-      UNREACHABLE();
   }
+  UNREACHABLE();
 }
 
 MaybeHandle<JSSegmentIterator> JSSegmentIterator::Create(
@@ -122,9 +121,8 @@ Handle<Object> JSSegmentIterator::BreakType() const {
         return GetReadOnlyRoots().sep_string_handle();
       }
       return GetReadOnlyRoots().undefined_value_handle();
-    case JSSegmenter::Granularity::COUNT:
-      UNREACHABLE();
   }
+  UNREACHABLE();
 }
 
 // ecma402 #sec-segment-iterator-prototype-index
@@ -209,7 +207,7 @@ Maybe<bool> JSSegmentIterator::Following(
       THROW_NEW_ERROR_RETURN_VALUE(
           isolate,
           NewRangeError(MessageTemplate::kParameterOfFunctionOutOfRange,
-                        factory->NewStringFromStaticChars("from"),
+                        factory->from_string(),
                         factory->NewStringFromStaticChars("following"), index),
           Nothing<bool>());
     }
@@ -222,7 +220,7 @@ Maybe<bool> JSSegmentIterator::Following(
       THROW_NEW_ERROR_RETURN_VALUE(
           isolate,
           NewRangeError(MessageTemplate::kParameterOfFunctionOutOfRange,
-                        factory->NewStringFromStaticChars("from"),
+                        factory->from_string(),
                         factory->NewStringFromStaticChars("following"),
                         from_obj),
           Nothing<bool>());
@@ -262,7 +260,7 @@ Maybe<bool> JSSegmentIterator::Preceding(
       THROW_NEW_ERROR_RETURN_VALUE(
           isolate,
           NewRangeError(MessageTemplate::kParameterOfFunctionOutOfRange,
-                        factory->NewStringFromStaticChars("from"),
+                        factory->from_string(),
                         factory->NewStringFromStaticChars("preceding"), index),
           Nothing<bool>());
     }
@@ -274,7 +272,7 @@ Maybe<bool> JSSegmentIterator::Preceding(
       THROW_NEW_ERROR_RETURN_VALUE(
           isolate,
           NewRangeError(MessageTemplate::kParameterOfFunctionOutOfRange,
-                        factory->NewStringFromStaticChars("from"),
+                        factory->from_string(),
                         factory->NewStringFromStaticChars("preceding"),
                         from_obj),
           Nothing<bool>());

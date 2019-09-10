@@ -29,14 +29,14 @@
   V(_, endRange_string, "endRange")                                 \
   V(_, engineering_string, "engineering")                           \
   V(_, era_string, "era")                                           \
-  V(_, first_string, "first")                                       \
-  V(_, format_string, "format")                                     \
-  V(_, fractionalSecond_string, "fractionalSecond")                 \
-  V(_, except_zero_string, "except-zero")                           \
+  V(_, exceptZero_string, "exceptZero")                             \
   V(_, exponentInteger_string, "exponentInteger")                   \
   V(_, exponentMinusSign_string, "exponentMinusSign")               \
   V(_, exponentSeparator_string, "exponentSeparator")               \
+  V(_, first_string, "first")                                       \
+  V(_, format_string, "format")                                     \
   V(_, fraction_string, "fraction")                                 \
+  V(_, fractionalSecond_string, "fractionalSecond")                 \
   V(_, fractionalSecondDigits_string, "fractionalSecondDigits")     \
   V(_, full_string, "full")                                         \
   V(_, granularity_string, "granularity")                           \
@@ -70,7 +70,7 @@
   V(_, minute_string, "minute")                                     \
   V(_, month_string, "month")                                       \
   V(_, nan_string, "nan")                                           \
-  V(_, narrow_symbol_string, "narrow-symbol")                       \
+  V(_, narrowSymbol_string, "narrowSymbol")                         \
   V(_, never_string, "never")                                       \
   V(_, none_string, "none")                                         \
   V(_, notation_string, "notation")                                 \
@@ -202,6 +202,7 @@
   V(_, illegal_access_string, "illegal access")                      \
   V(_, illegal_argument_string, "illegal argument")                  \
   V(_, index_string, "index")                                        \
+  V(_, indices_string, "indices")                                    \
   V(_, Infinity_string, "Infinity")                                  \
   V(_, infinity_string, "infinity")                                  \
   V(_, input_string, "input")                                        \
@@ -318,35 +319,37 @@
   V(_, writable_string, "writable")                                  \
   V(_, zero_string, "0")
 
-#define PRIVATE_SYMBOL_LIST_GENERATOR(V, _) \
-  V(_, call_site_frame_array_symbol)        \
-  V(_, call_site_frame_index_symbol)        \
-  V(_, console_context_id_symbol)           \
-  V(_, console_context_name_symbol)         \
-  V(_, class_fields_symbol)                 \
-  V(_, class_positions_symbol)              \
-  V(_, detailed_stack_trace_symbol)         \
-  V(_, elements_transition_symbol)          \
-  V(_, error_end_pos_symbol)                \
-  V(_, error_script_symbol)                 \
-  V(_, error_start_pos_symbol)              \
-  V(_, frozen_symbol)                       \
-  V(_, generic_symbol)                      \
-  V(_, home_object_symbol)                  \
-  V(_, interpreter_trampoline_symbol)       \
-  V(_, megamorphic_symbol)                  \
-  V(_, native_context_index_symbol)         \
-  V(_, nonextensible_symbol)                \
-  V(_, not_mapped_symbol)                   \
-  V(_, premonomorphic_symbol)               \
-  V(_, promise_debug_marker_symbol)         \
-  V(_, promise_forwarding_handler_symbol)   \
-  V(_, promise_handled_by_symbol)           \
-  V(_, sealed_symbol)                       \
-  V(_, stack_trace_symbol)                  \
-  V(_, strict_function_transition_symbol)   \
-  V(_, wasm_exception_tag_symbol)           \
-  V(_, wasm_exception_values_symbol)        \
+#define PRIVATE_SYMBOL_LIST_GENERATOR(V, _)               \
+  V(_, call_site_frame_array_symbol)                      \
+  V(_, call_site_frame_index_symbol)                      \
+  V(_, console_context_id_symbol)                         \
+  V(_, console_context_name_symbol)                       \
+  V(_, class_fields_symbol)                               \
+  V(_, class_positions_symbol)                            \
+  V(_, detailed_stack_trace_symbol)                       \
+  V(_, elements_transition_symbol)                        \
+  V(_, error_end_pos_symbol)                              \
+  V(_, error_script_symbol)                               \
+  V(_, error_start_pos_symbol)                            \
+  V(_, frozen_symbol)                                     \
+  V(_, generic_symbol)                                    \
+  V(_, home_object_symbol)                                \
+  V(_, interpreter_trampoline_symbol)                     \
+  V(_, megamorphic_symbol)                                \
+  V(_, native_context_index_symbol)                       \
+  V(_, nonextensible_symbol)                              \
+  V(_, not_mapped_symbol)                                 \
+  V(_, premonomorphic_symbol)                             \
+  V(_, promise_debug_marker_symbol)                       \
+  V(_, promise_forwarding_handler_symbol)                 \
+  V(_, promise_handled_by_symbol)                         \
+  V(_, regexp_result_cached_indices_or_match_info_symbol) \
+  V(_, regexp_result_names_symbol)                        \
+  V(_, sealed_symbol)                                     \
+  V(_, stack_trace_symbol)                                \
+  V(_, strict_function_transition_symbol)                 \
+  V(_, wasm_exception_tag_symbol)                         \
+  V(_, wasm_exception_values_symbol)                      \
   V(_, uninitialized_symbol)
 
 #define PUBLIC_SYMBOL_LIST_GENERATOR(V, _)          \
@@ -416,10 +419,12 @@
   F(MC_EVACUATE_CANDIDATES)                          \
   F(MC_EVACUATE_CLEAN_UP)                            \
   F(MC_EVACUATE_COPY)                                \
+  F(MC_EVACUATE_COPY_PARALLEL)                       \
   F(MC_EVACUATE_EPILOGUE)                            \
   F(MC_EVACUATE_PROLOGUE)                            \
   F(MC_EVACUATE_REBALANCE)                           \
   F(MC_EVACUATE_UPDATE_POINTERS)                     \
+  F(MC_EVACUATE_UPDATE_POINTERS_PARALLEL)            \
   F(MC_EVACUATE_UPDATE_POINTERS_SLOTS_MAIN)          \
   F(MC_EVACUATE_UPDATE_POINTERS_SLOTS_MAP_SPACE)     \
   F(MC_EVACUATE_UPDATE_POINTERS_TO_NEW_ROOTS)        \
@@ -447,15 +452,18 @@
   F(MINOR_MC_EVACUATE)                               \
   F(MINOR_MC_EVACUATE_CLEAN_UP)                      \
   F(MINOR_MC_EVACUATE_COPY)                          \
+  F(MINOR_MC_EVACUATE_COPY_PARALLEL)                 \
   F(MINOR_MC_EVACUATE_EPILOGUE)                      \
   F(MINOR_MC_EVACUATE_PROLOGUE)                      \
   F(MINOR_MC_EVACUATE_REBALANCE)                     \
   F(MINOR_MC_EVACUATE_UPDATE_POINTERS)               \
+  F(MINOR_MC_EVACUATE_UPDATE_POINTERS_PARALLEL)      \
   F(MINOR_MC_EVACUATE_UPDATE_POINTERS_SLOTS)         \
   F(MINOR_MC_EVACUATE_UPDATE_POINTERS_TO_NEW_ROOTS)  \
   F(MINOR_MC_EVACUATE_UPDATE_POINTERS_WEAK)          \
   F(MINOR_MC_MARK)                                   \
   F(MINOR_MC_MARK_GLOBAL_HANDLES)                    \
+  F(MINOR_MC_MARK_PARALLEL)                          \
   F(MINOR_MC_MARK_SEED)                              \
   F(MINOR_MC_MARK_ROOTS)                             \
   F(MINOR_MC_MARK_WEAK)                              \

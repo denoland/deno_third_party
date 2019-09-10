@@ -65,9 +65,10 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   CallDescriptor* call_descriptor() const { return call_descriptor_; }
   PoisoningMitigationLevel poisoning_level() const { return poisoning_level_; }
 
-  // Finalizes the schedule and exports it to be used for code generation. Note
-  // that this RawMachineAssembler becomes invalid after export.
-  Schedule* Export();
+  // Only used for tests: Finalizes the schedule and exports it to be used for
+  // code generation. Note that this RawMachineAssembler becomes invalid after
+  // export.
+  Schedule* ExportForTest();
   // Finalizes the schedule and transforms it into a graph that's suitable for
   // it to be used for Turbofan optimization and re-scheduling. Note that this
   // RawMachineAssembler becomes invalid after export.
@@ -577,6 +578,9 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   Node* Word32PairSar(Node* low_word, Node* high_word, Node* shift) {
     return AddNode(machine()->Word32PairSar(), low_word, high_word, shift);
   }
+  Node* StackPointerGreaterThan(Node* value) {
+    return AddNode(machine()->StackPointerGreaterThan(), value);
+  }
 
 #define INTPTR_BINOP(prefix, name)                           \
   Node* IntPtr##name(Node* a, Node* b) {                     \
@@ -907,7 +911,6 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   }
 
   // Stack operations.
-  Node* LoadStackPointer() { return AddNode(machine()->LoadStackPointer()); }
   Node* LoadFramePointer() { return AddNode(machine()->LoadFramePointer()); }
   Node* LoadParentFramePointer() {
     return AddNode(machine()->LoadParentFramePointer());
@@ -962,8 +965,8 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
 
   // Tail call a given call descriptor and the given arguments.
   // The call target is passed as part of the {inputs} array.
-  Node* TailCallN(CallDescriptor* call_descriptor, int input_count,
-                  Node* const* inputs);
+  void TailCallN(CallDescriptor* call_descriptor, int input_count,
+                 Node* const* inputs);
 
   // Type representing C function argument with type info.
   using CFunctionArg = std::pair<MachineType, Node*>;
@@ -1019,7 +1022,7 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
   void PopAndReturn(Node* pop, Node* v1, Node* v2, Node* v3, Node* v4);
   void Bind(RawMachineLabel* label);
   void Deoptimize(Node* state);
-  void DebugAbort(Node* message);
+  void AbortCSAAssert(Node* message);
   void DebugBreak();
   void Unreachable();
   void Comment(const std::string& msg);
@@ -1067,8 +1070,6 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
     return AddNode(op, sizeof...(args) + 1, buffer);
   }
 
-  size_t NodeCount();
-
   void SetSourcePosition(const char* file, int line);
   SourcePositionTable* source_positions() { return source_positions_; }
 
@@ -1092,6 +1093,9 @@ class V8_EXPORT_PRIVATE RawMachineAssembler {
 
   Schedule* schedule() { return schedule_; }
   size_t parameter_count() const { return call_descriptor_->ParameterCount(); }
+
+  static void OptimizeControlFlow(Schedule* schedule, Graph* graph,
+                                  CommonOperatorBuilder* common);
 
   Isolate* isolate_;
   Graph* graph_;

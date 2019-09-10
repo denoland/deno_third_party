@@ -79,6 +79,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kMips64F32x4Max:
     case kMips64F32x4Min:
     case kMips64F32x4Mul:
+    case kMips64F32x4Div:
     case kMips64F32x4Ne:
     case kMips64F32x4Neg:
     case kMips64F32x4RecipApprox:
@@ -318,6 +319,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kMips64Ush:
     case kMips64Usw:
     case kMips64Uswc1:
+    case kMips64Sync:
     case kMips64Word64AtomicStoreWord8:
     case kMips64Word64AtomicStoreWord16:
     case kMips64Word64AtomicStoreWord32:
@@ -1263,7 +1265,7 @@ int InstructionScheduler::GetInstructionLatency(const Instruction* instr) {
       return AssembleArchLookupSwitchLatency(instr);
     case kArchTableSwitch:
       return AssembleArchTableSwitchLatency();
-    case kArchDebugAbort:
+    case kArchAbortCSAAssert:
       return CallLatency() + 1;
     case kArchDebugBreak:
       return 1;
@@ -1274,7 +1276,6 @@ int InstructionScheduler::GetInstructionLatency(const Instruction* instr) {
       return 0;
     case kArchRet:
       return AssemblerReturnLatency();
-    case kArchStackPointer:
     case kArchFramePointer:
       return 1;
     case kArchParentFramePointer:

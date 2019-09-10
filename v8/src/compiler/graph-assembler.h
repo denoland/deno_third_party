@@ -5,10 +5,10 @@
 #ifndef V8_COMPILER_GRAPH_ASSEMBLER_H_
 #define V8_COMPILER_GRAPH_ASSEMBLER_H_
 
+#include "src/compiler/feedback-source.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/node.h"
 #include "src/compiler/simplified-operator.h"
-#include "src/compiler/vector-slot-pair.h"
 
 namespace v8 {
 namespace internal {
@@ -95,22 +95,24 @@ namespace compiler {
   V(Uint32Mod)                               \
   V(Uint32Div)
 
-#define JSGRAPH_SINGLETON_CONSTANT_LIST(V) \
-  V(TrueConstant)                          \
-  V(FalseConstant)                         \
-  V(NullConstant)                          \
-  V(BigIntMapConstant)                     \
-  V(BooleanMapConstant)                    \
-  V(HeapNumberMapConstant)                 \
-  V(NoContextConstant)                     \
-  V(EmptyStringConstant)                   \
-  V(UndefinedConstant)                     \
-  V(TheHoleConstant)                       \
-  V(FixedArrayMapConstant)                 \
-  V(FixedDoubleArrayMapConstant)           \
-  V(ToNumberBuiltinConstant)               \
-  V(AllocateInYoungGenerationStubConstant) \
-  V(AllocateInOldGenerationStubConstant)
+#define JSGRAPH_SINGLETON_CONSTANT_LIST(V)        \
+  V(TrueConstant)                                 \
+  V(FalseConstant)                                \
+  V(NullConstant)                                 \
+  V(BigIntMapConstant)                            \
+  V(BooleanMapConstant)                           \
+  V(HeapNumberMapConstant)                        \
+  V(NoContextConstant)                            \
+  V(EmptyStringConstant)                          \
+  V(UndefinedConstant)                            \
+  V(TheHoleConstant)                              \
+  V(FixedArrayMapConstant)                        \
+  V(FixedDoubleArrayMapConstant)                  \
+  V(ToNumberBuiltinConstant)                      \
+  V(AllocateInYoungGenerationStubConstant)        \
+  V(AllocateRegularInYoungGenerationStubConstant) \
+  V(AllocateInOldGenerationStubConstant)          \
+  V(AllocateRegularInOldGenerationStubConstant)
 
 class GraphAssembler;
 
@@ -198,6 +200,7 @@ class GraphAssembler {
   Node* Float64Constant(double value);
   Node* Projection(int index, Node* value);
   Node* HeapConstant(Handle<HeapObject> object);
+  Node* NumberConstant(double value);
   Node* CEntryStubConstant(int result_size);
   Node* ExternalConstant(ExternalReference ref);
 
@@ -220,6 +223,9 @@ class GraphAssembler {
   Node* DebugBreak();
 
   Node* Unreachable();
+
+  Node* IntPtrEqual(Node* left, Node* right);
+  Node* TaggedEqual(Node* left, Node* right);
 
   Node* Float64RoundDown(Node* value);
   Node* Float64RoundTruncate(Node* value);
@@ -248,11 +254,11 @@ class GraphAssembler {
   Node* Word32PoisonOnSpeculation(Node* value);
 
   Node* DeoptimizeIf(
-      DeoptimizeReason reason, VectorSlotPair const& feedback, Node* condition,
+      DeoptimizeReason reason, FeedbackSource const& feedback, Node* condition,
       Node* frame_state,
       IsSafetyCheck is_safety_check = IsSafetyCheck::kSafetyCheck);
   Node* DeoptimizeIfNot(
-      DeoptimizeReason reason, VectorSlotPair const& feedback, Node* condition,
+      DeoptimizeReason reason, FeedbackSource const& feedback, Node* condition,
       Node* frame_state,
       IsSafetyCheck is_safety_check = IsSafetyCheck::kSafetyCheck);
   template <typename... Args>

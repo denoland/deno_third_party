@@ -53,6 +53,7 @@ void CompileCurrentAst(TorqueCompilerOptions options) {
   if (options.force_assert_statements) {
     GlobalContext::SetForceAssertStatements();
   }
+  TargetArchitecture::Scope target_architecture(options.force_32bit_output);
   TypeOracle::Scope type_oracle;
 
   // Two-step process of predeclaration + resolution allows to resolve type
@@ -65,7 +66,7 @@ void CompileCurrentAst(TorqueCompilerOptions options) {
 
   // A class types' fields are resolved here, which allows two class fields to
   // mutually refer to each others.
-  TypeOracle::FinalizeClassTypes();
+  TypeOracle::FinalizeAggregateTypes();
 
   std::string output_directory = options.output_directory;
 
@@ -83,6 +84,7 @@ void CompileCurrentAst(TorqueCompilerOptions options) {
   implementation_visitor.GeneratePrintDefinitions(output_directory);
   implementation_visitor.GenerateClassDefinitions(output_directory);
   implementation_visitor.GenerateClassVerifiers(output_directory);
+  implementation_visitor.GenerateClassDebugReaders(output_directory);
   implementation_visitor.GenerateExportedMacrosAssembler(output_directory);
   implementation_visitor.GenerateCSATypes(output_directory);
   implementation_visitor.GenerateInstanceTypes(output_directory);

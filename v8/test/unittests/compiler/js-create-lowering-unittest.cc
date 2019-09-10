@@ -4,6 +4,7 @@
 
 #include "src/compiler/js-create-lowering.h"
 #include "src/codegen/code-factory.h"
+#include "src/codegen/tick-counter.h"
 #include "src/compiler/access-builder.h"
 #include "src/compiler/compilation-dependencies.h"
 #include "src/compiler/js-graph.h"
@@ -43,7 +44,7 @@ class JSCreateLoweringTest : public TypedGraphTest {
     JSGraph jsgraph(isolate(), graph(), common(), javascript(), &simplified,
                     &machine);
     // TODO(titzer): mock the GraphReducer here for better unit testing.
-    GraphReducer graph_reducer(zone(), graph());
+    GraphReducer graph_reducer(zone(), graph(), tick_counter());
     JSCreateLowering reducer(&graph_reducer, &deps_, &jsgraph, broker(),
                              zone());
     return reducer.Reduce(node);
@@ -171,7 +172,8 @@ TEST_F(JSCreateLoweringTest, JSCreateFunctionContextViaInlinedAllocation) {
 // JSCreateWithContext
 
 TEST_F(JSCreateLoweringTest, JSCreateWithContext) {
-  Handle<ScopeInfo> scope_info = ScopeInfo::CreateForEmptyFunction(isolate());
+  Handle<ScopeInfo> scope_info =
+      ReadOnlyRoots(isolate()).empty_function_scope_info_handle();
   Node* const object = Parameter(Type::Receiver());
   Node* const context = Parameter(Type::Any());
   Node* const effect = graph()->start();
@@ -191,7 +193,8 @@ TEST_F(JSCreateLoweringTest, JSCreateWithContext) {
 // JSCreateCatchContext
 
 TEST_F(JSCreateLoweringTest, JSCreateCatchContext) {
-  Handle<ScopeInfo> scope_info = ScopeInfo::CreateForEmptyFunction(isolate());
+  Handle<ScopeInfo> scope_info =
+      ReadOnlyRoots(isolate()).empty_function_scope_info_handle();
   Node* const exception = Parameter(Type::Receiver());
   Node* const context = Parameter(Type::Any());
   Node* const effect = graph()->start();

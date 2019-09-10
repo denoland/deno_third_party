@@ -22,6 +22,7 @@
 #include "src/objects/objects-inl.h"
 #include "src/objects/oddball-inl.h"
 #include "src/objects/ordered-hash-table-inl.h"
+#include "src/objects/property-descriptor.h"
 #include "src/objects/smi.h"
 #include "src/objects/transitions-inl.h"
 #include "src/snapshot/code-serializer.h"
@@ -65,9 +66,6 @@ static size_t BytesNeededForVarint(T value) {
   return result;
 }
 
-// Note that some additional tag values are defined in Blink's
-// Source/bindings/core/v8/serialization/SerializationTag.h, which must
-// not clash with values defined here.
 enum class SerializationTag : uint8_t {
   // version:uint32_t (if at beginning of data, sets version > 0)
   kVersion = 0xFF,
@@ -161,6 +159,40 @@ enum class SerializationTag : uint8_t {
   // A transferred WebAssembly.Memory object. maximumPages:int32_t, then by
   // SharedArrayBuffer tag and its data.
   kWasmMemoryTransfer = 'm',
+  // A list of (subtag: ErrorTag, [subtag dependent data]). See ErrorTag for
+  // details.
+  kError = 'r',
+
+  // The following tags are reserved because they were in use in Chromium before
+  // the kHostObject tag was introduced in format version 13, at
+  //   v8           refs/heads/master@{#43466}
+  //   chromium/src refs/heads/master@{#453568}
+  //
+  // They must not be reused without a version check to prevent old values from
+  // starting to deserialize incorrectly. For simplicity, it's recommended to
+  // avoid them altogether.
+  //
+  // This is the set of tags that existed in SerializationTag.h at that time and
+  // still exist at the time of this writing (i.e., excluding those that were
+  // removed on the Chromium side because there should be no real user data
+  // containing them).
+  //
+  // It might be possible to also free up other tags which were never persisted
+  // (e.g. because they were used only for transfer) in the future.
+  kLegacyReservedMessagePort = 'M',
+  kLegacyReservedBlob = 'b',
+  kLegacyReservedBlobIndex = 'i',
+  kLegacyReservedFile = 'f',
+  kLegacyReservedFileIndex = 'e',
+  kLegacyReservedDOMFileSystem = 'd',
+  kLegacyReservedFileList = 'l',
+  kLegacyReservedFileListIndex = 'L',
+  kLegacyReservedImageData = '#',
+  kLegacyReservedImageBitmap = 'g',
+  kLegacyReservedImageBitmapTransfer = 'G',
+  kLegacyReservedOffscreenCanvas = 'H',
+  kLegacyReservedCryptoKey = 'K',
+  kLegacyReservedRTCCertificate = 'k',
 };
 
 namespace {
@@ -182,6 +214,28 @@ enum class ArrayBufferViewTag : uint8_t {
 
 enum class WasmEncodingTag : uint8_t {
   kRawBytes = 'y',
+};
+
+// Sub-tags only meaningful for error serialization.
+enum class ErrorTag : uint8_t {
+  // The error is a EvalError. No accompanying data.
+  kEvalErrorPrototype = 'E',
+  // The error is a RangeError. No accompanying data.
+  kRangeErrorPrototype = 'R',
+  // The error is a ReferenceError. No accompanying data.
+  kReferenceErrorPrototype = 'F',
+  // The error is a SyntaxError. No accompanying data.
+  kSyntaxErrorPrototype = 'S',
+  // The error is a TypeError. No accompanying data.
+  kTypeErrorPrototype = 'T',
+  // The error is a URIError. No accompanying data.
+  kUriErrorPrototype = 'U',
+  // Followed by message: string.
+  kMessage = 'm',
+  // Followed by stack: string.
+  kStack = 's',
+  // The end of this error information.
+  kEnd = '.',
 };
 
 }  // namespace
@@ -363,9 +417,6 @@ Maybe<bool> ValueSerializer::WriteObject(Handle<Object> object) {
     case HEAP_NUMBER_TYPE:
       WriteHeapNumber(HeapNumber::cast(*object));
       return ThrowIfOutOfMemory();
-    case MUTABLE_HEAP_NUMBER_TYPE:
-      WriteMutableHeapNumber(MutableHeapNumber::cast(*object));
-      return ThrowIfOutOfMemory();
     case BIGINT_TYPE:
       WriteBigInt(BigInt::cast(*object));
       return ThrowIfOutOfMemory();
@@ -427,11 +478,6 @@ void ValueSerializer::WriteSmi(Smi smi) {
 }
 
 void ValueSerializer::WriteHeapNumber(HeapNumber number) {
-  WriteTag(SerializationTag::kDouble);
-  WriteDouble(number.value());
-}
-
-void ValueSerializer::WriteMutableHeapNumber(MutableHeapNumber number) {
   WriteTag(SerializationTag::kDouble);
   WriteDouble(number.value());
 }
@@ -520,6 +566,8 @@ Maybe<bool> ValueSerializer::WriteJSReceiver(Handle<JSReceiver> receiver) {
     case JS_TYPED_ARRAY_TYPE:
     case JS_DATA_VIEW_TYPE:
       return WriteJSArrayBufferView(JSArrayBufferView::cast(*receiver));
+    case JS_ERROR_TYPE:
+      return WriteJSError(Handle<JSObject>::cast(receiver));
     case WASM_MODULE_TYPE: {
       auto enabled_features = wasm::WasmFeaturesFromIsolate(isolate_);
       if (!FLAG_wasm_disable_structured_cloning || enabled_features.threads) {
@@ -876,6 +924,60 @@ Maybe<bool> ValueSerializer::WriteJSArrayBufferView(JSArrayBufferView view) {
   return ThrowIfOutOfMemory();
 }
 
+Maybe<bool> ValueSerializer::WriteJSError(Handle<JSObject> error) {
+  Handle<Object> stack;
+  PropertyDescriptor message_desc;
+  Maybe<bool> message_found = JSReceiver::GetOwnPropertyDescriptor(
+      isolate_, error, isolate_->factory()->message_string(), &message_desc);
+  MAYBE_RETURN(message_found, Nothing<bool>());
+
+  WriteTag(SerializationTag::kError);
+
+  Handle<HeapObject> prototype;
+  if (!JSObject::GetPrototype(isolate_, error).ToHandle(&prototype)) {
+    return Nothing<bool>();
+  }
+
+  if (*prototype == isolate_->eval_error_function()->prototype()) {
+    WriteVarint(static_cast<uint8_t>(ErrorTag::kEvalErrorPrototype));
+  } else if (*prototype == isolate_->range_error_function()->prototype()) {
+    WriteVarint(static_cast<uint8_t>(ErrorTag::kRangeErrorPrototype));
+  } else if (*prototype == isolate_->reference_error_function()->prototype()) {
+    WriteVarint(static_cast<uint8_t>(ErrorTag::kReferenceErrorPrototype));
+  } else if (*prototype == isolate_->syntax_error_function()->prototype()) {
+    WriteVarint(static_cast<uint8_t>(ErrorTag::kSyntaxErrorPrototype));
+  } else if (*prototype == isolate_->type_error_function()->prototype()) {
+    WriteVarint(static_cast<uint8_t>(ErrorTag::kTypeErrorPrototype));
+  } else if (*prototype == isolate_->uri_error_function()->prototype()) {
+    WriteVarint(static_cast<uint8_t>(ErrorTag::kUriErrorPrototype));
+  } else {
+    // The default prototype in the deserialization side is Error.prototype, so
+    // we don't have to do anything here.
+  }
+
+  if (message_found.FromJust() &&
+      PropertyDescriptor::IsDataDescriptor(&message_desc)) {
+    Handle<String> message;
+    if (!Object::ToString(isolate_, message_desc.value()).ToHandle(&message)) {
+      return Nothing<bool>();
+    }
+    WriteVarint(static_cast<uint8_t>(ErrorTag::kMessage));
+    WriteString(message);
+  }
+
+  if (!Object::GetProperty(isolate_, error, isolate_->factory()->stack_string())
+           .ToHandle(&stack)) {
+    return Nothing<bool>();
+  }
+  if (stack->IsString()) {
+    WriteVarint(static_cast<uint8_t>(ErrorTag::kStack));
+    WriteString(Handle<String>::cast(stack));
+  }
+
+  WriteVarint(static_cast<uint8_t>(ErrorTag::kEnd));
+  return ThrowIfOutOfMemory();
+}
+
 Maybe<bool> ValueSerializer::WriteWasmModule(Handle<WasmModuleObject> object) {
   if (delegate_ != nullptr) {
     // TODO(titzer): introduce a Utils::ToLocal for WasmModuleObject.
@@ -923,8 +1025,8 @@ Maybe<bool> ValueSerializer::WriteWasmMemory(Handle<WasmMemoryObject> object) {
     return Nothing<bool>();
   }
 
-  isolate_->wasm_engine()->memory_tracker()->RegisterWasmMemoryAsShared(
-      object, isolate_);
+  GlobalBackingStoreRegistry::Register(
+      object->array_buffer().GetBackingStore());
 
   WriteTag(SerializationTag::kWasmMemoryTransfer);
   WriteZigZag<int32_t>(object->maximum_pages());
@@ -1258,6 +1360,8 @@ MaybeHandle<Object> ValueDeserializer::ReadObjectInternal() {
       const bool is_shared = true;
       return ReadJSArrayBuffer(is_shared);
     }
+    case SerializationTag::kError:
+      return ReadJSError();
     case SerializationTag::kWasmModule:
       return ReadWasmModule();
     case SerializationTag::kWasmModuleTransfer:
@@ -1697,13 +1801,12 @@ MaybeHandle<JSArrayBuffer> ValueDeserializer::ReadJSArrayBuffer(
       byte_length > static_cast<size_t>(end_ - position_)) {
     return MaybeHandle<JSArrayBuffer>();
   }
-  const bool should_initialize = false;
-  Handle<JSArrayBuffer> array_buffer = isolate_->factory()->NewJSArrayBuffer(
-      SharedFlag::kNotShared, allocation_);
-  if (!JSArrayBuffer::SetupAllocatingData(array_buffer, isolate_, byte_length,
-                                          should_initialize)) {
-    return MaybeHandle<JSArrayBuffer>();
-  }
+  MaybeHandle<JSArrayBuffer> result =
+      isolate_->factory()->NewJSArrayBufferAndBackingStore(
+          byte_length, InitializedFlag::kUninitialized, allocation_);
+  Handle<JSArrayBuffer> array_buffer;
+  if (!result.ToHandle(&array_buffer)) return result;
+
   if (byte_length > 0) {
     memcpy(array_buffer->backing_store(), position_, byte_length);
   }
@@ -1771,6 +1874,78 @@ MaybeHandle<JSArrayBufferView> ValueDeserializer::ReadJSArrayBufferView(
       allocation_);
   AddObjectWithID(id, typed_array);
   return typed_array;
+}
+
+MaybeHandle<Object> ValueDeserializer::ReadJSError() {
+  Handle<Object> message = isolate_->factory()->undefined_value();
+  Handle<Object> stack = isolate_->factory()->undefined_value();
+  Handle<Object> no_caller;
+  auto constructor = isolate_->error_function();
+  bool done = false;
+
+  while (!done) {
+    uint8_t tag;
+    if (!ReadVarint<uint8_t>().To(&tag)) {
+      return MaybeHandle<JSObject>();
+    }
+    switch (static_cast<ErrorTag>(tag)) {
+      case ErrorTag::kEvalErrorPrototype:
+        constructor = isolate_->eval_error_function();
+        break;
+      case ErrorTag::kRangeErrorPrototype:
+        constructor = isolate_->range_error_function();
+        break;
+      case ErrorTag::kReferenceErrorPrototype:
+        constructor = isolate_->reference_error_function();
+        break;
+      case ErrorTag::kSyntaxErrorPrototype:
+        constructor = isolate_->syntax_error_function();
+        break;
+      case ErrorTag::kTypeErrorPrototype:
+        constructor = isolate_->type_error_function();
+        break;
+      case ErrorTag::kUriErrorPrototype:
+        constructor = isolate_->uri_error_function();
+        break;
+      case ErrorTag::kMessage: {
+        Handle<String> message_string;
+        if (!ReadString().ToHandle(&message_string)) {
+          return MaybeHandle<JSObject>();
+        }
+        message = message_string;
+        break;
+      }
+      case ErrorTag::kStack: {
+        Handle<String> stack_string;
+        if (!ReadString().ToHandle(&stack_string)) {
+          return MaybeHandle<JSObject>();
+        }
+        stack = stack_string;
+        break;
+      }
+      case ErrorTag::kEnd:
+        done = true;
+        break;
+      default:
+        return MaybeHandle<JSObject>();
+    }
+  }
+
+  Handle<Object> error;
+  if (!ErrorUtils::Construct(isolate_, constructor, constructor, message,
+                             SKIP_NONE, no_caller,
+                             ErrorUtils::StackTraceCollection::kNone)
+           .ToHandle(&error)) {
+    return MaybeHandle<Object>();
+  }
+
+  if (Object::SetProperty(
+          isolate_, error, isolate_->factory()->stack_trace_symbol(), stack,
+          StoreOrigin::kMaybeKeyed, Just(ShouldThrow::kThrowOnError))
+          .is_null()) {
+    return MaybeHandle<Object>();
+  }
+  return error;
 }
 
 MaybeHandle<JSObject> ValueDeserializer::ReadWasmModuleTransfer() {
@@ -1872,9 +2047,6 @@ MaybeHandle<WasmMemoryObject> ValueDeserializer::ReadWasmMemory() {
 
   Handle<WasmMemoryObject> result =
       WasmMemoryObject::New(isolate_, buffer, maximum_pages);
-
-  isolate_->wasm_engine()->memory_tracker()->RegisterWasmMemoryAsShared(
-      result, isolate_);
 
   AddObjectWithID(id, result);
   return result;

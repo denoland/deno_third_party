@@ -2844,6 +2844,65 @@ INSTANTIATE_TEST_SUITE_P(InstructionSelectorTest,
                          InstructionSelectorMemoryAccessTest,
                          ::testing::ValuesIn(kMemoryAccesses));
 
+static const WriteBarrierKind kWriteBarrierKinds[] = {
+    kMapWriteBarrier, kPointerWriteBarrier, kEphemeronKeyWriteBarrier,
+    kFullWriteBarrier};
+
+const int32_t kStoreWithBarrierImmediates[] = {
+    -256, -255, -3,   -2,   -1,   0,    1,     2,     3,     255,
+    256,  264,  4096, 4104, 8192, 8200, 16384, 16392, 32752, 32760};
+
+using InstructionSelectorStoreWithBarrierTest =
+    InstructionSelectorTestWithParam<WriteBarrierKind>;
+
+TEST_P(InstructionSelectorStoreWithBarrierTest,
+       StoreWithWriteBarrierParameters) {
+  const WriteBarrierKind barrier_kind = GetParam();
+  StreamBuilder m(this, MachineType::Int32(),
+                  MachineType::TypeCompressedTaggedPointer(),
+                  MachineType::Int32(), MachineType::TypeCompressedTagged());
+  m.Store(MachineType::RepCompressedTagged(), m.Parameter(0), m.Parameter(1),
+          m.Parameter(2), barrier_kind);
+  m.Return(m.Int32Constant(0));
+  Stream s = m.Build(kAllExceptNopInstructions);
+  // We have two instructions that are not nops: Store and Return.
+  ASSERT_EQ(2U, s.size());
+  EXPECT_EQ(kArchStoreWithWriteBarrier, s[0]->arch_opcode());
+  EXPECT_EQ(kMode_MRR, s[0]->addressing_mode());
+  EXPECT_EQ(3U, s[0]->InputCount());
+  EXPECT_EQ(0U, s[0]->OutputCount());
+}
+
+TEST_P(InstructionSelectorStoreWithBarrierTest,
+       StoreWithWriteBarrierImmediate) {
+  const WriteBarrierKind barrier_kind = GetParam();
+  TRACED_FOREACH(int32_t, index, kStoreWithBarrierImmediates) {
+    StreamBuilder m(this, MachineType::Int32(),
+                    MachineType::TypeCompressedTaggedPointer(),
+                    MachineType::TypeCompressedTagged());
+    m.Store(MachineType::RepCompressedTagged(), m.Parameter(0),
+            m.Int32Constant(index), m.Parameter(1), barrier_kind);
+    m.Return(m.Int32Constant(0));
+    Stream s = m.Build(kAllExceptNopInstructions);
+    // We have two instructions that are not nops: Store and Return.
+    ASSERT_EQ(2U, s.size());
+    EXPECT_EQ(kArchStoreWithWriteBarrier, s[0]->arch_opcode());
+    // With compressed pointers, a store with barrier is a 32-bit str which has
+    // a smaller immediate range.
+    if (COMPRESS_POINTERS_BOOL && (index > 16380)) {
+      EXPECT_EQ(kMode_MRR, s[0]->addressing_mode());
+    } else {
+      EXPECT_EQ(kMode_MRI, s[0]->addressing_mode());
+    }
+    EXPECT_EQ(3U, s[0]->InputCount());
+    EXPECT_EQ(0U, s[0]->OutputCount());
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(InstructionSelectorTest,
+                         InstructionSelectorStoreWithBarrierTest,
+                         ::testing::ValuesIn(kWriteBarrierKinds));
+
 // -----------------------------------------------------------------------------
 // Comparison instructions.
 
@@ -4510,54 +4569,6 @@ TEST_F(InstructionSelectorTest, CompareFloat64HighGreaterThanOrEqualZero64) {
   EXPECT_EQ(4U, s[1]->InputCount());
   EXPECT_EQ(InstructionOperand::IMMEDIATE, s[1]->InputAt(1)->kind());
   EXPECT_EQ(63, s.ToInt32(s[1]->InputAt(1)));
-}
-
-TEST_F(InstructionSelectorTest, StackCheck0) {
-  StreamBuilder m(this, MachineType::Int32(), MachineType::Pointer());
-  Node* const sp = m.LoadStackPointer();
-  Node* const stack_limit = m.Load(MachineType::Int64(), m.Parameter(0));
-  Node* const interrupt = m.UintPtrLessThan(sp, stack_limit);
-
-  RawMachineLabel if_true, if_false;
-  m.Branch(interrupt, &if_true, &if_false);
-
-  m.Bind(&if_true);
-  m.Return(m.Int32Constant(1));
-
-  m.Bind(&if_false);
-  m.Return(m.Int32Constant(0));
-
-  Stream s = m.Build();
-
-  ASSERT_EQ(2U, s.size());
-  EXPECT_EQ(kArm64Ldr, s[0]->arch_opcode());
-  EXPECT_EQ(kArm64Cmp, s[1]->arch_opcode());
-  EXPECT_EQ(4U, s[1]->InputCount());
-  EXPECT_EQ(0U, s[1]->OutputCount());
-}
-
-TEST_F(InstructionSelectorTest, StackCheck1) {
-  StreamBuilder m(this, MachineType::Int32(), MachineType::Pointer());
-  Node* const sp = m.LoadStackPointer();
-  Node* const stack_limit = m.Load(MachineType::Int64(), m.Parameter(0));
-  Node* const sp_within_limit = m.UintPtrLessThan(stack_limit, sp);
-
-  RawMachineLabel if_true, if_false;
-  m.Branch(sp_within_limit, &if_true, &if_false);
-
-  m.Bind(&if_true);
-  m.Return(m.Int32Constant(1));
-
-  m.Bind(&if_false);
-  m.Return(m.Int32Constant(0));
-
-  Stream s = m.Build();
-
-  ASSERT_EQ(2U, s.size());
-  EXPECT_EQ(kArm64Ldr, s[0]->arch_opcode());
-  EXPECT_EQ(kArm64Cmp, s[1]->arch_opcode());
-  EXPECT_EQ(4U, s[1]->InputCount());
-  EXPECT_EQ(0U, s[1]->OutputCount());
 }
 
 TEST_F(InstructionSelectorTest, ExternalReferenceLoad1) {

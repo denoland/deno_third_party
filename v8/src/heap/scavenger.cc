@@ -8,6 +8,7 @@
 #include "src/heap/barrier.h"
 #include "src/heap/gc-tracer.h"
 #include "src/heap/heap-inl.h"
+#include "src/heap/invalidated-slots-inl.h"
 #include "src/heap/item-parallel-job.h"
 #include "src/heap/mark-compact-inl.h"
 #include "src/heap/objects-visiting-inl.h"
@@ -41,10 +42,20 @@ class ScavengingTask final : public ItemParallelJob::Task {
         scavenger_(scavenger),
         barrier_(barrier) {}
 
-  void RunInParallel() final {
-    TRACE_BACKGROUND_GC(
-        heap_->tracer(),
-        GCTracer::BackgroundScope::SCAVENGER_BACKGROUND_SCAVENGE_PARALLEL);
+  void RunInParallel(Runner runner) final {
+    if (runner == Runner::kForeground) {
+      TRACE_GC(heap_->tracer(), GCTracer::Scope::SCAVENGER_SCAVENGE_PARALLEL);
+      ProcessItems();
+    } else {
+      TRACE_BACKGROUND_GC(
+          heap_->tracer(),
+          GCTracer::BackgroundScope::SCAVENGER_BACKGROUND_SCAVENGE_PARALLEL);
+      ProcessItems();
+    }
+  }
+
+ private:
+  void ProcessItems() {
     double scavenging_time = 0.0;
     {
       barrier_->Start();
@@ -66,8 +77,6 @@ class ScavengingTask final : public ItemParallelJob::Task {
                    scavenger_->bytes_copied(), scavenger_->bytes_promoted());
     }
   }
-
- private:
   Heap* const heap_;
   Scavenger* const scavenger_;
   OneshotBarrier* const barrier_;
@@ -362,9 +371,11 @@ void ScavengerCollector::MergeSurvivingNewLargeObjects(
 
 int ScavengerCollector::NumberOfScavengeTasks() {
   if (!FLAG_parallel_scavenge) return 1;
-  const int num_pages = heap_->new_space()->from_space().pages_used();
-  const int num_cores = V8::GetCurrentPlatform()->NumberOfWorkerThreads() + 1;
-  int tasks = Max(1, Min(Min(num_pages, kMaxScavengerTasks), num_cores));
+  const int num_scavenge_tasks =
+      static_cast<int>(heap_->new_space()->TotalCapacity()) / MB + 1;
+  static int num_cores = V8::GetCurrentPlatform()->NumberOfWorkerThreads() + 1;
+  int tasks =
+      Max(1, Min(Min(num_scavenge_tasks, kMaxScavengerTasks), num_cores));
   if (!heap_->CanExpandOldGeneration(
           static_cast<size_t>(tasks * Page::kPageSize))) {
     // Optimize for memory usage near the heap limit.
@@ -421,12 +432,21 @@ void Scavenger::AddPageToSweeperIfNecessary(MemoryChunk* page) {
 
 void Scavenger::ScavengePage(MemoryChunk* page) {
   CodePageMemoryModificationScope memory_modification_scope(page);
-  RememberedSet<OLD_TO_NEW>::Iterate(page,
-                                     [this](MaybeObjectSlot addr) {
-                                       return CheckAndScavengeObject(heap_,
-                                                                     addr);
-                                     },
-                                     SlotSet::KEEP_EMPTY_BUCKETS);
+  InvalidatedSlotsFilter filter = InvalidatedSlotsFilter::OldToNew(page);
+  RememberedSet<OLD_TO_NEW>::Iterate(
+      page,
+      [this, &filter](MaybeObjectSlot slot) {
+        CHECK(filter.IsValid(slot.address()));
+        return CheckAndScavengeObject(heap_, slot);
+      },
+      SlotSet::KEEP_EMPTY_BUCKETS);
+
+  if (page->invalidated_slots<OLD_TO_NEW>() != nullptr) {
+    // The invalidated slots are not needed after old-to-new slots were
+    // processed.
+    page->ReleaseInvalidatedSlots<OLD_TO_NEW>();
+  }
+
   RememberedSet<OLD_TO_NEW>::IterateTyped(
       page, [=](SlotType type, Address addr) {
         return UpdateTypedSlotHelper::UpdateTypedSlot(

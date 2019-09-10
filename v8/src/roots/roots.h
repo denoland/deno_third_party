@@ -97,7 +97,6 @@ class Symbol;
   V(Map, global_dictionary_map, GlobalDictionaryMap)                           \
   V(Map, many_closures_cell_map, ManyClosuresCellMap)                          \
   V(Map, module_info_map, ModuleInfoMap)                                       \
-  V(Map, mutable_heap_number_map, MutableHeapNumberMap)                        \
   V(Map, name_dictionary_map, NameDictionaryMap)                               \
   V(Map, no_closures_cell_map, NoClosuresCellMap)                              \
   V(Map, number_dictionary_map, NumberDictionaryMap)                           \
@@ -199,6 +198,9 @@ class Symbol;
     TrampolineTrivialCodeDataContainer)                                        \
   V(CodeDataContainer, trampoline_promise_rejection_code_data_container,       \
     TrampolinePromiseRejectionCodeDataContainer)                               \
+  /* Canonical scope infos */                                                  \
+  V(ScopeInfo, global_this_binding_scope_info, GlobalThisBindingScopeInfo)     \
+  V(ScopeInfo, empty_function_scope_info, EmptyFunctionScopeInfo)              \
   /* Hash seed */                                                              \
   V(ByteArray, hash_seed, HashSeed)
 
@@ -219,7 +221,6 @@ class Symbol;
   V(Cell, is_concat_spreadable_protector, IsConcatSpreadableProtector)       \
   V(PropertyCell, array_species_protector, ArraySpeciesProtector)            \
   V(PropertyCell, typed_array_species_protector, TypedArraySpeciesProtector) \
-  V(PropertyCell, regexp_species_protector, RegExpSpeciesProtector)          \
   V(PropertyCell, promise_species_protector, PromiseSpeciesProtector)        \
   V(Cell, string_length_protector, StringLengthProtector)                    \
   V(PropertyCell, array_iterator_protector, ArrayIteratorProtector)          \
@@ -267,12 +268,12 @@ class Symbol;
   V(HeapObject, weak_refs_keep_during_job, WeakRefsKeepDuringJob)          \
   V(HeapObject, interpreter_entry_trampoline_for_profiling,                \
     InterpreterEntryTrampolineForProfiling)                                \
-  V(Object, pending_optimize_for_test_bytecode, PendingOptimizeForTestBytecode)
+  V(Object, pending_optimize_for_test_bytecode,                            \
+    PendingOptimizeForTestBytecode)                                        \
+  V(WeakArrayList, shared_wasm_memories, SharedWasmMemories)
 
 // Entries in this list are limited to Smis and are not visited during GC.
 #define SMI_ROOT_LIST(V)                                                       \
-  V(Smi, stack_limit, StackLimit)                                              \
-  V(Smi, real_stack_limit, RealStackLimit)                                     \
   V(Smi, last_script_id, LastScriptId)                                         \
   V(Smi, last_debugging_id, LastDebuggingId)                                   \
   /* To distinguish the function templates, so that we can find them in the */ \

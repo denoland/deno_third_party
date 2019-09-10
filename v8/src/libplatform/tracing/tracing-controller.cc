@@ -14,9 +14,9 @@
 
 #ifdef V8_USE_PERFETTO
 #include "base/trace_event/common/trace_event_common.h"
-#include "perfetto/trace/chrome/chrome_trace_event.pbzero.h"
-#include "perfetto/trace/trace_packet.pbzero.h"
 #include "perfetto/tracing.h"
+#include "protos/perfetto/trace/chrome/chrome_trace_event.pbzero.h"
+#include "protos/perfetto/trace/trace_packet.pbzero.h"
 #include "src/base/platform/platform.h"
 #include "src/base/platform/semaphore.h"
 #include "src/libplatform/tracing/json-trace-event-listener.h"
@@ -26,13 +26,9 @@
 class V8DataSource : public perfetto::DataSource<V8DataSource> {
  public:
   void OnSetup(const SetupArgs&) override {}
-  void OnStart(const StartArgs&) override { started_.Signal(); }
+  void OnStart(const StartArgs&) override {}
   void OnStop(const StopArgs&) override {}
-
-  static v8::base::Semaphore started_;
 };
-
-v8::base::Semaphore V8DataSource::started_{0};
 
 PERFETTO_DEFINE_DATA_SOURCE_STATIC_MEMBERS(V8DataSource);
 #endif  // V8_USE_PERFETTO
@@ -92,6 +88,7 @@ void TracingController::InitializeForPerfetto(std::ostream* output_stream) {
   output_stream_ = output_stream;
   DCHECK_NOT_NULL(output_stream);
   DCHECK(output_stream->good());
+  mutex_.reset(new base::Mutex());
 }
 
 void TracingController::SetTraceEventListenerForTesting(
@@ -146,7 +143,9 @@ void AddArgsToTraceProto(
       case TRACE_VALUE_TYPE_POINTER:
         arg->set_pointer_value(arg_value.as_uint);
         break;
-      // TODO(petermarshall): Treat copy strings specially.
+      // There is no difference between copy strings and regular strings for
+      // Perfetto; the set_string_value(const char*) API will copy the string
+      // into the protobuf by default.
       case TRACE_VALUE_TYPE_COPY_STRING:
       case TRACE_VALUE_TYPE_STRING:
         arg->set_string_value(arg_value.as_string);
@@ -216,7 +215,8 @@ uint64_t TracingController::AddTraceEventWithTimestamp(
       AddArgsToTraceProto(trace_event, num_args, arg_names, arg_types,
                           arg_values, arg_convertables);
     });
-#endif  // V8_USE_PERFETTO
+    return 0;
+#else
 
   uint64_t handle = 0;
   if (recording_.load(std::memory_order_acquire)) {
@@ -232,6 +232,7 @@ uint64_t TracingController::AddTraceEventWithTimestamp(
     }
   }
   return handle;
+#endif  // V8_USE_PERFETTO
 }
 
 void TracingController::UpdateTraceEventDuration(
@@ -251,11 +252,12 @@ void TracingController::UpdateTraceEventDuration(
     trace_event->set_process_id(base::OS::GetCurrentProcessId());
     trace_event->set_thread_timestamp(cpu_now_us);
   });
-#endif  // V8_USE_PERFETTO
+#else
 
   TraceObject* trace_object = trace_buffer_->GetEventByHandle(handle);
   if (!trace_object) return;
   trace_object->UpdateDuration(now_us, cpu_now_us);
+#endif  // V8_USE_PERFETTO
 }
 
 const char* TracingController::GetCategoryGroupName(
@@ -288,14 +290,13 @@ void TracingController::StartTracing(TraceConfig* trace_config) {
 
   perfetto::DataSourceDescriptor dsd;
   dsd.set_name("v8.trace_events");
-  V8DataSource::Register(dsd);
+  bool registered = V8DataSource::Register(dsd);
+  CHECK(registered);
 
   tracing_session_ =
       perfetto::Tracing::NewTrace(perfetto::BackendType::kUnspecifiedBackend);
   tracing_session_->Setup(perfetto_trace_config);
-  // TODO(petermarshall): Switch to StartBlocking when available.
-  tracing_session_->Start();
-  V8DataSource::started_.Wait();
+  tracing_session_->StartBlocking();
 
 #endif  // V8_USE_PERFETTO
 
@@ -317,7 +318,6 @@ void TracingController::StopTracing() {
   if (!recording_.compare_exchange_strong(expected, false)) {
     return;
   }
-  DCHECK(trace_buffer_);
   UpdateCategoryGroupEnabledFlags();
   std::unordered_set<v8::TracingController::TraceStateObserver*> observers_copy;
   {
@@ -329,23 +329,31 @@ void TracingController::StopTracing() {
   }
 
 #ifdef V8_USE_PERFETTO
-  base::Semaphore stopped_{0};
-  tracing_session_->SetOnStopCallback([&stopped_]() { stopped_.Signal(); });
-  tracing_session_->Stop();
-  stopped_.Wait();
+  // Emit a fake trace event from the main thread. The final trace event is
+  // sometimes skipped because perfetto can't guarantee that the caller is
+  // totally finished writing to it without synchronization. To avoid the
+  // situation where we lose the last trace event, add a fake one here that will
+  // be sacrificed.
+  // TODO(petermarshall): Use the Client API to flush here rather than this
+  // workaround when that becomes available.
+  V8DataSource::Trace([&](V8DataSource::TraceContext ctx) {
+    auto packet = ctx.NewTracePacket();
+  });
+  tracing_session_->StopBlocking();
 
   std::vector<char> trace = tracing_session_->ReadTraceBlocking();
   json_listener_->ParseFromArray(trace);
   if (listener_for_testing_) listener_for_testing_->ParseFromArray(trace);
 
   json_listener_.reset();
-
-#endif  // V8_USE_PERFETTO
+#else
 
   {
     base::MutexGuard lock(mutex_.get());
+    DCHECK(trace_buffer_);
     trace_buffer_->Flush();
   }
+#endif  // V8_USE_PERFETTO
 }
 
 void TracingController::UpdateCategoryGroupEnabledFlag(size_t category_index) {

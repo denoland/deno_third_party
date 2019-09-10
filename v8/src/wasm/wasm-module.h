@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "src/base/optional.h"
 #include "src/common/globals.h"
 #include "src/handles/handles.h"
 #include "src/utils/vector.h"
@@ -164,7 +165,11 @@ struct WasmCompilationHint {
   WasmCompilationHintTier top_tier;
 };
 
-enum ModuleOrigin : uint8_t { kWasmOrigin, kAsmJsOrigin };
+enum ModuleOrigin : uint8_t {
+  kWasmOrigin,
+  kAsmJsSloppyOrigin,
+  kAsmJsStrictOrigin
+};
 
 #define SELECT_WASM_COUNTER(counters, origin, prefix, suffix)     \
   ((origin) == kWasmOrigin ? (counters)->prefix##_wasm_##suffix() \
@@ -220,6 +225,10 @@ struct V8_EXPORT_PRIVATE WasmModule {
                                   uint32_t function_index) const;
   void AddFunctionNameForTesting(int function_index, WireBytesRef name);
 };
+
+inline bool is_asmjs_module(const WasmModule* module) {
+  return module->origin != kWasmOrigin;
+}
 
 size_t EstimateStoredSize(const WasmModule* module);
 
@@ -293,13 +302,19 @@ V8_EXPORT_PRIVATE MaybeHandle<WasmModuleObject> CreateModuleObjectFromBytes(
 V8_EXPORT_PRIVATE bool IsWasmCodegenAllowed(Isolate* isolate,
                                             Handle<Context> context);
 
-V8_EXPORT_PRIVATE Handle<JSArray> GetImports(Isolate* isolate,
-                                             Handle<WasmModuleObject> module);
-V8_EXPORT_PRIVATE Handle<JSArray> GetExports(Isolate* isolate,
-                                             Handle<WasmModuleObject> module);
-V8_EXPORT_PRIVATE Handle<JSArray> GetCustomSections(
-    Isolate* isolate, Handle<WasmModuleObject> module, Handle<String> name,
-    ErrorThrower* thrower);
+Handle<JSObject> GetTypeForFunction(Isolate* isolate, FunctionSig* sig);
+Handle<JSObject> GetTypeForGlobal(Isolate* isolate, bool is_mutable,
+                                  ValueType type);
+Handle<JSObject> GetTypeForMemory(Isolate* isolate, uint32_t min_size,
+                                  base::Optional<uint32_t> max_size);
+Handle<JSObject> GetTypeForTable(Isolate* isolate, ValueType type,
+                                 uint32_t min_size,
+                                 base::Optional<uint32_t> max_size);
+Handle<JSArray> GetImports(Isolate* isolate, Handle<WasmModuleObject> module);
+Handle<JSArray> GetExports(Isolate* isolate, Handle<WasmModuleObject> module);
+Handle<JSArray> GetCustomSections(Isolate* isolate,
+                                  Handle<WasmModuleObject> module,
+                                  Handle<String> name, ErrorThrower* thrower);
 
 // Decode local variable names from the names section. Return FixedArray of
 // FixedArray of <undefined|String>. The outer fixed array is indexed by the

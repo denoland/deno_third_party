@@ -21,22 +21,21 @@ namespace internal {
 
 namespace {
 
-class ScopeCallsSloppyEvalField : public BitField8<bool, 0, 1> {};
-class InnerScopeCallsEvalField
-    : public BitField8<bool, ScopeCallsSloppyEvalField::kNext, 1> {};
+using ScopeSloppyEvalCanExtendVarsField = BitField8<bool, 0, 1>;
+using InnerScopeCallsEvalField =
+    ScopeSloppyEvalCanExtendVarsField::Next<bool, 1>;
+using NeedsPrivateNameContextChainRecalcField =
+    InnerScopeCallsEvalField::Next<bool, 1>;
 
-class VariableMaybeAssignedField : public BitField8<bool, 0, 1> {};
-class VariableContextAllocatedField
-    : public BitField8<bool, VariableMaybeAssignedField::kNext, 1> {};
+using VariableMaybeAssignedField = BitField8<bool, 0, 1>;
+using VariableContextAllocatedField = VariableMaybeAssignedField::Next<bool, 1>;
 
-class HasDataField : public BitField<bool, 0, 1> {};
-class LengthEqualsParametersField
-    : public BitField<bool, HasDataField::kNext, 1> {};
-class NumberOfParametersField
-    : public BitField<uint16_t, LengthEqualsParametersField::kNext, 16> {};
+using HasDataField = BitField<bool, 0, 1>;
+using LengthEqualsParametersField = HasDataField::Next<bool, 1>;
+using NumberOfParametersField = LengthEqualsParametersField::Next<uint16_t, 16>;
 
-class LanguageField : public BitField8<LanguageMode, 0, 1> {};
-class UsesSuperField : public BitField8<bool, LanguageField::kNext, 1> {};
+using LanguageField = BitField8<LanguageMode, 0, 1>;
+using UsesSuperField = LanguageField::Next<bool, 1>;
 STATIC_ASSERT(LanguageModeSize <= LanguageField::kNumValues);
 
 }  // namespace
@@ -266,7 +265,7 @@ bool PreparseDataBuilder::ScopeNeedsData(Scope* scope) {
   }
   if (!scope->is_hidden()) {
     for (Variable* var : *scope->locals()) {
-      if (IsDeclaredVariableMode(var->mode())) return true;
+      if (IsSerializableVariableMode(var->mode())) return true;
     }
   }
   for (Scope* inner = scope->inner_scope(); inner != nullptr;
@@ -325,7 +324,7 @@ void PreparseDataBuilder::SaveScopeAllocationData(DeclarationScope* scope,
     if (SaveDataForSkippableFunction(builder)) num_inner_with_data_++;
   }
 
-  // Don't save imcoplete scope information when bailed out.
+  // Don't save incomplete scope information when bailed out.
   if (!bailed_out_) {
 #ifdef DEBUG
   // function data items, kSkippableMinFunctionDataSize each.
@@ -355,13 +354,17 @@ void PreparseDataBuilder::SaveDataForScope(Scope* scope) {
   byte_data_.WriteUint8(scope->scope_type());
 #endif
 
-  uint8_t eval =
-      ScopeCallsSloppyEvalField::encode(
+  uint8_t eval_and_private_recalc =
+      ScopeSloppyEvalCanExtendVarsField::encode(
           scope->is_declaration_scope() &&
-          scope->AsDeclarationScope()->calls_sloppy_eval()) |
-      InnerScopeCallsEvalField::encode(scope->inner_scope_calls_eval());
+          scope->AsDeclarationScope()->sloppy_eval_can_extend_vars()) |
+      InnerScopeCallsEvalField::encode(scope->inner_scope_calls_eval()) |
+      NeedsPrivateNameContextChainRecalcField::encode(
+          scope->is_function_scope() &&
+          scope->AsDeclarationScope()
+              ->needs_private_name_context_chain_recalc());
   byte_data_.Reserve(kUint8Size);
-  byte_data_.WriteUint8(eval);
+  byte_data_.WriteUint8(eval_and_private_recalc);
 
   if (scope->is_function_scope()) {
     Variable* function = scope->AsDeclarationScope()->function_var();
@@ -369,7 +372,7 @@ void PreparseDataBuilder::SaveDataForScope(Scope* scope) {
   }
 
   for (Variable* var : *scope->locals()) {
-    if (IsDeclaredVariableMode(var->mode())) SaveDataForVariable(var);
+    if (IsSerializableVariableMode(var->mode())) SaveDataForVariable(var);
   }
 
   SaveDataForInnerScopes(scope);
@@ -602,9 +605,17 @@ void BaseConsumedPreparseData<Data>::RestoreDataForScope(Scope* scope) {
   DCHECK_EQ(scope_data_->ReadUint8(), scope->scope_type());
 
   CHECK(scope_data_->HasRemainingBytes(ByteData::kUint8Size));
-  uint32_t eval = scope_data_->ReadUint8();
-  if (ScopeCallsSloppyEvalField::decode(eval)) scope->RecordEvalCall();
-  if (InnerScopeCallsEvalField::decode(eval)) scope->RecordInnerScopeEvalCall();
+  uint32_t eval_and_private_recalc = scope_data_->ReadUint8();
+  if (ScopeSloppyEvalCanExtendVarsField::decode(eval_and_private_recalc)) {
+    scope->RecordEvalCall();
+  }
+  if (InnerScopeCallsEvalField::decode(eval_and_private_recalc)) {
+    scope->RecordInnerScopeEvalCall();
+  }
+  if (NeedsPrivateNameContextChainRecalcField::decode(
+          eval_and_private_recalc)) {
+    scope->AsDeclarationScope()->RecordNeedsPrivateNameContextChainRecalc();
+  }
 
   if (scope->is_function_scope()) {
     Variable* function = scope->AsDeclarationScope()->function_var();
@@ -612,7 +623,7 @@ void BaseConsumedPreparseData<Data>::RestoreDataForScope(Scope* scope) {
   }
 
   for (Variable* var : *scope->locals()) {
-    if (IsDeclaredVariableMode(var->mode())) RestoreDataForVariable(var);
+    if (IsSerializableVariableMode(var->mode())) RestoreDataForVariable(var);
   }
 
   RestoreDataForInnerScopes(scope);

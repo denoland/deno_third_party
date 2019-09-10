@@ -81,9 +81,6 @@
   'test-cpu-profiler/SampleWhenFrameIsNotSetup': [SKIP],
   'test-sampler/LibSamplerCollectSample': [SKIP],
 
-  # BUG(v8:9057). Flaky, maybe only on UBSan
-  'test-cpu-profiler/DeoptAtFirstLevelInlinedSource': [SKIP],
-
   # BUG(7202). The test is flaky.
   'test-cpu-profiler/NativeFrameStackTrace': [SKIP],
 
@@ -154,6 +151,8 @@
   # Pass but take too long with the simulator.
   'test-api/ExternalArrays': [PASS, SLOW],
   'test-api/Threading*': [SKIP],
+  'test-cpu-profiler/MultipleIsolates': [PASS, SLOW],
+  'test-debug/DebugBreakStackTrace': [PASS, SLOW],
 }],  # 'arch == arm64 and simulator_run'
 
 ##############################################################################
@@ -262,6 +261,7 @@
 ['arch == arm and simulator_run', {
   # Pass but take too long with the simulator.
   'test-api/Threading*': [SKIP],
+  'test-cpu-profiler/MultipleIsolates': [PASS, SLOW],
 }],  # 'arch == arm and simulator_run'
 
 ##############################################################################
@@ -474,8 +474,10 @@
   'test-api/WasmI32AtomicWaitCallback': [SKIP],
   'test-api/WasmI64AtomicWaitCallback': [SKIP],
   'test-api/WasmStreaming*': [SKIP],
+  'test-backing-store/Run_WasmModule_Buffer_Externalized_Regression_UseAfterFree': [SKIP],
   'test-c-wasm-entry/*': [SKIP],
   'test-jump-table-assembler/*': [SKIP],
+  'test-grow-memory/*': [SKIP],
   'test-run-wasm-64/*': [SKIP],
   'test-run-wasm-asmjs/*': [SKIP],
   'test-run-wasm-atomics64/*': [SKIP],
@@ -521,6 +523,7 @@
   'test-regexp/MacroAssemblerNativeSimpleUC16': [SKIP],
   'test-regexp/MacroAssemblerNativeSuccess': [SKIP],
   'test-regexp/MacroAssemblerStackOverflow': [SKIP],
+  'test-regexp/Graph': [SKIP],
   'test-run-bytecode-graph-builder/*': [SKIP],
   'test-run-calls-to-external-references/*': [SKIP],
   'test-run-deopt/*': [SKIP],

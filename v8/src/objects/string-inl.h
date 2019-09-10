@@ -22,8 +22,6 @@
 namespace v8 {
 namespace internal {
 
-INT32_ACCESSORS(String, length, kLengthOffset)
-
 int String::synchronized_length() const {
   return base::AsAtomic32::Acquire_Load(
       reinterpret_cast<const int32_t*>(FIELD_ADDR(*this, kLengthOffset)));
@@ -34,29 +32,21 @@ void String::synchronized_set_length(int value) {
       reinterpret_cast<int32_t*>(FIELD_ADDR(*this, kLengthOffset)), value);
 }
 
-OBJECT_CONSTRUCTORS_IMPL(String, Name)
-OBJECT_CONSTRUCTORS_IMPL(SeqString, String)
-OBJECT_CONSTRUCTORS_IMPL(SeqOneByteString, SeqString)
-OBJECT_CONSTRUCTORS_IMPL(SeqTwoByteString, SeqString)
-OBJECT_CONSTRUCTORS_IMPL(InternalizedString, String)
-OBJECT_CONSTRUCTORS_IMPL(ConsString, String)
-OBJECT_CONSTRUCTORS_IMPL(ThinString, String)
-OBJECT_CONSTRUCTORS_IMPL(SlicedString, String)
+TQ_OBJECT_CONSTRUCTORS_IMPL(String)
+TQ_OBJECT_CONSTRUCTORS_IMPL(SeqString)
+TQ_OBJECT_CONSTRUCTORS_IMPL(SeqOneByteString)
+TQ_OBJECT_CONSTRUCTORS_IMPL(SeqTwoByteString)
+TQ_OBJECT_CONSTRUCTORS_IMPL(InternalizedString)
+TQ_OBJECT_CONSTRUCTORS_IMPL(ConsString)
+TQ_OBJECT_CONSTRUCTORS_IMPL(ThinString)
+TQ_OBJECT_CONSTRUCTORS_IMPL(SlicedString)
 OBJECT_CONSTRUCTORS_IMPL(ExternalString, String)
 OBJECT_CONSTRUCTORS_IMPL(ExternalOneByteString, ExternalString)
 OBJECT_CONSTRUCTORS_IMPL(ExternalTwoByteString, ExternalString)
 
-CAST_ACCESSOR(ConsString)
 CAST_ACCESSOR(ExternalOneByteString)
 CAST_ACCESSOR(ExternalString)
 CAST_ACCESSOR(ExternalTwoByteString)
-CAST_ACCESSOR(InternalizedString)
-CAST_ACCESSOR(SeqOneByteString)
-CAST_ACCESSOR(SeqString)
-CAST_ACCESSOR(SeqTwoByteString)
-CAST_ACCESSOR(SlicedString)
-CAST_ACCESSOR(String)
-CAST_ACCESSOR(ThinString)
 
 StringShape::StringShape(const String str) : type_(str.map().instance_type()) {
   set_valid();
@@ -146,6 +136,65 @@ STATIC_ASSERT((kExternalStringTag | kTwoByteStringTag) ==
               Internals::kExternalTwoByteRepresentationTag);
 
 STATIC_ASSERT(v8::String::TWO_BYTE_ENCODING == kTwoByteStringTag);
+
+template <typename TDispatcher, typename TResult, typename... TArgs>
+inline TResult StringShape::DispatchToSpecificTypeWithoutCast(TArgs&&... args) {
+  switch (full_representation_tag()) {
+    case kSeqStringTag | kOneByteStringTag:
+      return TDispatcher::HandleSeqOneByteString(std::forward<TArgs>(args)...);
+    case kSeqStringTag | kTwoByteStringTag:
+      return TDispatcher::HandleSeqTwoByteString(std::forward<TArgs>(args)...);
+    case kConsStringTag | kOneByteStringTag:
+    case kConsStringTag | kTwoByteStringTag:
+      return TDispatcher::HandleConsString(std::forward<TArgs>(args)...);
+    case kExternalStringTag | kOneByteStringTag:
+      return TDispatcher::HandleExternalOneByteString(
+          std::forward<TArgs>(args)...);
+    case kExternalStringTag | kTwoByteStringTag:
+      return TDispatcher::HandleExternalTwoByteString(
+          std::forward<TArgs>(args)...);
+    case kSlicedStringTag | kOneByteStringTag:
+    case kSlicedStringTag | kTwoByteStringTag:
+      return TDispatcher::HandleSlicedString(std::forward<TArgs>(args)...);
+    case kThinStringTag | kOneByteStringTag:
+    case kThinStringTag | kTwoByteStringTag:
+      return TDispatcher::HandleThinString(std::forward<TArgs>(args)...);
+    default:
+      return TDispatcher::HandleInvalidString(std::forward<TArgs>(args)...);
+  }
+}
+
+// All concrete subclasses of String (leaves of the inheritance tree).
+#define STRING_CLASS_TYPES(V) \
+  V(SeqOneByteString)         \
+  V(SeqTwoByteString)         \
+  V(ConsString)               \
+  V(ExternalOneByteString)    \
+  V(ExternalTwoByteString)    \
+  V(SlicedString)             \
+  V(ThinString)
+
+template <typename TDispatcher, typename TResult, typename... TArgs>
+inline TResult StringShape::DispatchToSpecificType(String str,
+                                                   TArgs&&... args) {
+  class CastingDispatcher : public AllStatic {
+   public:
+#define DEFINE_METHOD(Type)                                         \
+  static inline TResult Handle##Type(String str, TArgs&&... args) { \
+    return TDispatcher::Handle##Type(Type::cast(str),               \
+                                     std::forward<TArgs>(args)...); \
+  }
+    STRING_CLASS_TYPES(DEFINE_METHOD)
+#undef DEFINE_METHOD
+    static inline TResult HandleInvalidString(String str, TArgs&&... args) {
+      return TDispatcher::HandleInvalidString(str,
+                                              std::forward<TArgs>(args)...);
+    }
+  };
+
+  return DispatchToSpecificTypeWithoutCast<CastingDispatcher, TResult>(
+      str, std::forward<TArgs>(args)...);
+}
 
 DEF_GETTER(String, IsOneByteRepresentation, bool) {
   uint32_t type = map(isolate).instance_type();
@@ -350,29 +399,22 @@ Handle<String> String::Flatten(Isolate* isolate, Handle<String> string,
 
 uint16_t String::Get(int index) {
   DCHECK(index >= 0 && index < length());
-  switch (StringShape(*this).full_representation_tag()) {
-    case kSeqStringTag | kOneByteStringTag:
-      return SeqOneByteString::cast(*this).Get(index);
-    case kSeqStringTag | kTwoByteStringTag:
-      return SeqTwoByteString::cast(*this).Get(index);
-    case kConsStringTag | kOneByteStringTag:
-    case kConsStringTag | kTwoByteStringTag:
-      return ConsString::cast(*this).Get(index);
-    case kExternalStringTag | kOneByteStringTag:
-      return ExternalOneByteString::cast(*this).Get(index);
-    case kExternalStringTag | kTwoByteStringTag:
-      return ExternalTwoByteString::cast(*this).Get(index);
-    case kSlicedStringTag | kOneByteStringTag:
-    case kSlicedStringTag | kTwoByteStringTag:
-      return SlicedString::cast(*this).Get(index);
-    case kThinStringTag | kOneByteStringTag:
-    case kThinStringTag | kTwoByteStringTag:
-      return ThinString::cast(*this).Get(index);
-    default:
-      break;
-  }
 
-  UNREACHABLE();
+  class StringGetDispatcher : public AllStatic {
+   public:
+#define DEFINE_METHOD(Type)                                  \
+  static inline uint16_t Handle##Type(Type str, int index) { \
+    return str.Get(index);                                   \
+  }
+    STRING_CLASS_TYPES(DEFINE_METHOD)
+#undef DEFINE_METHOD
+    static inline uint16_t HandleInvalidString(String str, int index) {
+      UNREACHABLE();
+    }
+  };
+
+  return StringShape(*this)
+      .DispatchToSpecificType<StringGetDispatcher, uint16_t>(*this, index);
 }
 
 void String::Set(int index, uint16_t value) {
@@ -528,32 +570,20 @@ int SeqOneByteString::SeqOneByteStringSize(InstanceType instance_type) {
   return SizeFor(length());
 }
 
-String SlicedString::parent() {
-  return TaggedField<String, kParentOffset>::load(*this);
-}
-
-void SlicedString::set_parent(Isolate* isolate, String parent,
-                              WriteBarrierMode mode) {
+void SlicedString::set_parent(String parent, WriteBarrierMode mode) {
   DCHECK(parent.IsSeqString() || parent.IsExternalString());
-  WRITE_FIELD(*this, kParentOffset, parent);
-  CONDITIONAL_WRITE_BARRIER(*this, kParentOffset, parent, mode);
+  TorqueGeneratedSlicedString<SlicedString, Super>::set_parent(parent, mode);
 }
 
-SMI_ACCESSORS(SlicedString, offset, kOffsetOffset)
-
-ACCESSORS(ConsString, first, String, kFirstOffset)
+TQ_SMI_ACCESSORS(SlicedString, offset)
 
 Object ConsString::unchecked_first() {
   return TaggedField<Object, kFirstOffset>::load(*this);
 }
 
-ACCESSORS(ConsString, second, String, kSecondOffset)
-
 Object ConsString::unchecked_second() {
   return RELAXED_READ_FIELD(*this, kSecondOffset);
 }
-
-ACCESSORS(ThinString, actual, String, kActualOffset)
 
 DEF_GETTER(ThinString, unchecked_actual, HeapObject) {
   return TaggedField<HeapObject, kActualOffset>::load(isolate, *this);

@@ -133,6 +133,13 @@ bool Object::IsNullOrUndefined() const {
 
 bool Object::IsZero() const { return *this == Smi::zero(); }
 
+bool Object::IsPublicSymbol() const {
+  return IsSymbol() && !Symbol::cast(*this).is_private();
+}
+bool Object::IsPrivateSymbol() const {
+  return IsSymbol() && Symbol::cast(*this).is_private();
+}
+
 bool Object::IsNoSharedNameSentinel() const {
   return *this == SharedFunctionInfo::kNoSharedNameSentinel;
 }
@@ -531,25 +538,28 @@ bool Object::FilterKey(PropertyFilter filter) {
   return false;
 }
 
-Representation Object::OptimalRepresentation() {
+Representation Object::OptimalRepresentation(Isolate* isolate) const {
   if (!FLAG_track_fields) return Representation::Tagged();
   if (IsSmi()) {
     return Representation::Smi();
-  } else if (FLAG_track_double_fields && IsHeapNumber()) {
+  }
+  HeapObject heap_object = HeapObject::cast(*this);
+  if (FLAG_track_double_fields && heap_object.IsHeapNumber(isolate)) {
     return Representation::Double();
-  } else if (FLAG_track_computed_fields && IsUninitialized()) {
+  } else if (FLAG_track_computed_fields &&
+             heap_object.IsUninitialized(
+                 heap_object.GetReadOnlyRoots(isolate))) {
     return Representation::None();
   } else if (FLAG_track_heap_object_fields) {
-    DCHECK(IsHeapObject());
     return Representation::HeapObject();
   } else {
     return Representation::Tagged();
   }
 }
 
-ElementsKind Object::OptimalElementsKind() {
+ElementsKind Object::OptimalElementsKind(Isolate* isolate) const {
   if (IsSmi()) return PACKED_SMI_ELEMENTS;
-  if (IsNumber()) return PACKED_DOUBLE_ELEMENTS;
+  if (IsNumber(isolate)) return PACKED_DOUBLE_ELEMENTS;
   return PACKED_ELEMENTS;
 }
 
@@ -557,7 +567,7 @@ bool Object::FitsRepresentation(Representation representation) {
   if (FLAG_track_fields && representation.IsSmi()) {
     return IsSmi();
   } else if (FLAG_track_double_fields && representation.IsDouble()) {
-    return IsMutableHeapNumber() || IsNumber();
+    return IsNumber();
   } else if (FLAG_track_heap_object_fields && representation.IsHeapObject()) {
     return IsHeapObject();
   } else if (FLAG_track_fields && representation.IsNone()) {

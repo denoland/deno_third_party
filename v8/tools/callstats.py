@@ -355,37 +355,6 @@ def statistics(data):
   return { 'samples': N, 'average': average, 'median': median,
            'stddev': stddev, 'min': low, 'max': high, 'ci': ci }
 
-def experimental_statistics(data):
-  # TODO(tmrts): copied from statistics for experimenting, will be removed
-  # afterwards
-  N = len(data)
-  average = numpy.average(data)
-  median = numpy.median(data)
-  low = numpy.min(data)
-  high= numpy.max(data)
-  if N > 1:
-    # evaluate sample variance by setting delta degrees of freedom (ddof) to
-    # 1. The degree used in calculations is N - ddof
-    stddev = numpy.std(data, ddof=1)
-    # Get the endpoints of the range that contains 95% of the distribution
-    t_bounds = scipy.stats.t.interval(0.95, N-1)
-    #assert abs(t_bounds[0] + t_bounds[1]) < 1e-6
-    # sum mean to the confidence interval
-    ci = {
-        'abs': t_bounds[1] * stddev / sqrt(N),
-        'low': average + t_bounds[0] * stddev / sqrt(N),
-        'high': average + t_bounds[1] * stddev / sqrt(N)
-    }
-  else:
-    stddev = 0
-    ci = { 'abs': 0, 'low': average, 'high': average }
-  if abs(stddev) > 0.0001 and abs(average) > 0.0001:
-    ci['perc'] = t_bounds[1] * stddev / sqrt(N) / average * 100
-  else:
-    ci['perc'] = 0
-  return { 'samples': N, 'average': average, 'median': median,
-           'stddev': stddev, 'min': low, 'max': high, 'ci': ci }
-
 
 def add_category_total(entries, groups, category_prefix):
   group_data = { 'time': 0, 'count': 0 }
@@ -576,10 +545,9 @@ def create_total_page_stats(domains, args):
   # Add a new "Total" page containing the summed up metrics.
   domains['Total'] = total
 
+# Generate Raw JSON file.
 
-# Generate JSON file.
-
-def do_json(args):
+def _read_logs(args):
   versions = {}
   for path in args.logdirs:
     if os.path.isdir(path):
@@ -593,6 +561,36 @@ def do_json(args):
             if domain not in versions[version]: versions[version][domain] = {}
             read_stats(os.path.join(root, filename),
                        versions[version][domain], args)
+
+  return versions
+
+def do_raw_json(args):
+  versions = _read_logs(args)
+
+  for version, domains in versions.items():
+    if args.aggregate:
+      create_total_page_stats(domains, args)
+    for domain, entries in domains.items():
+      raw_entries = []
+      for name, value in entries.items():
+        # We don't want the calculated sum in the JSON file.
+        if name == "Sum": continue
+        raw_entries.append({
+          'name': name,
+          'duration': value['time_list'],
+          'count': value['count_list'],
+        })
+
+      domains[domain] = raw_entries
+
+  print(json.dumps(versions, separators=(',', ':')))
+
+
+# Generate JSON file.
+
+def do_json(args):
+  versions = _read_logs(args)
+
   for version, domains in versions.items():
     if args.aggregate:
       create_total_page_stats(domains, args)
@@ -692,9 +690,6 @@ def main():
     subparser.add_argument(
         "--sites", type=str, metavar="<URL>", nargs="*",
         help="specify benchmark website")
-    subparser.add_argument(
-        "--experimental", action="store_true", default=False,
-        help="enable the experimental mode")
   add_replay_args(subparsers["run"])
 
   # Command: replay-server
@@ -740,6 +735,20 @@ def main():
       help="Create aggregated entries. Adds Group-* entries at the toplevel. " \
       "Additionally creates a Total page with all entries.")
 
+  # Command: raw-json.
+  subparsers["raw-json"] = subparser_adder.add_parser(
+      "raw-json", help="Collect raw results from 'run' command into" \
+          "a single json file.")
+  subparsers["raw-json"].set_defaults(
+      func=do_raw_json, error=subparsers["json"].error)
+  subparsers["raw-json"].add_argument(
+      "logdirs", type=str, metavar="<logdir>", nargs="*",
+      help="specify directories with log files to parse")
+  subparsers["raw-json"].add_argument(
+      "--aggregate", dest="aggregate", action="store_true", default=False,
+      help="Create aggregated entries. Adds Group-* entries at the toplevel. " \
+      "Additionally creates a Total page with all entries.")
+
   # Command: help.
   subparsers["help"] = subparser_adder.add_parser(
       "help", help="help information")
@@ -753,8 +762,6 @@ def main():
   # Execute the command.
   args = parser.parse_args()
   setattr(args, 'script_path', os.path.dirname(sys.argv[0]))
-  if args.experimental:
-    statistics = experimental_statistics
   if args.command == "run" and coexist(args.sites_file, args.sites):
     args.error("use either option --sites-file or site URLs")
     sys.exit(1)

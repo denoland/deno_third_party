@@ -110,8 +110,10 @@ void String::MakeThin(Isolate* isolate, String internalized) {
     }
   }
 
+  bool has_pointers = StringShape(*this).IsIndirect();
+
   int old_size = this->Size();
-  isolate->heap()->NotifyObjectLayoutChange(*this, old_size, no_gc);
+  isolate->heap()->NotifyObjectLayoutChange(*this, no_gc);
   bool one_byte = internalized.IsOneByteRepresentation();
   Handle<Map> map = one_byte ? isolate->factory()->thin_one_byte_string_map()
                              : isolate->factory()->thin_string_map();
@@ -123,7 +125,9 @@ void String::MakeThin(Isolate* isolate, String internalized) {
   int size_delta = old_size - ThinString::kSize;
   if (size_delta != 0) {
     Heap* heap = isolate->heap();
-    heap->CreateFillerObjectAt(thin_end, size_delta, ClearRecordedSlots::kNo);
+    heap->CreateFillerObjectAt(
+        thin_end, size_delta,
+        has_pointers ? ClearRecordedSlots::kYes : ClearRecordedSlots::kNo);
   }
 }
 
@@ -154,7 +158,7 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
   bool has_pointers = StringShape(*this).IsIndirect();
 
   if (has_pointers) {
-    isolate->heap()->NotifyObjectLayoutChange(*this, size, no_allocation);
+    isolate->heap()->NotifyObjectLayoutChange(*this, no_allocation);
   }
   // Morph the string to an external string by replacing the map and
   // reinitializing the fields.  This won't work if the space the existing
@@ -178,7 +182,8 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
   // Byte size of the external String object.
   int new_size = this->SizeFromMap(new_map);
   isolate->heap()->CreateFillerObjectAt(
-      this->address() + new_size, size - new_size, ClearRecordedSlots::kNo);
+      this->address() + new_size, size - new_size,
+      has_pointers ? ClearRecordedSlots::kYes : ClearRecordedSlots::kNo);
   if (has_pointers) {
     isolate->heap()->ClearRecordedSlotRange(this->address(),
                                             this->address() + new_size);
@@ -227,7 +232,7 @@ bool String::MakeExternal(v8::String::ExternalOneByteStringResource* resource) {
   bool has_pointers = StringShape(*this).IsIndirect();
 
   if (has_pointers) {
-    isolate->heap()->NotifyObjectLayoutChange(*this, size, no_allocation);
+    isolate->heap()->NotifyObjectLayoutChange(*this, no_allocation);
   }
   // Morph the string to an external string by replacing the map and
   // reinitializing the fields.  This won't work if the space the existing
@@ -250,7 +255,8 @@ bool String::MakeExternal(v8::String::ExternalOneByteStringResource* resource) {
   // Byte size of the external String object.
   int new_size = this->SizeFromMap(new_map);
   isolate->heap()->CreateFillerObjectAt(
-      this->address() + new_size, size - new_size, ClearRecordedSlots::kNo);
+      this->address() + new_size, size - new_size,
+      has_pointers ? ClearRecordedSlots::kYes : ClearRecordedSlots::kNo);
   if (has_pointers) {
     isolate->heap()->ClearRecordedSlotRange(this->address(),
                                             this->address() + new_size);

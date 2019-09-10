@@ -4,7 +4,9 @@
 
 #include <cctype>
 
+#include "src/codegen/tick-counter.h"
 #include "src/compiler/compilation-dependencies.h"
+#include "src/compiler/feedback-source.h"
 #include "src/compiler/js-call-reducer.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/simplified-operator.h"
@@ -22,7 +24,6 @@ class JSCallReducerTest : public TypedGraphTest {
  public:
   JSCallReducerTest()
       : TypedGraphTest(3), javascript_(zone()), deps_(broker(), zone()) {
-    broker()->SerializeStandardObjects();
   }
   ~JSCallReducerTest() override = default;
 
@@ -33,7 +34,7 @@ class JSCallReducerTest : public TypedGraphTest {
     JSGraph jsgraph(isolate(), graph(), common(), javascript(), &simplified,
                     &machine);
     // TODO(titzer): mock the GraphReducer here for better unit testing.
-    GraphReducer graph_reducer(zone(), graph());
+    GraphReducer graph_reducer(zone(), graph(), tick_counter());
 
     JSCallReducer reducer(&graph_reducer, &jsgraph, broker(),
                           JSCallReducer::kNoFlags, &deps_);
@@ -112,7 +113,7 @@ class JSCallReducerTest : public TypedGraphTest {
         ClosureFeedbackCellArray::New(isolate(), shared);
     Handle<FeedbackVector> vector =
         FeedbackVector::New(isolate(), shared, closure_feedback_cell_array);
-    VectorSlotPair feedback(vector, FeedbackSlot(0), UNINITIALIZED);
+    FeedbackSource feedback(vector, FeedbackSlot(0));
     return javascript()->Call(arity, CallFrequency(), feedback,
                               ConvertReceiverMode::kAny,
                               SpeculationMode::kAllowSpeculation);

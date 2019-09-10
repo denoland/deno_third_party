@@ -11,7 +11,6 @@
 #include "src/common/globals.h"
 #include "src/debug/debug-interface.h"
 #include "src/debug/interface-types.h"
-#include "src/execution/frames.h"
 #include "src/execution/interrupts-scope.h"
 #include "src/execution/isolate.h"
 #include "src/handles/handles.h"
@@ -23,7 +22,10 @@ namespace internal {
 // Forward declarations.
 class AbstractCode;
 class DebugScope;
+class InterpretedFrame;
+class JavaScriptFrame;
 class JSGeneratorObject;
+class StackFrame;
 
 // Step actions. NOTE: These values are in macros.py as well.
 enum StepAction : int8_t {
@@ -342,7 +344,7 @@ class V8_EXPORT_PRIVATE Debug {
   void set_break_points_active(bool v) { break_points_active_ = v; }
   bool break_points_active() const { return break_points_active_; }
 
-  StackFrame::Id break_frame_id() { return thread_local_.break_frame_id_; }
+  StackFrameId break_frame_id() { return thread_local_.break_frame_id_; }
 
   Handle<Object> return_value_handle();
   Object return_value() { return thread_local_.return_value_; }
@@ -373,6 +375,8 @@ class V8_EXPORT_PRIVATE Debug {
     return thread_local_.break_on_next_function_call_;
   }
 
+  inline bool break_disabled() const { return break_disabled_; }
+
   DebugFeatureTracker* feature_tracker() { return &feature_tracker_; }
 
   // For functions in which we cannot set a break point, use a canonical
@@ -397,7 +401,6 @@ class V8_EXPORT_PRIVATE Debug {
     return is_suppressed_ || !is_active_ ||
            isolate_->debug_execution_mode() == DebugInfo::kSideEffects;
   }
-  inline bool break_disabled() const { return break_disabled_; }
 
   void clear_suspended_generator() {
     thread_local_.suspended_generator_ = Smi::kZero;
@@ -498,7 +501,7 @@ class V8_EXPORT_PRIVATE Debug {
     base::AtomicWord current_debug_scope_;
 
     // Frame id for the frame of the current break.
-    StackFrame::Id break_frame_id_;
+    StackFrameId break_frame_id_;
 
     // Step action for last step performed.
     StepAction last_step_action_;
@@ -565,7 +568,7 @@ class DebugScope {
 
   Debug* debug_;
   DebugScope* prev_;               // Previous scope if entered recursively.
-  StackFrame::Id break_frame_id_;  // Previous break frame id.
+  StackFrameId break_frame_id_;    // Previous break frame id.
   PostponeInterruptsScope no_interrupts_;
 };
 

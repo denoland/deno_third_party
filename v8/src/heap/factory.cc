@@ -285,11 +285,12 @@ HeapObject Factory::New(Handle<Map> map, AllocationType allocation) {
 }
 
 Handle<HeapObject> Factory::NewFillerObject(int size, bool double_align,
-                                            AllocationType allocation) {
+                                            AllocationType allocation,
+                                            AllocationOrigin origin) {
   AllocationAlignment alignment = double_align ? kDoubleAligned : kWordAligned;
   Heap* heap = isolate()->heap();
   HeapObject result =
-      heap->AllocateRawWithRetryOrFail(size, allocation, alignment);
+      heap->AllocateRawWithRetryOrFail(size, allocation, origin, alignment);
   heap->CreateFillerObjectAt(result.address(), size, ClearRecordedSlots::kNo);
   return Handle<HeapObject>(result, isolate());
 }
@@ -685,16 +686,19 @@ Handle<SmallOrderedNameDictionary> Factory::NewSmallOrderedNameDictionary(
 }
 
 Handle<OrderedHashSet> Factory::NewOrderedHashSet() {
-  return OrderedHashSet::Allocate(isolate(), OrderedHashSet::kMinCapacity);
+  return OrderedHashSet::Allocate(isolate(), OrderedHashSet::kMinCapacity)
+      .ToHandleChecked();
 }
 
 Handle<OrderedHashMap> Factory::NewOrderedHashMap() {
-  return OrderedHashMap::Allocate(isolate(), OrderedHashMap::kMinCapacity);
+  return OrderedHashMap::Allocate(isolate(), OrderedHashMap::kMinCapacity)
+      .ToHandleChecked();
 }
 
 Handle<OrderedNameDictionary> Factory::NewOrderedNameDictionary() {
   return OrderedNameDictionary::Allocate(isolate(),
-                                         OrderedNameDictionary::kMinCapacity);
+                                         OrderedNameDictionary::kMinCapacity)
+      .ToHandleChecked();
 }
 
 Handle<AccessorPair> Factory::NewAccessorPair() {
@@ -1314,7 +1318,7 @@ Handle<String> Factory::NewProperSubString(Handle<String> str, int begin,
 
   slice->set_hash_field(String::kEmptyHashField);
   slice->set_length(length);
-  slice->set_parent(isolate(), *str);
+  slice->set_parent(*str);
   slice->set_offset(offset);
   return slice;
 }
@@ -1744,16 +1748,6 @@ Handle<PromiseResolveThenableJobTask> Factory::NewPromiseResolveThenableJobTask(
   return microtask;
 }
 
-Handle<FinalizationGroupCleanupJobTask>
-Factory::NewFinalizationGroupCleanupJobTask(
-    Handle<JSFinalizationGroup> finalization_group) {
-  Handle<FinalizationGroupCleanupJobTask> microtask =
-      Handle<FinalizationGroupCleanupJobTask>::cast(
-          NewStruct(FINALIZATION_GROUP_CLEANUP_JOB_TASK_TYPE));
-  microtask->set_finalization_group(*finalization_group);
-  return microtask;
-}
-
 Handle<Foreign> Factory::NewForeign(Address addr, AllocationType allocation) {
   // Statically ensure that it is safe to allocate foreigns in paged spaces.
   STATIC_ASSERT(Foreign::kSize <= kMaxRegularHeapObjectSize);
@@ -2010,7 +2004,8 @@ Handle<JSObject> Factory::CopyJSObjectWithAllocationSite(
   HeapObject raw_clone = isolate()->heap()->AllocateRawWithRetryOrFail(
       adjusted_object_size, AllocationType::kYoung);
 
-  DCHECK(Heap::InYoungGeneration(raw_clone));
+  DCHECK(Heap::InYoungGeneration(raw_clone) || FLAG_single_generation);
+
   // Since we know the clone is allocated in new space, we can copy
   // the contents without worrying about updating the write barrier.
   Heap::CopyBlock(raw_clone.address(), source->address(), object_size);
@@ -2065,6 +2060,13 @@ void initialize_length(Handle<T> array, int length) {
 template <>
 void initialize_length<PropertyArray>(Handle<PropertyArray> array, int length) {
   array->initialize_length(length);
+}
+
+inline void ZeroEmbedderFields(i::Handle<i::JSObject> obj) {
+  auto count = obj->GetEmbedderFieldCount();
+  for (int i = 0; i < count; i++) {
+    obj->SetEmbedderField(i, Smi::kZero);
+  }
 }
 
 }  // namespace
@@ -2234,13 +2236,10 @@ Handle<HeapNumber> Factory::NewHeapNumber(AllocationType allocation) {
   return handle(HeapNumber::cast(result), isolate());
 }
 
-Handle<MutableHeapNumber> Factory::NewMutableHeapNumber(
-    AllocationType allocation) {
-  STATIC_ASSERT(HeapNumber::kSize <= kMaxRegularHeapObjectSize);
-  Map map = *mutable_heap_number_map();
-  HeapObject result = AllocateRawWithImmortalMap(
-      MutableHeapNumber::kSize, allocation, map, kDoubleUnaligned);
-  return handle(MutableHeapNumber::cast(result), isolate());
+Handle<HeapNumber> Factory::NewHeapNumberForCodeAssembler(double value) {
+  return NewHeapNumber(value, isolate()->heap()->CanAllocateInReadOnlySpace()
+                                  ? AllocationType::kReadOnly
+                                  : AllocationType::kOld);
 }
 
 Handle<FreshlyAllocatedBigInt> Factory::NewBigInt(int length,
@@ -2518,7 +2517,7 @@ Handle<JSFunction> Factory::NewFunctionFromSharedFunctionInfo(
       NewFunction(initial_map, info, context, allocation);
 
   // Give compiler a chance to pre-initialize.
-  Compiler::PostInstantiation(result, allocation);
+  Compiler::PostInstantiation(result);
 
   return result;
 }
@@ -2550,14 +2549,15 @@ Handle<JSFunction> Factory::NewFunctionFromSharedFunctionInfo(
   result->set_raw_feedback_cell(*feedback_cell);
 
   // Give compiler a chance to pre-initialize.
-  Compiler::PostInstantiation(result, allocation);
+  Compiler::PostInstantiation(result);
 
   return result;
 }
 
-Handle<ScopeInfo> Factory::NewScopeInfo(int length) {
+Handle<ScopeInfo> Factory::NewScopeInfo(int length, AllocationType type) {
+  DCHECK(type == AllocationType::kOld || type == AllocationType::kReadOnly);
   return NewFixedArrayWithMap<ScopeInfo>(RootIndex::kScopeInfoMap, length,
-                                         AllocationType::kOld);
+                                         type);
 }
 
 Handle<SourceTextModuleInfo> Factory::NewSourceTextModuleInfo() {
@@ -3093,15 +3093,46 @@ Handle<SyntheticModule> Factory::NewSyntheticModule(
   return module;
 }
 
-Handle<JSArrayBuffer> Factory::NewJSArrayBuffer(SharedFlag shared,
-                                                AllocationType allocation) {
-  Handle<JSFunction> array_buffer_fun(
-      shared == SharedFlag::kShared
-          ? isolate()->native_context()->shared_array_buffer_fun()
-          : isolate()->native_context()->array_buffer_fun(),
+Handle<JSArrayBuffer> Factory::NewJSArrayBuffer(AllocationType allocation) {
+  Handle<Map> map(isolate()->native_context()->array_buffer_fun().initial_map(),
+                  isolate());
+  auto result =
+      Handle<JSArrayBuffer>::cast(NewJSObjectFromMap(map, allocation));
+  ZeroEmbedderFields(result);
+  result->SetupEmpty(SharedFlag::kNotShared);
+  return result;
+}
+
+MaybeHandle<JSArrayBuffer> Factory::NewJSArrayBufferAndBackingStore(
+    size_t byte_length, InitializedFlag initialized,
+    AllocationType allocation) {
+  // TODO(titzer): Don't bother allocating a 0-length backing store.
+  // This is currently required because the embedder API for
+  // TypedArray::HasBuffer() checks if the backing store is nullptr.
+  // That check should be changed.
+
+  std::unique_ptr<BackingStore> backing_store = BackingStore::Allocate(
+      isolate(), byte_length, SharedFlag::kNotShared, initialized);
+  if (!backing_store) return MaybeHandle<JSArrayBuffer>();
+  Handle<Map> map(isolate()->native_context()->array_buffer_fun().initial_map(),
+                  isolate());
+  auto array_buffer =
+      Handle<JSArrayBuffer>::cast(NewJSObjectFromMap(map, allocation));
+  array_buffer->Attach(std::move(backing_store));
+  ZeroEmbedderFields(array_buffer);
+  return array_buffer;
+}
+
+Handle<JSArrayBuffer> Factory::NewJSSharedArrayBuffer(
+    AllocationType allocation) {
+  Handle<Map> map(
+      isolate()->native_context()->shared_array_buffer_fun().initial_map(),
       isolate());
-  Handle<Map> map(array_buffer_fun->initial_map(), isolate());
-  return Handle<JSArrayBuffer>::cast(NewJSObjectFromMap(map, allocation));
+  auto result =
+      Handle<JSArrayBuffer>::cast(NewJSObjectFromMap(map, allocation));
+  ZeroEmbedderFields(result);
+  result->SetupEmpty(SharedFlag::kShared);
+  return result;
 }
 
 Handle<JSIteratorResult> Factory::NewJSIteratorResult(Handle<Object> value,
@@ -3190,9 +3221,7 @@ Handle<JSArrayBufferView> Factory::NewJSArrayBufferView(
   array_buffer_view->set_buffer(*buffer);
   array_buffer_view->set_byte_offset(byte_offset);
   array_buffer_view->set_byte_length(byte_length);
-  for (int i = 0; i < v8::ArrayBufferView::kEmbedderFieldCount; i++) {
-    array_buffer_view->SetEmbedderField(i, Smi::kZero);
-  }
+  ZeroEmbedderFields(array_buffer_view);
   DCHECK_EQ(array_buffer_view->GetEmbedderFieldCount(),
             v8::ArrayBufferView::kEmbedderFieldCount);
   return array_buffer_view;
@@ -3716,6 +3745,7 @@ Handle<StackFrameInfo> Factory::NewStackFrameInfo(
   Handle<Object> type_name = undefined_value();
   Handle<Object> eval_origin = frame->GetEvalOrigin();
   Handle<Object> wasm_module_name = frame->GetWasmModuleName();
+  Handle<Object> wasm_instance = frame->GetWasmInstance();
 
   // MethodName and TypeName are expensive to look up, so they are only
   // included when they are strictly needed by the stack trace
@@ -3751,6 +3781,7 @@ Handle<StackFrameInfo> Factory::NewStackFrameInfo(
   info->set_type_name(*type_name);
   info->set_eval_origin(*eval_origin);
   info->set_wasm_module_name(*wasm_module_name);
+  info->set_wasm_instance(*wasm_instance);
 
   info->set_is_eval(frame->IsEval());
   info->set_is_constructor(is_constructor);
@@ -3904,9 +3935,12 @@ void Factory::SetRegExpIrregexpData(Handle<JSRegExp> regexp,
   store->set(JSRegExp::kFlagsIndex, Smi::FromInt(flags));
   store->set(JSRegExp::kIrregexpLatin1CodeIndex, uninitialized);
   store->set(JSRegExp::kIrregexpUC16CodeIndex, uninitialized);
+  store->set(JSRegExp::kIrregexpLatin1BytecodeIndex, uninitialized);
+  store->set(JSRegExp::kIrregexpUC16BytecodeIndex, uninitialized);
   store->set(JSRegExp::kIrregexpMaxRegisterCountIndex, Smi::kZero);
   store->set(JSRegExp::kIrregexpCaptureCountIndex, Smi::FromInt(capture_count));
   store->set(JSRegExp::kIrregexpCaptureNameMapIndex, uninitialized);
+  store->set(JSRegExp::kIrregexpTierUpTicksIndex, Smi::kZero);
   regexp->set_data(*store);
 }
 
@@ -4148,9 +4182,7 @@ Handle<JSPromise> Factory::NewJSPromiseWithoutHook(AllocationType allocation) {
       NewJSObject(isolate()->promise_function(), allocation));
   promise->set_reactions_or_result(Smi::kZero);
   promise->set_flags(0);
-  for (int i = 0; i < v8::Promise::kEmbedderFieldCount; i++) {
-    promise->SetEmbedderField(i, Smi::kZero);
-  }
+  ZeroEmbedderFields(promise);
   return promise;
 }
 

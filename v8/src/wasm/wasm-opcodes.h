@@ -15,8 +15,10 @@ namespace internal {
 
 namespace wasm {
 
+struct WasmFeatures;
+
 std::ostream& operator<<(std::ostream& os, const FunctionSig& function);
-bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
+bool IsJSCompatibleSignature(const FunctionSig* sig, const WasmFeatures&);
 
 // Control expressions and blocks.
 #define FOREACH_CONTROL_OPCODE(V)        \
@@ -307,12 +309,26 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I32x4GeU, 0xfd35, s_ss)              \
   V(I64x2Eq, 0xfd36, s_ss)               \
   V(I64x2Ne, 0xfd37, s_ss)               \
+  V(I64x2LtS, 0xfd38, s_ss)              \
+  V(I64x2LtU, 0xfd39, s_ss)              \
+  V(I64x2GtS, 0xfd3a, s_ss)              \
+  V(I64x2GtU, 0xfd3b, s_ss)              \
+  V(I64x2LeS, 0xfd3c, s_ss)              \
+  V(I64x2LeU, 0xfd3d, s_ss)              \
+  V(I64x2GeS, 0xfd3e, s_ss)              \
+  V(I64x2GeU, 0xfd3f, s_ss)              \
   V(F32x4Eq, 0xfd40, s_ss)               \
   V(F32x4Ne, 0xfd41, s_ss)               \
   V(F32x4Lt, 0xfd42, s_ss)               \
   V(F32x4Gt, 0xfd43, s_ss)               \
   V(F32x4Le, 0xfd44, s_ss)               \
   V(F32x4Ge, 0xfd45, s_ss)               \
+  V(F64x2Eq, 0xfd46, s_ss)               \
+  V(F64x2Ne, 0xfd47, s_ss)               \
+  V(F64x2Lt, 0xfd48, s_ss)               \
+  V(F64x2Gt, 0xfd49, s_ss)               \
+  V(F64x2Le, 0xfd4a, s_ss)               \
+  V(F64x2Ge, 0xfd4b, s_ss)               \
   V(S128Not, 0xfd4c, s_s)                \
   V(S128And, 0xfd4d, s_ss)               \
   V(S128Or, 0xfd4e, s_ss)                \
@@ -321,6 +337,9 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I8x16Neg, 0xfd51, s_s)               \
   V(S1x16AnyTrue, 0xfd52, i_s)           \
   V(S1x16AllTrue, 0xfd53, i_s)           \
+  V(I8x16Shl, 0xfd54, s_si)              \
+  V(I8x16ShrS, 0xfd55, s_si)             \
+  V(I8x16ShrU, 0xfd56, s_si)             \
   V(I8x16Add, 0xfd57, s_ss)              \
   V(I8x16AddSaturateS, 0xfd58, s_ss)     \
   V(I8x16AddSaturateU, 0xfd59, s_ss)     \
@@ -335,6 +354,9 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I16x8Neg, 0xfd62, s_s)               \
   V(S1x8AnyTrue, 0xfd63, i_s)            \
   V(S1x8AllTrue, 0xfd64, i_s)            \
+  V(I16x8Shl, 0xfd65, s_si)              \
+  V(I16x8ShrS, 0xfd66, s_si)             \
+  V(I16x8ShrU, 0xfd67, s_si)             \
   V(I16x8Add, 0xfd68, s_ss)              \
   V(I16x8AddSaturateS, 0xfd69, s_ss)     \
   V(I16x8AddSaturateU, 0xfd6a, s_ss)     \
@@ -349,6 +371,9 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I32x4Neg, 0xfd73, s_s)               \
   V(S1x4AnyTrue, 0xfd74, i_s)            \
   V(S1x4AllTrue, 0xfd75, i_s)            \
+  V(I32x4Shl, 0xfd76, s_si)              \
+  V(I32x4ShrS, 0xfd77, s_si)             \
+  V(I32x4ShrU, 0xfd78, s_si)             \
   V(I32x4Add, 0xfd79, s_ss)              \
   V(I32x4Sub, 0xfd7c, s_ss)              \
   V(I32x4Mul, 0xfd7f, s_ss)              \
@@ -357,8 +382,18 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I32x4MaxS, 0xfd82, s_ss)             \
   V(I32x4MaxU, 0xfd83, s_ss)             \
   V(I64x2Neg, 0xfd84, s_s)               \
+  V(S1x2AnyTrue, 0xfd85, i_s)            \
+  V(S1x2AllTrue, 0xfd86, i_s)            \
+  V(I64x2Shl, 0xfd87, s_si)              \
+  V(I64x2ShrS, 0xfd88, s_si)             \
+  V(I64x2ShrU, 0xfd89, s_si)             \
   V(I64x2Add, 0xfd8a, s_ss)              \
   V(I64x2Sub, 0xfd8d, s_ss)              \
+  V(I64x2Mul, 0xfd8c, s_ss)              \
+  V(I64x2MinS, 0xfd8e, s_ss)             \
+  V(I64x2MinU, 0xfd8f, s_ss)             \
+  V(I64x2MaxS, 0xfd90, s_ss)             \
+  V(I64x2MaxU, 0xfd91, s_ss)             \
   V(F32x4Abs, 0xfd95, s_s)               \
   V(F32x4Neg, 0xfd96, s_s)               \
   V(F32x4RecipApprox, 0xfd98, s_s)       \
@@ -366,24 +401,33 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(F32x4Add, 0xfd9a, s_ss)              \
   V(F32x4Sub, 0xfd9b, s_ss)              \
   V(F32x4Mul, 0xfd9c, s_ss)              \
+  V(F32x4Div, 0xfd9d, s_ss)              \
   V(F32x4Min, 0xfd9e, s_ss)              \
   V(F32x4Max, 0xfd9f, s_ss)              \
+  V(F64x2Abs, 0xfda0, s_s)               \
+  V(F64x2Neg, 0xfda1, s_s)               \
+  V(F64x2Add, 0xfda5, s_ss)              \
+  V(F64x2Sub, 0xfda6, s_ss)              \
+  V(F64x2Mul, 0xfda7, s_ss)              \
+  V(F64x2Div, 0xfda8, s_ss)              \
+  V(F64x2Min, 0xfda9, s_ss)              \
+  V(F64x2Max, 0xfdaa, s_ss)              \
   V(I32x4SConvertF32x4, 0xfdab, s_s)     \
   V(I32x4UConvertF32x4, 0xfdac, s_s)     \
   V(F32x4SConvertI32x4, 0xfdaf, s_s)     \
   V(F32x4UConvertI32x4, 0xfdb0, s_s)     \
-  V(I8x16SConvertI16x8, 0xfdb1, s_ss)    \
-  V(I8x16UConvertI16x8, 0xfdb2, s_ss)    \
-  V(I16x8SConvertI32x4, 0xfdb3, s_ss)    \
-  V(I16x8UConvertI32x4, 0xfdb4, s_ss)    \
-  V(I16x8SConvertI8x16Low, 0xfdb5, s_s)  \
-  V(I16x8SConvertI8x16High, 0xfdb6, s_s) \
-  V(I16x8UConvertI8x16Low, 0xfdb7, s_s)  \
-  V(I16x8UConvertI8x16High, 0xfdb8, s_s) \
-  V(I32x4SConvertI16x8Low, 0xfdb9, s_s)  \
-  V(I32x4SConvertI16x8High, 0xfdba, s_s) \
-  V(I32x4UConvertI16x8Low, 0xfdbb, s_s)  \
-  V(I32x4UConvertI16x8High, 0xfdbc, s_s) \
+  V(I8x16SConvertI16x8, 0xfdc6, s_ss)    \
+  V(I8x16UConvertI16x8, 0xfdc7, s_ss)    \
+  V(I16x8SConvertI32x4, 0xfdc8, s_ss)    \
+  V(I16x8UConvertI32x4, 0xfdc9, s_ss)    \
+  V(I16x8SConvertI8x16Low, 0xfdca, s_s)  \
+  V(I16x8SConvertI8x16High, 0xfdcb, s_s) \
+  V(I16x8UConvertI8x16Low, 0xfdcc, s_s)  \
+  V(I16x8UConvertI8x16High, 0xfdcd, s_s) \
+  V(I32x4SConvertI16x8Low, 0xfdce, s_s)  \
+  V(I32x4SConvertI16x8High, 0xfdcf, s_s) \
+  V(I32x4UConvertI16x8Low, 0xfdd0, s_s)  \
+  V(I32x4UConvertI16x8High, 0xfdd1, s_s) \
   V(I16x8AddHoriz, 0xfdbd, s_ss)         \
   V(I32x4AddHoriz, 0xfdbe, s_ss)         \
   V(F32x4AddHoriz, 0xfdbf, s_ss)
@@ -394,25 +438,15 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I32x4ExtractLane, 0xfd0d, _)                 \
   V(I64x2ExtractLane, 0xfd10, _)                 \
   V(F32x4ExtractLane, 0xfd13, _)                 \
-  V(I8x16Shl, 0xfd54, _)                         \
-  V(I8x16ShrS, 0xfd55, _)                        \
-  V(I8x16ShrU, 0xfd56, _)                        \
-  V(I16x8Shl, 0xfd65, _)                         \
-  V(I16x8ShrS, 0xfd66, _)                        \
-  V(I16x8ShrU, 0xfd67, _)                        \
-  V(I32x4Shl, 0xfd76, _)                         \
-  V(I32x4ShrS, 0xfd77, _)                        \
-  V(I32x4ShrU, 0xfd78, _)                        \
-  V(I64x2Shl, 0xfd87, _)                         \
-  V(I64x2ShrS, 0xfd88, _)                        \
-  V(I64x2ShrU, 0xfd89, _)
+  V(F64x2ExtractLane, 0xfd16, _)
 
 #define FOREACH_SIMD_1_OPERAND_2_PARAM_OPCODE(V) \
   V(I8x16ReplaceLane, 0xfd07, _)                 \
   V(I16x8ReplaceLane, 0xfd0b, _)                 \
   V(I32x4ReplaceLane, 0xfd0e, _)                 \
   V(I64x2ReplaceLane, 0xfd11, _)                 \
-  V(F32x4ReplaceLane, 0xfd14, _)
+  V(F32x4ReplaceLane, 0xfd14, _)                 \
+  V(F64x2ReplaceLane, 0xfd17, _)
 
 #define FOREACH_SIMD_1_OPERAND_OPCODE(V)   \
   FOREACH_SIMD_1_OPERAND_1_PARAM_OPCODE(V) \
@@ -436,7 +470,7 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(TableCopy, 0xfc0e, v_iii)                                                 \
   V(TableGrow, 0xfc0f, i_ai)                                                  \
   V(TableSize, 0xfc10, i_v)                                                   \
-  /*TableFill is polymorph in the second parameter. It's anyref or anyfunc.*/ \
+  /*TableFill is polymorph in the second parameter. It's anyref or funcref.*/ \
   V(TableFill, 0xfc11, v_iii)
 
 #define FOREACH_ATOMIC_OPCODE(V)                \
@@ -507,6 +541,10 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(I64AtomicCompareExchange16U, 0xfe4d, l_ill) \
   V(I64AtomicCompareExchange32U, 0xfe4e, l_ill)
 
+#define FOREACH_ATOMIC_0_OPERAND_OPCODE(V)                      \
+  /* AtomicFence does not target a particular linear memory. */ \
+  V(AtomicFence, 0xfe03, v_v)
+
 // All opcodes.
 #define FOREACH_OPCODE(V)             \
   FOREACH_CONTROL_OPCODE(V)           \
@@ -522,6 +560,7 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   FOREACH_SIMD_MASK_OPERAND_OPCODE(V) \
   FOREACH_SIMD_MEM_OPCODE(V)          \
   FOREACH_ATOMIC_OPCODE(V)            \
+  FOREACH_ATOMIC_0_OPERAND_OPCODE(V)  \
   FOREACH_NUMERIC_OPCODE(V)
 
 // All signatures.
@@ -565,7 +604,7 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, bool hasBigIntFeature);
   V(i_iil, kWasmI32, kWasmI32, kWasmI32, kWasmI64)  \
   V(i_ill, kWasmI32, kWasmI32, kWasmI64, kWasmI64)  \
   V(i_r, kWasmI32, kWasmAnyRef)                     \
-  V(i_ai, kWasmI32, kWasmAnyFunc, kWasmI32)
+  V(i_ai, kWasmI32, kWasmFuncRef, kWasmI32)
 
 #define FOREACH_SIMD_SIGNATURE(V)          \
   V(s_s, kWasmS128, kWasmS128)             \
@@ -652,6 +691,8 @@ struct WasmInitExpr {
       val.global_index = index;
     } else if (kind == kRefFuncConst) {
       val.function_index = index;
+    } else if (kind == kRefNullConst) {
+      // Nothing to do.
     } else {
       // For the other types, the other initializers should be used.
       UNREACHABLE();

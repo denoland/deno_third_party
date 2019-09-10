@@ -10,6 +10,9 @@
 
 namespace v8 {
 namespace internal {
+
+class TickCounter;
+
 namespace compiler {
 
 // Forward declarations.
@@ -36,7 +39,7 @@ class MemoryOptimizer final {
   MemoryOptimizer(JSGraph* jsgraph, Zone* zone,
                   PoisoningMitigationLevel poisoning_level,
                   AllocationFolding allocation_folding,
-                  const char* function_debug_name);
+                  const char* function_debug_name, TickCounter* tick_counter);
   ~MemoryOptimizer() = default;
 
   void Optimize();
@@ -115,7 +118,6 @@ class MemoryOptimizer final {
   void VisitNode(Node*, AllocationState const*);
   void VisitAllocateRaw(Node*, AllocationState const*);
   void VisitCall(Node*, AllocationState const*);
-  void VisitCallWithCallerSavedRegisters(Node*, AllocationState const*);
   void VisitLoadFromObject(Node*, AllocationState const*);
   void VisitLoadElement(Node*, AllocationState const*);
   void VisitLoadField(Node*, AllocationState const*);
@@ -139,6 +141,11 @@ class MemoryOptimizer final {
 
   bool NeedsPoisoning(LoadSensitivity load_sensitivity) const;
 
+  // Returns true if the AllocationType of the current AllocateRaw node that we
+  // are visiting needs to be updated to kOld, due to propagation of tenuring
+  // from outer to inner allocations.
+  bool AllocationTypeNeedsUpdateToOld(Node* const user, const Edge edge);
+
   AllocationState const* empty_state() const { return empty_state_; }
   Graph* graph() const;
   Isolate* isolate() const;
@@ -158,6 +165,7 @@ class MemoryOptimizer final {
   PoisoningMitigationLevel poisoning_level_;
   AllocationFolding allocation_folding_;
   const char* function_debug_name_;
+  TickCounter* const tick_counter_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(MemoryOptimizer);
 };

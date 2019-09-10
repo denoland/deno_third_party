@@ -8,6 +8,7 @@
 #include "src/debug/debug.h"
 #include "src/execution/arguments-inl.h"
 #include "src/execution/frame-constants.h"
+#include "src/execution/frames.h"
 #include "src/heap/factory.h"
 #include "src/logging/counters.h"
 #include "src/numbers/conversions.h"
@@ -62,7 +63,7 @@ Object ThrowWasmError(Isolate* isolate, MessageTemplate message) {
 }
 }  // namespace
 
-RUNTIME_FUNCTION(Runtime_WasmIsValidAnyFuncValue) {
+RUNTIME_FUNCTION(Runtime_WasmIsValidFuncRefValue) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
   CONVERT_ARG_HANDLE_CHECKED(Object, function, 0);
@@ -224,8 +225,8 @@ RUNTIME_FUNCTION(Runtime_WasmRunInterpreter) {
       CASE_ARG_TYPE(kWasmF64, double)
 #undef CASE_ARG_TYPE
       case wasm::kWasmAnyRef:
-      case wasm::kWasmAnyFunc:
-      case wasm::kWasmExceptRef: {
+      case wasm::kWasmFuncRef:
+      case wasm::kWasmExnRef: {
         DCHECK_EQ(wasm::ValueTypes::ElementSizeInBytes(sig->GetParam(i)),
                   kSystemPointerSize);
         Handle<Object> ref(base::ReadUnalignedValue<Object>(arg_buf_ptr),
@@ -275,8 +276,8 @@ RUNTIME_FUNCTION(Runtime_WasmRunInterpreter) {
       CASE_RET_TYPE(kWasmF64, double)
 #undef CASE_RET_TYPE
       case wasm::kWasmAnyRef:
-      case wasm::kWasmAnyFunc:
-      case wasm::kWasmExceptRef: {
+      case wasm::kWasmFuncRef:
+      case wasm::kWasmExnRef: {
         DCHECK_EQ(wasm::ValueTypes::ElementSizeInBytes(sig->GetReturn(i)),
                   kSystemPointerSize);
         base::WriteUnalignedValue<Object>(arg_buf_ptr,
@@ -429,8 +430,8 @@ RUNTIME_FUNCTION(Runtime_WasmRefFunc) {
   isolate->set_context(instance->native_context());
   CONVERT_UINT32_ARG_CHECKED(function_index, 0);
 
-  Handle<WasmExportedFunction> function =
-      WasmInstanceObject::GetOrCreateWasmExportedFunction(isolate, instance,
+  Handle<WasmExternalFunction> function =
+      WasmInstanceObject::GetOrCreateWasmExternalFunction(isolate, instance,
                                                           function_index);
 
   return *function;
@@ -502,16 +503,18 @@ RUNTIME_FUNCTION(Runtime_WasmTableInit) {
 RUNTIME_FUNCTION(Runtime_WasmTableCopy) {
   HandleScope scope(isolate);
   DCHECK_EQ(5, args.length());
+  DCHECK(isolate->context().is_null());
+  isolate->set_context(GetNativeContextFromWasmInstanceOnStackTop(isolate));
   auto instance =
       Handle<WasmInstanceObject>(GetWasmInstanceOnStackTop(isolate), isolate);
-  CONVERT_UINT32_ARG_CHECKED(table_src_index, 0);
-  CONVERT_UINT32_ARG_CHECKED(table_dst_index, 1);
+  CONVERT_UINT32_ARG_CHECKED(table_dst_index, 0);
+  CONVERT_UINT32_ARG_CHECKED(table_src_index, 1);
   CONVERT_UINT32_ARG_CHECKED(dst, 2);
   CONVERT_UINT32_ARG_CHECKED(src, 3);
   CONVERT_UINT32_ARG_CHECKED(count, 4);
 
   bool oob = !WasmInstanceObject::CopyTableEntries(
-      isolate, instance, table_src_index, table_dst_index, dst, src, count);
+      isolate, instance, table_dst_index, table_src_index, dst, src, count);
   if (oob) return ThrowTableOutOfBounds(isolate, instance);
   return ReadOnlyRoots(isolate).undefined_value();
 }
@@ -564,6 +567,25 @@ RUNTIME_FUNCTION(Runtime_WasmTableFill) {
     return ThrowTableOutOfBounds(isolate, instance);
   }
   return ReadOnlyRoots(isolate).undefined_value();
+}
+
+RUNTIME_FUNCTION(Runtime_WasmNewMultiReturnFixedArray) {
+  DCHECK_EQ(1, args.length());
+  HandleScope scope(isolate);
+  CONVERT_INT32_ARG_CHECKED(size, 0);
+  Handle<FixedArray> fixed_array = isolate->factory()->NewFixedArray(size);
+  return *fixed_array;
+}
+
+RUNTIME_FUNCTION(Runtime_WasmNewMultiReturnJSArray) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+  DCHECK(!isolate->context().is_null());
+  CONVERT_ARG_CHECKED(FixedArray, fixed_array, 0);
+  Handle<FixedArray> fixed_array_handle(fixed_array, isolate);
+  Handle<JSArray> array = isolate->factory()->NewJSArrayWithElements(
+      fixed_array_handle, PACKED_ELEMENTS);
+  return *array;
 }
 }  // namespace internal
 }  // namespace v8

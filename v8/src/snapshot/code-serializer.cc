@@ -98,9 +98,9 @@ ScriptData* CodeSerializer::SerializeSharedFunctionInfo(
 bool CodeSerializer::SerializeReadOnlyObject(HeapObject obj) {
   if (!ReadOnlyHeap::Contains(obj)) return false;
 
-  // For objects in RO_SPACE, never serialize the object, but instead create a
-  // back reference that encodes the page number as the chunk_index and the
-  // offset within the page as the chunk_offset.
+  // For objects on the read-only heap, never serialize the object, but instead
+  // create a back reference that encodes the page number as the chunk_index and
+  // the offset within the page as the chunk_offset.
   Address address = obj.address();
   Page* page = Page::FromAddress(address);
   uint32_t chunk_index = 0;
@@ -110,8 +110,8 @@ bool CodeSerializer::SerializeReadOnlyObject(HeapObject obj) {
     ++chunk_index;
   }
   uint32_t chunk_offset = static_cast<uint32_t>(page->Offset(address));
-  SerializerReference back_reference =
-      SerializerReference::BackReference(RO_SPACE, chunk_index, chunk_offset);
+  SerializerReference back_reference = SerializerReference::BackReference(
+      SnapshotSpace::kReadOnlyHeap, chunk_index, chunk_offset);
   reference_map()->Add(reinterpret_cast<void*>(obj.ptr()), back_reference);
   CHECK(SerializeBackReference(obj));
   return true;
@@ -312,6 +312,8 @@ MaybeHandle<SharedFunctionInfo> CodeSerializer::Deserialize(
                                              log_code_creation);
 #endif  // V8_TARGET_ARCH_ARM
 
+  bool needs_source_positions = isolate->NeedsSourcePositionsForProfiling();
+
   if (log_code_creation || FLAG_log_function_events) {
     Handle<Script> script(Script::cast(result->script()), isolate);
     Handle<String> name(script->name().IsString()
@@ -328,22 +330,29 @@ MaybeHandle<SharedFunctionInfo> CodeSerializer::Deserialize(
     if (log_code_creation) {
       Script::InitLineEnds(script);
 
-      DisallowHeapAllocation no_gc;
       SharedFunctionInfo::ScriptIterator iter(isolate, *script);
-      for (i::SharedFunctionInfo info = iter.Next(); !info.is_null();
+      for (SharedFunctionInfo info = iter.Next(); !info.is_null();
            info = iter.Next()) {
         if (info.is_compiled()) {
-          int line_num = script->GetLineNumber(info.StartPosition()) + 1;
-          int column_num = script->GetColumnNumber(info.StartPosition()) + 1;
+          Handle<SharedFunctionInfo> shared_info(info, isolate);
+          if (needs_source_positions) {
+            SharedFunctionInfo::EnsureSourcePositionsAvailable(isolate,
+                                                               shared_info);
+          }
+          DisallowHeapAllocation no_gc;
+          int line_num =
+              script->GetLineNumber(shared_info->StartPosition()) + 1;
+          int column_num =
+              script->GetColumnNumber(shared_info->StartPosition()) + 1;
           PROFILE(isolate, CodeCreateEvent(CodeEventListener::SCRIPT_TAG,
-                                           info.abstract_code(), info, *name,
-                                           line_num, column_num));
+                                           info.abstract_code(), *shared_info,
+                                           *name, line_num, column_num));
         }
       }
     }
   }
 
-  if (isolate->NeedsSourcePositionsForProfiling()) {
+  if (needs_source_positions) {
     Handle<Script> script(Script::cast(result->script()), isolate);
     Script::InitLineEnds(script);
   }

@@ -5,6 +5,7 @@
 #include "src/compiler/memory-optimizer.h"
 
 #include "src/codegen/interface-descriptors.h"
+#include "src/codegen/tick-counter.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/linkage.h"
 #include "src/compiler/node-matchers.h"
@@ -20,7 +21,8 @@ namespace compiler {
 MemoryOptimizer::MemoryOptimizer(JSGraph* jsgraph, Zone* zone,
                                  PoisoningMitigationLevel poisoning_level,
                                  AllocationFolding allocation_folding,
-                                 const char* function_debug_name)
+                                 const char* function_debug_name,
+                                 TickCounter* tick_counter)
     : jsgraph_(jsgraph),
       empty_state_(AllocationState::Empty(zone)),
       pending_(zone),
@@ -29,7 +31,8 @@ MemoryOptimizer::MemoryOptimizer(JSGraph* jsgraph, Zone* zone,
       graph_assembler_(jsgraph, nullptr, nullptr, zone),
       poisoning_level_(poisoning_level),
       allocation_folding_(allocation_folding),
-      function_debug_name_(function_debug_name) {}
+      function_debug_name_(function_debug_name),
+      tick_counter_(tick_counter) {}
 
 void MemoryOptimizer::Optimize() {
   EnqueueUses(graph()->start(), empty_state());
@@ -98,8 +101,14 @@ bool CanAllocate(const Node* node) {
   switch (node->opcode()) {
     case IrOpcode::kBitcastTaggedToWord:
     case IrOpcode::kBitcastWordToTagged:
+    case IrOpcode::kChangeCompressedToTagged:
+    case IrOpcode::kChangeCompressedSignedToTaggedSigned:
+    case IrOpcode::kChangeCompressedPointerToTaggedPointer:
+    case IrOpcode::kChangeTaggedToCompressed:
+    case IrOpcode::kChangeTaggedSignedToCompressedSigned:
+    case IrOpcode::kChangeTaggedPointerToCompressedPointer:
     case IrOpcode::kComment:
-    case IrOpcode::kDebugAbort:
+    case IrOpcode::kAbortCSAAssert:
     case IrOpcode::kDebugBreak:
     case IrOpcode::kDeoptimizeIf:
     case IrOpcode::kDeoptimizeUnless:
@@ -158,7 +167,6 @@ bool CanAllocate(const Node* node) {
       return false;
 
     case IrOpcode::kCall:
-    case IrOpcode::kCallWithCallerSavedRegisters:
       return !(CallDescriptorOf(node->op())->flags() &
                CallDescriptor::kNoAllocate);
     default:
@@ -216,6 +224,7 @@ Node* EffectPhiForPhi(Node* phi) {
 }  // namespace
 
 void MemoryOptimizer::VisitNode(Node* node, AllocationState const* state) {
+  tick_counter_->DoTick();
   DCHECK(!node->IsDead());
   DCHECK_LT(0, node->op()->EffectInputCount());
   switch (node->opcode()) {
@@ -227,8 +236,6 @@ void MemoryOptimizer::VisitNode(Node* node, AllocationState const* state) {
       return VisitAllocateRaw(node, state);
     case IrOpcode::kCall:
       return VisitCall(node, state);
-    case IrOpcode::kCallWithCallerSavedRegisters:
-      return VisitCallWithCallerSavedRegisters(node, state);
     case IrOpcode::kLoadFromObject:
       return VisitLoadFromObject(node, state);
     case IrOpcode::kLoadElement:
@@ -254,6 +261,35 @@ void MemoryOptimizer::VisitNode(Node* node, AllocationState const* state) {
 
 #define __ gasm()->
 
+bool MemoryOptimizer::AllocationTypeNeedsUpdateToOld(Node* const node,
+                                                     const Edge edge) {
+  if (COMPRESS_POINTERS_BOOL && IrOpcode::IsCompressOpcode(node->opcode())) {
+    // In Pointer Compression we might have a Compress node between an
+    // AllocateRaw and the value used as input. This case is trickier since we
+    // have to check all of the Compress node edges to test for a StoreField.
+    for (Edge const new_edge : node->use_edges()) {
+      if (AllocationTypeNeedsUpdateToOld(new_edge.from(), new_edge)) {
+        return true;
+      }
+    }
+
+    // If we arrived here, we tested all the edges of the Compress node and
+    // didn't find it necessary to update the AllocationType.
+    return false;
+  }
+
+  // Test to see if we need to update the AllocationType.
+  if (node->opcode() == IrOpcode::kStoreField && edge.index() == 1) {
+    Node* parent = node->InputAt(0);
+    if (parent->opcode() == IrOpcode::kAllocateRaw &&
+        AllocationTypeOf(parent->op()) == AllocationType::kOld) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void MemoryOptimizer::VisitAllocateRaw(Node* node,
                                        AllocationState const* state) {
   DCHECK_EQ(IrOpcode::kAllocateRaw, node->opcode());
@@ -274,8 +310,17 @@ void MemoryOptimizer::VisitAllocateRaw(Node* node,
   if (allocation_type == AllocationType::kOld) {
     for (Edge const edge : node->use_edges()) {
       Node* const user = edge.from();
+
       if (user->opcode() == IrOpcode::kStoreField && edge.index() == 0) {
-        Node* const child = user->InputAt(1);
+        Node* child = user->InputAt(1);
+        // In Pointer Compression we might have a Compress node between an
+        // AllocateRaw and the value used as input. If so, we need to update
+        // child to point to the StoreField.
+        if (COMPRESS_POINTERS_BOOL &&
+            IrOpcode::IsCompressOpcode(child->opcode())) {
+          child = child->InputAt(0);
+        }
+
         if (child->opcode() == IrOpcode::kAllocateRaw &&
             AllocationTypeOf(child->op()) == AllocationType::kYoung) {
           NodeProperties::ChangeOp(child, node->op());
@@ -287,14 +332,25 @@ void MemoryOptimizer::VisitAllocateRaw(Node* node,
     DCHECK_EQ(AllocationType::kYoung, allocation_type);
     for (Edge const edge : node->use_edges()) {
       Node* const user = edge.from();
-      if (user->opcode() == IrOpcode::kStoreField && edge.index() == 1) {
-        Node* const parent = user->InputAt(0);
-        if (parent->opcode() == IrOpcode::kAllocateRaw &&
-            AllocationTypeOf(parent->op()) == AllocationType::kOld) {
-          allocation_type = AllocationType::kOld;
-          break;
-        }
+      if (AllocationTypeNeedsUpdateToOld(user, edge)) {
+        allocation_type = AllocationType::kOld;
+        break;
       }
+    }
+  }
+
+  Node* allocate_builtin;
+  if (allocation_type == AllocationType::kYoung) {
+    if (allocation.allow_large_objects() == AllowLargeObjects::kTrue) {
+      allocate_builtin = __ AllocateInYoungGenerationStubConstant();
+    } else {
+      allocate_builtin = __ AllocateRegularInYoungGenerationStubConstant();
+    }
+  } else {
+    if (allocation.allow_large_objects() == AllowLargeObjects::kTrue) {
+      allocate_builtin = __ AllocateInOldGenerationStubConstant();
+    } else {
+      allocate_builtin = __ AllocateRegularInOldGenerationStubConstant();
     }
   }
 
@@ -373,11 +429,6 @@ void MemoryOptimizer::VisitAllocateRaw(Node* node,
 
       __ Bind(&call_runtime);
       {
-        Node* target = allocation_type == AllocationType::kYoung
-                           ? __
-                             AllocateInYoungGenerationStubConstant()
-                           : __
-                             AllocateInOldGenerationStubConstant();
         if (!allocate_operator_.is_set()) {
           auto descriptor = AllocateDescriptor{};
           auto call_descriptor = Linkage::GetStubCallDescriptor(
@@ -386,7 +437,7 @@ void MemoryOptimizer::VisitAllocateRaw(Node* node,
           allocate_operator_.set(common()->Call(call_descriptor));
         }
         Node* vfalse = __ BitcastTaggedToWord(
-            __ Call(allocate_operator_.get(), target, size));
+            __ Call(allocate_operator_.get(), allocate_builtin, size));
         vfalse = __ IntSub(vfalse, __ IntPtrConstant(kHeapObjectTag));
         __ Goto(&done, vfalse);
       }
@@ -436,11 +487,6 @@ void MemoryOptimizer::VisitAllocateRaw(Node* node,
                        __ IntAdd(top, __ IntPtrConstant(kHeapObjectTag))));
 
     __ Bind(&call_runtime);
-    Node* target = allocation_type == AllocationType::kYoung
-                       ? __
-                         AllocateInYoungGenerationStubConstant()
-                       : __
-                         AllocateInOldGenerationStubConstant();
     if (!allocate_operator_.is_set()) {
       auto descriptor = AllocateDescriptor{};
       auto call_descriptor = Linkage::GetStubCallDescriptor(
@@ -448,7 +494,7 @@ void MemoryOptimizer::VisitAllocateRaw(Node* node,
           CallDescriptor::kCanUseRoots, Operator::kNoThrow);
       allocate_operator_.set(common()->Call(call_descriptor));
     }
-    __ Goto(&done, __ Call(allocate_operator_.get(), target, size));
+    __ Goto(&done, __ Call(allocate_operator_.get(), allocate_builtin, size));
 
     __ Bind(&done);
     value = done.PhiAt(0);
@@ -514,16 +560,6 @@ void MemoryOptimizer::VisitCall(Node* node, AllocationState const* state) {
   EnqueueUses(node, state);
 }
 
-void MemoryOptimizer::VisitCallWithCallerSavedRegisters(
-    Node* node, AllocationState const* state) {
-  DCHECK_EQ(IrOpcode::kCallWithCallerSavedRegisters, node->opcode());
-  // If the call can allocate, we start with a fresh state.
-  if (!(CallDescriptorOf(node->op())->flags() & CallDescriptor::kNoAllocate)) {
-    state = empty_state();
-  }
-  EnqueueUses(node, state);
-}
-
 void MemoryOptimizer::VisitLoadElement(Node* node,
                                        AllocationState const* state) {
   DCHECK_EQ(IrOpcode::kLoadElement, node->opcode());
@@ -531,9 +567,7 @@ void MemoryOptimizer::VisitLoadElement(Node* node,
   Node* index = node->InputAt(1);
   node->ReplaceInput(1, ComputeIndex(access, index));
   MachineType type = access.machine_type;
-  if (NeedsPoisoning(access.load_sensitivity) &&
-      type.representation() != MachineRepresentation::kTaggedPointer &&
-      type.representation() != MachineRepresentation::kCompressedPointer) {
+  if (NeedsPoisoning(access.load_sensitivity)) {
     NodeProperties::ChangeOp(node, machine()->PoisonedLoad(type));
   } else {
     NodeProperties::ChangeOp(node, machine()->Load(type));
@@ -547,9 +581,7 @@ void MemoryOptimizer::VisitLoadField(Node* node, AllocationState const* state) {
   Node* offset = jsgraph()->IntPtrConstant(access.offset - access.tag());
   node->InsertInput(graph()->zone(), 1, offset);
   MachineType type = access.machine_type;
-  if (NeedsPoisoning(access.load_sensitivity) &&
-      type.representation() != MachineRepresentation::kTaggedPointer &&
-      type.representation() != MachineRepresentation::kCompressedPointer) {
+  if (NeedsPoisoning(access.load_sensitivity)) {
     NodeProperties::ChangeOp(node, machine()->PoisonedLoad(type));
   } else {
     NodeProperties::ChangeOp(node, machine()->Load(type));

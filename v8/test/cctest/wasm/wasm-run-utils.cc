@@ -10,7 +10,6 @@
 #include "src/wasm/graph-builder-interface.h"
 #include "src/wasm/module-compiler.h"
 #include "src/wasm/wasm-import-wrapper-cache.h"
-#include "src/wasm/wasm-memory.h"
 #include "src/wasm/wasm-objects-inl.h"
 
 namespace v8 {
@@ -47,8 +46,10 @@ TestingModuleBuilder::TestingModuleBuilder(
   if (maybe_import) {
     // Manually compile an import wrapper and insert it into the instance.
     CodeSpaceMemoryModificationScope modification_scope(isolate_->heap());
-    auto kind = compiler::GetWasmImportCallKind(maybe_import->js_function,
-                                                maybe_import->sig, false);
+    auto resolved = compiler::ResolveWasmImportCall(
+        maybe_import->js_function, maybe_import->sig, enabled_features_);
+    compiler::WasmImportCallKind kind = resolved.first;
+    Handle<JSReceiver> callable = resolved.second;
     WasmImportWrapperCache::ModificationScope cache_scope(
         native_module_->import_wrapper_cache());
     WasmImportWrapperCache::CacheKey key(kind, maybe_import->sig);
@@ -60,7 +61,7 @@ TestingModuleBuilder::TestingModuleBuilder(
     }
 
     ImportedFunctionEntry(instance_object_, maybe_import_index)
-        .SetWasmToJs(isolate_, maybe_import->js_function, import_wrapper);
+        .SetWasmToJs(isolate_, callable, import_wrapper);
   }
 
   if (tier == ExecutionTier::kInterpreter) {
@@ -73,29 +74,23 @@ byte* TestingModuleBuilder::AddMemory(uint32_t size, SharedFlag shared) {
   CHECK_NULL(mem_start_);
   CHECK_EQ(0, mem_size_);
   DCHECK(!instance_object_->has_memory_object());
-  DCHECK_IMPLIES(test_module_->origin == kWasmOrigin,
-                 size % kWasmPageSize == 0);
+  uint32_t initial_pages = RoundUp(size, kWasmPageSize) / kWasmPageSize;
+  uint32_t maximum_pages = (test_module_->maximum_pages != 0)
+                               ? test_module_->maximum_pages
+                               : initial_pages;
   test_module_->has_memory = true;
-  uint32_t max_size =
-      (test_module_->maximum_pages != 0) ? test_module_->maximum_pages : size;
-  uint32_t alloc_size = RoundUp(size, kWasmPageSize);
-  Handle<JSArrayBuffer> new_buffer;
-  if (shared == SharedFlag::kShared) {
-    CHECK(NewSharedArrayBuffer(isolate_, alloc_size, max_size)
-              .ToHandle(&new_buffer));
-  } else {
-    CHECK(NewArrayBuffer(isolate_, alloc_size).ToHandle(&new_buffer));
-  }
-  CHECK(!new_buffer.is_null());
-  mem_start_ = reinterpret_cast<byte*>(new_buffer->backing_store());
-  mem_size_ = size;
-  CHECK(size == 0 || mem_start_);
-  memset(mem_start_, 0, size);
 
   // Create the WasmMemoryObject.
   Handle<WasmMemoryObject> memory_object =
-      WasmMemoryObject::New(isolate_, new_buffer, max_size);
+      WasmMemoryObject::New(isolate_, initial_pages, maximum_pages, shared)
+          .ToHandleChecked();
   instance_object_->set_memory_object(*memory_object);
+
+  mem_start_ =
+      reinterpret_cast<byte*>(memory_object->array_buffer().backing_store());
+  mem_size_ = size;
+  CHECK(size == 0 || mem_start_);
+
   WasmMemoryObject::AddInstance(isolate_, memory_object, instance_object_);
   // TODO(wasm): Delete the following two lines when test-run-wasm will use a
   // multiple of kPageSize as memory size. At the moment, the effect of these
@@ -157,7 +152,7 @@ void TestingModuleBuilder::FreezeSignatureMapAndInitializeWrapperCache() {
 Handle<JSFunction> TestingModuleBuilder::WrapCode(uint32_t index) {
   FreezeSignatureMapAndInitializeWrapperCache();
   SetExecutable();
-  return WasmInstanceObject::GetOrCreateWasmExportedFunction(
+  return WasmInstanceObject::GetOrCreateWasmExternalFunction(
       isolate_, instance_object(), index);
 }
 
@@ -170,9 +165,24 @@ void TestingModuleBuilder::AddIndirectFunctionTable(
   table.initial_size = table_size;
   table.maximum_size = table_size;
   table.has_maximum_size = true;
-  table.type = kWasmAnyFunc;
+  table.type = kWasmFuncRef;
+
+  {
+    // Allocate the indirect function table.
+    Handle<FixedArray> old_tables =
+        table_index == 0
+            ? isolate_->factory()->empty_fixed_array()
+            : handle(instance_object_->indirect_function_tables(), isolate_);
+    Handle<FixedArray> new_tables =
+        isolate_->factory()->CopyFixedArrayAndGrow(old_tables, 1);
+    Handle<WasmIndirectFunctionTable> table_obj =
+        WasmIndirectFunctionTable::New(isolate_, table.initial_size);
+    new_tables->set(table_index, *table_obj);
+    instance_object_->set_indirect_function_tables(*new_tables);
+  }
+
   WasmInstanceObject::EnsureIndirectFunctionTableWithMinimumSize(
-      instance_object(), 0, table_size);
+      instance_object(), table_index, table_size);
   Handle<WasmTableObject> table_obj =
       WasmTableObject::New(isolate_, table.type, table.initial_size,
                            table.has_maximum_size, table.maximum_size, nullptr);
@@ -184,7 +194,7 @@ void TestingModuleBuilder::AddIndirectFunctionTable(
     for (uint32_t i = 0; i < table_size; ++i) {
       WasmFunction& function = test_module_->functions[function_indexes[i]];
       int sig_id = test_module_->signature_map.Find(*function.sig);
-      IndirectFunctionTableEntry(instance, 0, i)
+      IndirectFunctionTableEntry(instance, table_index, i)
           .Set(sig_id, instance, function.func_index);
       WasmTableObject::SetFunctionTablePlaceholder(
           isolate_, table_obj, i, instance_object_, function_indexes[i]);
@@ -192,8 +202,8 @@ void TestingModuleBuilder::AddIndirectFunctionTable(
   }
 
   Handle<FixedArray> old_tables(instance_object_->tables(), isolate_);
-  Handle<FixedArray> new_tables = isolate_->factory()->CopyFixedArrayAndGrow(
-      old_tables, old_tables->length() + 1);
+  Handle<FixedArray> new_tables =
+      isolate_->factory()->CopyFixedArrayAndGrow(old_tables, 1);
   new_tables->set(old_tables->length(), *table_obj);
   instance_object_->set_tables(*new_tables);
 }
@@ -307,9 +317,14 @@ Handle<WasmInstanceObject> TestingModuleBuilder::InitInstanceObject() {
   Handle<Script> script =
       isolate_->factory()->NewScript(isolate_->factory()->empty_string());
   script->set_type(Script::TYPE_WASM);
+
+  auto native_module = isolate_->wasm_engine()->NewNativeModule(
+      isolate_, enabled_features_, test_module_);
+  native_module->SetWireBytes(OwnedVector<const uint8_t>());
+  native_module->SetRuntimeStubs(isolate_);
+
   Handle<WasmModuleObject> module_object =
-      WasmModuleObject::New(isolate_, enabled_features_, test_module_, {},
-                            script, Handle<ByteArray>::null());
+      WasmModuleObject::New(isolate_, std::move(native_module), script);
   // This method is called when we initialize TestEnvironment. We don't
   // have a memory yet, so we won't create it here. We'll update the
   // interpreter when we get a memory. We do have globals, though.
@@ -343,7 +358,7 @@ void TestBuildingGraphWithBuilder(compiler::WasmGraphBuilder* builder,
     FATAL("Verification failed; pc = +%x, msg = %s", result.error().offset(),
           result.error().message().c_str());
   }
-  builder->LowerInt64();
+  builder->LowerInt64(compiler::WasmGraphBuilder::kCalledFromWasm);
   if (!CpuFeatures::SupportsWasmSimd128()) {
     builder->SimdScalarLoweringForTesting();
   }
@@ -436,8 +451,8 @@ Handle<Code> WasmFunctionWrapper::GetWrapperCode() {
   if (!code_.ToHandle(&code)) {
     Isolate* isolate = CcTest::InitIsolateOnce();
 
-    auto call_descriptor =
-        compiler::Linkage::GetSimplifiedCDescriptor(zone(), signature_, true);
+    auto call_descriptor = compiler::Linkage::GetSimplifiedCDescriptor(
+        zone(), signature_, CallDescriptor::kInitializeRootRegister);
 
     if (kSystemPointerSize == 4) {
       size_t num_params = signature_->parameter_count();

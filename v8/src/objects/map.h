@@ -215,8 +215,8 @@ class Map : public HeapObject {
       Handle<Map> map, Handle<Context> native_context);
 
   // Retrieve interceptors.
-  inline InterceptorInfo GetNamedInterceptor();
-  inline InterceptorInfo GetIndexedInterceptor();
+  DECL_GETTER(GetNamedInterceptor, InterceptorInfo)
+  DECL_GETTER(GetIndexedInterceptor, InterceptorInfo)
 
   // Instance type.
   DECL_PRIMITIVE_ACCESSORS(instance_type, InstanceType)
@@ -423,7 +423,8 @@ class Map : public HeapObject {
   inline bool has_fast_string_wrapper_elements() const;
   inline bool has_typed_array_elements() const;
   inline bool has_dictionary_elements() const;
-  inline bool has_frozen_or_sealed_elements() const;
+  inline bool has_any_nonextensible_elements() const;
+  inline bool has_nonextensible_elements() const;
   inline bool has_sealed_elements() const;
   inline bool has_frozen_elements() const;
 

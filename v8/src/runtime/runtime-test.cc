@@ -11,11 +11,13 @@
 #include "src/base/platform/mutex.h"
 #include "src/codegen/assembler-inl.h"
 #include "src/codegen/compiler.h"
+#include "src/codegen/pending-optimization-table.h"
 #include "src/compiler-dispatcher/optimizing-compile-dispatcher.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/execution/arguments-inl.h"
 #include "src/execution/frames-inl.h"
 #include "src/execution/isolate-inl.h"
+#include "src/execution/protectors-inl.h"
 #include "src/execution/runtime-profiler.h"
 #include "src/heap/heap-inl.h"  // For ToBoolean. TODO(jkummerow): Drop.
 #include "src/heap/heap-write-barrier-inl.h"
@@ -23,6 +25,7 @@
 #include "src/logging/counters.h"
 #include "src/objects/heap-object-inl.h"
 #include "src/objects/js-array-inl.h"
+#include "src/objects/js-regexp-inl.h"
 #include "src/objects/smi.h"
 #include "src/snapshot/natives.h"
 #include "src/trap-handler/trap-handler.h"
@@ -218,28 +221,6 @@ RUNTIME_FUNCTION(Runtime_IsConcurrentRecompilationSupported) {
       isolate->concurrent_recompilation_enabled());
 }
 
-namespace {
-
-void RemoveBytecodeFromPendingOptimizeTable(v8::internal::Isolate* isolate,
-                                            Handle<JSFunction> function) {
-  // TODO(mythria): Remove the check for undefined, once we fix all tests to
-  // add PrepareForOptimization when using OptimizeFunctionOnNextCall.
-  if (isolate->heap()->pending_optimize_for_test_bytecode().IsUndefined()) {
-    return;
-  }
-
-  Handle<ObjectHashTable> table =
-      handle(ObjectHashTable::cast(
-                 isolate->heap()->pending_optimize_for_test_bytecode()),
-             isolate);
-  bool was_present;
-  table = table->Remove(isolate, table, handle(function->shared(), isolate),
-                        &was_present);
-  isolate->heap()->SetPendingOptimizeForTestBytecode(*table);
-}
-
-}  // namespace
-
 RUNTIME_FUNCTION(Runtime_OptimizeFunctionOnNextCall) {
   HandleScope scope(isolate);
 
@@ -271,9 +252,9 @@ RUNTIME_FUNCTION(Runtime_OptimizeFunctionOnNextCall) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
 
-  if (function->shared().optimization_disabled() &&
-      function->shared().disable_optimization_reason() ==
-          BailoutReason::kNeverOptimize) {
+  if (!FLAG_opt || (function->shared().optimization_disabled() &&
+                    function->shared().disable_optimization_reason() ==
+                        BailoutReason::kNeverOptimize)) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
 
@@ -281,24 +262,17 @@ RUNTIME_FUNCTION(Runtime_OptimizeFunctionOnNextCall) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
 
-  if (function->HasOptimizedCode()) {
-    DCHECK(function->IsOptimized() || function->ChecksOptimizationMarker());
-    // If function is already optimized, remove the bytecode array from the
-    // pending optimize for test table and return. It is OK if there is no
-    // entry in the table since if the function got optimized before executing
-    // %OptimizeFunctionOnNextCall the entry would have been removed.
-    RemoveBytecodeFromPendingOptimizeTable(isolate, function);
-    return ReadOnlyRoots(isolate).undefined_value();
+  if (FLAG_testing_d8_test_runner) {
+    PendingOptimizationTable::MarkedForOptimization(isolate, function);
   }
 
-  // Check we called PrepareFunctionForOptimization and hold the bytecode
-  // array to prevent it from getting flushed.
-  // TODO(mythria): Enable this check once we add PrepareForOptimization in all
-  // tests before calling OptimizeFunctionOnNextCall.
-  // CHECK(!ObjectHashTable::cast(
-  //          isolate->heap()->pending_optimize_for_test_bytecode())
-  //          ->Lookup(handle(function->shared(), isolate))
-  //          ->IsTheHole());
+  if (function->HasOptimizedCode()) {
+    DCHECK(function->IsOptimized() || function->ChecksOptimizationMarker());
+    if (FLAG_testing_d8_test_runner) {
+      PendingOptimizationTable::FunctionWasOptimized(isolate, function);
+    }
+    return ReadOnlyRoots(isolate).undefined_value();
+  }
 
   ConcurrencyMode concurrency_mode = ConcurrencyMode::kNotConcurrent;
   if (args.length() == 2) {
@@ -338,13 +312,19 @@ namespace {
 
 bool EnsureFeedbackVector(Handle<JSFunction> function) {
   // Check function allows lazy compilation.
-  if (!function->shared().allows_lazy_compilation()) {
-    return false;
-  }
+  if (!function->shared().allows_lazy_compilation()) return false;
+
+  if (function->has_feedback_vector()) return true;
 
   // If function isn't compiled, compile it now.
   IsCompiledScope is_compiled_scope(function->shared().is_compiled_scope());
-  if (!is_compiled_scope.is_compiled() &&
+  // If the JSFunction isn't compiled but it has a initialized feedback cell
+  // then no need to compile. CompileLazy builtin would handle these cases by
+  // installing the code from SFI. Calling compile here may cause another
+  // optimization if FLAG_always_opt is set.
+  bool needs_compilation =
+      !function->is_compiled() && !function->has_closure_feedback_cell_array();
+  if (needs_compilation &&
       !Compiler::Compile(function, Compiler::CLEAR_EXCEPTION,
                          &is_compiled_scope)) {
     return false;
@@ -371,11 +351,23 @@ RUNTIME_FUNCTION(Runtime_EnsureFeedbackVectorForFunction) {
 
 RUNTIME_FUNCTION(Runtime_PrepareFunctionForOptimization) {
   HandleScope scope(isolate);
-  DCHECK_EQ(1, args.length());
+  DCHECK(args.length() == 1 || args.length() == 2);
   if (!args[0].IsJSFunction()) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
+
+  bool allow_heuristic_optimization = false;
+  if (args.length() == 2) {
+    CONVERT_ARG_HANDLE_CHECKED(Object, sync_object, 1);
+    if (!sync_object->IsString())
+      return ReadOnlyRoots(isolate).undefined_value();
+    Handle<String> sync = Handle<String>::cast(sync_object);
+    if (sync->IsOneByteEqualTo(
+            StaticCharVector("allow heuristic optimization"))) {
+      allow_heuristic_optimization = true;
+    }
+  }
 
   if (!EnsureFeedbackVector(function)) {
     return ReadOnlyRoots(isolate).undefined_value();
@@ -396,16 +388,10 @@ RUNTIME_FUNCTION(Runtime_PrepareFunctionForOptimization) {
 
   // Hold onto the bytecode array between marking and optimization to ensure
   // it's not flushed.
-  Handle<ObjectHashTable> table =
-      isolate->heap()->pending_optimize_for_test_bytecode().IsUndefined()
-          ? ObjectHashTable::New(isolate, 1)
-          : handle(ObjectHashTable::cast(
-                       isolate->heap()->pending_optimize_for_test_bytecode()),
-                   isolate);
-  table = ObjectHashTable::Put(
-      table, handle(function->shared(), isolate),
-      handle(function->shared().GetBytecodeArray(), isolate));
-  isolate->heap()->SetPendingOptimizeForTestBytecode(*table);
+  if (FLAG_testing_d8_test_runner) {
+    PendingOptimizationTable::PreparedForOptimization(
+        isolate, function, allow_heuristic_optimization);
+  }
 
   return ReadOnlyRoots(isolate).undefined_value();
 }
@@ -425,26 +411,23 @@ RUNTIME_FUNCTION(Runtime_OptimizeOsr) {
   if (!it.done()) function = handle(it.frame()->function(), isolate);
   if (function.is_null()) return ReadOnlyRoots(isolate).undefined_value();
 
-  if (function->shared().optimization_disabled() &&
-      function->shared().disable_optimization_reason() ==
-          BailoutReason::kNeverOptimize) {
+  if (!FLAG_opt || (function->shared().optimization_disabled() &&
+                    function->shared().disable_optimization_reason() ==
+                        BailoutReason::kNeverOptimize)) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
 
-  // Check we called PrepareFunctionForOptimization and hold the bytecode
-  // array to prevent it from getting flushed.
-  // TODO(mythria): Enable this check once we add PrepareForOptimization in all
-  // tests before calling OptimizeOsr.
-  // CHECK(!ObjectHashTable::cast(
-  //          isolate->heap()->pending_optimize_for_test_bytecode())
-  //          ->Lookup(handle(function->shared(), isolate))
-  //          ->IsTheHole());
+  if (FLAG_testing_d8_test_runner) {
+    PendingOptimizationTable::MarkedForOptimization(isolate, function);
+  }
 
   if (function->HasOptimizedCode()) {
     DCHECK(function->IsOptimized() || function->ChecksOptimizationMarker());
     // If function is already optimized, remove the bytecode array from the
     // pending optimize for test table and return.
-    RemoveBytecodeFromPendingOptimizeTable(isolate, function);
+    if (FLAG_testing_d8_test_runner) {
+      PendingOptimizationTable::FunctionWasOptimized(isolate, function);
+    }
     return ReadOnlyRoots(isolate).undefined_value();
   }
 
@@ -540,7 +523,11 @@ RUNTIME_FUNCTION(Runtime_GetOptimizationStatus) {
   }
 
   if (function->IsOptimized()) {
-    status |= static_cast<int>(OptimizationStatus::kOptimized);
+    if (function->code().marked_for_deoptimization()) {
+      status |= static_cast<int>(OptimizationStatus::kMarkedForDeoptimization);
+    } else {
+      status |= static_cast<int>(OptimizationStatus::kOptimized);
+    }
     if (function->code().is_turbofanned()) {
       status |= static_cast<int>(OptimizationStatus::kTurboFanned);
     }
@@ -839,7 +826,6 @@ RUNTIME_FUNCTION(Runtime_Abort) {
   UNREACHABLE();
 }
 
-
 RUNTIME_FUNCTION(Runtime_AbortJS) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
@@ -854,6 +840,16 @@ RUNTIME_FUNCTION(Runtime_AbortJS) {
   UNREACHABLE();
 }
 
+RUNTIME_FUNCTION(Runtime_AbortCSAAssert) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(1, args.length());
+  CONVERT_ARG_HANDLE_CHECKED(String, message, 0);
+  base::OS::PrintError("abort: CSA_ASSERT failed: %s\n",
+                       message->ToCString().get());
+  isolate->PrintStack(stderr);
+  base::OS::Abort();
+  UNREACHABLE();
+}
 
 RUNTIME_FUNCTION(Runtime_DisassembleFunction) {
   HandleScope scope(isolate);
@@ -1053,6 +1049,24 @@ RUNTIME_FUNCTION(Runtime_SetWasmThreadsEnabled) {
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
+RUNTIME_FUNCTION(Runtime_RegexpHasBytecode) {
+  SealHandleScope shs(isolate);
+  DCHECK_EQ(2, args.length());
+  CONVERT_ARG_CHECKED(JSRegExp, regexp, 0);
+  CONVERT_BOOLEAN_ARG_CHECKED(is_latin1, 1);
+  bool is_irregexp_bytecode = regexp.Bytecode(is_latin1).IsByteArray();
+  return isolate->heap()->ToBoolean(is_irregexp_bytecode);
+}
+
+RUNTIME_FUNCTION(Runtime_RegexpHasNativeCode) {
+  SealHandleScope shs(isolate);
+  DCHECK_EQ(2, args.length());
+  CONVERT_ARG_CHECKED(JSRegExp, regexp, 0);
+  CONVERT_BOOLEAN_ARG_CHECKED(is_latin1, 1);
+  bool is_irregexp_native_code = regexp.Code(is_latin1).IsCode();
+  return isolate->heap()->ToBoolean(is_irregexp_native_code);
+}
+
 #define ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(Name)      \
   RUNTIME_FUNCTION(Runtime_Has##Name) {                 \
     CONVERT_ARG_CHECKED(JSObject, obj, 0);              \
@@ -1086,7 +1100,8 @@ TYPED_ARRAYS(FIXED_TYPED_ARRAYS_CHECK_RUNTIME_FUNCTION)
 RUNTIME_FUNCTION(Runtime_ArraySpeciesProtector) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(0, args.length());
-  return isolate->heap()->ToBoolean(isolate->IsArraySpeciesLookupChainIntact());
+  return isolate->heap()->ToBoolean(
+      Protectors::IsArraySpeciesLookupChainIntact(isolate));
 }
 
 RUNTIME_FUNCTION(Runtime_MapIteratorProtector) {
@@ -1117,17 +1132,22 @@ RUNTIME_FUNCTION(Runtime_SerializeWasmModule) {
 
   wasm::NativeModule* native_module = module_obj->native_module();
   wasm::WasmSerializer wasm_serializer(native_module);
-  size_t compiled_size = wasm_serializer.GetSerializedNativeModuleSize();
-  void* array_data = isolate->array_buffer_allocator()->Allocate(compiled_size);
-  Handle<JSArrayBuffer> array_buffer =
-      isolate->factory()->NewJSArrayBuffer(SharedFlag::kNotShared);
-  JSArrayBuffer::Setup(array_buffer, isolate, false, array_data, compiled_size);
-  if (!array_data ||
-      !wasm_serializer.SerializeNativeModule(
-          {reinterpret_cast<uint8_t*>(array_data), compiled_size})) {
-    return ReadOnlyRoots(isolate).undefined_value();
+  size_t byte_length = wasm_serializer.GetSerializedNativeModuleSize();
+
+  MaybeHandle<JSArrayBuffer> result =
+      isolate->factory()->NewJSArrayBufferAndBackingStore(
+          byte_length, InitializedFlag::kUninitialized);
+
+  Handle<JSArrayBuffer> array_buffer;
+  if (result.ToHandle(&array_buffer) &&
+      wasm_serializer.SerializeNativeModule(
+          {reinterpret_cast<uint8_t*>(array_buffer->backing_store()),
+           byte_length})) {
+    return *array_buffer;
   }
-  return *array_buffer;
+
+  // Error. Return undefined.
+  return ReadOnlyRoots(isolate).undefined_value();
 }
 
 // Take an array buffer and attempt to reconstruct a compiled wasm module.
@@ -1328,6 +1348,7 @@ RUNTIME_FUNCTION(Runtime_EnableCodeLoggingForTesting) {
     void RegExpCodeCreateEvent(AbstractCode code, String source) final {}
     void CodeMoveEvent(AbstractCode from, AbstractCode to) final {}
     void SharedFunctionInfoMoveEvent(Address from, Address to) final {}
+    void NativeContextMoveEvent(Address from, Address to) final {}
     void CodeMovingGCEvent() final {}
     void CodeDisableOptEvent(AbstractCode code,
                              SharedFunctionInfo shared) final {}

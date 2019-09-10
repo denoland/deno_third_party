@@ -134,6 +134,7 @@ namespace compiler {
   V(MipsStackClaim)                \
   V(MipsSeb)                       \
   V(MipsSeh)                       \
+  V(MipsSync)                      \
   V(MipsS128Zero)                  \
   V(MipsI32x4Splat)                \
   V(MipsI32x4ExtractLane)          \
@@ -164,6 +165,7 @@ namespace compiler {
   V(MipsF32x4AddHoriz)             \
   V(MipsF32x4Sub)                  \
   V(MipsF32x4Mul)                  \
+  V(MipsF32x4Div)                  \
   V(MipsF32x4Max)                  \
   V(MipsF32x4Min)                  \
   V(MipsF32x4Eq)                   \

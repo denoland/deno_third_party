@@ -230,9 +230,10 @@ WasmModuleBuilder::WasmModuleBuilder(Zone* zone)
     : zone_(zone),
       signatures_(zone),
       function_imports_(zone),
-      function_exports_(zone),
       global_imports_(zone),
+      exports_(zone),
       functions_(zone),
+      tables_(zone),
       data_segments_(zone),
       indirect_functions_(zone),
       globals_(zone),
@@ -269,18 +270,62 @@ uint32_t WasmModuleBuilder::AddSignature(FunctionSig* sig) {
 }
 
 uint32_t WasmModuleBuilder::AllocateIndirectFunctions(uint32_t count) {
+  DCHECK(allocating_indirect_functions_allowed_);
   uint32_t index = static_cast<uint32_t>(indirect_functions_.size());
   DCHECK_GE(FLAG_wasm_max_table_size, index);
   if (count > FLAG_wasm_max_table_size - index) {
     return std::numeric_limits<uint32_t>::max();
   }
-  indirect_functions_.resize(indirect_functions_.size() + count);
+  uint32_t new_size = static_cast<uint32_t>(indirect_functions_.size()) + count;
+  DCHECK(max_table_size_ == 0 || new_size <= max_table_size_);
+  indirect_functions_.resize(new_size, WasmElemSegment::kNullIndex);
+  uint32_t max = max_table_size_ > 0 ? max_table_size_ : new_size;
+  if (tables_.empty()) {
+    // This cannot use {AddTable} because that would flip the
+    // {allocating_indirect_functions_allowed_} flag.
+    tables_.push_back({kWasmFuncRef, new_size, max, true});
+  } else {
+    // There can only be the indirect function table so far, otherwise the
+    // {allocating_indirect_functions_allowed_} flag would have been false.
+    DCHECK_EQ(1u, tables_.size());
+    DCHECK_EQ(kWasmFuncRef, tables_[0].type);
+    DCHECK(tables_[0].has_maximum);
+    tables_[0].min_size = new_size;
+    tables_[0].max_size = max;
+  }
   return index;
 }
 
 void WasmModuleBuilder::SetIndirectFunction(uint32_t indirect,
                                             uint32_t direct) {
   indirect_functions_[indirect] = direct;
+}
+
+void WasmModuleBuilder::SetMaxTableSize(uint32_t max) {
+  DCHECK_GE(FLAG_wasm_max_table_size, max);
+  DCHECK_GE(max, indirect_functions_.size());
+  max_table_size_ = max;
+  DCHECK(allocating_indirect_functions_allowed_);
+  if (!tables_.empty()) {
+    tables_[0].max_size = max;
+  }
+}
+
+uint32_t WasmModuleBuilder::AddTable(ValueType type, uint32_t min_size) {
+#if DEBUG
+  allocating_indirect_functions_allowed_ = false;
+#endif
+  tables_.push_back({type, min_size, 0, false});
+  return static_cast<uint32_t>(tables_.size() - 1);
+}
+
+uint32_t WasmModuleBuilder::AddTable(ValueType type, uint32_t min_size,
+                                     uint32_t max_size) {
+#if DEBUG
+  allocating_indirect_functions_allowed_ = false;
+#endif
+  tables_.push_back({type, min_size, max_size, true});
+  return static_cast<uint32_t>(tables_.size() - 1);
 }
 
 uint32_t WasmModuleBuilder::AddImport(Vector<const char> name,
@@ -291,8 +336,9 @@ uint32_t WasmModuleBuilder::AddImport(Vector<const char> name,
 }
 
 uint32_t WasmModuleBuilder::AddGlobalImport(Vector<const char> name,
-                                            ValueType type) {
-  global_imports_.push_back({name, ValueTypes::ValueTypeCodeFor(type)});
+                                            ValueType type, bool mutability) {
+  global_imports_.push_back(
+      {name, ValueTypes::ValueTypeCodeFor(type), mutability});
   return static_cast<uint32_t>(global_imports_.size() - 1);
 }
 
@@ -301,25 +347,33 @@ void WasmModuleBuilder::MarkStartFunction(WasmFunctionBuilder* function) {
 }
 
 void WasmModuleBuilder::AddExport(Vector<const char> name,
-                                  WasmFunctionBuilder* function) {
-  DCHECK(function->func_index() <= std::numeric_limits<int>::max());
-  function_exports_.push_back({name, static_cast<int>(function->func_index())});
+                                  ImportExportKindCode kind, uint32_t index) {
+  DCHECK_LE(index, std::numeric_limits<int>::max());
+  exports_.push_back({name, kind, static_cast<int>(index)});
 }
 
-void WasmModuleBuilder::AddExportedImport(Vector<const char> name,
-                                          int import_index) {
+uint32_t WasmModuleBuilder::AddExportedGlobal(ValueType type, bool mutability,
+                                              const WasmInitExpr& init,
+                                              Vector<const char> name) {
+  uint32_t index = AddGlobal(type, mutability, init);
+  AddExport(name, kExternalGlobal, index);
+  return index;
+}
+
+void WasmModuleBuilder::ExportImportedFunction(Vector<const char> name,
+                                               int import_index) {
 #if DEBUG
   // The size of function_imports_ must not change any more.
   adding_imports_allowed_ = false;
 #endif
-  function_exports_.push_back(
-      {name, import_index - static_cast<int>(function_imports_.size())});
+  exports_.push_back(
+      {name, kExternalFunction,
+       import_index - static_cast<int>(function_imports_.size())});
 }
 
-uint32_t WasmModuleBuilder::AddGlobal(ValueType type, bool exported,
-                                      bool mutability,
+uint32_t WasmModuleBuilder::AddGlobal(ValueType type, bool mutability,
                                       const WasmInitExpr& init) {
-  globals_.push_back({type, exported, mutability, init});
+  globals_.push_back({type, mutability, init});
   return static_cast<uint32_t>(globals_.size() - 1);
 }
 
@@ -367,7 +421,7 @@ void WasmModuleBuilder::WriteTo(ZoneBuffer* buffer) const {
       buffer->write_string(import.name);  // field name
       buffer->write_u8(kExternalGlobal);
       buffer->write_u8(import.type_code);
-      buffer->write_u8(0);  // immutable
+      buffer->write_u8(import.mutability ? 1 : 0);
     }
     for (auto import : function_imports_) {
       buffer->write_u32v(0);              // module name (length)
@@ -390,18 +444,20 @@ void WasmModuleBuilder::WriteTo(ZoneBuffer* buffer) const {
     FixupSection(buffer, start);
   }
 
-  // == emit function table ====================================================
-  if (indirect_functions_.size() > 0) {
+  // == Emit tables ============================================================
+  if (tables_.size() > 0) {
     size_t start = EmitSection(kTableSectionCode, buffer);
-    buffer->write_u8(1);  // table count
-    buffer->write_u8(kLocalAnyFunc);
-    buffer->write_u8(kHasMaximumFlag);
-    buffer->write_size(indirect_functions_.size());
-    buffer->write_size(indirect_functions_.size());
+    buffer->write_size(tables_.size());
+    for (const WasmTable& table : tables_) {
+      buffer->write_u8(ValueTypes::ValueTypeCodeFor(table.type));
+      buffer->write_u8(table.has_maximum ? kHasMaximumFlag : kNoMaximumFlag);
+      buffer->write_size(table.min_size);
+      if (table.has_maximum) buffer->write_size(table.max_size);
+    }
     FixupSection(buffer, start);
   }
 
-  // == emit memory declaration ================================================
+  // == Emit memory declaration ================================================
   {
     size_t start = EmitSection(kMemorySectionCode, buffer);
     buffer->write_u8(1);  // memory count
@@ -452,7 +508,13 @@ void WasmModuleBuilder::WriteTo(ZoneBuffer* buffer) const {
           buffer->write_u8(kExprGetGlobal);
           buffer->write_u32v(global.init.val.global_index);
           break;
-        default: {
+        case WasmInitExpr::kRefNullConst:
+          buffer->write_u8(kExprRefNull);
+          break;
+        case WasmInitExpr::kRefFuncConst:
+          UNIMPLEMENTED();
+          break;
+        case WasmInitExpr::kNone: {
           // No initializer, emit a default value.
           switch (global.type) {
             case kWasmI32:
@@ -484,14 +546,28 @@ void WasmModuleBuilder::WriteTo(ZoneBuffer* buffer) const {
   }
 
   // == emit exports ===========================================================
-  if (!function_exports_.empty()) {
+  if (exports_.size() > 0) {
     size_t start = EmitSection(kExportSectionCode, buffer);
-    buffer->write_size(function_exports_.size());
-    for (auto function_export : function_exports_) {
-      buffer->write_string(function_export.name);
-      buffer->write_u8(kExternalFunction);
-      buffer->write_size(function_export.function_index +
-                         function_imports_.size());
+    buffer->write_size(exports_.size());
+    for (auto ex : exports_) {
+      buffer->write_string(ex.name);
+      buffer->write_u8(ex.kind);
+      switch (ex.kind) {
+        case kExternalFunction:
+          buffer->write_size(ex.index + function_imports_.size());
+          break;
+        case kExternalGlobal:
+          buffer->write_size(ex.index + global_imports_.size());
+          break;
+        case kExternalMemory:
+        case kExternalTable:
+          // The WasmModuleBuilder doesn't support importing tables or memories
+          // yet, so there is no index offset to add.
+          buffer->write_size(ex.index);
+          break;
+        case kExternalException:
+          UNREACHABLE();
+      }
     }
     FixupSection(buffer, start);
   }
@@ -508,13 +584,24 @@ void WasmModuleBuilder::WriteTo(ZoneBuffer* buffer) const {
     size_t start = EmitSection(kElementSectionCode, buffer);
     buffer->write_u8(1);              // count of entries
     buffer->write_u8(0);              // table index
+    uint32_t first_element = 0;
+    while (first_element < indirect_functions_.size() &&
+           indirect_functions_[first_element] == WasmElemSegment::kNullIndex) {
+      first_element++;
+    }
+    uint32_t last_element =
+        static_cast<uint32_t>(indirect_functions_.size() - 1);
+    while (last_element >= first_element &&
+           indirect_functions_[last_element] == WasmElemSegment::kNullIndex) {
+      last_element--;
+    }
     buffer->write_u8(kExprI32Const);  // offset
-    buffer->write_u32v(0);
+    buffer->write_u32v(first_element);
     buffer->write_u8(kExprEnd);
-    buffer->write_size(indirect_functions_.size());  // element count
-
-    for (auto index : indirect_functions_) {
-      buffer->write_size(index + function_imports_.size());
+    uint32_t element_count = last_element - first_element + 1;
+    buffer->write_size(element_count);
+    for (uint32_t i = first_element; i <= last_element; i++) {
+      buffer->write_size(indirect_functions_[i] + function_imports_.size());
     }
 
     FixupSection(buffer, start);

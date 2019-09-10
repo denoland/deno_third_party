@@ -1858,10 +1858,12 @@ using SimulatorRuntimeCall = intptr_t (*)(intptr_t arg0, intptr_t arg1,
                                           intptr_t arg2, intptr_t arg3,
                                           intptr_t arg4, intptr_t arg5,
                                           intptr_t arg6, intptr_t arg7,
-                                          intptr_t arg8);
+                                          intptr_t arg8, intptr_t arg9);
 using SimulatorRuntimePairCall = ObjectPair (*)(intptr_t arg0, intptr_t arg1,
                                                 intptr_t arg2, intptr_t arg3,
-                                                intptr_t arg4, intptr_t arg5);
+                                                intptr_t arg4, intptr_t arg5,
+                                                intptr_t arg6, intptr_t arg7,
+                                                intptr_t arg8, intptr_t arg9);
 
 // These prototypes handle the four types of FP calls.
 using SimulatorRuntimeCompareCall = int (*)(double darg0, double darg1);
@@ -1891,7 +1893,7 @@ void Simulator::SoftwareInterrupt(Instruction* instr) {
           (get_register(sp) & (::v8::internal::FLAG_sim_stack_alignment - 1)) ==
           0;
       Redirection* redirection = Redirection::FromInstruction(instr);
-      const int kArgCount = 9;
+      const int kArgCount = 10;
       const int kRegisterArgCount = 5;
       int arg0_regnum = 2;
       intptr_t result_buffer = 0;
@@ -1913,8 +1915,8 @@ void Simulator::SoftwareInterrupt(Instruction* instr) {
         arg[i] = stack_pointer[(kCalleeRegisterSaveAreaSize / kPointerSize) +
                                (i - kRegisterArgCount)];
       }
-      STATIC_ASSERT(kArgCount == kRegisterArgCount + 4);
-      STATIC_ASSERT(kMaxCParameters == 9);
+      STATIC_ASSERT(kArgCount == kRegisterArgCount + 5);
+      STATIC_ASSERT(kMaxCParameters == kArgCount);
       bool fp_call =
           (redirection->type() == ExternalReference::BUILTIN_FP_FP_CALL) ||
           (redirection->type() == ExternalReference::BUILTIN_COMPARE_CALL) ||
@@ -2094,9 +2096,10 @@ void Simulator::SoftwareInterrupt(Instruction* instr) {
               "Call to host function at %p,\n"
               "\t\t\t\targs %08" V8PRIxPTR ", %08" V8PRIxPTR ", %08" V8PRIxPTR
               ", %08" V8PRIxPTR ", %08" V8PRIxPTR ", %08" V8PRIxPTR
-              ", %08" V8PRIxPTR ", %08" V8PRIxPTR ", %08" V8PRIxPTR,
+              ", %08" V8PRIxPTR ", %08" V8PRIxPTR ", %08" V8PRIxPTR
+              ", %08" V8PRIxPTR,
               reinterpret_cast<void*>(FUNCTION_ADDR(target)), arg[0], arg[1],
-              arg[2], arg[3], arg[4], arg[5], arg[6], arg[7], arg[8]);
+              arg[2], arg[3], arg[4], arg[5], arg[6], arg[7], arg[8], arg[9]);
           if (!stack_aligned) {
             PrintF(" with unaligned stack %08" V8PRIxPTR "\n",
                    static_cast<intptr_t>(get_register(sp)));
@@ -2107,8 +2110,8 @@ void Simulator::SoftwareInterrupt(Instruction* instr) {
         if (redirection->type() == ExternalReference::BUILTIN_CALL_PAIR) {
           SimulatorRuntimePairCall target =
               reinterpret_cast<SimulatorRuntimePairCall>(external);
-          ObjectPair result =
-              target(arg[0], arg[1], arg[2], arg[3], arg[4], arg[5]);
+          ObjectPair result = target(arg[0], arg[1], arg[2], arg[3], arg[4],
+                                     arg[5], arg[6], arg[7], arg[8], arg[9]);
           intptr_t x;
           intptr_t y;
           decodeObjectPair(&result, &x, &y);
@@ -2128,7 +2131,7 @@ void Simulator::SoftwareInterrupt(Instruction* instr) {
           SimulatorRuntimeCall target =
               reinterpret_cast<SimulatorRuntimeCall>(external);
           intptr_t result = target(arg[0], arg[1], arg[2], arg[3], arg[4],
-                                   arg[5], arg[6], arg[7], arg[8]);
+                                   arg[5], arg[6], arg[7], arg[8], arg[9]);
           if (::v8::internal::FLAG_trace_sim) {
             PrintF("Returned %08" V8PRIxPTR "\n", result);
           }
@@ -5149,27 +5152,6 @@ EVALUATE(STM) {
   return length;
 }
 
-EVALUATE(TM) {
-  DCHECK_OPCODE(TM);
-  // Test Under Mask (Mem - Imm) (8)
-  DECODE_SI_INSTRUCTION_I_UINT8(b1, d1_val, imm_val)
-  int64_t b1_val = (b1 == 0) ? 0 : get_register(b1);
-  intptr_t addr = b1_val + d1_val;
-  uint8_t mem_val = ReadB(addr);
-  uint8_t selected_bits = mem_val & imm_val;
-  // CC0: Selected bits are zero
-  // CC1: Selected bits mixed zeros and ones
-  // CC3: Selected bits all ones
-  if (0 == selected_bits) {
-    condition_reg_ = CC_EQ;  // CC0
-  } else if (selected_bits == imm_val) {
-    condition_reg_ = 0x1;  // CC3
-  } else {
-    condition_reg_ = 0x4;  // CC1
-  }
-  return length;
-}
-
 EVALUATE(MVI) {
   UNIMPLEMENTED();
   USE(instr);
@@ -5595,7 +5577,8 @@ EVALUATE(LLILL) {
   return 0;
 }
 
-inline static int TestUnderMask(uint16_t val, uint16_t mask) {
+inline static int TestUnderMask(uint16_t val, uint16_t mask,
+                                bool is_tm_or_tmy) {
   // Test if all selected bits are zeros or mask is zero
   if (0 == (mask & val)) {
     return 0x8;
@@ -5607,6 +5590,13 @@ inline static int TestUnderMask(uint16_t val, uint16_t mask) {
   }
 
   // Now we know selected bits mixed zeros and ones
+  // Test if it is TM or TMY since they have
+  // different CC result from TMLL/TMLH/TMHH/TMHL
+  if (is_tm_or_tmy) {
+    return 0x4;
+  }
+
+  // Now we know the instruction is TMLL/TMLH/TMHH/TMHL
   // Test if the leftmost bit is zero or one
 #if defined(__GNUC__)
   int leadingZeros = __builtin_clz(mask);
@@ -5639,7 +5629,8 @@ EVALUATE(TMLH) {
   DECODE_RI_A_INSTRUCTION(instr, r1, i2);
   uint32_t value = get_low_register<uint32_t>(r1) >> 16;
   uint32_t mask = i2 & 0x0000FFFF;
-  condition_reg_ = TestUnderMask(value, mask);
+  bool is_tm_or_tmy = 0;
+  condition_reg_ = TestUnderMask(value, mask, is_tm_or_tmy);
   return length;  // DONE
 }
 
@@ -5648,20 +5639,29 @@ EVALUATE(TMLL) {
   DECODE_RI_A_INSTRUCTION(instr, r1, i2);
   uint32_t value = get_low_register<uint32_t>(r1) & 0x0000FFFF;
   uint32_t mask = i2 & 0x0000FFFF;
-  condition_reg_ = TestUnderMask(value, mask);
+  bool is_tm_or_tmy = 0;
+  condition_reg_ = TestUnderMask(value, mask, is_tm_or_tmy);
   return length;  // DONE
 }
 
 EVALUATE(TMHH) {
-  UNIMPLEMENTED();
-  USE(instr);
-  return 0;
+  DCHECK_OPCODE(TMHH);
+  DECODE_RI_A_INSTRUCTION(instr, r1, i2);
+  uint32_t value = get_high_register<uint32_t>(r1) >> 16;
+  uint32_t mask = i2 & 0x0000FFFF;
+  bool is_tm_or_tmy = 0;
+  condition_reg_ = TestUnderMask(value, mask, is_tm_or_tmy);
+  return length;
 }
 
 EVALUATE(TMHL) {
-  UNIMPLEMENTED();
-  USE(instr);
-  return 0;
+  DCHECK_OPCODE(TMHL);
+  DECODE_RI_A_INSTRUCTION(instr, r1, i2);
+  uint32_t value = get_high_register<uint32_t>(r1) & 0x0000FFFF;
+  uint32_t mask = i2 & 0x0000FFFF;
+  bool is_tm_or_tmy = 0;
+  condition_reg_ = TestUnderMask(value, mask, is_tm_or_tmy);
+  return length;
 }
 
 EVALUATE(BRAS) {
@@ -9972,26 +9972,31 @@ EVALUATE(ECAG) {
   return 0;
 }
 
+EVALUATE(TM) {
+  DCHECK_OPCODE(TM);
+  // Test Under Mask (Mem - Imm) (8)
+  DECODE_SI_INSTRUCTION_I_UINT8(b1, d1_val, imm_val)
+  int64_t b1_val = (b1 == 0) ? 0 : get_register(b1);
+  intptr_t addr = b1_val + d1_val;
+  uint8_t mem_val = ReadB(addr);
+  uint8_t selected_bits = mem_val & imm_val;
+  // is TM
+  bool is_tm_or_tmy = 1;
+  condition_reg_ = TestUnderMask(selected_bits, imm_val, is_tm_or_tmy);
+  return length;
+}
+
 EVALUATE(TMY) {
   DCHECK_OPCODE(TMY);
   // Test Under Mask (Mem - Imm) (8)
-  DECODE_SIY_INSTRUCTION(b1, d1, i2);
+  DECODE_SIY_INSTRUCTION(b1, d1_val, imm_val);
   int64_t b1_val = (b1 == 0) ? 0 : get_register(b1);
-  intptr_t d1_val = d1;
   intptr_t addr = b1_val + d1_val;
   uint8_t mem_val = ReadB(addr);
-  uint8_t imm_val = i2;
   uint8_t selected_bits = mem_val & imm_val;
-  // CC0: Selected bits are zero
-  // CC1: Selected bits mixed zeros and ones
-  // CC3: Selected bits all ones
-  if (0 == selected_bits) {
-    condition_reg_ = CC_EQ;  // CC0
-  } else if (selected_bits == imm_val) {
-    condition_reg_ = 0x1;  // CC3
-  } else {
-    condition_reg_ = 0x4;  // CC1
-  }
+  // is TMY
+  bool is_tm_or_tmy = 1;
+  condition_reg_ = TestUnderMask(selected_bits, imm_val, is_tm_or_tmy);
   return length;
 }
 

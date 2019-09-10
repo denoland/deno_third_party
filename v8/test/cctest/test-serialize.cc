@@ -1516,6 +1516,50 @@ static Handle<SharedFunctionInfo> CompileScriptAndProduceCache(
   return sfi;
 }
 
+TEST(CodeSerializerWithProfiler) {
+  FLAG_enable_lazy_source_positions = true;
+  FLAG_stress_lazy_source_positions = false;
+
+  LocalContext context;
+  Isolate* isolate = CcTest::i_isolate();
+  isolate->compilation_cache()->Disable();  // Disable same-isolate code cache.
+
+  v8::HandleScope scope(CcTest::isolate());
+
+  const char* source = "1 + 1";
+
+  Handle<String> orig_source = isolate->factory()
+                                   ->NewStringFromUtf8(CStrVector(source))
+                                   .ToHandleChecked();
+  Handle<String> copy_source = isolate->factory()
+                                   ->NewStringFromUtf8(CStrVector(source))
+                                   .ToHandleChecked();
+  CHECK(!orig_source.is_identical_to(copy_source));
+  CHECK(orig_source->Equals(*copy_source));
+
+  ScriptData* cache = nullptr;
+
+  Handle<SharedFunctionInfo> orig = CompileScriptAndProduceCache(
+      isolate, orig_source, Handle<String>(), &cache,
+      v8::ScriptCompiler::kNoCompileOptions);
+
+  CHECK(!orig->GetBytecodeArray().HasSourcePositionTable());
+
+  isolate->set_is_profiling(true);
+
+  // This does not assert that no compilation can happen as source position
+  // collection could trigger it.
+  Handle<SharedFunctionInfo> copy =
+      CompileScript(isolate, copy_source, Handle<String>(), cache,
+                    v8::ScriptCompiler::kConsumeCodeCache);
+
+  // Since the profiler is now enabled, source positions should be collected
+  // after deserialization.
+  CHECK(copy->GetBytecodeArray().HasSourcePositionTable());
+
+  delete cache;
+}
+
 void TestCodeSerializerOnePlusOneImpl(bool verify_builtins_count = true) {
   LocalContext context;
   Isolate* isolate = CcTest::i_isolate();
@@ -2938,6 +2982,53 @@ UNINITIALIZED_TEST(SnapshotCreatorArrayJoinWithKeep) {
   FreeCurrentEmbeddedBlob();
 }
 
+v8::StartupData CreateCustomSnapshotWithDuplicateFunctions() {
+  v8::SnapshotCreator creator;
+  v8::Isolate* isolate = creator.GetIsolate();
+  {
+    v8::HandleScope handle_scope(isolate);
+    {
+      v8::Local<v8::Context> context = v8::Context::New(isolate);
+      v8::Context::Scope context_scope(context);
+      CompileRun(
+          "function f() { return (() => 'a'); }\n"
+          "let g1 = f();\n"
+          "let g2 = f();\n");
+      ExpectString("g1()", "a");
+      ExpectString("g2()", "a");
+      creator.SetDefaultContext(context);
+    }
+  }
+  return creator.CreateBlob(v8::SnapshotCreator::FunctionCodeHandling::kKeep);
+}
+
+UNINITIALIZED_TEST(SnapshotCreatorDuplicateFunctions) {
+  DisableAlwaysOpt();
+  DisableEmbeddedBlobRefcounting();
+  v8::StartupData blob = CreateCustomSnapshotWithDuplicateFunctions();
+  ReadOnlyHeap::ClearSharedHeapForTest();
+
+  // Deserialize with an incomplete list of external references.
+  {
+    v8::Isolate::CreateParams params;
+    params.snapshot_blob = &blob;
+    params.array_buffer_allocator = CcTest::array_buffer_allocator();
+    // Test-appropriate equivalent of v8::Isolate::New.
+    v8::Isolate* isolate = TestSerializer::NewIsolate(params);
+    {
+      v8::Isolate::Scope isolate_scope(isolate);
+      v8::HandleScope handle_scope(isolate);
+      v8::Local<v8::Context> context = v8::Context::New(isolate);
+      v8::Context::Scope context_scope(context);
+      ExpectString("g1()", "a");
+      ExpectString("g2()", "a");
+    }
+    isolate->Dispose();
+  }
+  delete[] blob.data;
+  FreeCurrentEmbeddedBlob();
+}
+
 TEST(SnapshotCreatorNoExternalReferencesCustomFail1) {
   DisableAlwaysOpt();
   v8::StartupData blob = CreateSnapshotWithDefaultAndCustom();
@@ -3518,6 +3609,7 @@ UNINITIALIZED_TEST(SnapshotCreatorIncludeGlobalProxy) {
           base::make_unique<v8::Extension>("new extension",
                                            "function i() { return 24; }"
                                            "function j() { return 25; }"
+                                           "let a = 26;"
                                            "try {"
                                            "  if (o.p == 7) o.p++;"
                                            "} catch {}");
@@ -3535,6 +3627,7 @@ UNINITIALIZED_TEST(SnapshotCreatorIncludeGlobalProxy) {
         ExpectInt32("i()", 24);
         ExpectInt32("j()", 25);
         ExpectInt32("o.p", 8);
+        ExpectInt32("a", 26);
         v8::TryCatch try_catch(isolate);
         CHECK(CompileRun("x").IsEmpty());
         CHECK(try_catch.HasCaught());

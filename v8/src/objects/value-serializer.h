@@ -30,7 +30,6 @@ class JSMap;
 class JSPrimitiveWrapper;
 class JSRegExp;
 class JSSet;
-class MutableHeapNumber;
 class Object;
 class Oddball;
 class Smi;
@@ -111,7 +110,6 @@ class ValueSerializer {
   void WriteOddball(Oddball oddball);
   void WriteSmi(Smi smi);
   void WriteHeapNumber(HeapNumber number);
-  void WriteMutableHeapNumber(MutableHeapNumber number);
   void WriteBigInt(BigInt bigint);
   void WriteString(Handle<String> string);
   Maybe<bool> WriteJSReceiver(Handle<JSReceiver> receiver)
@@ -128,6 +126,7 @@ class ValueSerializer {
   Maybe<bool> WriteJSArrayBuffer(Handle<JSArrayBuffer> array_buffer)
       V8_WARN_UNUSED_RESULT;
   Maybe<bool> WriteJSArrayBufferView(JSArrayBufferView array_buffer);
+  Maybe<bool> WriteJSError(Handle<JSObject> error) V8_WARN_UNUSED_RESULT;
   Maybe<bool> WriteWasmModule(Handle<WasmModuleObject> object)
       V8_WARN_UNUSED_RESULT;
   Maybe<bool> WriteWasmMemory(Handle<WasmMemoryObject> object)
@@ -276,6 +275,7 @@ class ValueDeserializer {
       V8_WARN_UNUSED_RESULT;
   MaybeHandle<JSArrayBufferView> ReadJSArrayBufferView(
       Handle<JSArrayBuffer> buffer) V8_WARN_UNUSED_RESULT;
+  MaybeHandle<Object> ReadJSError() V8_WARN_UNUSED_RESULT;
   MaybeHandle<JSObject> ReadWasmModule() V8_WARN_UNUSED_RESULT;
   MaybeHandle<JSObject> ReadWasmModuleTransfer() V8_WARN_UNUSED_RESULT;
   MaybeHandle<WasmMemoryObject> ReadWasmMemory() V8_WARN_UNUSED_RESULT;

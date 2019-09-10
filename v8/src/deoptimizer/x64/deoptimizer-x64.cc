@@ -13,6 +13,9 @@
 namespace v8 {
 namespace internal {
 
+const bool Deoptimizer::kSupportsFixedDeoptExitSize = false;
+const int Deoptimizer::kDeoptExitSize = 0;
+
 #define __ masm->
 
 void Deoptimizer::GenerateDeoptimizationEntries(MacroAssembler* masm,
@@ -34,16 +37,6 @@ void Deoptimizer::GenerateDeoptimizationEntries(MacroAssembler* masm,
     __ Movsd(Operand(rsp, offset), xmm_reg);
   }
 
-  const int kFloatRegsSize = kFloatSize * XMMRegister::kNumRegisters;
-  __ AllocateStackSpace(kFloatRegsSize);
-
-  for (int i = 0; i < config->num_allocatable_float_registers(); ++i) {
-    int code = config->GetAllocatableFloatCode(i);
-    XMMRegister xmm_reg = XMMRegister::from_code(code);
-    int offset = code * kFloatSize;
-    __ Movss(Operand(rsp, offset), xmm_reg);
-  }
-
   // We push all registers onto the stack, even though we do not need
   // to restore all later.
   for (int i = 0; i < kNumberOfRegisters; i++) {
@@ -51,8 +44,8 @@ void Deoptimizer::GenerateDeoptimizationEntries(MacroAssembler* masm,
     __ pushq(r);
   }
 
-  const int kSavedRegistersAreaSize = kNumberOfRegisters * kSystemPointerSize +
-                                      kDoubleRegsSize + kFloatRegsSize;
+  const int kSavedRegistersAreaSize =
+      kNumberOfRegisters * kSystemPointerSize + kDoubleRegsSize;
 
   __ Store(
       ExternalReference::Create(IsolateAddressId::kCEntryFPAddress, isolate),
@@ -112,22 +105,18 @@ void Deoptimizer::GenerateDeoptimizationEntries(MacroAssembler* masm,
     __ PopQuad(Operand(rbx, offset));
   }
 
-  // Fill in the float input registers.
-  int float_regs_offset = FrameDescription::float_registers_offset();
-  for (int i = 0; i < XMMRegister::kNumRegisters; i++) {
-    int src_offset = i * kFloatSize;
-    int dst_offset = i * kFloatSize + float_regs_offset;
-    __ movl(rcx, Operand(rsp, src_offset));
-    __ movl(Operand(rbx, dst_offset), rcx);
-  }
-  __ addq(rsp, Immediate(kFloatRegsSize));
-
   // Fill in the double input registers.
   int double_regs_offset = FrameDescription::double_registers_offset();
   for (int i = 0; i < XMMRegister::kNumRegisters; i++) {
     int dst_offset = i * kDoubleSize + double_regs_offset;
     __ popq(Operand(rbx, dst_offset));
   }
+
+  // Mark the stack as not iterable for the CPU profiler which won't be able to
+  // walk the stack without the return address.
+  __ movb(__ ExternalReferenceAsOperand(
+              ExternalReference::stack_is_iterable_address(isolate)),
+          Immediate(0));
 
   // Remove the return address from the stack.
   __ addq(rsp, Immediate(kPCOnStackSize));
@@ -218,11 +207,18 @@ void Deoptimizer::GenerateDeoptimizationEntries(MacroAssembler* masm,
     __ popq(r);
   }
 
+  __ movb(__ ExternalReferenceAsOperand(
+              ExternalReference::stack_is_iterable_address(isolate)),
+          Immediate(1));
+
   // Return to the continuation point.
   __ ret(0);
 }
 
-bool Deoptimizer::PadTopOfStackRegister() { return false; }
+Float32 RegisterValues::GetFloatRegister(unsigned n) const {
+  return Float32::FromBits(
+      static_cast<uint32_t>(double_registers_[n].get_bits()));
+}
 
 void FrameDescription::SetCallerPc(unsigned offset, intptr_t value) {
   if (kPCOnStackSize == 2 * kSystemPointerSize) {

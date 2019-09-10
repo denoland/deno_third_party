@@ -5,6 +5,7 @@
 #ifndef V8_AST_SCOPES_H_
 #define V8_AST_SCOPES_H_
 
+#include <numeric>
 #include "src/ast/ast.h"
 #include "src/base/compiler-specific.h"
 #include "src/base/hashmap.h"
@@ -13,6 +14,7 @@
 #include "src/objects/function-kind.h"
 #include "src/objects/objects.h"
 #include "src/utils/pointer-with-payload.h"
+#include "src/utils/utils.h"
 #include "src/zone/zone.h"
 
 namespace v8 {
@@ -42,7 +44,6 @@ class VariableMap : public ZoneHashMap {
                     VariableMode mode, VariableKind kind,
                     InitializationFlag initialization_flag,
                     MaybeAssignedFlag maybe_assigned_flag,
-                    RequiresBrandCheckFlag requires_brand_check,
                     bool* was_added);
 
   V8_EXPORT_PRIVATE Variable* Lookup(const AstRawString* name);
@@ -111,8 +112,10 @@ class V8_EXPORT_PRIVATE Scope : public NON_EXPORTED_BASE(ZoneObject) {
     }
 
     void RestoreEvalFlag() {
-      outer_scope_and_calls_eval_->scope_calls_eval_ =
-          outer_scope_and_calls_eval_.GetPayload();
+      if (outer_scope_and_calls_eval_.GetPayload()) {
+        // This recreates both calls_eval and sloppy_eval_can_extend_vars.
+        outer_scope_and_calls_eval_.GetPointer()->RecordEvalCall();
+      }
     }
 
     void Reparent(DeclarationScope* new_parent);
@@ -265,9 +268,7 @@ class V8_EXPORT_PRIVATE Scope : public NON_EXPORTED_BASE(ZoneObject) {
 
   // Inform the scope and outer scopes that the corresponding code contains an
   // eval call.
-  void RecordEvalCall() {
-    scope_calls_eval_ = true;
-  }
+  inline void RecordEvalCall();
 
   void RecordInnerScopeEvalCall() {
     inner_scope_calls_eval_ = true;
@@ -359,6 +360,9 @@ class V8_EXPORT_PRIVATE Scope : public NON_EXPORTED_BASE(ZoneObject) {
   bool is_class_scope() const { return scope_type_ == CLASS_SCOPE; }
 
   bool inner_scope_calls_eval() const { return inner_scope_calls_eval_; }
+  bool private_name_lookup_skips_outer_class() const {
+    return private_name_lookup_skips_outer_class_;
+  }
   bool IsAsmModule() const;
   // Returns true if this scope or any inner scopes that might be eagerly
   // compiled are asm modules.
@@ -460,12 +464,8 @@ class V8_EXPORT_PRIVATE Scope : public NON_EXPORTED_BASE(ZoneObject) {
   int ContextChainLength(Scope* scope) const;
 
   // The number of contexts between this and the outermost context that has a
-  // sloppy eval call. One if this->calls_sloppy_eval().
+  // sloppy eval call. One if this->sloppy_eval_can_extend_vars().
   int ContextChainLengthUntilOutermostSloppyEval() const;
-
-  // Find the closest class scope in the current scope and outer scopes. If no
-  // class scope is found, nullptr will be returned.
-  ClassScope* GetClassScope();
 
   // Find the first function, script, eval or (declaration) block scope. This is
   // the scope where var declarations will be hoisted to in the implementation.
@@ -558,7 +558,7 @@ class V8_EXPORT_PRIVATE Scope : public NON_EXPORTED_BASE(ZoneObject) {
                     MaybeAssignedFlag maybe_assigned_flag, bool* was_added) {
     Variable* result =
         variables_.Declare(zone, this, name, mode, kind, initialization_flag,
-                           maybe_assigned_flag, kNoBrandCheck, was_added);
+                           maybe_assigned_flag, was_added);
     if (*was_added) locals_.Add(result);
     return result;
   }
@@ -703,22 +703,29 @@ class V8_EXPORT_PRIVATE Scope : public NON_EXPORTED_BASE(ZoneObject) {
   // The language mode of this scope.
   STATIC_ASSERT(LanguageModeSize == 2);
   bool is_strict_ : 1;
-  // This scope or a nested catch scope or with scope contain an 'eval' call. At
-  // the 'eval' call site this scope is the declaration scope.
-  bool scope_calls_eval_ : 1;
+  // This scope contains an 'eval' call.
+  bool calls_eval_ : 1;
+  // The context associated with this scope can be extended by a sloppy eval
+  // called inside of it.
+  bool sloppy_eval_can_extend_vars_ : 1;
   // This scope's declarations might not be executed in order (e.g., switch).
   bool scope_nonlinear_ : 1;
   bool is_hidden_ : 1;
-  // Temporary workaround that allows masking of 'this' in debug-evalute scopes.
+  // Temporary workaround that allows masking of 'this' in debug-evaluate
+  // scopes.
   bool is_debug_evaluate_scope_ : 1;
 
   // True if one of the inner scopes or the scope itself calls eval.
   bool inner_scope_calls_eval_ : 1;
-  bool force_context_allocation_ : 1;
   bool force_context_allocation_for_parameters_ : 1;
 
   // True if it holds 'var' declarations.
   bool is_declaration_scope_ : 1;
+
+  // True if the outer scope is a class scope and should be skipped when
+  // resolving private names, i.e. if the scope is in a class heritage
+  // expression.
+  bool private_name_lookup_skips_outer_class_ : 1;
 
   bool must_use_preparsed_scope_data_ : 1;
 };
@@ -754,11 +761,50 @@ class V8_EXPORT_PRIVATE DeclarationScope : public Scope {
                                         IsClassConstructor(function_kind())));
   }
 
-  bool calls_sloppy_eval() const {
-    // TODO(delphick): Calculate this when setting and change the name of
-    // scope_calls_eval_.
-    return !is_script_scope() && scope_calls_eval_ &&
-           is_sloppy(language_mode());
+  // Inform the scope and outer scopes that the corresponding code contains an
+  // eval call.
+  void RecordDeclarationScopeEvalCall() {
+    calls_eval_ = true;
+
+    // If this isn't a sloppy eval, we don't care about it.
+    if (language_mode() != LanguageMode::kSloppy) return;
+
+    // Sloppy eval in script scopes can only introduce global variables anyway,
+    // so we don't care that it calls sloppy eval.
+    if (is_script_scope()) return;
+
+    // Sloppy eval in a eval scope can only introduce variables into the outer
+    // (non-eval) declaration scope, not into this eval scope.
+    if (is_eval_scope()) {
+#ifdef DEBUG
+      // One of three things must be true:
+      //   1. The outer non-eval declaration scope should already be marked as
+      //      being extendable by sloppy eval, by the current sloppy eval rather
+      //      than the inner one,
+      //   2. The outer non-eval declaration scope is a script scope and thus
+      //      isn't extendable anyway, or
+      //   3. This is a debug evaluate and all bets are off.
+      DeclarationScope* outer_decl_scope = outer_scope()->GetDeclarationScope();
+      while (outer_decl_scope->is_eval_scope()) {
+        outer_decl_scope = outer_decl_scope->GetDeclarationScope();
+      }
+      if (outer_decl_scope->is_debug_evaluate_scope()) {
+        // Don't check anything.
+        // TODO(9662): Figure out where variables declared by an eval inside a
+        // debug-evaluate actually go.
+      } else if (!outer_decl_scope->is_script_scope()) {
+        DCHECK(outer_decl_scope->sloppy_eval_can_extend_vars_);
+      }
+#endif
+
+      return;
+    }
+
+    sloppy_eval_can_extend_vars_ = true;
+  }
+
+  bool sloppy_eval_can_extend_vars() const {
+    return sloppy_eval_can_extend_vars_;
   }
 
   bool was_lazily_parsed() const { return was_lazily_parsed_; }
@@ -1039,6 +1085,11 @@ class V8_EXPORT_PRIVATE DeclarationScope : public Scope {
     GetReceiverScope()->receiver()->ForceContextAllocation();
   }
 
+  bool needs_private_name_context_chain_recalc() const {
+    return needs_private_name_context_chain_recalc_;
+  }
+  void RecordNeedsPrivateNameContextChainRecalc();
+
  private:
   V8_INLINE void AllocateParameter(Variable* var, int index);
 
@@ -1055,6 +1106,12 @@ class V8_EXPORT_PRIVATE DeclarationScope : public Scope {
   bool AllocateVariables(ParseInfo* info);
 
   void SetDefaults();
+
+  // Recalculate the private name context chain from the existing skip bit in
+  // preparation for AllocateScopeInfos. Because the private name scope is
+  // implemented with a skip bit for scopes in heritage position, that bit may
+  // need to be recomputed due scopes that do not need contexts.
+  void RecalcPrivateNameContextChain();
 
   bool has_simple_parameters_ : 1;
   // This scope contains an "use asm" annotation.
@@ -1077,6 +1134,7 @@ class V8_EXPORT_PRIVATE DeclarationScope : public Scope {
   bool has_checked_syntax_ : 1;
   bool has_this_reference_ : 1;
   bool has_this_declaration_ : 1;
+  bool needs_private_name_context_chain_recalc_ : 1;
 
   // If the scope is a function scope, this is the function kind.
   const FunctionKind function_kind_;
@@ -1139,13 +1197,21 @@ class V8_EXPORT_PRIVATE DeclarationScope : public Scope {
   RareData* rare_data_ = nullptr;
 };
 
+void Scope::RecordEvalCall() {
+  calls_eval_ = true;
+  GetDeclarationScope()->RecordDeclarationScopeEvalCall();
+  RecordInnerScopeEvalCall();
+}
+
 Scope::Snapshot::Snapshot(Scope* scope)
-    : outer_scope_and_calls_eval_(scope, scope->scope_calls_eval_),
+    : outer_scope_and_calls_eval_(scope, scope->calls_eval_),
       top_inner_scope_(scope->inner_scope_),
       top_unresolved_(scope->unresolved_list_.end()),
       top_local_(scope->GetClosureScope()->locals_.end()) {
   // Reset in order to record eval calls during this Snapshot's lifetime.
-  outer_scope_and_calls_eval_.GetPointer()->scope_calls_eval_ = false;
+  outer_scope_and_calls_eval_.GetPointer()->calls_eval_ = false;
+  outer_scope_and_calls_eval_.GetPointer()->sloppy_eval_can_extend_vars_ =
+      false;
 }
 
 class ModuleScope final : public DeclarationScope {
@@ -1174,13 +1240,21 @@ class V8_EXPORT_PRIVATE ClassScope : public Scope {
   ClassScope(Zone* zone, AstValueFactory* ast_value_factory,
              Handle<ScopeInfo> scope_info);
 
+  struct HeritageParsingScope {
+    explicit HeritageParsingScope(ClassScope* class_scope)
+        : class_scope_(class_scope) {
+      class_scope_->SetIsParsingHeritage(true);
+    }
+    ~HeritageParsingScope() { class_scope_->SetIsParsingHeritage(false); }
+
+   private:
+    ClassScope* class_scope_;
+  };
+
   // Declare a private name in the private name map and add it to the
   // local variables of this scope.
-  Variable* DeclarePrivateName(const AstRawString* name,
-                               RequiresBrandCheckFlag requires_brand_check,
+  Variable* DeclarePrivateName(const AstRawString* name, VariableMode mode,
                                bool* was_added);
-
-  void AddUnresolvedPrivateName(VariableProxy* proxy);
 
   // Try resolving all unresolved private names found in the current scope.
   // Called from DeclarationScope::AllocateVariables() when reparsing a
@@ -1213,11 +1287,17 @@ class V8_EXPORT_PRIVATE ClassScope : public Scope {
   Variable* DeclareBrandVariable(AstValueFactory* ast_value_factory,
                                  int class_token_pos);
   Variable* brand() {
-    return rare_data_ == nullptr ? nullptr : rare_data_->brand;
+    return GetRareData() == nullptr ? nullptr : GetRareData()->brand;
+  }
+
+  V8_INLINE bool IsParsingHeritage() {
+    return rare_data_and_is_parsing_heritage_.GetPayload();
   }
 
  private:
   friend class Scope;
+  friend class PrivateNameScopeIterator;
+
   // Find the private name declared in the private name map first,
   // if it cannot be found there, try scope info if there is any.
   // Returns nullptr if it cannot be found.
@@ -1235,14 +1315,44 @@ class V8_EXPORT_PRIVATE ClassScope : public Scope {
     Variable* brand = nullptr;
   };
 
+  V8_INLINE RareData* GetRareData() {
+    return rare_data_and_is_parsing_heritage_.GetPointer();
+  }
   V8_INLINE RareData* EnsureRareData() {
-    if (rare_data_ == nullptr) {
-      rare_data_ = new (zone_) RareData(zone_);
+    if (GetRareData() == nullptr) {
+      rare_data_and_is_parsing_heritage_.SetPointer(new (zone_)
+                                                        RareData(zone_));
     }
-    return rare_data_;
+    return GetRareData();
+  }
+  V8_INLINE void SetIsParsingHeritage(bool v) {
+    rare_data_and_is_parsing_heritage_.SetPayload(v);
   }
 
-  RareData* rare_data_ = nullptr;
+  PointerWithPayload<RareData, bool, 1> rare_data_and_is_parsing_heritage_;
+};
+
+// Iterate over the private name scope chain. The iteration proceeds from the
+// innermost private name scope outwards.
+class PrivateNameScopeIterator {
+ public:
+  explicit PrivateNameScopeIterator(Scope* start);
+
+  bool Done() const { return current_scope_ == nullptr; }
+  void Next();
+
+  // Add an unresolved private name to the current scope.
+  void AddUnresolvedPrivateName(VariableProxy* proxy);
+
+  ClassScope* GetScope() const {
+    DCHECK(!Done());
+    return current_scope_->AsClassScope();
+  }
+
+ private:
+  bool skipped_any_scopes_ = false;
+  Scope* start_scope_;
+  Scope* current_scope_;
 };
 
 }  // namespace internal

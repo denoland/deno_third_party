@@ -52,6 +52,9 @@ Node* GraphAssembler::HeapConstant(Handle<HeapObject> object) {
   return jsgraph()->HeapConstant(object);
 }
 
+Node* GraphAssembler::NumberConstant(double value) {
+  return jsgraph()->Constant(value);
+}
 
 Node* GraphAssembler::ExternalConstant(ExternalReference ref) {
   return jsgraph()->ExternalConstant(ref);
@@ -90,6 +93,14 @@ PURE_ASSEMBLER_MACH_BINOP_LIST(PURE_BINOP_DEF)
   }
 CHECKED_ASSEMBLER_MACH_BINOP_LIST(CHECKED_BINOP_DEF)
 #undef CHECKED_BINOP_DEF
+
+Node* GraphAssembler::IntPtrEqual(Node* left, Node* right) {
+  return WordEqual(left, right);
+}
+
+Node* GraphAssembler::TaggedEqual(Node* left, Node* right) {
+  return WordEqual(left, right);
+}
 
 Node* GraphAssembler::Float64RoundDown(Node* value) {
   CHECK(machine()->Float64RoundDown().IsSupported());
@@ -234,7 +245,7 @@ Node* GraphAssembler::Word32PoisonOnSpeculation(Node* value) {
 }
 
 Node* GraphAssembler::DeoptimizeIf(DeoptimizeReason reason,
-                                   VectorSlotPair const& feedback,
+                                   FeedbackSource const& feedback,
                                    Node* condition, Node* frame_state,
                                    IsSafetyCheck is_safety_check) {
   return current_control_ = current_effect_ = graph()->NewNode(
@@ -244,7 +255,7 @@ Node* GraphAssembler::DeoptimizeIf(DeoptimizeReason reason,
 }
 
 Node* GraphAssembler::DeoptimizeIfNot(DeoptimizeReason reason,
-                                      VectorSlotPair const& feedback,
+                                      FeedbackSource const& feedback,
                                       Node* condition, Node* frame_state,
                                       IsSafetyCheck is_safety_check) {
   return current_control_ = current_effect_ = graph()->NewNode(

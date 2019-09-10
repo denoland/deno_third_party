@@ -289,6 +289,8 @@ class Object : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
 
   V8_INLINE bool IsZero() const;
   V8_INLINE bool IsNoSharedNameSentinel() const;
+  V8_INLINE bool IsPrivateSymbol() const;
+  V8_INLINE bool IsPublicSymbol() const;
 
   enum class Conversion { kToNumber, kToNumeric };
 
@@ -309,9 +311,9 @@ class Object : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
   V8_EXPORT_PRIVATE bool ToInt32(int32_t* value);
   inline bool ToUint32(uint32_t* value) const;
 
-  inline Representation OptimalRepresentation();
+  inline Representation OptimalRepresentation(Isolate* isolate) const;
 
-  inline ElementsKind OptimalElementsKind();
+  inline ElementsKind OptimalElementsKind(Isolate* isolate) const;
 
   inline bool FitsRepresentation(Representation representation);
 

@@ -84,26 +84,9 @@ void PreparseData::set_child(int index, PreparseData value,
   CONDITIONAL_WRITE_BARRIER(*this, offset, value, mode);
 }
 
-OBJECT_CONSTRUCTORS_IMPL(UncompiledData, HeapObject)
-OBJECT_CONSTRUCTORS_IMPL(UncompiledDataWithoutPreparseData, UncompiledData)
-OBJECT_CONSTRUCTORS_IMPL(UncompiledDataWithPreparseData, UncompiledData)
-CAST_ACCESSOR(UncompiledData)
-ACCESSORS(UncompiledData, inferred_name, String, kInferredNameOffset)
-INT32_ACCESSORS(UncompiledData, start_position, kStartPositionOffset)
-INT32_ACCESSORS(UncompiledData, end_position, kEndPositionOffset)
-
-void UncompiledData::clear_padding() {
-  if (FIELD_SIZE(kOptionalPaddingOffset) == 0) return;
-  DCHECK_EQ(4, FIELD_SIZE(kOptionalPaddingOffset));
-  memset(reinterpret_cast<void*>(address() + kOptionalPaddingOffset), 0,
-         FIELD_SIZE(kOptionalPaddingOffset));
-}
-
-CAST_ACCESSOR(UncompiledDataWithoutPreparseData)
-
-CAST_ACCESSOR(UncompiledDataWithPreparseData)
-ACCESSORS(UncompiledDataWithPreparseData, preparse_data, PreparseData,
-          kPreparseDataOffset)
+TQ_OBJECT_CONSTRUCTORS_IMPL(UncompiledData)
+TQ_OBJECT_CONSTRUCTORS_IMPL(UncompiledDataWithoutPreparseData)
+TQ_OBJECT_CONSTRUCTORS_IMPL(UncompiledDataWithPreparseData)
 
 DEF_GETTER(HeapObject, IsUncompiledData, bool) {
   return IsUncompiledDataWithoutPreparseData(isolate) ||
@@ -200,14 +183,13 @@ int SharedFunctionInfo::function_token_position() const {
   }
 }
 
-BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, is_wrapped,
-                    SharedFunctionInfo::IsWrappedBit)
+BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, syntax_kind,
+                    SharedFunctionInfo::FunctionSyntaxKindBits)
+
 BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, allows_lazy_compilation,
                     SharedFunctionInfo::AllowLazyCompilationBit)
 BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, has_duplicate_parameters,
                     SharedFunctionInfo::HasDuplicateParametersBit)
-BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, is_declaration,
-                    SharedFunctionInfo::IsDeclarationBit)
 
 BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, native,
                     SharedFunctionInfo::IsNativeBit)
@@ -219,13 +201,9 @@ BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags,
 
 BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, name_should_print_as_anonymous,
                     SharedFunctionInfo::NameShouldPrintAsAnonymousBit)
-BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, is_anonymous_expression,
-                    SharedFunctionInfo::IsAnonymousExpressionBit)
 BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, has_reported_binary_coverage,
                     SharedFunctionInfo::HasReportedBinaryCoverageBit)
 
-BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, is_named_expression,
-                    SharedFunctionInfo::IsNamedExpressionBit)
 BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags, is_toplevel,
                     SharedFunctionInfo::IsTopLevelBit)
 BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags,
@@ -234,6 +212,9 @@ BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags,
 BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags,
                     is_safe_to_skip_arguments_adaptor,
                     SharedFunctionInfo::IsSafeToSkipArgumentsAdaptorBit)
+BIT_FIELD_ACCESSORS(SharedFunctionInfo, flags,
+                    private_name_lookup_skips_outer_class,
+                    SharedFunctionInfo::PrivateNameLookupSkipsOuterClassBit)
 
 bool SharedFunctionInfo::optimization_disabled() const {
   return disable_optimization_reason() != BailoutReason::kNoReason;
@@ -269,6 +250,10 @@ void SharedFunctionInfo::set_kind(FunctionKind kind) {
   hints = IsClassConstructorBit::update(hints, IsClassConstructor(kind));
   set_flags(hints);
   UpdateFunctionMapIndex();
+}
+
+bool SharedFunctionInfo::is_wrapped() const {
+  return syntax_kind() == FunctionSyntaxKind::kWrapped;
 }
 
 bool SharedFunctionInfo::needs_home_object() const {
@@ -359,6 +344,11 @@ void SharedFunctionInfo::set_scope_info(ScopeInfo scope_info,
   if (HasInferredName() && inferred_name().length() != 0) {
     scope_info.SetInferredFunctionName(inferred_name());
   }
+  set_raw_scope_info(scope_info, mode);
+}
+
+void SharedFunctionInfo::set_raw_scope_info(ScopeInfo scope_info,
+                                            WriteBarrierMode mode) {
   WRITE_FIELD(*this, kNameOrScopeInfoOffset, scope_info);
   CONDITIONAL_WRITE_BARRIER(*this, kNameOrScopeInfoOffset, scope_info, mode);
 }
@@ -572,7 +562,8 @@ UncompiledData SharedFunctionInfo::uncompiled_data() const {
 }
 
 void SharedFunctionInfo::set_uncompiled_data(UncompiledData uncompiled_data) {
-  DCHECK(function_data() == Smi::FromEnum(Builtins::kCompileLazy));
+  DCHECK(function_data() == Smi::FromEnum(Builtins::kCompileLazy) ||
+         HasUncompiledData());
   DCHECK(uncompiled_data.IsUncompiledData());
   set_function_data(uncompiled_data);
 }
@@ -608,12 +599,11 @@ void SharedFunctionInfo::ClearPreparseData() {
   Heap* heap = GetHeapFromWritableObject(data);
 
   // Swap the map.
-  heap->NotifyObjectLayoutChange(data, UncompiledDataWithPreparseData::kSize,
-                                 no_gc);
+  heap->NotifyObjectLayoutChange(data, no_gc);
   STATIC_ASSERT(UncompiledDataWithoutPreparseData::kSize <
                 UncompiledDataWithPreparseData::kSize);
   STATIC_ASSERT(UncompiledDataWithoutPreparseData::kSize ==
-                UncompiledData::kSize);
+                UncompiledData::kHeaderSize);
   data.synchronized_set_map(
       GetReadOnlyRoots().uncompiled_data_without_preparse_data_map());
 
@@ -622,7 +612,7 @@ void SharedFunctionInfo::ClearPreparseData() {
       data.address() + UncompiledDataWithoutPreparseData::kSize,
       UncompiledDataWithPreparseData::kSize -
           UncompiledDataWithoutPreparseData::kSize,
-      ClearRecordedSlots::kNo);
+      ClearRecordedSlots::kYes);
 
   // Ensure that the clear was successful.
   DCHECK(HasUncompiledDataWithoutPreparseData());
@@ -639,7 +629,6 @@ void UncompiledData::Initialize(
       data, data.RawField(UncompiledData::kInferredNameOffset), inferred_name);
   data.set_start_position(start_position);
   data.set_end_position(end_position);
-  data.clear_padding();
 }
 
 void UncompiledDataWithPreparseData::Initialize(

@@ -237,6 +237,30 @@ static const InstructionDesc cmov_instructions[16] = {
     {"cmovle", TWO_OPERANDS_INSTR, REG_OPER_OP_ORDER, false},
     {"cmovg", TWO_OPERANDS_INSTR, REG_OPER_OP_ORDER, false}};
 
+namespace {
+int8_t Imm8(const uint8_t* data) {
+  return *reinterpret_cast<const int8_t*>(data);
+}
+uint8_t Imm8_U(const uint8_t* data) {
+  return *reinterpret_cast<const uint8_t*>(data);
+}
+int16_t Imm16(const uint8_t* data) {
+  return *reinterpret_cast<const int16_t*>(data);
+}
+uint16_t Imm16_U(const uint8_t* data) {
+  return *reinterpret_cast<const uint16_t*>(data);
+}
+int32_t Imm32(const uint8_t* data) {
+  return *reinterpret_cast<const int32_t*>(data);
+}
+uint32_t Imm32_U(const uint8_t* data) {
+  return *reinterpret_cast<const uint32_t*>(data);
+}
+int64_t Imm64(const uint8_t* data) {
+  return *reinterpret_cast<const int64_t*>(data);
+}
+}  // namespace
+
 //------------------------------------------------------------------------------
 // DisassemblerX64 implementation.
 
@@ -458,8 +482,7 @@ int DisassemblerX64::PrintRightOperandHelper(
   switch (mod) {
     case 0:
       if ((rm & 7) == 5) {
-        int32_t disp = *reinterpret_cast<int32_t*>(modrmp + 1);
-        AppendToBuffer("[rip+0x%x]", disp);
+        AppendToBuffer("[rip+0x%x]", Imm32(modrmp + 1));
         return 5;
       } else if ((rm & 7) == 4) {
         // Codes for SIB byte.
@@ -473,7 +496,7 @@ int DisassemblerX64::PrintRightOperandHelper(
           return 2;
         } else if (base == 5) {
           // base == rbp means no base register (when mod == 0).
-          int32_t disp = *reinterpret_cast<int32_t*>(modrmp + 2);
+          int32_t disp = Imm32(modrmp + 2);
           AppendToBuffer("[%s*%d%s0x%x]", NameOfCPURegister(index), 1 << scale,
                          disp < 0 ? "-" : "+", disp < 0 ? -disp : disp);
           return 6;
@@ -497,8 +520,7 @@ int DisassemblerX64::PrintRightOperandHelper(
         byte sib = *(modrmp + 1);
         int scale, index, base;
         get_sib(sib, &scale, &index, &base);
-        int disp = (mod == 2) ? *reinterpret_cast<int32_t*>(modrmp + 2)
-                              : *reinterpret_cast<int8_t*>(modrmp + 2);
+        int disp = (mod == 2) ? Imm32(modrmp + 2) : Imm8(modrmp + 2);
         if (index == 4 && (base & 7) == 4 && scale == 0 /*times_1*/) {
           AppendToBuffer("[%s%s0x%x]", NameOfCPURegister(base),
                          disp < 0 ? "-" : "+", disp < 0 ? -disp : disp);
@@ -510,8 +532,7 @@ int DisassemblerX64::PrintRightOperandHelper(
         return mod == 2 ? 6 : 3;
       } else {
         // No sib.
-        int disp = (mod == 2) ? *reinterpret_cast<int32_t*>(modrmp + 1)
-                              : *reinterpret_cast<int8_t*>(modrmp + 1);
+        int disp = (mod == 2) ? Imm32(modrmp + 1) : Imm8(modrmp + 1);
         AppendToBuffer("[%s%s0x%x]", NameOfCPURegister(rm),
                        disp < 0 ? "-" : "+", disp < 0 ? -disp : disp);
         if (rm == i::kRootRegister.code()) {
@@ -540,15 +561,15 @@ int DisassemblerX64::PrintImmediate(byte* data, OperandSize size) {
       count = 1;
       break;
     case OPERAND_WORD_SIZE:
-      value = *reinterpret_cast<int16_t*>(data);
+      value = Imm16(data);
       count = 2;
       break;
     case OPERAND_DOUBLEWORD_SIZE:
-      value = *reinterpret_cast<uint32_t*>(data);
+      value = Imm32_U(data);
       count = 4;
       break;
     case OPERAND_QUADWORD_SIZE:
-      value = *reinterpret_cast<int32_t*>(data);
+      value = Imm32(data);
       count = 4;
       break;
     default:
@@ -763,7 +784,7 @@ int DisassemblerX64::JumpShort(byte* data) {
 int DisassemblerX64::JumpConditional(byte* data) {
   DCHECK_EQ(0x0F, *data);
   byte cond = *(data + 1) & 0x0F;
-  byte* dest = data + *reinterpret_cast<int32_t*>(data + 2) + 6;
+  byte* dest = data + Imm32(data + 2) + 6;
   const char* mnem = conditional_code_suffix[cond];
   AppendToBuffer("j%s %s", mnem, NameOfAddress(dest));
   return 6;  // includes 0x0F
@@ -1663,6 +1684,7 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
 
         SSSE3_INSTRUCTION_LIST(SSE34_DIS_CASE)
         SSE4_INSTRUCTION_LIST(SSE34_DIS_CASE)
+        SSE4_2_INSTRUCTION_LIST(SSE34_DIS_CASE)
 #undef SSE34_DIS_CASE
         default:
           UnimplementedInstruction();
@@ -1825,12 +1847,26 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
         const char* mnemonic;
         if (opcode == 0x54) {
           mnemonic = "andpd";
+        } else if (opcode == 0x55) {
+          mnemonic = "andnpd";
         } else if (opcode == 0x56) {
           mnemonic = "orpd";
         } else if (opcode == 0x57) {
           mnemonic = "xorpd";
+        } else if (opcode == 0x58) {
+          mnemonic = "addpd";
+        } else if (opcode == 0x59) {
+          mnemonic = "mulpd";
         } else if (opcode == 0x5B) {
           mnemonic = "cvtps2dq";
+        } else if (opcode == 0x5C) {
+          mnemonic = "subpd";
+        } else if (opcode == 0x5D) {
+          mnemonic = "minpd";
+        } else if (opcode == 0x5E) {
+          mnemonic = "divpd";
+        } else if (opcode == 0x5F) {
+          mnemonic = "maxpd";
         } else if (opcode == 0x60) {
           mnemonic = "punpcklbw";
         } else if (opcode == 0x61) {
@@ -1873,6 +1909,8 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
           mnemonic = "psrlw";
         } else if (opcode == 0xD2) {
           mnemonic = "psrld";
+        } else if (opcode == 0xD3) {
+          mnemonic = "psrld";
         } else if (opcode == 0xD4) {
           mnemonic = "paddq";
         } else if (opcode == 0xD5) {
@@ -1884,9 +1922,9 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
         } else if (opcode == 0xD9) {
           mnemonic = "psubusw";
         } else if (opcode == 0xDA) {
-          mnemonic = "pand";
-        } else if (opcode == 0xDB) {
           mnemonic = "pminub";
+        } else if (opcode == 0xDB) {
+          mnemonic = "pand";
         } else if (opcode == 0xDC) {
           mnemonic = "paddusb";
         } else if (opcode == 0xDD) {
@@ -1917,6 +1955,8 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
           mnemonic = "psllw";
         } else if (opcode == 0xF2) {
           mnemonic = "pslld";
+        } else if (opcode == 0xF3) {
+          mnemonic = "psllq";
         } else if (opcode == 0xF4) {
           mnemonic = "pmuludq";
         } else if (opcode == 0xF8) {
@@ -1963,6 +2003,11 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
         AppendToBuffer("%s,", NameOfXMMRegister(regop));
         current += PrintRightXMMOperand(current);
       }
+    } else if (opcode == 0x12) {
+      int mod, regop, rm;
+      get_modrm(*current, &mod, &regop, &rm);
+      AppendToBuffer("movddup %s,", NameOfXMMRegister(regop));
+      current += PrintRightXMMOperand(current);
     } else if (opcode == 0x2A) {
       // CVTSI2SD: integer to XMM double conversion.
       int mod, regop, rm;
@@ -2268,7 +2313,10 @@ int DisassemblerX64::TwoByteOpcodeInstruction(byte* data) {
       byte_size_operand_ = true;
     }
     current += PrintOperands(mnemonic, OPER_REG_OP_ORDER, current);
-  } else if (opcode == 0xAE && (*(data + 2) & 0xF8) == 0xE8) {
+  } else if (opcode == 0xAE && (data[2] & 0xF8) == 0xF0) {
+    AppendToBuffer("mfence");
+    current = data + 3;
+  } else if (opcode == 0xAE && (data[2] & 0xF8) == 0xE8) {
     AppendToBuffer("lfence");
     current = data + 3;
   } else {
@@ -2421,18 +2469,15 @@ int DisassemblerX64::InstructionDecode(v8::internal::Vector<char> out_buffer,
         byte* addr = nullptr;
         switch (operand_size()) {
           case OPERAND_WORD_SIZE:
-            addr =
-                reinterpret_cast<byte*>(*reinterpret_cast<int16_t*>(data + 1));
+            addr = reinterpret_cast<byte*>(Imm16(data + 1));
             data += 3;
             break;
           case OPERAND_DOUBLEWORD_SIZE:
-            addr =
-                reinterpret_cast<byte*>(*reinterpret_cast<uint32_t*>(data + 1));
+            addr = reinterpret_cast<byte*>(Imm32_U(data + 1));
             data += 5;
             break;
           case OPERAND_QUADWORD_SIZE:
-            addr =
-                reinterpret_cast<byte*>(*reinterpret_cast<int64_t*>(data + 1));
+            addr = reinterpret_cast<byte*>(Imm64(data + 1));
             data += 9;
             break;
           default:
@@ -2445,7 +2490,7 @@ int DisassemblerX64::InstructionDecode(v8::internal::Vector<char> out_buffer,
       }
 
       case CALL_JUMP_INSTR: {
-        byte* addr = data + *reinterpret_cast<int32_t*>(data + 1) + 5;
+        byte* addr = data + Imm32(data + 1) + 5;
         AppendToBuffer("%s %s", idesc.mnem, NameOfAddress(addr));
         data += 5;
         break;
@@ -2454,10 +2499,10 @@ int DisassemblerX64::InstructionDecode(v8::internal::Vector<char> out_buffer,
       case SHORT_IMMEDIATE_INSTR: {
         int32_t imm;
         if (operand_size() == OPERAND_WORD_SIZE) {
-          imm = *reinterpret_cast<int16_t*>(data + 1);
+          imm = Imm16(data + 1);
           data += 3;
         } else {
-          imm = *reinterpret_cast<int32_t*>(data + 1);
+          imm = Imm32(data + 1);
           data += 5;
         }
         AppendToBuffer("%s rax,0x%x", idesc.mnem, imm);
@@ -2478,7 +2523,7 @@ int DisassemblerX64::InstructionDecode(v8::internal::Vector<char> out_buffer,
   if (!processed) {
     switch (*data) {
       case 0xC2:
-        AppendToBuffer("ret 0x%x", *reinterpret_cast<uint16_t*>(data + 1));
+        AppendToBuffer("ret 0x%x", Imm16_U(data + 1));
         data += 3;
         break;
 
@@ -2562,12 +2607,10 @@ int DisassemblerX64::InstructionDecode(v8::internal::Vector<char> out_buffer,
           AppendToBuffer("mov%c ", operand_size_code());
           data += PrintRightOperand(data);
           if (operand_size() == OPERAND_WORD_SIZE) {
-            int16_t imm = *reinterpret_cast<int16_t*>(data);
-            AppendToBuffer(",0x%x", imm);
+            AppendToBuffer(",0x%x", Imm16(data));
             data += 2;
           } else {
-            int32_t imm = *reinterpret_cast<int32_t*>(data);
-            AppendToBuffer(",0x%x", imm);
+            AppendToBuffer(",0x%x", Imm32(data));
             data += 4;
           }
         }
@@ -2663,12 +2706,12 @@ int DisassemblerX64::InstructionDecode(v8::internal::Vector<char> out_buffer,
         break;
       }
       case 0x68:
-        AppendToBuffer("push 0x%x", *reinterpret_cast<int32_t*>(data + 1));
+        AppendToBuffer("push 0x%x", Imm32(data + 1));
         data += 5;
         break;
 
       case 0x6A:
-        AppendToBuffer("push 0x%x", *reinterpret_cast<int8_t*>(data + 1));
+        AppendToBuffer("push 0x%x", Imm8(data + 1));
         data += 2;
         break;
 
@@ -2676,8 +2719,8 @@ int DisassemblerX64::InstructionDecode(v8::internal::Vector<char> out_buffer,
       case 0xA3:
         switch (operand_size()) {
           case OPERAND_DOUBLEWORD_SIZE: {
-            const char* memory_location = NameOfAddress(
-                reinterpret_cast<byte*>(*reinterpret_cast<int32_t*>(data + 1)));
+            const char* memory_location =
+                NameOfAddress(reinterpret_cast<byte*>(Imm32(data + 1)));
             if (*data == 0xA1) {  // Opcode 0xA1
               AppendToBuffer("movzxlq rax,(%s)", memory_location);
             } else {  // Opcode 0xA3
@@ -2689,7 +2732,7 @@ int DisassemblerX64::InstructionDecode(v8::internal::Vector<char> out_buffer,
           case OPERAND_QUADWORD_SIZE: {
             // New x64 instruction mov rax,(imm_64).
             const char* memory_location =
-                NameOfAddress(*reinterpret_cast<byte**>(data + 1));
+                NameOfAddress(reinterpret_cast<byte*>(Imm64(data + 1)));
             if (*data == 0xA1) {  // Opcode 0xA1
               AppendToBuffer("movq rax,(%s)", memory_location);
             } else {  // Opcode 0xA3
@@ -2705,7 +2748,7 @@ int DisassemblerX64::InstructionDecode(v8::internal::Vector<char> out_buffer,
         break;
 
       case 0xA8:
-        AppendToBuffer("test al,0x%x", *reinterpret_cast<uint8_t*>(data + 1));
+        AppendToBuffer("test al,0x%x", Imm8_U(data + 1));
         data += 2;
         break;
 
@@ -2713,15 +2756,15 @@ int DisassemblerX64::InstructionDecode(v8::internal::Vector<char> out_buffer,
         int64_t value = 0;
         switch (operand_size()) {
           case OPERAND_WORD_SIZE:
-            value = *reinterpret_cast<uint16_t*>(data + 1);
+            value = Imm16_U(data + 1);
             data += 3;
             break;
           case OPERAND_DOUBLEWORD_SIZE:
-            value = *reinterpret_cast<uint32_t*>(data + 1);
+            value = Imm32_U(data + 1);
             data += 5;
             break;
           case OPERAND_QUADWORD_SIZE:
-            value = *reinterpret_cast<int32_t*>(data + 1);
+            value = Imm32(data + 1);
             data += 5;
             break;
           default:
@@ -2764,7 +2807,7 @@ int DisassemblerX64::InstructionDecode(v8::internal::Vector<char> out_buffer,
         break;
 
       case 0x3C:
-        AppendToBuffer("cmp al,0x%x", *reinterpret_cast<int8_t*>(data + 1));
+        AppendToBuffer("cmp al,0x%x", Imm8(data + 1));
         data += 2;
         break;
 

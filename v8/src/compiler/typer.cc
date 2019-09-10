@@ -7,8 +7,10 @@
 #include <iomanip>
 
 #include "src/base/flags.h"
+#include "src/codegen/tick-counter.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph-reducer.h"
+#include "src/compiler/js-heap-broker.h"
 #include "src/compiler/js-operator.h"
 #include "src/compiler/linkage.h"
 #include "src/compiler/loop-variable-optimizer.h"
@@ -33,20 +35,21 @@ class Typer::Decorator final : public GraphDecorator {
   Typer* const typer_;
 };
 
-Typer::Typer(JSHeapBroker* broker, Flags flags, Graph* graph)
+Typer::Typer(JSHeapBroker* broker, Flags flags, Graph* graph,
+             TickCounter* tick_counter)
     : flags_(flags),
       graph_(graph),
       decorator_(nullptr),
       cache_(TypeCache::Get()),
       broker_(broker),
-      operation_typer_(broker, zone()) {
+      operation_typer_(broker, zone()),
+      tick_counter_(tick_counter) {
   singleton_false_ = operation_typer_.singleton_false();
   singleton_true_ = operation_typer_.singleton_true();
 
   decorator_ = new (zone()) Decorator(this);
   graph_->AddDecorator(decorator_);
 }
-
 
 Typer::~Typer() {
   graph_->RemoveDecorator(decorator_);
@@ -91,6 +94,7 @@ class Typer::Visitor : public Reducer {
   case IrOpcode::k##x:  \
     return UpdateType(node, TypeBinaryOp(node, x));
       SIMPLIFIED_NUMBER_BINOP_LIST(DECLARE_CASE)
+      SIMPLIFIED_BIGINT_BINOP_LIST(DECLARE_CASE)
       SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_CASE)
       SIMPLIFIED_SPECULATIVE_BIGINT_BINOP_LIST(DECLARE_CASE)
 #undef DECLARE_CASE
@@ -101,6 +105,7 @@ class Typer::Visitor : public Reducer {
       SIMPLIFIED_NUMBER_UNOP_LIST(DECLARE_CASE)
       SIMPLIFIED_BIGINT_UNOP_LIST(DECLARE_CASE)
       SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(DECLARE_CASE)
+      SIMPLIFIED_SPECULATIVE_BIGINT_UNOP_LIST(DECLARE_CASE)
 #undef DECLARE_CASE
 
 #define DECLARE_CASE(x) case IrOpcode::k##x:
@@ -159,6 +164,7 @@ class Typer::Visitor : public Reducer {
   case IrOpcode::k##x:  \
     return TypeBinaryOp(node, x);
       SIMPLIFIED_NUMBER_BINOP_LIST(DECLARE_CASE)
+      SIMPLIFIED_BIGINT_BINOP_LIST(DECLARE_CASE)
       SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_CASE)
       SIMPLIFIED_SPECULATIVE_BIGINT_BINOP_LIST(DECLARE_CASE)
 #undef DECLARE_CASE
@@ -169,6 +175,7 @@ class Typer::Visitor : public Reducer {
       SIMPLIFIED_NUMBER_UNOP_LIST(DECLARE_CASE)
       SIMPLIFIED_BIGINT_UNOP_LIST(DECLARE_CASE)
       SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(DECLARE_CASE)
+      SIMPLIFIED_SPECULATIVE_BIGINT_UNOP_LIST(DECLARE_CASE)
 #undef DECLARE_CASE
 
 #define DECLARE_CASE(x) case IrOpcode::k##x:
@@ -282,12 +289,14 @@ class Typer::Visitor : public Reducer {
   SIMPLIFIED_NUMBER_UNOP_LIST(DECLARE_METHOD)
   SIMPLIFIED_BIGINT_UNOP_LIST(DECLARE_METHOD)
   SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_SPECULATIVE_BIGINT_UNOP_LIST(DECLARE_METHOD)
 #undef DECLARE_METHOD
 #define DECLARE_METHOD(Name)                       \
   static Type Name(Type lhs, Type rhs, Typer* t) { \
     return t->operation_typer_.Name(lhs, rhs);     \
   }
   SIMPLIFIED_NUMBER_BINOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_BIGINT_BINOP_LIST(DECLARE_METHOD)
   SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_METHOD)
   SIMPLIFIED_SPECULATIVE_BIGINT_BINOP_LIST(DECLARE_METHOD)
 #undef DECLARE_METHOD
@@ -416,7 +425,7 @@ void Typer::Run(const NodeVector& roots,
     induction_vars->ChangeToInductionVariablePhis();
   }
   Visitor visitor(this, induction_vars);
-  GraphReducer graph_reducer(zone(), graph());
+  GraphReducer graph_reducer(zone(), graph(), tick_counter_);
   graph_reducer.AddReducer(&visitor);
   for (Node* const root : roots) graph_reducer.ReduceNode(root);
   graph_reducer.ReduceGraph();
@@ -779,7 +788,13 @@ Type Typer::Visitor::TypeParameter(Node* node) {
   return Type::NonInternal();
 }
 
-Type Typer::Visitor::TypeOsrValue(Node* node) { return Type::Any(); }
+Type Typer::Visitor::TypeOsrValue(Node* node) {
+  if (OsrValueIndexOf(node->op()) == Linkage::kOsrContextSpillSlotIndex) {
+    return Type::OtherInternal();
+  } else {
+    return Type::Any();
+  }
+}
 
 Type Typer::Visitor::TypeRetain(Node* node) { UNREACHABLE(); }
 
@@ -990,10 +1005,6 @@ Type Typer::Visitor::TypeTypedObjectState(Node* node) {
 }
 
 Type Typer::Visitor::TypeCall(Node* node) { return Type::Any(); }
-
-Type Typer::Visitor::TypeCallWithCallerSavedRegisters(Node* node) {
-  UNREACHABLE();
-}
 
 Type Typer::Visitor::TypeProjection(Node* node) {
   Type const type = Operand(node, 0);
@@ -1516,6 +1527,10 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     return Type::NonInternal();
   }
   JSFunctionRef function = fun.AsHeapConstant()->Ref().AsJSFunction();
+  if (!function.serialized()) {
+    TRACE_BROKER_MISSING(t->broker(), "data for function " << function);
+    return Type::NonInternal();
+  }
   if (!function.shared().HasBuiltinId()) {
     return Type::NonInternal();
   }
@@ -1556,6 +1571,7 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     case Builtins::kMathPow:
     case Builtins::kMathMax:
     case Builtins::kMathMin:
+    case Builtins::kMathHypot:
       return Type::Number();
     case Builtins::kMathImul:
       return Type::Signed32();
@@ -2348,11 +2364,15 @@ Type Typer::Visitor::TypeFindOrderedHashMapEntryForInt32Key(Node* node) {
 
 Type Typer::Visitor::TypeRuntimeAbort(Node* node) { UNREACHABLE(); }
 
+Type Typer::Visitor::TypeAssertType(Node* node) { UNREACHABLE(); }
+
 // Heap constants.
 
 Type Typer::Visitor::TypeConstant(Handle<Object> value) {
   return Type::NewConstant(typer_->broker(), value, zone());
 }
+
+Type Typer::Visitor::TypeJSGetIterator(Node* node) { return Type::Any(); }
 
 }  // namespace compiler
 }  // namespace internal

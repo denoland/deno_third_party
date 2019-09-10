@@ -170,7 +170,8 @@ class EXPORT_TEMPLATE_DECLARE(V8_EXPORT_PRIVATE) BaseNameDictionary
 
   // Collect the keys into the given KeyAccumulator, in ascending chronological
   // order of property creation.
-  static void CollectKeysTo(Handle<Derived> dictionary, KeyAccumulator* keys);
+  V8_WARN_UNUSED_RESULT static ExceptionStatus CollectKeysTo(
+      Handle<Derived> dictionary, KeyAccumulator* keys);
 
   // Return the key indices sorted by its enumeration index.
   static Handle<FixedArray> IterationIndices(Isolate* isolate,
@@ -212,6 +213,8 @@ class V8_EXPORT_PRIVATE NameDictionary
   static const int kInitialCapacity = 2;
 
   inline Name NameAt(int entry);
+  inline Name NameAt(Isolate* isolate, int entry);
+
   inline void set_hash(int hash);
   inline int hash() const;
 
@@ -250,10 +253,13 @@ class V8_EXPORT_PRIVATE GlobalDictionary
   DECL_CAST(GlobalDictionary)
 
   inline Object ValueAt(int entry);
+  inline Object ValueAt(Isolate* isolate, int entry);
   inline PropertyCell CellAt(int entry);
+  inline PropertyCell CellAt(Isolate* isolate, int entry);
   inline void SetEntry(Isolate* isolate, int entry, Object key, Object value,
                        PropertyDetails details);
   inline Name NameAt(int entry);
+  inline Name NameAt(Isolate* isolate, int entry);
   inline void ValueAtPut(int entry, Object value);
 
   OBJECT_CONSTRUCTORS(

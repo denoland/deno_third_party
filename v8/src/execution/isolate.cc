@@ -32,7 +32,6 @@
 #include "src/debug/debug.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/diagnostics/compilation-statistics.h"
-#include "src/diagnostics/crash-key.h"
 #include "src/execution/frames-inl.h"
 #include "src/execution/isolate-inl.h"
 #include "src/execution/messages.h"
@@ -52,11 +51,13 @@
 #include "src/logging/counters.h"
 #include "src/logging/log.h"
 #include "src/numbers/hash-seed-inl.h"
+#include "src/objects/backing-store.h"
 #include "src/objects/elements.h"
 #include "src/objects/frame-array-inl.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/js-array-inl.h"
 #include "src/objects/js-generator-inl.h"
+#include "src/objects/js-weak-refs-inl.h"
 #include "src/objects/module-inl.h"
 #include "src/objects/promise-inl.h"
 #include "src/objects/prototype.h"
@@ -86,9 +87,9 @@
 #include "unicode/uobject.h"
 #endif  // V8_INTL_SUPPORT
 
-#if defined(V8_OS_WIN_X64)
+#if defined(V8_OS_WIN64)
 #include "src/diagnostics/unwinding-info-win64.h"
-#endif
+#endif  // V8_OS_WIN64
 
 extern "C" const uint8_t* v8_Default_embedded_blob_;
 extern "C" uint32_t v8_Default_embedded_blob_size_;
@@ -943,6 +944,14 @@ void CaptureAsyncStackTrace(Isolate* isolate, Handle<JSPromise> promise,
           PromiseCapability::cast(context->get(index)), isolate);
       if (!capability->promise().IsJSPromise()) return;
       promise = handle(JSPromise::cast(capability->promise()), isolate);
+    } else if (IsBuiltinFunction(isolate, reaction->fulfill_handler(),
+                                 Builtins::kPromiseCapabilityDefaultResolve)) {
+      Handle<JSFunction> function(JSFunction::cast(reaction->fulfill_handler()),
+                                  isolate);
+      Handle<Context> context(function->context(), isolate);
+      promise =
+          handle(JSPromise::cast(context->get(PromiseBuiltins::kPromiseSlot)),
+                 isolate);
     } else {
       // We have some generic promise chain here, so try to
       // continue with the chained promise on the reaction
@@ -2015,7 +2024,7 @@ void Isolate::CancelScheduledExceptionFromTryCatch(v8::TryCatch* handler) {
     DCHECK_EQ(scheduled_exception(),
               ReadOnlyRoots(heap()).termination_exception());
     // Clear termination once we returned from all V8 frames.
-    if (handle_scope_implementer()->CallDepthIsZero()) {
+    if (thread_local_top()->CallDepthIsZero()) {
       thread_local_top()->external_caught_exception_ = false;
       clear_scheduled_exception();
     }
@@ -2641,21 +2650,12 @@ Handle<Context> Isolate::GetIncumbentContext() {
 char* Isolate::ArchiveThread(char* to) {
   MemCopy(to, reinterpret_cast<char*>(thread_local_top()),
           sizeof(ThreadLocalTop));
-  InitializeThreadLocal();
-  clear_pending_exception();
-  clear_pending_message();
-  clear_scheduled_exception();
   return to + sizeof(ThreadLocalTop);
 }
 
 char* Isolate::RestoreThread(char* from) {
   MemCopy(reinterpret_cast<char*>(thread_local_top()), from,
           sizeof(ThreadLocalTop));
-// This might be just paranoia, but it seems to be needed in case a
-// thread_local_top_ is restored on a separate OS thread.
-#ifdef USE_SIMULATOR
-  thread_local_top()->simulator_ = Simulator::current(this);
-#endif
   DCHECK(context().is_null() || context().IsContext());
   return from + sizeof(ThreadLocalTop);
 }
@@ -2877,9 +2877,9 @@ v8::PageAllocator* Isolate::page_allocator() {
 }
 
 Isolate::Isolate(std::unique_ptr<i::IsolateAllocator> isolate_allocator)
-    : isolate_allocator_(std::move(isolate_allocator)),
+    : isolate_data_(this),
+      isolate_allocator_(std::move(isolate_allocator)),
       id_(isolate_counter.fetch_add(1, std::memory_order_relaxed)),
-      stack_guard_(this),
       allocator_(FLAG_trace_zone_stats
                      ? new VerboseAccountingAllocator(&heap_, 256 * KB)
                      : new AccountingAllocator()),
@@ -2918,6 +2918,14 @@ void Isolate::CheckIsolateLayout() {
   CHECK_EQ(OFFSET_OF(Isolate, isolate_data_), 0);
   CHECK_EQ(static_cast<int>(OFFSET_OF(Isolate, isolate_data_.embedder_data_)),
            Internals::kIsolateEmbedderDataOffset);
+  CHECK_EQ(static_cast<int>(
+               OFFSET_OF(Isolate, isolate_data_.fast_c_call_caller_fp_)),
+           Internals::kIsolateFastCCallCallerFpOffset);
+  CHECK_EQ(static_cast<int>(
+               OFFSET_OF(Isolate, isolate_data_.fast_c_call_caller_pc_)),
+           Internals::kIsolateFastCCallCallerPcOffset);
+  CHECK_EQ(static_cast<int>(OFFSET_OF(Isolate, isolate_data_.stack_guard_)),
+           Internals::kIsolateStackGuardOffset);
   CHECK_EQ(static_cast<int>(OFFSET_OF(Isolate, isolate_data_.roots_)),
            Internals::kIsolateRootsOffset);
   CHECK_EQ(Internals::kExternalMemoryOffset % 8, 0);
@@ -2954,7 +2962,7 @@ void Isolate::Deinit() {
     heap_profiler()->StopSamplingHeapProfiler();
   }
 
-#if defined(V8_OS_WIN_X64)
+#if defined(V8_OS_WIN64)
   if (win64_unwindinfo::CanRegisterUnwindInfoForNonABICompliantCodeRange() &&
       heap()->memory_allocator()) {
     const base::AddressRegion& code_range =
@@ -2962,7 +2970,7 @@ void Isolate::Deinit() {
     void* start = reinterpret_cast<void*>(code_range.begin());
     win64_unwindinfo::UnregisterNonABICompliantCodeRange(start);
   }
-#endif
+#endif  // V8_OS_WIN64
 
   debug()->Unload();
 
@@ -2974,7 +2982,7 @@ void Isolate::Deinit() {
     optimizing_compile_dispatcher_ = nullptr;
   }
 
-  wasm_engine()->memory_tracker()->DeleteSharedMemoryObjectsOnIsolate(this);
+  BackingStore::RemoveSharedWasmMemoryObjects(this);
 
   heap_.mark_compact_collector()->EnsureSweepingCompleted();
   heap_.memory_allocator()->unmapper()->EnsureUnmappingCompleted();
@@ -3132,7 +3140,12 @@ Isolate::~Isolate() {
   default_microtask_queue_ = nullptr;
 }
 
-void Isolate::InitializeThreadLocal() { thread_local_top()->Initialize(this); }
+void Isolate::InitializeThreadLocal() {
+  thread_local_top()->Initialize(this);
+  clear_pending_exception();
+  clear_pending_message();
+  clear_scheduled_exception();
+}
 
 void Isolate::SetTerminationOnExternalTryCatch() {
   if (try_catch_handler() == nullptr) return;
@@ -3301,17 +3314,31 @@ bool Isolate::InitWithSnapshot(ReadOnlyDeserializer* read_only_deserializer,
   return Init(read_only_deserializer, startup_deserializer);
 }
 
-static void AddCrashKeysForIsolateAndHeapPointers(Isolate* isolate) {
-  const int id = isolate->id();
-  crash::AddCrashKey(id, "isolate", reinterpret_cast<uintptr_t>(isolate));
+static std::string AddressToString(uintptr_t address) {
+  std::stringstream stream_address;
+  stream_address << "0x" << std::hex << address;
+  return stream_address.str();
+}
 
-  auto heap = isolate->heap();
-  crash::AddCrashKey(id, "ro_space",
-    reinterpret_cast<uintptr_t>(heap->read_only_space()->first_page()));
-  crash::AddCrashKey(id, "map_space",
-    reinterpret_cast<uintptr_t>(heap->map_space()->first_page()));
-  crash::AddCrashKey(id, "code_space",
-    reinterpret_cast<uintptr_t>(heap->code_space()->first_page()));
+void Isolate::AddCrashKeysForIsolateAndHeapPointers() {
+  DCHECK_NOT_NULL(add_crash_key_callback_);
+
+  const uintptr_t isolate_address = reinterpret_cast<uintptr_t>(this);
+  add_crash_key_callback_(v8::CrashKeyId::kIsolateAddress,
+                          AddressToString(isolate_address));
+
+  const uintptr_t ro_space_firstpage_address =
+      reinterpret_cast<uintptr_t>(heap()->read_only_space()->first_page());
+  add_crash_key_callback_(v8::CrashKeyId::kReadonlySpaceFirstPageAddress,
+                          AddressToString(ro_space_firstpage_address));
+  const uintptr_t map_space_firstpage_address =
+      reinterpret_cast<uintptr_t>(heap()->map_space()->first_page());
+  add_crash_key_callback_(v8::CrashKeyId::kMapSpaceFirstPageAddress,
+                          AddressToString(map_space_firstpage_address));
+  const uintptr_t code_space_firstpage_address =
+      reinterpret_cast<uintptr_t>(heap()->code_space()->first_page());
+  add_crash_key_callback_(v8::CrashKeyId::kCodeSpaceFirstPageAddress,
+                          AddressToString(code_space_firstpage_address));
 }
 
 bool Isolate::Init(ReadOnlyDeserializer* read_only_deserializer,
@@ -3333,9 +3360,6 @@ bool Isolate::Init(ReadOnlyDeserializer* read_only_deserializer,
 
   // The initialization process does not handle memory exhaustion.
   AlwaysAllocateScope always_allocate(this);
-
-  // Safe after setting Heap::isolate_, and initializing StackGuard
-  heap_.SetStackLimits();
 
 #define ASSIGN_ELEMENT(CamelName, hacker_name)                  \
   isolate_addresses_[IsolateAddressId::k##CamelName##Address] = \
@@ -3370,7 +3394,7 @@ bool Isolate::Init(ReadOnlyDeserializer* read_only_deserializer,
     // will ensure this too, but we don't have to use lockers if we are only
     // using one thread.
     ExecutionAccess lock(this);
-    stack_guard_.InitThread(lock);
+    stack_guard()->InitThread(lock);
   }
 
   // SetUp the object heap.
@@ -3515,10 +3539,6 @@ bool Isolate::Init(ReadOnlyDeserializer* read_only_deserializer,
   clear_pending_message();
   clear_scheduled_exception();
 
-  // Deserializing may put strange things in the root array's copy of the
-  // stack guard.
-  heap_.SetStackLimits();
-
   // Quiet the heap NaN if needed on target platform.
   if (!create_heap_objects)
     Assembler::QuietNaN(ReadOnlyRoots(this).nan_value());
@@ -3544,7 +3564,7 @@ bool Isolate::Init(ReadOnlyDeserializer* read_only_deserializer,
                                                sampling_flags);
   }
 
-#if defined(V8_OS_WIN_X64)
+#if defined(V8_OS_WIN64)
   if (win64_unwindinfo::CanRegisterUnwindInfoForNonABICompliantCodeRange()) {
     const base::AddressRegion& code_range =
         heap()->memory_allocator()->code_range();
@@ -3552,14 +3572,13 @@ bool Isolate::Init(ReadOnlyDeserializer* read_only_deserializer,
     size_t size_in_bytes = code_range.size();
     win64_unwindinfo::RegisterNonABICompliantCodeRange(start, size_in_bytes);
   }
-#endif
+#endif  // V8_OS_WIN64
 
   if (create_heap_objects && FLAG_profile_deserialization) {
     double ms = timer.Elapsed().InMillisecondsF();
     PrintF("[Initializing isolate from scratch took %0.3f ms]\n", ms);
   }
 
-  AddCrashKeysForIsolateAndHeapPointers(this);
   return true;
 }
 
@@ -3940,13 +3959,31 @@ void Isolate::UpdateNoElementsProtectorOnSetElement(Handle<JSObject> object) {
   if (!IsNoElementsProtectorIntact()) return;
   if (!IsArrayOrObjectOrStringPrototype(*object)) return;
   PropertyCell::SetValueWithInvalidation(
-      this, factory()->no_elements_protector(),
+      this, "no_elements_protector", factory()->no_elements_protector(),
       handle(Smi::FromInt(kProtectorInvalid), this));
+}
+
+void Isolate::TraceProtectorInvalidation(const char* protector_name) {
+  static constexpr char kInvalidateProtectorTracingCategory[] =
+      "V8.InvalidateProtector";
+  static constexpr char kInvalidateProtectorTracingArg[] = "protector-name";
+
+  DCHECK(FLAG_trace_protector_invalidation);
+
+  // TODO(jgruber): Remove the PrintF once tracing can output to stdout.
+  i::PrintF("Invalidating protector cell %s in isolate %p\n", protector_name,
+            this);
+  TRACE_EVENT_INSTANT1("v8", kInvalidateProtectorTracingCategory,
+                       TRACE_EVENT_SCOPE_THREAD, kInvalidateProtectorTracingArg,
+                       protector_name);
 }
 
 void Isolate::InvalidateIsConcatSpreadableProtector() {
   DCHECK(factory()->is_concat_spreadable_protector()->value().IsSmi());
   DCHECK(IsIsConcatSpreadableLookupChainIntact());
+  if (FLAG_trace_protector_invalidation) {
+    TraceProtectorInvalidation("is_concat_spreadable_protector");
+  }
   factory()->is_concat_spreadable_protector()->set_value(
       Smi::FromInt(kProtectorInvalid));
   DCHECK(!IsIsConcatSpreadableLookupChainIntact());
@@ -3955,43 +3992,19 @@ void Isolate::InvalidateIsConcatSpreadableProtector() {
 void Isolate::InvalidateArrayConstructorProtector() {
   DCHECK(factory()->array_constructor_protector()->value().IsSmi());
   DCHECK(IsArrayConstructorIntact());
+  if (FLAG_trace_protector_invalidation) {
+    TraceProtectorInvalidation("array_constructor_protector");
+  }
   factory()->array_constructor_protector()->set_value(
       Smi::FromInt(kProtectorInvalid));
   DCHECK(!IsArrayConstructorIntact());
-}
-
-void Isolate::InvalidateArraySpeciesProtector() {
-  DCHECK(factory()->array_species_protector()->value().IsSmi());
-  DCHECK(IsArraySpeciesLookupChainIntact());
-  PropertyCell::SetValueWithInvalidation(
-      this, factory()->array_species_protector(),
-      handle(Smi::FromInt(kProtectorInvalid), this));
-  DCHECK(!IsArraySpeciesLookupChainIntact());
-}
-
-void Isolate::InvalidateTypedArraySpeciesProtector() {
-  DCHECK(factory()->typed_array_species_protector()->value().IsSmi());
-  DCHECK(IsTypedArraySpeciesLookupChainIntact());
-  PropertyCell::SetValueWithInvalidation(
-      this, factory()->typed_array_species_protector(),
-      handle(Smi::FromInt(kProtectorInvalid), this));
-  DCHECK(!IsTypedArraySpeciesLookupChainIntact());
-}
-
-void Isolate::InvalidateRegExpSpeciesProtector() {
-  DCHECK(factory()->regexp_species_protector()->value().IsSmi());
-  DCHECK(IsRegExpSpeciesLookupChainIntact());
-  PropertyCell::SetValueWithInvalidation(
-      this, factory()->regexp_species_protector(),
-      handle(Smi::FromInt(kProtectorInvalid), this));
-  DCHECK(!IsRegExpSpeciesLookupChainIntact());
 }
 
 void Isolate::InvalidatePromiseSpeciesProtector() {
   DCHECK(factory()->promise_species_protector()->value().IsSmi());
   DCHECK(IsPromiseSpeciesLookupChainIntact());
   PropertyCell::SetValueWithInvalidation(
-      this, factory()->promise_species_protector(),
+      this, "promise_species_protector", factory()->promise_species_protector(),
       handle(Smi::FromInt(kProtectorInvalid), this));
   DCHECK(!IsPromiseSpeciesLookupChainIntact());
 }
@@ -3999,6 +4012,9 @@ void Isolate::InvalidatePromiseSpeciesProtector() {
 void Isolate::InvalidateStringLengthOverflowProtector() {
   DCHECK(factory()->string_length_protector()->value().IsSmi());
   DCHECK(IsStringLengthOverflowIntact());
+  if (FLAG_trace_protector_invalidation) {
+    TraceProtectorInvalidation("string_length_protector");
+  }
   factory()->string_length_protector()->set_value(
       Smi::FromInt(kProtectorInvalid));
   DCHECK(!IsStringLengthOverflowIntact());
@@ -4008,7 +4024,7 @@ void Isolate::InvalidateArrayIteratorProtector() {
   DCHECK(factory()->array_iterator_protector()->value().IsSmi());
   DCHECK(IsArrayIteratorLookupChainIntact());
   PropertyCell::SetValueWithInvalidation(
-      this, factory()->array_iterator_protector(),
+      this, "array_iterator_protector", factory()->array_iterator_protector(),
       handle(Smi::FromInt(kProtectorInvalid), this));
   DCHECK(!IsArrayIteratorLookupChainIntact());
 }
@@ -4017,7 +4033,7 @@ void Isolate::InvalidateMapIteratorProtector() {
   DCHECK(factory()->map_iterator_protector()->value().IsSmi());
   DCHECK(IsMapIteratorLookupChainIntact());
   PropertyCell::SetValueWithInvalidation(
-      this, factory()->map_iterator_protector(),
+      this, "map_iterator_protector", factory()->map_iterator_protector(),
       handle(Smi::FromInt(kProtectorInvalid), this));
   DCHECK(!IsMapIteratorLookupChainIntact());
 }
@@ -4026,7 +4042,7 @@ void Isolate::InvalidateSetIteratorProtector() {
   DCHECK(factory()->set_iterator_protector()->value().IsSmi());
   DCHECK(IsSetIteratorLookupChainIntact());
   PropertyCell::SetValueWithInvalidation(
-      this, factory()->set_iterator_protector(),
+      this, "set_iterator_protector", factory()->set_iterator_protector(),
       handle(Smi::FromInt(kProtectorInvalid), this));
   DCHECK(!IsSetIteratorLookupChainIntact());
 }
@@ -4035,7 +4051,7 @@ void Isolate::InvalidateStringIteratorProtector() {
   DCHECK(factory()->string_iterator_protector()->value().IsSmi());
   DCHECK(IsStringIteratorLookupChainIntact());
   PropertyCell::SetValueWithInvalidation(
-      this, factory()->string_iterator_protector(),
+      this, "string_iterator_protector", factory()->string_iterator_protector(),
       handle(Smi::FromInt(kProtectorInvalid), this));
   DCHECK(!IsStringIteratorLookupChainIntact());
 }
@@ -4044,7 +4060,8 @@ void Isolate::InvalidateArrayBufferDetachingProtector() {
   DCHECK(factory()->array_buffer_detaching_protector()->value().IsSmi());
   DCHECK(IsArrayBufferDetachingIntact());
   PropertyCell::SetValueWithInvalidation(
-      this, factory()->array_buffer_detaching_protector(),
+      this, "array_buffer_detaching_protector",
+      factory()->array_buffer_detaching_protector(),
       handle(Smi::FromInt(kProtectorInvalid), this));
   DCHECK(!IsArrayBufferDetachingIntact());
 }
@@ -4053,7 +4070,7 @@ void Isolate::InvalidatePromiseHookProtector() {
   DCHECK(factory()->promise_hook_protector()->value().IsSmi());
   DCHECK(IsPromiseHookProtectorIntact());
   PropertyCell::SetValueWithInvalidation(
-      this, factory()->promise_hook_protector(),
+      this, "promise_hook_protector", factory()->promise_hook_protector(),
       handle(Smi::FromInt(kProtectorInvalid), this));
   DCHECK(!IsPromiseHookProtectorIntact());
 }
@@ -4061,6 +4078,9 @@ void Isolate::InvalidatePromiseHookProtector() {
 void Isolate::InvalidatePromiseResolveProtector() {
   DCHECK(factory()->promise_resolve_protector()->value().IsSmi());
   DCHECK(IsPromiseResolveLookupChainIntact());
+  if (FLAG_trace_protector_invalidation) {
+    TraceProtectorInvalidation("promise_resolve_protector");
+  }
   factory()->promise_resolve_protector()->set_value(
       Smi::FromInt(kProtectorInvalid));
   DCHECK(!IsPromiseResolveLookupChainIntact());
@@ -4070,7 +4090,7 @@ void Isolate::InvalidatePromiseThenProtector() {
   DCHECK(factory()->promise_then_protector()->value().IsSmi());
   DCHECK(IsPromiseThenLookupChainIntact());
   PropertyCell::SetValueWithInvalidation(
-      this, factory()->promise_then_protector(),
+      this, "promise_then_protector", factory()->promise_then_protector(),
       handle(Smi::FromInt(kProtectorInvalid), this));
   DCHECK(!IsPromiseThenLookupChainIntact());
 }
@@ -4147,7 +4167,7 @@ Handle<Symbol> Isolate::SymbolFor(RootIndex dictionary_index,
                                      PropertyDetails::Empty(), &entry);
     switch (dictionary_index) {
       case RootIndex::kPublicSymbolTable:
-        symbol->set_is_public(true);
+        symbol->set_is_in_public_symbol_table(true);
         heap()->set_public_symbol_table(*dictionary);
         break;
       case RootIndex::kApiSymbolTable:
@@ -4195,7 +4215,7 @@ void Isolate::RemoveCallCompletedCallback(CallCompletedCallback callback) {
 }
 
 void Isolate::FireCallCompletedCallback(MicrotaskQueue* microtask_queue) {
-  if (!handle_scope_implementer()->CallDepthIsZero()) return;
+  if (!thread_local_top()->CallDepthIsZero()) return;
 
   bool run_microtasks =
       microtask_queue && microtask_queue->size() &&
@@ -4204,12 +4224,6 @@ void Isolate::FireCallCompletedCallback(MicrotaskQueue* microtask_queue) {
 
   if (run_microtasks) {
     microtask_queue->RunMicrotasks(this);
-  } else {
-    // TODO(marja): (spec) The discussion about when to clear the KeepDuringJob
-    // set is still open (whether to clear it after every microtask or once
-    // during a microtask checkpoint). See also
-    // https://github.com/tc39/proposal-weakrefs/issues/39 .
-    heap()->ClearKeptObjects();
   }
 
   if (call_completed_callbacks_.empty()) return;
@@ -4288,6 +4302,23 @@ MaybeHandle<JSPromise> Isolate::RunHostImportModuleDynamicallyCallback(
   return v8::Utils::OpenHandle(*promise);
 }
 
+void Isolate::ClearKeptObjects() { heap()->ClearKeptObjects(); }
+
+void Isolate::SetHostCleanupFinalizationGroupCallback(
+    HostCleanupFinalizationGroupCallback callback) {
+  host_cleanup_finalization_group_callback_ = callback;
+}
+
+void Isolate::RunHostCleanupFinalizationGroupCallback(
+    Handle<JSFinalizationGroup> fg) {
+  if (host_cleanup_finalization_group_callback_ != nullptr) {
+    v8::Local<v8::Context> api_context =
+        v8::Utils::ToLocal(handle(Context::cast(fg->native_context()), this));
+    host_cleanup_finalization_group_callback_(api_context,
+                                              v8::Utils::ToLocal(fg));
+  }
+}
+
 void Isolate::SetHostImportModuleDynamicallyCallback(
     HostImportModuleDynamicallyCallback callback) {
   host_import_module_dynamically_callback_ = callback;
@@ -4295,7 +4326,7 @@ void Isolate::SetHostImportModuleDynamicallyCallback(
 
 Handle<JSObject> Isolate::RunHostInitializeImportMetaObjectCallback(
     Handle<SourceTextModule> module) {
-  Handle<Object> host_meta(module->import_meta(), this);
+  Handle<HeapObject> host_meta(module->import_meta(), this);
   if (host_meta->IsTheHole(this)) {
     host_meta = factory()->NewJSObjectWithNullProto();
     if (host_initialize_import_meta_object_callback_ != nullptr) {
@@ -4357,7 +4388,7 @@ void Isolate::PrepareBuiltinSourcePositionMap() {
   }
 }
 
-#if defined(V8_OS_WIN_X64)
+#if defined(V8_OS_WIN64)
 void Isolate::SetBuiltinUnwindData(
     int builtin_index,
     const win64_unwindinfo::BuiltinUnwindInfo& unwinding_info) {
@@ -4365,7 +4396,7 @@ void Isolate::SetBuiltinUnwindData(
     embedded_file_writer_->SetBuiltinUnwindData(builtin_index, unwinding_info);
   }
 }
-#endif
+#endif  // V8_OS_WIN64
 
 void Isolate::SetPrepareStackTraceCallback(PrepareStackTraceCallback callback) {
   prepare_stack_trace_callback_ = callback;
@@ -4373,6 +4404,13 @@ void Isolate::SetPrepareStackTraceCallback(PrepareStackTraceCallback callback) {
 
 bool Isolate::HasPrepareStackTraceCallback() const {
   return prepare_stack_trace_callback_ != nullptr;
+}
+
+void Isolate::SetAddCrashKeyCallback(AddCrashKeyCallback callback) {
+  add_crash_key_callback_ = callback;
+
+  // Log the initial set of data.
+  AddCrashKeysForIsolateAndHeapPointers();
 }
 
 void Isolate::SetAtomicsWaitCallback(v8::Isolate::AtomicsWaitCallback callback,
@@ -4532,6 +4570,15 @@ void Isolate::AddDetachedContext(Handle<Context> context) {
   heap()->set_detached_contexts(*detached_contexts);
 }
 
+void Isolate::AddSharedWasmMemory(Handle<WasmMemoryObject> memory_object) {
+  HandleScope scope(this);
+  Handle<WeakArrayList> shared_wasm_memories =
+      factory()->shared_wasm_memories();
+  shared_wasm_memories = WeakArrayList::AddToEnd(
+      this, shared_wasm_memories, MaybeObjectHandle::Weak(memory_object));
+  heap()->set_shared_wasm_memories(*shared_wasm_memories);
+}
+
 void Isolate::CheckDetachedContextsAfterGC() {
   HandleScope scope(this);
   Handle<WeakArrayList> detached_contexts = factory()->detached_contexts();
@@ -4618,6 +4665,27 @@ void Isolate::SetIdle(bool is_idle) {
     set_current_vm_state(IDLE);
   } else if (state == IDLE) {
     set_current_vm_state(EXTERNAL);
+  }
+}
+
+void Isolate::CollectSourcePositionsForAllBytecodeArrays() {
+  HandleScope scope(this);
+  std::vector<Handle<SharedFunctionInfo>> sfis;
+  {
+    DisallowHeapAllocation no_gc;
+    HeapObjectIterator iterator(heap());
+    for (HeapObject obj = iterator.Next(); !obj.is_null();
+         obj = iterator.Next()) {
+      if (obj.IsSharedFunctionInfo()) {
+        SharedFunctionInfo sfi = SharedFunctionInfo::cast(obj);
+        if (sfi.HasBytecodeArray()) {
+          sfis.push_back(Handle<SharedFunctionInfo>(sfi, this));
+        }
+      }
+    }
+  }
+  for (auto sfi : sfis) {
+    SharedFunctionInfo::EnsureSourcePositionsAvailable(this, sfi);
   }
 }
 

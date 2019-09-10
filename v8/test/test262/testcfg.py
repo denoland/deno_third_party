@@ -44,7 +44,6 @@ from testrunner.outproc import test262
 
 # TODO(littledan): move the flag mapping into the status file
 FEATURE_FLAGS = {
-  'numeric-separator-literal': '--harmony-numeric-separator',
   'Intl.DateTimeFormat-datetimestyle': '--harmony-intl-datetime-style',
   'Intl.DateTimeFormat-formatRange': '--harmony-intl-date-format-range',
   'Intl.NumberFormat-unified': '--harmony-intl-numberformat-unified',
@@ -56,10 +55,15 @@ FEATURE_FLAGS = {
   'export-star-as-namespace-from-module': '--harmony-namespace-exports',
   'BigInt': '--harmony-intl-bigint',
   'Promise.allSettled': '--harmony-promise-all-settled',
+  'FinalizationGroup': '--harmony-weak-refs',
+  'WeakRef': '--harmony-weak-refs',
+  'host-gc-required': '--expose-gc-as=v8GC',
+  'optional-chaining': '--harmony-optional-chaining',
 }
 
 SKIPPED_FEATURES = set(['class-methods-private',
-                        'class-static-methods-private'])
+                        'class-static-methods-private',
+                        'top-level-await'])
 
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 

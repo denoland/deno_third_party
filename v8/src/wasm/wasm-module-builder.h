@@ -231,16 +231,29 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   // Building methods.
   uint32_t AddImport(Vector<const char> name, FunctionSig* sig);
   WasmFunctionBuilder* AddFunction(FunctionSig* sig = nullptr);
-  uint32_t AddGlobal(ValueType type, bool exported, bool mutability = true,
+  uint32_t AddGlobal(ValueType type, bool mutability = true,
                      const WasmInitExpr& init = WasmInitExpr());
-  uint32_t AddGlobalImport(Vector<const char> name, ValueType type);
+  uint32_t AddGlobalImport(Vector<const char> name, ValueType type,
+                           bool mutability);
   void AddDataSegment(const byte* data, uint32_t size, uint32_t dest);
   uint32_t AddSignature(FunctionSig* sig);
+  // In the current implementation, it's supported to have uninitialized slots
+  // at the beginning and/or end of the indirect function table, as long as
+  // the filled slots form a contiguous block in the middle.
   uint32_t AllocateIndirectFunctions(uint32_t count);
   void SetIndirectFunction(uint32_t indirect, uint32_t direct);
+  void SetMaxTableSize(uint32_t max);
+  uint32_t AddTable(ValueType type, uint32_t min_size);
+  uint32_t AddTable(ValueType type, uint32_t min_size, uint32_t max_size);
   void MarkStartFunction(WasmFunctionBuilder* builder);
-  void AddExport(Vector<const char> name, WasmFunctionBuilder* builder);
-  void AddExportedImport(Vector<const char> name, int import_index);
+  void AddExport(Vector<const char> name, ImportExportKindCode kind,
+                 uint32_t index);
+  void AddExport(Vector<const char> name, WasmFunctionBuilder* builder) {
+    AddExport(name, kExternalFunction, builder->func_index());
+  }
+  uint32_t AddExportedGlobal(ValueType type, bool mutability,
+                             const WasmInitExpr& init, Vector<const char> name);
+  void ExportImportedFunction(Vector<const char> name, int import_index);
   void SetMinMemorySize(uint32_t value);
   void SetMaxMemorySize(uint32_t value);
   void SetHasSharedMemory();
@@ -259,22 +272,29 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
     uint32_t sig_index;
   };
 
-  struct WasmFunctionExport {
-    Vector<const char> name;
-    // Can be negative for re-exported imported functions.
-    int function_index;
-  };
-
   struct WasmGlobalImport {
     Vector<const char> name;
     ValueTypeCode type_code;
+    bool mutability;
+  };
+
+  struct WasmExport {
+    Vector<const char> name;
+    ImportExportKindCode kind;
+    int index;  // Can be negative for re-exported imports.
   };
 
   struct WasmGlobal {
     ValueType type;
-    bool exported;
     bool mutability;
     WasmInitExpr init;
+  };
+
+  struct WasmTable {
+    ValueType type;
+    uint32_t min_size;
+    uint32_t max_size;
+    bool has_maximum;
   };
 
   struct WasmDataSegment {
@@ -286,14 +306,16 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   Zone* zone_;
   ZoneVector<FunctionSig*> signatures_;
   ZoneVector<WasmFunctionImport> function_imports_;
-  ZoneVector<WasmFunctionExport> function_exports_;
   ZoneVector<WasmGlobalImport> global_imports_;
+  ZoneVector<WasmExport> exports_;
   ZoneVector<WasmFunctionBuilder*> functions_;
+  ZoneVector<WasmTable> tables_;
   ZoneVector<WasmDataSegment> data_segments_;
   ZoneVector<uint32_t> indirect_functions_;
   ZoneVector<WasmGlobal> globals_;
   ZoneUnorderedMap<FunctionSig, uint32_t> signature_map_;
   int start_function_index_;
+  uint32_t max_table_size_ = 0;
   uint32_t min_memory_size_;
   uint32_t max_memory_size_;
   bool has_max_memory_size_;
@@ -301,6 +323,8 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
 #if DEBUG
   // Once AddExportedImport is called, no more imports can be added.
   bool adding_imports_allowed_ = true;
+  // Indirect functions must be allocated before adding extra tables.
+  bool allocating_indirect_functions_allowed_ = true;
 #endif
 };
 

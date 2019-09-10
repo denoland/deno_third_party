@@ -12975,7 +12975,7 @@ void ApiTestFuzzer::SetUp(PartOfTest part) {
     RegisterThreadedTest::nth(i)->fuzzer_ = new ApiTestFuzzer(i + start);
   }
   for (int i = 0; i < active_tests_; i++) {
-    RegisterThreadedTest::nth(i)->fuzzer_->Start();
+    CHECK(RegisterThreadedTest::nth(i)->fuzzer_->Start());
   }
 }
 
@@ -18386,8 +18386,8 @@ TEST(MultipleIsolatesOnIndividualThreads) {
   IsolateThread thread2(12);
 
   // Compute some fibonacci numbers on 3 threads in 3 isolates.
-  thread1.Start();
-  thread2.Start();
+  CHECK(thread1.Start());
+  CHECK(thread2.Start());
 
   int result1 = CalcFibonacci(CcTest::isolate(), 21);
   int result2 = CalcFibonacci(CcTest::isolate(), 12);
@@ -18481,7 +18481,7 @@ class InitDefaultIsolateThread : public v8::base::Thread {
 
 static void InitializeTestHelper(InitDefaultIsolateThread::TestCase testCase) {
   InitDefaultIsolateThread thread(testCase);
-  thread.Start();
+  CHECK(thread.Start());
   thread.Join();
   CHECK(thread.result());
 }
@@ -19953,6 +19953,71 @@ TEST(ScopedMicrotasks) {
   env->GetIsolate()->SetMicrotasksPolicy(v8::MicrotasksPolicy::kScoped);
   {
     v8::MicrotasksScope scope1(env->GetIsolate(),
+                               v8::MicrotasksScope::kRunMicrotasks);
+    env->GetIsolate()->EnqueueMicrotask(
+        Function::New(env.local(), MicrotaskOne).ToLocalChecked());
+    CompileRun("var ext1Calls = 0;");
+  }
+  {
+    v8::MicrotasksScope scope1(env->GetIsolate(),
+                               v8::MicrotasksScope::kRunMicrotasks);
+    ExpectInt32("ext1Calls", 1);
+  }
+  {
+    v8::MicrotasksScope scope1(env->GetIsolate(),
+                               v8::MicrotasksScope::kRunMicrotasks);
+    env->GetIsolate()->EnqueueMicrotask(
+        Function::New(env.local(), MicrotaskOne).ToLocalChecked());
+    CompileRun("throw new Error()");
+  }
+  {
+    v8::MicrotasksScope scope1(env->GetIsolate(),
+                               v8::MicrotasksScope::kRunMicrotasks);
+    ExpectInt32("ext1Calls", 2);
+  }
+  {
+    v8::MicrotasksScope scope1(env->GetIsolate(),
+                               v8::MicrotasksScope::kRunMicrotasks);
+    env->GetIsolate()->EnqueueMicrotask(
+        Function::New(env.local(), MicrotaskOne).ToLocalChecked());
+    v8::TryCatch try_catch(env->GetIsolate());
+    CompileRun("throw new Error()");
+  }
+  {
+    v8::MicrotasksScope scope1(env->GetIsolate(),
+                               v8::MicrotasksScope::kRunMicrotasks);
+    ExpectInt32("ext1Calls", 3);
+  }
+  {
+    v8::MicrotasksScope scope1(env->GetIsolate(),
+                               v8::MicrotasksScope::kRunMicrotasks);
+    env->GetIsolate()->EnqueueMicrotask(
+        Function::New(env.local(), MicrotaskOne).ToLocalChecked());
+    env->GetIsolate()->TerminateExecution();
+    {
+      v8::MicrotasksScope scope2(env->GetIsolate(),
+                                 v8::MicrotasksScope::kRunMicrotasks);
+      env->GetIsolate()->EnqueueMicrotask(
+          Function::New(env.local(), MicrotaskOne).ToLocalChecked());
+    }
+  }
+  env->GetIsolate()->CancelTerminateExecution();
+  {
+    v8::MicrotasksScope scope1(env->GetIsolate(),
+                               v8::MicrotasksScope::kRunMicrotasks);
+    ExpectInt32("ext1Calls", 3);
+    env->GetIsolate()->EnqueueMicrotask(
+        Function::New(env.local(), MicrotaskOne).ToLocalChecked());
+  }
+  {
+    v8::MicrotasksScope scope1(env->GetIsolate(),
+                               v8::MicrotasksScope::kRunMicrotasks);
+
+    ExpectInt32("ext1Calls", 4);
+  }
+
+  {
+    v8::MicrotasksScope scope1(env->GetIsolate(),
                                v8::MicrotasksScope::kDoNotRunMicrotasks);
     env->GetIsolate()->EnqueueMicrotask(
         Function::New(env.local(), MicrotaskOne).ToLocalChecked());
@@ -20746,7 +20811,7 @@ class ThreadInterruptTest {
 
   void RunTest() {
     InterruptThread i_thread(this);
-    i_thread.Start();
+    CHECK(i_thread.Start());
 
     sem_.Wait();
     CHECK_EQ(kExpectedValue, sem_value_);
@@ -21009,7 +21074,7 @@ class RegExpInterruptTest {
     v8::HandleScope handle_scope(isolate_);
 
     i_thread.SetTestBody(test_body_fn);
-    i_thread.Start();
+    CHECK(i_thread.Start());
 
     TestBody();
 
@@ -21213,7 +21278,7 @@ class RequestInterruptTestBaseWithSimpleInterrupt
  public:
   RequestInterruptTestBaseWithSimpleInterrupt() : i_thread(this) { }
 
-  void StartInterruptThread() override { i_thread.Start(); }
+  void StartInterruptThread() override { CHECK(i_thread.Start()); }
 
  private:
   class InterruptThread : public v8::base::Thread {
@@ -21444,7 +21509,7 @@ class RequestMultipleInterrupts : public RequestInterruptTestBase {
  public:
   RequestMultipleInterrupts() : i_thread(this), counter_(0) {}
 
-  void StartInterruptThread() override { i_thread.Start(); }
+  void StartInterruptThread() override { CHECK(i_thread.Start()); }
 
   void TestBody() override {
     Local<Function> func = Function::New(env_.local(), ShouldContinueCallback,
@@ -23566,9 +23631,31 @@ v8::MaybeLocal<Module> UnexpectedModuleResolveCallback(Local<Context> context,
   CHECK_WITH_MSG(false, "Unexpected call to resolve callback");
 }
 
-bool UnexpectedSyntheticModuleEvaluationStepsCallback(Local<Context> context,
-                                                      Local<Module> module) {
+v8::MaybeLocal<Value> UnexpectedSyntheticModuleEvaluationStepsCallback(
+    Local<Context> context, Local<Module> module) {
   CHECK_WITH_MSG(false, "Unexpected call to synthetic module re callback");
+}
+
+static int synthetic_module_callback_count;
+
+v8::MaybeLocal<Value> SyntheticModuleEvaluationStepsCallback(
+    Local<Context> context, Local<Module> module) {
+  synthetic_module_callback_count++;
+  return v8::Undefined(reinterpret_cast<v8::Isolate*>(context->GetIsolate()));
+}
+
+v8::MaybeLocal<Value> SyntheticModuleEvaluationStepsCallbackFail(
+    Local<Context> context, Local<Module> module) {
+  synthetic_module_callback_count++;
+  context->GetIsolate()->ThrowException(
+      v8_str("SyntheticModuleEvaluationStepsCallbackFail exception"));
+  return v8::MaybeLocal<Value>();
+}
+
+v8::MaybeLocal<Value> SyntheticModuleEvaluationStepsCallbackSetExport(
+    Local<Context> context, Local<Module> module) {
+  module->SetSyntheticModuleExport(v8_str("test_export"), v8_num(42));
+  return v8::Undefined(reinterpret_cast<v8::Isolate*>(context->GetIsolate()));
 }
 
 namespace {
@@ -23627,6 +23714,28 @@ Local<Module> CompileAndInstantiateModuleFromCache(
 }
 
 }  // namespace
+
+v8::MaybeLocal<Module> SyntheticModuleResolveCallback(Local<Context> context,
+                                                      Local<String> specifier,
+                                                      Local<Module> referrer) {
+  std::vector<v8::Local<v8::String>> export_names{v8_str("test_export")};
+  Local<Module> module = CreateAndInstantiateSyntheticModule(
+      context->GetIsolate(),
+      v8_str("SyntheticModuleResolveCallback-TestSyntheticModule"), context,
+      export_names, SyntheticModuleEvaluationStepsCallbackSetExport);
+  return v8::MaybeLocal<Module>(module);
+}
+
+v8::MaybeLocal<Module> SyntheticModuleThatThrowsDuringEvaluateResolveCallback(
+    Local<Context> context, Local<String> specifier, Local<Module> referrer) {
+  std::vector<v8::Local<v8::String>> export_names{v8_str("test_export")};
+  Local<Module> module = CreateAndInstantiateSyntheticModule(
+      context->GetIsolate(),
+      v8_str("SyntheticModuleThatThrowsDuringEvaluateResolveCallback-"
+             "TestSyntheticModule"),
+      context, export_names, SyntheticModuleEvaluationStepsCallbackFail);
+  return v8::MaybeLocal<Module>(module);
+}
 
 TEST(ModuleCodeCache) {
   v8::Isolate::CreateParams create_params;
@@ -23761,6 +23870,144 @@ TEST(SyntheticModuleSetExports) {
   CHECK(i::Handle<i::String>::cast(
             i::Handle<i::Object>(foo_cell->value(), i_isolate))
             ->Equals(*v8::Utils::OpenHandle(*bar_string)));
+}
+
+TEST(SyntheticModuleEvaluationStepsNoThrow) {
+  synthetic_module_callback_count = 0;
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::Isolate::Scope iscope(isolate);
+  v8::HandleScope scope(isolate);
+  v8::Local<v8::Context> context = v8::Context::New(isolate);
+  v8::Context::Scope cscope(context);
+
+  std::vector<v8::Local<v8::String>> export_names{v8_str("default")};
+
+  Local<Module> module = CreateAndInstantiateSyntheticModule(
+      isolate,
+      v8_str("SyntheticModuleEvaluationStepsNoThrow-TestSyntheticModule"),
+      context, export_names, SyntheticModuleEvaluationStepsCallback);
+  CHECK_EQ(synthetic_module_callback_count, 0);
+  Local<Value> completion_value = module->Evaluate(context).ToLocalChecked();
+  CHECK(completion_value->IsUndefined());
+  CHECK_EQ(synthetic_module_callback_count, 1);
+  CHECK_EQ(module->GetStatus(), Module::kEvaluated);
+}
+
+TEST(SyntheticModuleEvaluationStepsThrow) {
+  synthetic_module_callback_count = 0;
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::Isolate::Scope iscope(isolate);
+  v8::HandleScope scope(isolate);
+  v8::Local<v8::Context> context = CcTest::isolate()->GetCurrentContext();
+  v8::Context::Scope cscope(context);
+
+  std::vector<v8::Local<v8::String>> export_names{v8_str("default")};
+
+  Local<Module> module = CreateAndInstantiateSyntheticModule(
+      isolate,
+      v8_str("SyntheticModuleEvaluationStepsThrow-TestSyntheticModule"),
+      context, export_names, SyntheticModuleEvaluationStepsCallbackFail);
+  TryCatch try_catch(isolate);
+  CHECK_EQ(synthetic_module_callback_count, 0);
+  v8::MaybeLocal<Value> completion_value = module->Evaluate(context);
+  CHECK(completion_value.IsEmpty());
+  CHECK_EQ(synthetic_module_callback_count, 1);
+  CHECK_EQ(module->GetStatus(), Module::kErrored);
+  CHECK(try_catch.HasCaught());
+}
+
+TEST(SyntheticModuleEvaluationStepsSetExport) {
+  synthetic_module_callback_count = 0;
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  auto i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+  v8::Isolate::Scope iscope(isolate);
+  v8::HandleScope scope(isolate);
+  v8::Local<v8::Context> context = v8::Context::New(isolate);
+  v8::Context::Scope cscope(context);
+
+  Local<String> test_export_string = v8_str("test_export");
+  std::vector<v8::Local<v8::String>> export_names{test_export_string};
+
+  Local<Module> module = CreateAndInstantiateSyntheticModule(
+      isolate,
+      v8_str("SyntheticModuleEvaluationStepsSetExport-TestSyntheticModule"),
+      context, export_names, SyntheticModuleEvaluationStepsCallbackSetExport);
+
+  i::Handle<i::SyntheticModule> i_module =
+      i::Handle<i::SyntheticModule>::cast(v8::Utils::OpenHandle(*module));
+  i::Handle<i::ObjectHashTable> exports(i_module->exports(), i_isolate);
+
+  i::Handle<i::Cell> test_export_cell =
+      i::Handle<i::Cell>::cast(i::Handle<i::Object>(
+          exports->Lookup(v8::Utils::OpenHandle(*test_export_string)),
+          i_isolate));
+  CHECK(test_export_cell->value().IsUndefined());
+
+  Local<Value> completion_value = module->Evaluate(context).ToLocalChecked();
+  CHECK(completion_value->IsUndefined());
+  CHECK_EQ(42, test_export_cell->value().Number());
+  CHECK_EQ(module->GetStatus(), Module::kEvaluated);
+}
+
+TEST(ImportFromSyntheticModule) {
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::Isolate::Scope iscope(isolate);
+  v8::HandleScope scope(isolate);
+  v8::Local<v8::Context> context = v8::Context::New(isolate);
+  v8::Context::Scope cscope(context);
+
+  Local<String> url = v8_str("www.test.com");
+  Local<String> source_text = v8_str(
+      "import {test_export} from './synthetic.module';"
+      "(function() { return test_export; })();");
+  v8::ScriptOrigin origin(url, Local<v8::Integer>(), Local<v8::Integer>(),
+                          Local<v8::Boolean>(), Local<v8::Integer>(),
+                          Local<v8::Value>(), Local<v8::Boolean>(),
+                          Local<v8::Boolean>(), True(isolate));
+  v8::ScriptCompiler::Source source(source_text, origin);
+  Local<Module> module =
+      v8::ScriptCompiler::CompileModule(isolate, &source).ToLocalChecked();
+  module->InstantiateModule(context, SyntheticModuleResolveCallback)
+      .ToChecked();
+
+  Local<Value> completion_value = module->Evaluate(context).ToLocalChecked();
+  CHECK_EQ(42, completion_value->Int32Value(context).FromJust());
+}
+
+TEST(ImportFromSyntheticModuleThrow) {
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::Isolate::Scope iscope(isolate);
+  v8::HandleScope scope(isolate);
+  v8::Local<v8::Context> context = v8::Context::New(isolate);
+  v8::Context::Scope cscope(context);
+
+  Local<String> url = v8_str("www.test.com");
+  Local<String> source_text = v8_str(
+      "import {test_export} from './synthetic.module';"
+      "(function() { return test_export; })();");
+  v8::ScriptOrigin origin(url, Local<v8::Integer>(), Local<v8::Integer>(),
+                          Local<v8::Boolean>(), Local<v8::Integer>(),
+                          Local<v8::Value>(), Local<v8::Boolean>(),
+                          Local<v8::Boolean>(), True(isolate));
+  v8::ScriptCompiler::Source source(source_text, origin);
+  Local<Module> module =
+      v8::ScriptCompiler::CompileModule(isolate, &source).ToLocalChecked();
+  module
+      ->InstantiateModule(
+          context, SyntheticModuleThatThrowsDuringEvaluateResolveCallback)
+      .ToChecked();
+
+  CHECK_EQ(module->GetStatus(), Module::kInstantiated);
+  TryCatch try_catch(isolate);
+  v8::MaybeLocal<Value> completion_value = module->Evaluate(context);
+  CHECK(completion_value.IsEmpty());
+  CHECK_EQ(module->GetStatus(), Module::kErrored);
+  CHECK(try_catch.HasCaught());
 }
 
 // Tests that the code cache does not confuse the same source code compiled as a
@@ -24669,7 +24916,7 @@ TEST(FutexInterruption) {
   FutexInterruptionThread timeout_thread(isolate);
 
   v8::TryCatch try_catch(CcTest::isolate());
-  timeout_thread.Start();
+  CHECK(timeout_thread.Start());
 
   CompileRun(
       "var ab = new SharedArrayBuffer(4);"
@@ -25086,7 +25333,7 @@ TEST(MemoryPressure) {
     LocalContext env;
     MemoryPressureThread memory_pressure_thread(
         isolate, v8::MemoryPressureLevel::kCritical);
-    memory_pressure_thread.Start();
+    CHECK(memory_pressure_thread.Start());
     memory_pressure_thread.Join();
     // This should trigger GC.
     CHECK_EQ(0, counter.NumberOfWeakCalls());
@@ -25898,7 +26145,7 @@ void AtomicsWaitCallbackForTesting(
         break;
       case AtomicsWaitCallbackAction::StopFromThreadAndThrow:
         info->stop_thread = v8::base::make_unique<StopAtomicsWaitThread>(info);
-        info->stop_thread->Start();
+        CHECK(info->stop_thread->Start());
         break;
       case AtomicsWaitCallbackAction::KeepWaiting:
         break;

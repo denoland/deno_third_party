@@ -309,30 +309,15 @@ void PrintWasmText(const WasmModule* module, const ModuleWireBytes& wire_bytes,
           case kExprI32x4ExtractLane:
           case kExprI64x2ExtractLane:
           case kExprF32x4ExtractLane:
+          case kExprF64x2ExtractLane:
           case kExprI8x16ReplaceLane:
           case kExprI16x8ReplaceLane:
           case kExprI32x4ReplaceLane:
           case kExprI64x2ReplaceLane:
-          case kExprF32x4ReplaceLane: {
+          case kExprF32x4ReplaceLane:
+          case kExprF64x2ReplaceLane: {
             SimdLaneImmediate<Decoder::kNoValidate> imm(&i, i.pc());
             os << WasmOpcodes::OpcodeName(opcode) << ' ' << imm.lane;
-            break;
-          }
-
-          case kExprI8x16Shl:
-          case kExprI8x16ShrS:
-          case kExprI8x16ShrU:
-          case kExprI16x8Shl:
-          case kExprI16x8ShrS:
-          case kExprI16x8ShrU:
-          case kExprI32x4Shl:
-          case kExprI32x4ShrS:
-          case kExprI32x4ShrU:
-          case kExprI64x2Shl:
-          case kExprI64x2ShrS:
-          case kExprI64x2ShrU: {
-            SimdShiftImmediate<Decoder::kNoValidate> imm(&i, i.pc());
-            os << WasmOpcodes::OpcodeName(opcode) << ' ' << imm.shift;
             break;
           }
 
@@ -357,6 +342,10 @@ void PrintWasmText(const WasmModule* module, const ModuleWireBytes& wire_bytes,
             os << WasmOpcodes::OpcodeName(atomic_opcode)
                << " offset=" << imm.offset
                << " align=" << (1ULL << imm.alignment);
+            break;
+          }
+          FOREACH_ATOMIC_0_OPERAND_OPCODE(CASE_OPCODE) {
+            os << WasmOpcodes::OpcodeName(atomic_opcode);
             break;
           }
           default:

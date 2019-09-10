@@ -8,6 +8,7 @@
 #include "src/codegen/compiler.h"
 #include "src/date/date.h"
 #include "src/execution/arguments.h"
+#include "src/execution/frames.h"
 #include "src/execution/isolate.h"
 #include "src/handles/handles-inl.h"
 #include "src/handles/maybe-handles.h"
@@ -1508,20 +1509,27 @@ namespace {
 
 Maybe<bool> GetPropertyDescriptorWithInterceptor(LookupIterator* it,
                                                  PropertyDescriptor* desc) {
+  Handle<InterceptorInfo> interceptor;
+
   if (it->state() == LookupIterator::ACCESS_CHECK) {
     if (it->HasAccess()) {
       it->Next();
-    } else if (!JSObject::AllCanRead(it) ||
-               it->state() != LookupIterator::INTERCEPTOR) {
-      it->Restart();
-      return Just(false);
+    } else {
+      interceptor = it->GetInterceptorForFailedAccessCheck();
+      if (interceptor.is_null() &&
+          (!JSObject::AllCanRead(it) ||
+           it->state() != LookupIterator::INTERCEPTOR)) {
+        it->Restart();
+        return Just(false);
+      }
     }
   }
 
-  if (it->state() != LookupIterator::INTERCEPTOR) return Just(false);
-
+  if (it->state() == LookupIterator::INTERCEPTOR) {
+    interceptor = it->GetInterceptor();
+  }
+  if (interceptor.is_null()) return Just(false);
   Isolate* isolate = it->isolate();
-  Handle<InterceptorInfo> interceptor = it->GetInterceptor();
   if (interceptor->descriptor().IsUndefined(isolate)) return Just(false);
 
   Handle<Object> result;
@@ -1606,12 +1614,14 @@ Maybe<bool> JSReceiver::GetOwnPropertyDescriptor(LookupIterator* it,
     // 6. Else X is an accessor property, so
     Handle<AccessorPair> accessors =
         Handle<AccessorPair>::cast(it->GetAccessors());
+    Handle<NativeContext> native_context =
+        it->GetHolder<JSReceiver>()->GetCreationContext();
     // 6a. Set D.[[Get]] to the value of X's [[Get]] attribute.
-    desc->set_get(
-        AccessorPair::GetComponent(isolate, accessors, ACCESSOR_GETTER));
+    desc->set_get(AccessorPair::GetComponent(isolate, native_context, accessors,
+                                             ACCESSOR_GETTER));
     // 6b. Set D.[[Set]] to the value of X's [[Set]] attribute.
-    desc->set_set(
-        AccessorPair::GetComponent(isolate, accessors, ACCESSOR_SETTER));
+    desc->set_set(AccessorPair::GetComponent(isolate, native_context, accessors,
+                                             ACCESSOR_SETTER));
   }
 
   // 7. Set D.[[Enumerable]] to the value of X's [[Enumerable]] attribute.
@@ -2038,7 +2048,7 @@ MaybeHandle<JSObject> JSObject::ObjectCreate(Isolate* isolate,
 void JSObject::EnsureWritableFastElements(Handle<JSObject> object) {
   DCHECK(object->HasSmiOrObjectElements() ||
          object->HasFastStringWrapperElements() ||
-         object->HasFrozenOrSealedElements());
+         object->HasAnyNonextensibleElements());
   FixedArray raw_elems = FixedArray::cast(object->elements());
   Isolate* isolate = object->GetIsolate();
   if (raw_elems.map() != ReadOnlyRoots(isolate).fixed_cow_array_map()) return;
@@ -2621,12 +2631,12 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
         FieldIndex::ForDescriptor(isolate, *new_map, new_map->LastAdded());
     if (index.is_inobject() || index.outobject_array_index() <
                                    object->property_array(isolate).length()) {
-      // We still need to allocate MutableHeapNumbers for double fields
+      // We still need to allocate HeapNumbers for double fields
       // if either double field unboxing is disabled or the double field
       // is in the PropertyArray backing store (where we don't support
       // double field unboxing).
       if (index.is_double() && !new_map->IsUnboxedDoubleField(isolate, index)) {
-        auto value = isolate->factory()->NewMutableHeapNumberWithHoleNaN();
+        auto value = isolate->factory()->NewHeapNumberWithHoleNaN();
         object->RawFastPropertyAtPut(index, *value);
       }
       object->synchronized_set_map(*new_map);
@@ -2643,7 +2653,7 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
     // Properly initialize newly added property.
     Handle<Object> value;
     if (details.representation().IsDouble()) {
-      value = isolate->factory()->NewMutableHeapNumberWithHoleNaN();
+      value = isolate->factory()->NewHeapNumberWithHoleNaN();
     } else {
       value = isolate->factory()->uninitialized_value();
     }
@@ -2707,7 +2717,7 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
         // must already be prepared for data of certain type.
         DCHECK(!details.representation().IsNone());
         if (details.representation().IsDouble()) {
-          value = isolate->factory()->NewMutableHeapNumberWithHoleNaN();
+          value = isolate->factory()->NewHeapNumberWithHoleNaN();
         } else {
           value = isolate->factory()->uninitialized_value();
         }
@@ -2721,11 +2731,7 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
       FieldIndex index = FieldIndex::ForDescriptor(isolate, *old_map, i);
       if (object->IsUnboxedDoubleField(isolate, index)) {
         uint64_t old_bits = object->RawFastDoublePropertyAsBitsAt(index);
-        if (representation.IsDouble()) {
-          value = isolate->factory()->NewMutableHeapNumberFromBits(old_bits);
-        } else {
-          value = isolate->factory()->NewHeapNumberFromBits(old_bits);
-        }
+        value = isolate->factory()->NewHeapNumberFromBits(old_bits);
       } else {
         value = handle(object->RawFastPropertyAt(isolate, index), isolate);
         if (!old_representation.IsDouble() && representation.IsDouble()) {
@@ -2753,7 +2759,7 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
     DCHECK_EQ(kData, details.kind());
     Handle<Object> value;
     if (details.representation().IsDouble()) {
-      value = isolate->factory()->NewMutableHeapNumberWithHoleNaN();
+      value = isolate->factory()->NewHeapNumberWithHoleNaN();
     } else {
       value = isolate->factory()->uninitialized_value();
     }
@@ -2770,9 +2776,10 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
 
   Heap* heap = isolate->heap();
 
-  int old_instance_size = old_map->instance_size();
-
-  heap->NotifyObjectLayoutChange(*object, old_instance_size, no_allocation);
+  // Invalidate slots manually later in case of tagged to untagged translation.
+  // In all other cases the recorded slot remains dereferenceable.
+  heap->NotifyObjectLayoutChange(*object, no_allocation,
+                                 InvalidateRecordedSlots::kNo);
 
   // Copy (real) inobject properties. If necessary, stop at number_of_fields to
   // avoid overwriting |one_pointer_filler_map|.
@@ -2783,13 +2790,15 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
     // Can't use JSObject::FastPropertyAtPut() because proper map was not set
     // yet.
     if (new_map->IsUnboxedDoubleField(isolate, index)) {
-      DCHECK(value.IsMutableHeapNumber(isolate));
+      DCHECK(value.IsHeapNumber(isolate));
       // Ensure that all bits of the double value are preserved.
       object->RawFastDoublePropertyAsBitsAtPut(
-          index, MutableHeapNumber::cast(value).value_as_bits());
+          index, HeapNumber::cast(value).value_as_bits());
       if (i < old_number_of_fields && !old_map->IsUnboxedDoubleField(index)) {
         // Transition from tagged to untagged slot.
         heap->ClearRecordedSlot(*object, object->RawField(index.offset()));
+        MemoryChunk* chunk = MemoryChunk::FromHeapObject(*object);
+        chunk->InvalidateRecordedSlots(*object);
       } else {
 #ifdef DEBUG
         heap->VerifyClearedSlot(*object, object->RawField(index.offset()));
@@ -2803,6 +2812,7 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
   object->SetProperties(*array);
 
   // Create filler object past the new instance size.
+  int old_instance_size = old_map->instance_size();
   int new_instance_size = new_map->instance_size();
   int instance_size_delta = old_instance_size - new_instance_size;
   DCHECK_GE(instance_size_delta, 0);
@@ -2858,8 +2868,8 @@ void MigrateFastToSlow(Isolate* isolate, Handle<JSObject> object,
         } else {
           value = handle(object->RawFastPropertyAt(isolate, index), isolate);
           if (details.representation().IsDouble()) {
-            DCHECK(value->IsMutableHeapNumber(isolate));
-            double old_value = Handle<MutableHeapNumber>::cast(value)->value();
+            DCHECK(value->IsHeapNumber(isolate));
+            double old_value = Handle<HeapNumber>::cast(value)->value();
             value = isolate->factory()->NewHeapNumber(old_value);
           }
         }
@@ -2885,10 +2895,15 @@ void MigrateFastToSlow(Isolate* isolate, Handle<JSObject> object,
   DisallowHeapAllocation no_allocation;
 
   Heap* heap = isolate->heap();
-  int old_instance_size = map->instance_size();
-  heap->NotifyObjectLayoutChange(*object, old_instance_size, no_allocation);
+
+  // Invalidate slots manually later in case the new map has in-object
+  // properties. If not, it is not possible to store an untagged value
+  // in a recorded slot.
+  heap->NotifyObjectLayoutChange(*object, no_allocation,
+                                 InvalidateRecordedSlots::kNo);
 
   // Resize the object in the heap if necessary.
+  int old_instance_size = map->instance_size();
   int new_instance_size = new_map->instance_size();
   int instance_size_delta = old_instance_size - new_instance_size;
   DCHECK_GE(instance_size_delta, 0);
@@ -2912,6 +2927,8 @@ void MigrateFastToSlow(Isolate* isolate, Handle<JSObject> object,
     heap->ClearRecordedSlotRange(
         object->address() + map->GetInObjectPropertyOffset(0),
         object->address() + new_instance_size);
+    MemoryChunk* chunk = MemoryChunk::FromHeapObject(*object);
+    chunk->InvalidateRecordedSlots(*object);
 
     for (int i = 0; i < inobject_properties; i++) {
       FieldIndex index = FieldIndex::ForPropertyIndex(*new_map, i);
@@ -3047,7 +3064,7 @@ void JSObject::AllocateStorageForMap(Handle<JSObject> object, Handle<Map> map) {
       if (!representation.IsDouble()) continue;
       FieldIndex index = FieldIndex::ForDescriptor(*map, i);
       if (map->IsUnboxedDoubleField(index)) continue;
-      auto box = isolate->factory()->NewMutableHeapNumberWithHoleNaN();
+      auto box = isolate->factory()->NewHeapNumberWithHoleNaN();
       if (index.is_inobject()) {
         storage->set(index.property_index(), *box);
       } else {
@@ -3463,7 +3480,8 @@ Handle<NumberDictionary> JSObject::NormalizeElements(Handle<JSObject> object) {
 
   DCHECK(object->HasSmiOrObjectElements() || object->HasDoubleElements() ||
          object->HasFastArgumentsElements() ||
-         object->HasFastStringWrapperElements() || object->HasSealedElements());
+         object->HasFastStringWrapperElements() ||
+         object->HasSealedElements() || object->HasNonextensibleElements());
 
   Handle<NumberDictionary> dictionary =
       object->GetElementsAccessor()->Normalize(object);
@@ -3636,6 +3654,7 @@ bool TestElementsIntegrityLevel(JSObject object, PropertyAttributes level) {
   }
   if (IsFrozenElementsKind(kind)) return true;
   if (IsSealedElementsKind(kind) && level != FROZEN) return true;
+  if (IsNonextensibleElementsKind(kind) && level == NONE) return true;
 
   ElementsAccessor* accessor = ElementsAccessor::ForKind(kind);
   // Only DICTIONARY_ELEMENTS and SLOW_SLOPPY_ARGUMENTS_ELEMENTS have
@@ -3794,9 +3813,9 @@ Maybe<bool> JSObject::PreventExtensionsWithTransition(
   if (attrs == NONE && !object->map().is_extensible()) return Just(true);
   {
     ElementsKind old_elements_kind = object->map().elements_kind();
+    if (IsFrozenElementsKind(old_elements_kind)) return Just(true);
     if (attrs != FROZEN && IsSealedElementsKind(old_elements_kind))
       return Just(true);
-    if (old_elements_kind == PACKED_FROZEN_ELEMENTS) return Just(true);
   }
 
   if (object->IsJSGlobalProxy()) {
@@ -3841,8 +3860,7 @@ Maybe<bool> JSObject::PreventExtensionsWithTransition(
   // elements kind change in one go. If seal or freeze with Smi or Double
   // elements kind, we will transition to Object elements kind first to make
   // sure of valid element access.
-  if (FLAG_enable_sealed_frozen_elements_kind &&
-      (attrs == SEALED || attrs == FROZEN)) {
+  if (FLAG_enable_sealed_frozen_elements_kind) {
     switch (object->map().elements_kind()) {
       case PACKED_SMI_ELEMENTS:
       case PACKED_DOUBLE_ELEMENTS:
@@ -3870,9 +3888,9 @@ Maybe<bool> JSObject::PreventExtensionsWithTransition(
     DCHECK(transition_map->has_dictionary_elements() ||
            transition_map->has_typed_array_elements() ||
            transition_map->elements_kind() == SLOW_STRING_WRAPPER_ELEMENTS ||
-           transition_map->has_frozen_or_sealed_elements());
+           transition_map->has_any_nonextensible_elements());
     DCHECK(!transition_map->is_extensible());
-    if (!transition_map->has_frozen_or_sealed_elements()) {
+    if (!transition_map->has_any_nonextensible_elements()) {
       new_element_dictionary = CreateElementDictionary(isolate, object);
     }
     JSObject::MigrateToMap(isolate, object, transition_map);
@@ -3880,7 +3898,7 @@ Maybe<bool> JSObject::PreventExtensionsWithTransition(
     // Create a new descriptor array with the appropriate property attributes
     Handle<Map> new_map = Map::CopyForPreventExtensions(
         isolate, old_map, attrs, transition_marker, "CopyForPreventExtensions");
-    if (!new_map->has_frozen_or_sealed_elements()) {
+    if (!new_map->has_any_nonextensible_elements()) {
       new_element_dictionary = CreateElementDictionary(isolate, object);
     }
     JSObject::MigrateToMap(isolate, object, new_map);
@@ -3895,7 +3913,6 @@ Maybe<bool> JSObject::PreventExtensionsWithTransition(
     Handle<Map> new_map = Map::Copy(isolate, handle(object->map(), isolate),
                                     "SlowCopyForPreventExtensions");
     new_map->set_is_extensible(false);
-    DCHECK(!new_map->has_frozen_or_sealed_elements());
     new_element_dictionary = CreateElementDictionary(isolate, object);
     if (!new_element_dictionary.is_null()) {
       ElementsKind new_kind =
@@ -3922,7 +3939,7 @@ Maybe<bool> JSObject::PreventExtensionsWithTransition(
     }
   }
 
-  if (object->map().has_frozen_or_sealed_elements()) {
+  if (object->map().has_any_nonextensible_elements()) {
     DCHECK(new_element_dictionary.is_null());
     return Just(true);
   }
@@ -3980,6 +3997,7 @@ bool JSObject::HasEnumerableElements() {
     case PACKED_ELEMENTS:
     case PACKED_FROZEN_ELEMENTS:
     case PACKED_SEALED_ELEMENTS:
+    case PACKED_NONEXTENSIBLE_ELEMENTS:
     case PACKED_DOUBLE_ELEMENTS: {
       int length = object.IsJSArray()
                        ? Smi::ToInt(JSArray::cast(object).length())
@@ -3989,6 +4007,7 @@ bool JSObject::HasEnumerableElements() {
     case HOLEY_SMI_ELEMENTS:
     case HOLEY_FROZEN_ELEMENTS:
     case HOLEY_SEALED_ELEMENTS:
+    case HOLEY_NONEXTENSIBLE_ELEMENTS:
     case HOLEY_ELEMENTS: {
       FixedArray elements = FixedArray::cast(object.elements());
       int length = object.IsJSArray()
@@ -4146,7 +4165,7 @@ Object JSObject::SlowReverseLookup(Object value) {
         } else {
           Object property = RawFastPropertyAt(field_index);
           if (field_index.is_double()) {
-            DCHECK(property.IsMutableHeapNumber());
+            DCHECK(property.IsHeapNumber());
             if (value_is_number && property.Number() == value.Number()) {
               return descs.GetKey(i);
             }
@@ -4597,22 +4616,22 @@ static ElementsKind BestFittingFastElementsKind(JSObject object) {
 void JSObject::AddDataElement(Handle<JSObject> object, uint32_t index,
                               Handle<Object> value,
                               PropertyAttributes attributes) {
-  DCHECK(object->map().is_extensible());
-
   Isolate* isolate = object->GetIsolate();
+
+  DCHECK(object->map(isolate).is_extensible());
 
   uint32_t old_length = 0;
   uint32_t new_capacity = 0;
 
-  if (object->IsJSArray()) {
+  if (object->IsJSArray(isolate)) {
     CHECK(JSArray::cast(*object).length().ToArrayLength(&old_length));
   }
 
-  ElementsKind kind = object->GetElementsKind();
-  FixedArrayBase elements = object->elements();
+  ElementsKind kind = object->GetElementsKind(isolate);
+  FixedArrayBase elements = object->elements(isolate);
   ElementsKind dictionary_kind = DICTIONARY_ELEMENTS;
   if (IsSloppyArgumentsElementsKind(kind)) {
-    elements = SloppyArgumentsElements::cast(elements).arguments();
+    elements = SloppyArgumentsElements::cast(elements).arguments(isolate);
     dictionary_kind = SLOW_SLOPPY_ARGUMENTS_ELEMENTS;
   } else if (IsStringWrapperElementsKind(kind)) {
     dictionary_kind = SLOW_STRING_WRAPPER_ELEMENTS;
@@ -4620,7 +4639,7 @@ void JSObject::AddDataElement(Handle<JSObject> object, uint32_t index,
 
   if (attributes != NONE) {
     kind = dictionary_kind;
-  } else if (elements.IsNumberDictionary()) {
+  } else if (elements.IsNumberDictionary(isolate)) {
     kind = ShouldConvertToFastElements(
                *object, NumberDictionary::cast(elements), index, &new_capacity)
                ? BestFittingFastElementsKind(*object)
@@ -4631,8 +4650,9 @@ void JSObject::AddDataElement(Handle<JSObject> object, uint32_t index,
     kind = dictionary_kind;
   }
 
-  ElementsKind to = value->OptimalElementsKind();
-  if (IsHoleyElementsKind(kind) || !object->IsJSArray() || index > old_length) {
+  ElementsKind to = value->OptimalElementsKind(isolate);
+  if (IsHoleyElementsKind(kind) || !object->IsJSArray(isolate) ||
+      index > old_length) {
     to = GetHoleyElementsKind(to);
     kind = GetHoleyElementsKind(kind);
   }
@@ -4640,7 +4660,7 @@ void JSObject::AddDataElement(Handle<JSObject> object, uint32_t index,
   ElementsAccessor* accessor = ElementsAccessor::ForKind(to);
   accessor->Add(object, index, value, attributes, new_capacity);
 
-  if (object->IsJSArray() && index >= old_length) {
+  if (object->IsJSArray(isolate) && index >= old_length) {
     Handle<Object> new_length =
         isolate->factory()->NewNumberFromUint(index + 1);
     JSArray::cast(*object).set_length(*new_length);
@@ -4690,8 +4710,9 @@ void JSObject::TransitionElementsKind(Handle<JSObject> object,
   if (from_kind == to_kind) return;
 
   // This method should never be called for any other case.
-  DCHECK(IsFastElementsKind(from_kind));
-  DCHECK(IsFastElementsKind(to_kind));
+  DCHECK(IsFastElementsKind(from_kind) ||
+         IsNonextensibleElementsKind(from_kind));
+  DCHECK(IsFastElementsKind(to_kind) || IsNonextensibleElementsKind(to_kind));
   DCHECK_NE(TERMINAL_FAST_ELEMENTS_KIND, from_kind);
 
   UpdateAllocationSite(object, to_kind);
@@ -4734,6 +4755,7 @@ int JSObject::GetFastElementsUsage() {
     case PACKED_ELEMENTS:
     case PACKED_FROZEN_ELEMENTS:
     case PACKED_SEALED_ELEMENTS:
+    case PACKED_NONEXTENSIBLE_ELEMENTS:
       return IsJSArray() ? Smi::ToInt(JSArray::cast(*this).length())
                          : store.length();
     case FAST_SLOPPY_ARGUMENTS_ELEMENTS:
@@ -4743,6 +4765,7 @@ int JSObject::GetFastElementsUsage() {
     case HOLEY_ELEMENTS:
     case HOLEY_FROZEN_ELEMENTS:
     case HOLEY_SEALED_ELEMENTS:
+    case HOLEY_NONEXTENSIBLE_ELEMENTS:
     case FAST_STRING_WRAPPER_ELEMENTS:
       return HoleyElementsUsage(*this, FixedArray::cast(store));
     case HOLEY_DOUBLE_ELEMENTS:
@@ -4800,6 +4823,8 @@ bool JSObject::IsApiWrapper() {
   return instance_type == JS_API_OBJECT_TYPE ||
          instance_type == JS_ARRAY_BUFFER_TYPE ||
          instance_type == JS_DATA_VIEW_TYPE ||
+         instance_type == JS_GLOBAL_OBJECT_TYPE ||
+         instance_type == JS_GLOBAL_PROXY_TYPE ||
          instance_type == JS_SPECIAL_API_OBJECT_TYPE ||
          instance_type == JS_TYPED_ARRAY_TYPE;
 }
@@ -4984,6 +5009,13 @@ void JSFunction::EnsureFeedbackVector(Handle<JSFunction> function) {
 // static
 void JSFunction::InitializeFeedbackCell(Handle<JSFunction> function) {
   Isolate* const isolate = function->GetIsolate();
+
+  if (function->has_feedback_vector()) {
+    CHECK_EQ(function->feedback_vector().length(),
+             function->feedback_vector().metadata().slot_count());
+    return;
+  }
+
   bool needs_feedback_vector = !FLAG_lazy_feedback_allocation;
   // We need feedback vector for certain log events, collecting type profile
   // and more precise code coverage.
@@ -5183,6 +5215,7 @@ bool CanSubclassHaveInobjectProperties(InstanceType instance_type) {
     case JS_MESSAGE_OBJECT_TYPE:
     case JS_OBJECT_TYPE:
     case JS_ERROR_TYPE:
+    case JS_FINALIZATION_GROUP_TYPE:
     case JS_ARGUMENTS_TYPE:
     case JS_PROMISE_TYPE:
     case JS_REGEXP_TYPE:
@@ -5191,6 +5224,7 @@ bool CanSubclassHaveInobjectProperties(InstanceType instance_type) {
     case JS_TYPED_ARRAY_TYPE:
     case JS_PRIMITIVE_WRAPPER_TYPE:
     case JS_WEAK_MAP_TYPE:
+    case JS_WEAK_REF_TYPE:
     case JS_WEAK_SET_TYPE:
     case WASM_GLOBAL_TYPE:
     case WASM_INSTANCE_TYPE:
@@ -5227,7 +5261,6 @@ bool CanSubclassHaveInobjectProperties(InstanceType instance_type) {
     case JS_GLOBAL_PROXY_TYPE:
     case JS_PROXY_TYPE:
     case MAP_TYPE:
-    case MUTABLE_HEAP_NUMBER_TYPE:
     case ODDBALL_TYPE:
     case PROPERTY_CELL_TYPE:
     case SHARED_FUNCTION_INFO_TYPE:

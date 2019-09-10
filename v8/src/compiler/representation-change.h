@@ -5,6 +5,7 @@
 #ifndef V8_COMPILER_REPRESENTATION_CHANGE_H_
 #define V8_COMPILER_REPRESENTATION_CHANGE_H_
 
+#include "src/compiler/feedback-source.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/simplified-operator.h"
 
@@ -165,7 +166,7 @@ class UseInfo {
  public:
   UseInfo(MachineRepresentation representation, Truncation truncation,
           TypeCheckKind type_check = TypeCheckKind::kNone,
-          const VectorSlotPair& feedback = VectorSlotPair())
+          const FeedbackSource& feedback = FeedbackSource())
       : representation_(representation),
         truncation_(truncation),
         type_check_(type_check),
@@ -173,9 +174,12 @@ class UseInfo {
   static UseInfo TruncatingWord32() {
     return UseInfo(MachineRepresentation::kWord32, Truncation::Word32());
   }
-  static UseInfo TruncatedBigIntAsWord64() {
+  static UseInfo TruncatingWord64() {
+    return UseInfo(MachineRepresentation::kWord64, Truncation::Word64());
+  }
+  static UseInfo CheckedBigIntTruncatingWord64(const FeedbackSource& feedback) {
     return UseInfo(MachineRepresentation::kWord64, Truncation::Word64(),
-                   TypeCheckKind::kBigInt);
+                   TypeCheckKind::kBigInt, feedback);
   }
   static UseInfo Word64() {
     return UseInfo(MachineRepresentation::kWord64, Truncation::Any());
@@ -216,59 +220,59 @@ class UseInfo {
 
   // Possibly deoptimizing conversions.
   static UseInfo CheckedHeapObjectAsTaggedPointer(
-      const VectorSlotPair& feedback) {
+      const FeedbackSource& feedback) {
     return UseInfo(MachineRepresentation::kTaggedPointer, Truncation::Any(),
                    TypeCheckKind::kHeapObject, feedback);
   }
 
-  static UseInfo CheckedBigIntAsTaggedPointer(const VectorSlotPair& feedback) {
+  static UseInfo CheckedBigIntAsTaggedPointer(const FeedbackSource& feedback) {
     return UseInfo(MachineRepresentation::kTaggedPointer, Truncation::Any(),
                    TypeCheckKind::kBigInt, feedback);
   }
 
   static UseInfo CheckedSignedSmallAsTaggedSigned(
-      const VectorSlotPair& feedback,
+      const FeedbackSource& feedback,
       IdentifyZeros identify_zeros = kDistinguishZeros) {
     return UseInfo(MachineRepresentation::kTaggedSigned,
                    Truncation::Any(identify_zeros), TypeCheckKind::kSignedSmall,
                    feedback);
   }
   static UseInfo CheckedSignedSmallAsWord32(IdentifyZeros identify_zeros,
-                                            const VectorSlotPair& feedback) {
+                                            const FeedbackSource& feedback) {
     return UseInfo(MachineRepresentation::kWord32,
                    Truncation::Any(identify_zeros), TypeCheckKind::kSignedSmall,
                    feedback);
   }
   static UseInfo CheckedSigned32AsWord32(IdentifyZeros identify_zeros,
-                                         const VectorSlotPair& feedback) {
+                                         const FeedbackSource& feedback) {
     return UseInfo(MachineRepresentation::kWord32,
                    Truncation::Any(identify_zeros), TypeCheckKind::kSigned32,
                    feedback);
   }
   static UseInfo CheckedSigned64AsWord64(IdentifyZeros identify_zeros,
-                                         const VectorSlotPair& feedback) {
+                                         const FeedbackSource& feedback) {
     return UseInfo(MachineRepresentation::kWord64,
                    Truncation::Any(identify_zeros), TypeCheckKind::kSigned64,
                    feedback);
   }
   static UseInfo CheckedNumberAsFloat64(IdentifyZeros identify_zeros,
-                                        const VectorSlotPair& feedback) {
+                                        const FeedbackSource& feedback) {
     return UseInfo(MachineRepresentation::kFloat64,
                    Truncation::Any(identify_zeros), TypeCheckKind::kNumber,
                    feedback);
   }
-  static UseInfo CheckedNumberAsWord32(const VectorSlotPair& feedback) {
+  static UseInfo CheckedNumberAsWord32(const FeedbackSource& feedback) {
     return UseInfo(MachineRepresentation::kWord32, Truncation::Word32(),
                    TypeCheckKind::kNumber, feedback);
   }
   static UseInfo CheckedNumberOrOddballAsFloat64(
-      IdentifyZeros identify_zeros, const VectorSlotPair& feedback) {
+      IdentifyZeros identify_zeros, const FeedbackSource& feedback) {
     return UseInfo(MachineRepresentation::kFloat64,
                    Truncation::Any(identify_zeros),
                    TypeCheckKind::kNumberOrOddball, feedback);
   }
   static UseInfo CheckedNumberOrOddballAsWord32(
-      const VectorSlotPair& feedback) {
+      const FeedbackSource& feedback) {
     return UseInfo(MachineRepresentation::kWord32, Truncation::Word32(),
                    TypeCheckKind::kNumberOrOddball, feedback);
   }
@@ -294,13 +298,13 @@ class UseInfo {
                ? CheckForMinusZeroMode::kDontCheckForMinusZero
                : CheckForMinusZeroMode::kCheckForMinusZero;
   }
-  const VectorSlotPair& feedback() const { return feedback_; }
+  const FeedbackSource& feedback() const { return feedback_; }
 
  private:
   MachineRepresentation representation_;
   Truncation truncation_;
   TypeCheckKind type_check_;
-  VectorSlotPair feedback_;
+  FeedbackSource feedback_;
 };
 
 // Contains logic related to changing the representation of values for constants
@@ -308,7 +312,7 @@ class UseInfo {
 // Eagerly folds any representation changes for constants.
 class V8_EXPORT_PRIVATE RepresentationChanger final {
  public:
-  RepresentationChanger(JSGraph* jsgraph, Isolate* isolate);
+  RepresentationChanger(JSGraph* jsgraph, JSHeapBroker* broker);
 
   // Changes representation from {output_type} to {use_rep}. The {truncation}
   // parameter is only used for sanity checking - if the changer cannot figure
@@ -338,7 +342,7 @@ class V8_EXPORT_PRIVATE RepresentationChanger final {
  private:
   TypeCache const* cache_;
   JSGraph* jsgraph_;
-  Isolate* isolate_;
+  JSHeapBroker* broker_;
 
   friend class RepresentationChangerTester;  // accesses the below fields.
 
@@ -392,13 +396,18 @@ class V8_EXPORT_PRIVATE RepresentationChanger final {
   Node* InsertChangeTaggedSignedToInt32(Node* node);
   Node* InsertChangeTaggedToFloat64(Node* node);
   Node* InsertChangeUint32ToFloat64(Node* node);
+  Node* InsertChangeCompressedPointerToTaggedPointer(Node* node);
+  Node* InsertChangeCompressedSignedToTaggedSigned(Node* node);
   Node* InsertChangeCompressedToTagged(Node* node);
+  Node* InsertCheckedFloat64ToInt32(Node* node, CheckForMinusZeroMode check,
+                                    const FeedbackSource& feedback,
+                                    Node* use_node);
   Node* InsertConversion(Node* node, const Operator* op, Node* use_node);
   Node* InsertTruncateInt64ToInt32(Node* node);
   Node* InsertUnconditionalDeopt(Node* node, DeoptimizeReason reason);
 
   JSGraph* jsgraph() const { return jsgraph_; }
-  Isolate* isolate() const { return isolate_; }
+  Isolate* isolate() const;
   Factory* factory() const { return isolate()->factory(); }
   SimplifiedOperatorBuilder* simplified() { return jsgraph()->simplified(); }
   MachineOperatorBuilder* machine() { return jsgraph()->machine(); }

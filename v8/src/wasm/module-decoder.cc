@@ -123,7 +123,7 @@ ValueType TypeOf(const WasmModule* module, const WasmInitExpr& expr) {
     case WasmInitExpr::kRefNullConst:
       return kWasmNullRef;
     case WasmInitExpr::kRefFuncConst:
-      return kWasmAnyFunc;
+      return kWasmFuncRef;
     default:
       UNREACHABLE();
   }
@@ -259,13 +259,13 @@ class ModuleDecoderImpl : public Decoder {
   explicit ModuleDecoderImpl(const WasmFeatures& enabled, ModuleOrigin origin)
       : Decoder(nullptr, nullptr),
         enabled_features_(enabled),
-        origin_(FLAG_assume_asmjs_origin ? kAsmJsOrigin : origin) {}
+        origin_(FLAG_assume_asmjs_origin ? kAsmJsSloppyOrigin : origin) {}
 
   ModuleDecoderImpl(const WasmFeatures& enabled, const byte* module_start,
                     const byte* module_end, ModuleOrigin origin)
       : Decoder(module_start, module_end),
         enabled_features_(enabled),
-        origin_(FLAG_assume_asmjs_origin ? kAsmJsOrigin : origin) {
+        origin_(FLAG_assume_asmjs_origin ? kAsmJsSloppyOrigin : origin) {
     if (end_ < start_) {
       error(start_, "end is less than start");
       end_ = start_;
@@ -550,7 +550,7 @@ class ModuleDecoderImpl : public Decoder {
           table->imported = true;
           ValueType type = consume_reference_type();
           if (!enabled_features_.anyref) {
-            if (type != kWasmAnyFunc) {
+            if (type != kWasmFuncRef) {
               error(pc_ - 1, "invalid table type");
               break;
             }
@@ -635,7 +635,7 @@ class ModuleDecoderImpl : public Decoder {
   void DecodeTableSection() {
     // TODO(ahaas): Set the correct limit to {kV8MaxWasmTables} once the
     // implementation of AnyRef landed.
-    uint32_t max_count = enabled_features_.anyref ? 10 : kV8MaxWasmTables;
+    uint32_t max_count = enabled_features_.anyref ? 100000 : kV8MaxWasmTables;
     uint32_t table_count = consume_count("table count", max_count);
 
     for (uint32_t i = 0; ok() && i < table_count; i++) {
@@ -746,7 +746,7 @@ class ModuleDecoderImpl : public Decoder {
       }
     }
     // Check for duplicate exports (except for asm.js).
-    if (ok() && origin_ != kAsmJsOrigin && module_->export_table.size() > 1) {
+    if (ok() && origin_ == kWasmOrigin && module_->export_table.size() > 1) {
       std::vector<WasmExport> sorted_exports(module_->export_table);
 
       auto cmp_less = [this](const WasmExport& a, const WasmExport& b) {
@@ -808,16 +808,16 @@ class ModuleDecoderImpl : public Decoder {
           errorf(pos, "out of bounds table index %u", table_index);
           break;
         }
-        if (!ValueTypes::IsSubType(kWasmAnyFunc,
+        if (!ValueTypes::IsSubType(kWasmFuncRef,
                                    module_->tables[table_index].type)) {
           errorf(pos,
-                 "Invalid element segment. Table %u is not of type AnyFunc",
+                 "Invalid element segment. Table %u is not of type FuncRef",
                  table_index);
           break;
         }
       } else {
         ValueType type = consume_reference_type();
-        if (!ValueTypes::IsSubType(kWasmAnyFunc, type)) {
+        if (!ValueTypes::IsSubType(kWasmFuncRef, type)) {
           error(pc_ - 1, "invalid element segment type");
           break;
         }
@@ -1595,14 +1595,14 @@ class ModuleDecoderImpl : public Decoder {
             case kLocalS128:
               if (enabled_features_.simd) return kWasmS128;
               break;
-            case kLocalAnyFunc:
-              if (enabled_features_.anyref) return kWasmAnyFunc;
+            case kLocalFuncRef:
+              if (enabled_features_.anyref) return kWasmFuncRef;
               break;
             case kLocalAnyRef:
               if (enabled_features_.anyref) return kWasmAnyRef;
               break;
-            case kLocalExceptRef:
-              if (enabled_features_.eh) return kWasmExceptRef;
+            case kLocalExnRef:
+              if (enabled_features_.eh) return kWasmExnRef;
               break;
             default:
               break;
@@ -1618,8 +1618,8 @@ class ModuleDecoderImpl : public Decoder {
     byte val = consume_u8("reference type");
     ValueTypeCode t = static_cast<ValueTypeCode>(val);
     switch (t) {
-      case kLocalAnyFunc:
-        return kWasmAnyFunc;
+      case kLocalFuncRef:
+        return kWasmFuncRef;
       case kLocalAnyRef:
         if (!enabled_features_.anyref) {
           error(pc_ - 1,

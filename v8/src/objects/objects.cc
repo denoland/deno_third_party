@@ -33,6 +33,7 @@
 #include "src/execution/frames-inl.h"
 #include "src/execution/isolate-inl.h"
 #include "src/execution/microtask-queue.h"
+#include "src/execution/protectors-inl.h"
 #include "src/heap/heap-inl.h"
 #include "src/heap/read-only-heap.h"
 #include "src/ic/ic.h"
@@ -193,12 +194,12 @@ Handle<FieldType> Object::OptimalType(Isolate* isolate,
 Handle<Object> Object::NewStorageFor(Isolate* isolate, Handle<Object> object,
                                      Representation representation) {
   if (!representation.IsDouble()) return object;
-  auto result = isolate->factory()->NewMutableHeapNumberWithHoleNaN();
+  auto result = isolate->factory()->NewHeapNumberWithHoleNaN();
   if (object->IsUninitialized(isolate)) {
     result->set_value_as_bits(kHoleNanInt64);
-  } else if (object->IsMutableHeapNumber()) {
+  } else if (object->IsHeapNumber()) {
     // Ensure that all bits of the double value are preserved.
-    result->set_value_as_bits(MutableHeapNumber::cast(*object).value_as_bits());
+    result->set_value_as_bits(HeapNumber::cast(*object).value_as_bits());
   } else {
     result->set_value(object->Number());
   }
@@ -213,7 +214,7 @@ Handle<Object> Object::WrapForRead(Isolate* isolate, Handle<Object> object,
     return object;
   }
   return isolate->factory()->NewHeapNumberFromBits(
-      MutableHeapNumber::cast(*object).value_as_bits());
+      HeapNumber::cast(*object).value_as_bits());
 }
 
 MaybeHandle<JSReceiver> Object::ToObjectImpl(Isolate* isolate,
@@ -1667,7 +1668,7 @@ MaybeHandle<Object> Object::ArraySpeciesConstructor(
   Handle<Object> default_species = isolate->array_function();
   if (original_array->IsJSArray() &&
       Handle<JSArray>::cast(original_array)->HasArrayPrototype(isolate) &&
-      isolate->IsArraySpeciesLookupChainIntact()) {
+      Protectors::IsArraySpeciesLookupChainIntact(isolate)) {
     return default_species;
   }
   Handle<Object> constructor = isolate->factory()->undefined_value();
@@ -2077,12 +2078,6 @@ void HeapObject::HeapObjectShortPrint(std::ostream& os) {  // NOLINT
       os << ">";
       break;
     }
-    case MUTABLE_HEAP_NUMBER_TYPE: {
-      os << "<MutableHeapNumber ";
-      MutableHeapNumber::cast(*this).MutableHeapNumberPrint(os);
-      os << '>';
-      break;
-    }
     case BIGINT_TYPE: {
       os << "<BigInt ";
       BigInt::cast(*this).BigIntShortPrint(os);
@@ -2192,8 +2187,7 @@ int HeapObject::SizeFromMap(Map map) const {
         FixedArray::unchecked_cast(*this).synchronized_length());
   }
   if (IsInRange(instance_type, FIRST_CONTEXT_TYPE, LAST_CONTEXT_TYPE)) {
-    // Native context has fixed size.
-    DCHECK_NE(instance_type, NATIVE_CONTEXT_TYPE);
+    if (instance_type == NATIVE_CONTEXT_TYPE) return NativeContext::kSize;
     return Context::SizeFor(Context::unchecked_cast(*this).length());
   }
   if (instance_type == ONE_BYTE_STRING_TYPE ||
@@ -3046,27 +3040,34 @@ Maybe<bool> JSProxy::DeletePropertyOrElement(Handle<JSProxy> proxy,
   }
 
   // Enforce the invariant.
+  return JSProxy::CheckDeleteTrap(isolate, name, target);
+}
+
+Maybe<bool> JSProxy::CheckDeleteTrap(Isolate* isolate, Handle<Name> name,
+                                     Handle<JSReceiver> target) {
+  // 10. Let targetDesc be ? target.[[GetOwnProperty]](P).
   PropertyDescriptor target_desc;
-  Maybe<bool> owned =
+  Maybe<bool> target_found =
       JSReceiver::GetOwnPropertyDescriptor(isolate, target, name, &target_desc);
-  MAYBE_RETURN(owned, Nothing<bool>());
-  if (owned.FromJust()) {
+  MAYBE_RETURN(target_found, Nothing<bool>());
+  // 11. If targetDesc is undefined, return true.
+  if (target_found.FromJust()) {
+    // 12. If targetDesc.[[Configurable]] is false, throw a TypeError exception.
     if (!target_desc.configurable()) {
-      isolate->Throw(*factory->NewTypeError(
+      isolate->Throw(*isolate->factory()->NewTypeError(
           MessageTemplate::kProxyDeletePropertyNonConfigurable, name));
       return Nothing<bool>();
     }
     // 13. Let extensibleTarget be ? IsExtensible(target).
+    Maybe<bool> extensible_target = JSReceiver::IsExtensible(target);
+    MAYBE_RETURN(extensible_target, Nothing<bool>());
     // 14. If extensibleTarget is false, throw a TypeError exception.
-    Maybe<bool> extensible = JSReceiver::IsExtensible(target);
-    MAYBE_RETURN(extensible, Nothing<bool>());
-    if (!extensible.FromJust()) {
-      isolate->Throw(*factory->NewTypeError(
+    if (!extensible_target.FromJust()) {
+      isolate->Throw(*isolate->factory()->NewTypeError(
           MessageTemplate::kProxyDeletePropertyNonExtensible, name));
       return Nothing<bool>();
     }
   }
-
   return Just(true);
 }
 
@@ -3272,7 +3273,11 @@ Maybe<bool> JSArray::ArraySetLength(Isolate* isolate, Handle<JSArray> a,
                                      new_len_desc, should_throw);
   }
   // 13. If oldLenDesc.[[Writable]] is false, return false.
-  if (!old_len_desc.writable()) {
+  if (!old_len_desc.writable() ||
+      // Also handle the {configurable: true} case since we later use
+      // JSArray::SetLength instead of OrdinaryDefineOwnProperty to change
+      // the length, and it doesn't have access to the descriptor anymore.
+      new_len_desc->configurable()) {
     RETURN_FAILURE(isolate, GetShouldThrow(isolate, should_throw),
                    NewTypeError(MessageTemplate::kRedefineDisallowed,
                                 isolate->factory()->length_string()));
@@ -4248,7 +4253,7 @@ void DescriptorArray::Sort() {
 }
 
 int16_t DescriptorArray::UpdateNumberOfMarkedDescriptors(
-    uintptr_t mark_compact_epoch, int16_t new_marked) {
+    unsigned mark_compact_epoch, int16_t new_marked) {
   STATIC_ASSERT(kMaxNumberOfDescriptors <=
                 NumberOfMarkedDescriptors::kMaxNumberOfMarkedDescriptors);
   int16_t old_raw_marked = raw_number_of_marked_descriptors();
@@ -4278,11 +4283,13 @@ Handle<AccessorPair> AccessorPair::Copy(Isolate* isolate,
 }
 
 Handle<Object> AccessorPair::GetComponent(Isolate* isolate,
+                                          Handle<NativeContext> native_context,
                                           Handle<AccessorPair> accessor_pair,
                                           AccessorComponent component) {
   Object accessor = accessor_pair->get(component);
   if (accessor.IsFunctionTemplateInfo()) {
     return ApiNatives::InstantiateFunction(
+               isolate, native_context,
                handle(FunctionTemplateInfo::cast(accessor), isolate))
         .ToHandleChecked();
   }
@@ -5328,12 +5335,9 @@ void SharedFunctionInfo::InitFromFunctionLiteral(
                                               lit->end_position());
     needs_position_info = false;
   }
-  shared_info->set_is_declaration(lit->is_declaration());
-  shared_info->set_is_named_expression(lit->is_named_expression());
-  shared_info->set_is_anonymous_expression(lit->is_anonymous_expression());
+  shared_info->set_syntax_kind(lit->syntax_kind());
   shared_info->set_allows_lazy_compilation(lit->AllowsLazyCompilation());
   shared_info->set_language_mode(lit->language_mode());
-  shared_info->set_is_wrapped(lit->is_wrapped());
   shared_info->set_function_literal_id(lit->function_literal_id());
   //  shared_info->set_kind(lit->kind());
   // FunctionKind must have already been set.
@@ -5350,6 +5354,8 @@ void SharedFunctionInfo::InitFromFunctionLiteral(
     Scope* outer_scope = lit->scope()->GetOuterScopeWithContext();
     if (outer_scope) {
       shared_info->set_outer_scope_info(*outer_scope->scope_info());
+      shared_info->set_private_name_lookup_skips_outer_class(
+          lit->scope()->private_name_lookup_skips_outer_class());
     }
   }
 
@@ -5639,8 +5645,7 @@ bool AllocationSite::IsNested() {
 }
 
 bool AllocationSite::ShouldTrack(ElementsKind from, ElementsKind to) {
-  return IsSmiElementsKind(from) &&
-         IsMoreGeneralElementsKindTransition(from, to);
+  return IsMoreGeneralElementsKindTransition(from, to);
 }
 
 const char* AllocationSite::PretenureDecisionName(PretenureDecision decision) {
@@ -6134,21 +6139,63 @@ Handle<JSRegExp> JSRegExp::Copy(Handle<JSRegExp> regexp) {
   return Handle<JSRegExp>::cast(isolate->factory()->CopyJSObject(regexp));
 }
 
+Object JSRegExp::Code(bool is_latin1) const {
+  return DataAt(code_index(is_latin1));
+}
+
+Object JSRegExp::Bytecode(bool is_latin1) const {
+  return DataAt(bytecode_index(is_latin1));
+}
+
+bool JSRegExp::ShouldProduceBytecode() {
+  return FLAG_regexp_interpret_all ||
+         (FLAG_regexp_tier_up && !MarkedForTierUp());
+}
+
+// An irregexp is considered to be marked for tier up if the tier-up ticks value
+// is not zero. An atom is not subject to tier-up implementation, so the tier-up
+// ticks value is not set.
+bool JSRegExp::MarkedForTierUp() {
+  DCHECK(data().IsFixedArray());
+  if (TypeTag() == JSRegExp::ATOM) {
+    return false;
+  }
+  return Smi::ToInt(DataAt(kIrregexpTierUpTicksIndex)) != 0;
+}
+
+void JSRegExp::ResetTierUp() {
+  DCHECK(FLAG_regexp_tier_up);
+  DCHECK_EQ(TypeTag(), JSRegExp::IRREGEXP);
+  FixedArray::cast(data()).set(JSRegExp::kIrregexpTierUpTicksIndex, Smi::kZero);
+}
+
+void JSRegExp::MarkTierUpForNextExec() {
+  DCHECK(FLAG_regexp_tier_up);
+  DCHECK_EQ(TypeTag(), JSRegExp::IRREGEXP);
+  FixedArray::cast(data()).set(JSRegExp::kIrregexpTierUpTicksIndex,
+                               Smi::FromInt(1));
+}
+
 namespace {
 
 template <typename Char>
 int CountRequiredEscapes(Handle<String> source) {
   DisallowHeapAllocation no_gc;
   int escapes = 0;
+  bool in_char_class = false;
   Vector<const Char> src = source->GetCharVector<Char>(no_gc);
   for (int i = 0; i < src.length(); i++) {
     const Char c = src[i];
     if (c == '\\') {
       // Escape. Skip next character;
       i++;
-    } else if (c == '/') {
+    } else if (c == '/' && !in_char_class) {
       // Not escaped forward-slash needs escape.
       escapes++;
+    } else if (c == '[') {
+      in_char_class = true;
+    } else if (c == ']') {
+      in_char_class = false;
     } else if (c == '\n') {
       escapes++;
     } else if (c == '\r') {
@@ -6161,6 +6208,7 @@ int CountRequiredEscapes(Handle<String> source) {
       DCHECK(!unibrow::IsLineTerminator(static_cast<unibrow::uchar>(c)));
     }
   }
+  DCHECK(!in_char_class);
   return escapes;
 }
 
@@ -6178,16 +6226,19 @@ Handle<StringType> WriteEscapedRegExpSource(Handle<String> source,
   Vector<Char> dst(result->GetChars(no_gc), result->length());
   int s = 0;
   int d = 0;
-  // TODO(v8:1982): Fully implement
-  // https://tc39.github.io/ecma262/#sec-escaperegexppattern
+  bool in_char_class = false;
   while (s < src.length()) {
     if (src[s] == '\\') {
       // Escape. Copy this and next character.
       dst[d++] = src[s++];
       if (s == src.length()) break;
-    } else if (src[s] == '/') {
+    } else if (src[s] == '/' && !in_char_class) {
       // Not escaped forward-slash needs escape.
       dst[d++] = '\\';
+    } else if (src[s] == '[') {
+      in_char_class = true;
+    } else if (src[s] == ']') {
+      in_char_class = false;
     } else if (src[s] == '\n') {
       WriteStringToCharVector(dst, &d, "\\n");
       s++;
@@ -6208,6 +6259,7 @@ Handle<StringType> WriteEscapedRegExpSource(Handle<String> source,
     dst[d++] = src[s++];
   }
   DCHECK_EQ(result->length(), d);
+  DCHECK(!in_char_class);
   return result;
 }
 
@@ -6264,12 +6316,12 @@ MaybeHandle<JSRegExp> JSRegExp::Initialize(Handle<JSRegExp> regexp,
 
   source = String::Flatten(isolate, source);
 
+  RETURN_ON_EXCEPTION(isolate, RegExp::Compile(isolate, regexp, source, flags),
+                      JSRegExp);
+
   Handle<String> escaped_source;
   ASSIGN_RETURN_ON_EXCEPTION(isolate, escaped_source,
                              EscapeRegExpSource(isolate, source), JSRegExp);
-
-  RETURN_ON_EXCEPTION(isolate, RegExp::Compile(isolate, regexp, source, flags),
-                      JSRegExp);
 
   regexp->set_source(*escaped_source);
   regexp->set_flags(Smi::FromInt(flags));
@@ -7384,7 +7436,7 @@ Handle<FixedArray> BaseNameDictionary<Derived, Shape>::IterationIndices(
 }
 
 template <typename Derived, typename Shape>
-void BaseNameDictionary<Derived, Shape>::CollectKeysTo(
+ExceptionStatus BaseNameDictionary<Derived, Shape>::CollectKeysTo(
     Handle<Derived> dictionary, KeyAccumulator* keys) {
   Isolate* isolate = keys->isolate();
   ReadOnlyRoots roots(isolate);
@@ -7429,16 +7481,19 @@ void BaseNameDictionary<Derived, Shape>::CollectKeysTo(
       has_seen_symbol = true;
       continue;
     }
-    keys->AddKey(key, DO_NOT_CONVERT);
+    ExceptionStatus status = keys->AddKey(key, DO_NOT_CONVERT);
+    if (!status) return status;
   }
   if (has_seen_symbol) {
     for (int i = 0; i < array_size; i++) {
       int index = Smi::ToInt(array->get(i));
       Object key = dictionary->NameAt(index);
       if (!key.IsSymbol()) continue;
-      keys->AddKey(key, DO_NOT_CONVERT);
+      ExceptionStatus status = keys->AddKey(key, DO_NOT_CONVERT);
+      if (!status) return status;
     }
   }
+  return ExceptionStatus::kSuccess;
 }
 
 // Backwards lookup (slow).
@@ -7841,9 +7896,13 @@ Handle<PropertyCell> PropertyCell::PrepareForValue(
 
 // static
 void PropertyCell::SetValueWithInvalidation(Isolate* isolate,
+                                            const char* cell_name,
                                             Handle<PropertyCell> cell,
                                             Handle<Object> new_value) {
   if (cell->value() != *new_value) {
+    if (FLAG_trace_protector_invalidation) {
+      isolate->TraceProtectorInvalidation(cell_name);
+    }
     cell->set_value(*new_value);
     cell->dependent_code().DeoptimizeDependentCodeGroup(
         isolate, DependentCode::kPropertyCellChangedGroup);
@@ -8042,7 +8101,10 @@ HashTable<NameDictionary, NameDictionaryShape>::Shrink(Isolate* isolate,
                                                        Handle<NameDictionary>,
                                                        int additionalCapacity);
 
-void JSFinalizationGroup::Cleanup(
+template void HashTable<GlobalDictionary, GlobalDictionaryShape>::Rehash(
+    ReadOnlyRoots roots);
+
+Maybe<bool> JSFinalizationGroup::Cleanup(
     Isolate* isolate, Handle<JSFinalizationGroup> finalization_group,
     Handle<Object> cleanup) {
   DCHECK(cleanup->IsCallable());
@@ -8063,23 +8125,17 @@ void JSFinalizationGroup::Cleanup(
               Handle<AllocationSite>::null()));
       iterator->set_finalization_group(*finalization_group);
     }
-
-    v8::TryCatch try_catch(reinterpret_cast<v8::Isolate*>(isolate));
-    v8::Local<v8::Value> result;
-    MaybeHandle<Object> exception;
     Handle<Object> args[] = {iterator};
-    bool has_pending_exception = !ToLocal<Value>(
-        Execution::TryCall(
+    if (Execution::Call(
             isolate, cleanup,
-            handle(ReadOnlyRoots(isolate).undefined_value(), isolate), 1, args,
-            Execution::MessageHandling::kReport, &exception),
-        &result);
-    // TODO(marja): (spec): What if there's an exception?
-    USE(has_pending_exception);
-
+            handle(ReadOnlyRoots(isolate).undefined_value(), isolate), 1, args)
+            .is_null()) {
+      return Nothing<bool>();
+    }
     // TODO(marja): (spec): Should the iterator be invalidated after the
     // function returns?
   }
+  return Just(true);
 }
 
 MaybeHandle<FixedArray> JSReceiver::GetPrivateEntries(

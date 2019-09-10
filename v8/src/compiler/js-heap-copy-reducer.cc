@@ -29,9 +29,12 @@ Reduction JSHeapCopyReducer::Reduce(Node* node) {
     case IrOpcode::kHeapConstant: {
       ObjectRef object(broker(), HeapConstantOf(node->op()));
       if (object.IsJSFunction()) object.AsJSFunction().Serialize();
-      if (object.IsJSObject()) object.AsJSObject().SerializeObjectCreateMap();
-      if (object.IsSourceTextModule()) object.AsSourceTextModule().Serialize();
-      if (object.IsContext()) object.AsContext().SerializeContextChain();
+      if (object.IsJSObject()) {
+        object.AsJSObject().SerializeObjectCreateMap();
+      }
+      if (object.IsSourceTextModule()) {
+        object.AsSourceTextModule().Serialize();
+      }
       break;
     }
     case IrOpcode::kJSCreateArray: {
@@ -70,7 +73,7 @@ Reduction JSHeapCopyReducer::Reduce(Node* node) {
     }
     case IrOpcode::kJSCreateEmptyLiteralArray: {
       FeedbackParameter const& p = FeedbackParameterOf(node->op());
-      FeedbackVectorRef(broker(), p.feedback().vector()).SerializeSlots();
+      FeedbackVectorRef(broker(), p.feedback().vector).Serialize();
       break;
     }
     case IrOpcode::kJSCreateFunctionContext: {
@@ -82,22 +85,30 @@ Reduction JSHeapCopyReducer::Reduce(Node* node) {
     case IrOpcode::kJSCreateLiteralArray:
     case IrOpcode::kJSCreateLiteralObject: {
       CreateLiteralParameters const& p = CreateLiteralParametersOf(node->op());
-      FeedbackVectorRef(broker(), p.feedback().vector()).SerializeSlots();
+      FeedbackVectorRef(broker(), p.feedback().vector).Serialize();
       break;
     }
     case IrOpcode::kJSCreateLiteralRegExp: {
       CreateLiteralParameters const& p = CreateLiteralParametersOf(node->op());
-      FeedbackVectorRef(broker(), p.feedback().vector()).SerializeSlots();
+      FeedbackVectorRef(broker(), p.feedback().vector).Serialize();
       break;
     }
     case IrOpcode::kJSCreateWithContext: {
       ScopeInfoRef(broker(), ScopeInfoOf(node->op()));
       break;
     }
-    case IrOpcode::kJSLoadNamed:
+    case IrOpcode::kJSLoadNamed: {
+      NamedAccess const& p = NamedAccessOf(node->op());
+      NameRef name(broker(), p.name());
+      if (p.feedback().IsValid()) {
+        broker()->ProcessFeedbackForPropertyAccess(p.feedback(),
+                                                   AccessMode::kLoad, name);
+      }
+      break;
+    }
     case IrOpcode::kJSStoreNamed: {
       NamedAccess const& p = NamedAccessOf(node->op());
-      NameRef(broker(), p.name());
+      NameRef name(broker(), p.name());
       break;
     }
     case IrOpcode::kStoreField:
@@ -134,7 +145,15 @@ Reduction JSHeapCopyReducer::Reduce(Node* node) {
       }
       break;
     }
-
+    case IrOpcode::kJSLoadProperty: {
+      PropertyAccess const& p = PropertyAccessOf(node->op());
+      AccessMode access_mode = AccessMode::kLoad;
+      if (p.feedback().IsValid()) {
+        broker()->ProcessFeedbackForPropertyAccess(p.feedback(), access_mode,
+                                                   base::nullopt);
+      }
+      break;
+    }
     default:
       break;
   }

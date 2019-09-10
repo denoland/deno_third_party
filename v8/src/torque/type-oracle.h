@@ -30,9 +30,13 @@ class TypeOracle : public ContextualClass<TypeOracle> {
     return result;
   }
 
-  static StructType* GetStructType(const std::string& name) {
-    StructType* result = new StructType(CurrentNamespace(), name);
-    Get().struct_types_.push_back(std::unique_ptr<StructType>(result));
+  static StructType* GetStructType(
+      const StructDeclaration* decl,
+      StructType::MaybeSpecializationKey specialized_from) {
+    Namespace* nspace = new Namespace(STRUCT_NAMESPACE_STRING);
+    StructType* result = new StructType(nspace, decl, specialized_from);
+    Get().aggregate_types_.push_back(std::unique_ptr<StructType>(result));
+    Get().struct_namespaces_.push_back(std::unique_ptr<Namespace>(nspace));
     return result;
   }
 
@@ -42,7 +46,7 @@ class TypeOracle : public ContextualClass<TypeOracle> {
                                  const TypeAlias* alias) {
     ClassType* result = new ClassType(parent, CurrentNamespace(), name, flags,
                                       generates, decl, alias);
-    Get().struct_types_.push_back(std::unique_ptr<ClassType>(result));
+    Get().aggregate_types_.push_back(std::unique_ptr<ClassType>(result));
     return result;
   }
 
@@ -60,8 +64,26 @@ class TypeOracle : public ContextualClass<TypeOracle> {
     return result;
   }
 
-  static const ReferenceType* GetReferenceType(const Type* referenced_type) {
-    return Get().reference_types_.Add(ReferenceType(referenced_type));
+  static const StructType* GetGenericStructTypeInstance(
+      GenericStructType* generic_struct, TypeVector arg_types);
+
+  static GenericStructType* GetReferenceGeneric() {
+    return Declarations::LookupUniqueGenericStructType(QualifiedName(
+        {TORQUE_INTERNAL_NAMESPACE_STRING}, REFERENCE_TYPE_STRING));
+  }
+
+  static GenericStructType* GetSliceGeneric() {
+    return Declarations::LookupUniqueGenericStructType(
+        QualifiedName({TORQUE_INTERNAL_NAMESPACE_STRING}, SLICE_TYPE_STRING));
+  }
+
+  static const StructType* GetReferenceType(const Type* referenced_type) {
+    return GetGenericStructTypeInstance(GetReferenceGeneric(),
+                                        {referenced_type});
+  }
+
+  static const StructType* GetSliceType(const Type* referenced_type) {
+    return GetGenericStructTypeInstance(GetSliceGeneric(), {referenced_type});
   }
 
   static const std::vector<const BuiltinPointerType*>&
@@ -129,6 +151,10 @@ class TypeOracle : public ContextualClass<TypeOracle> {
 
   static const Type* GetHeapObjectType() {
     return Get().GetBuiltinType(HEAP_OBJECT_TYPE_STRING);
+  }
+
+  static const Type* GetJSAnyType() {
+    return Get().GetBuiltinType(JSANY_TYPE_STRING);
   }
 
   static const Type* GetJSObjectType() {
@@ -222,8 +248,8 @@ class TypeOracle : public ContextualClass<TypeOracle> {
   static bool IsImplicitlyConvertableFrom(const Type* to, const Type* from) {
     for (Generic* from_constexpr :
          Declarations::LookupGeneric(kFromConstexprMacroName)) {
-      if (base::Optional<Callable*> specialization =
-              from_constexpr->GetSpecialization({to, from})) {
+      if (base::Optional<const Callable*> specialization =
+              from_constexpr->specializations().Get({to, from})) {
         if ((*specialization)->signature().GetExplicitTypes() ==
             TypeVector{from}) {
           return true;
@@ -233,7 +259,9 @@ class TypeOracle : public ContextualClass<TypeOracle> {
     return false;
   }
 
-  static void FinalizeClassTypes();
+  static const std::vector<std::unique_ptr<AggregateType>>* GetAggregateTypes();
+
+  static void FinalizeAggregateTypes();
 
  private:
   const Type* GetBuiltinType(const std::string& name) {
@@ -243,10 +271,10 @@ class TypeOracle : public ContextualClass<TypeOracle> {
   Deduplicator<BuiltinPointerType> function_pointer_types_;
   std::vector<const BuiltinPointerType*> all_builtin_pointer_types_;
   Deduplicator<UnionType> union_types_;
-  Deduplicator<ReferenceType> reference_types_;
   std::vector<std::unique_ptr<Type>> nominal_types_;
-  std::vector<std::unique_ptr<AggregateType>> struct_types_;
+  std::vector<std::unique_ptr<AggregateType>> aggregate_types_;
   std::vector<std::unique_ptr<Type>> top_types_;
+  std::vector<std::unique_ptr<Namespace>> struct_namespaces_;
 };
 
 }  // namespace torque

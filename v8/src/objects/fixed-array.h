@@ -247,7 +247,10 @@ class FixedDoubleArray : public FixedArrayBase {
 
   DECL_CAST(FixedDoubleArray)
 
-  // Maximally allowed length of a FixedArray.
+  // Start offset of elements.
+  static constexpr int kFloatsOffset = kHeaderSize;
+
+  // Maximally allowed length of a FixedDoubleArray.
   static const int kMaxLength = (kMaxSize - kHeaderSize) / kDoubleSize;
   static_assert(Internals::IsValidSmi(kMaxLength),
                 "FixedDoubleArray maxLength not a Smi");
@@ -487,6 +490,9 @@ class ByteArray : public FixedArrayBase {
 
   inline uint32_t get_uint32(int index) const;
   inline void set_uint32(int index, uint32_t value);
+
+  inline uint32_t get_uint32_relaxed(int index) const;
+  inline void set_uint32_relaxed(int index, uint32_t value);
 
   // Clear uninitialized padding space. This ensures that the snapshot content
   // is deterministic.

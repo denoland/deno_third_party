@@ -37,7 +37,7 @@ class LookupIterator;
 class FieldType;
 class Module;
 class SourceTextModuleInfoEntry;
-class MutableHeapNumber;
+class HeapNumber;
 class ObjectHashTable;
 class ObjectTemplateInfo;
 class ObjectVisitor;
@@ -158,6 +158,7 @@ class ZoneForwardList;
   V(JSReceiver)                                \
   V(JSRegExp)                                  \
   V(JSRegExpResult)                            \
+  V(JSRegExpResultIndices)                     \
   V(JSRegExpStringIterator)                    \
   V(JSSet)                                     \
   V(JSSetIterator)                             \
@@ -173,7 +174,6 @@ class ZoneForwardList;
   V(MapCache)                                  \
   V(Module)                                    \
   V(Microtask)                                 \
-  V(MutableHeapNumber)                         \
   V(Name)                                      \
   V(NameDictionary)                            \
   V(NativeContext)                             \

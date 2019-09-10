@@ -334,9 +334,9 @@ void InstructionSelector::VisitStackSlot(Node* node) {
        sequence()->AddImmediate(Constant(alignment)), 0, nullptr);
 }
 
-void InstructionSelector::VisitDebugAbort(Node* node) {
+void InstructionSelector::VisitAbortCSAAssert(Node* node) {
   Mips64OperandGenerator g(this);
-  Emit(kArchDebugAbort, g.NoOutput(), g.UseFixed(node->InputAt(0), a0));
+  Emit(kArchAbortCSAAssert, g.NoOutput(), g.UseFixed(node->InputAt(0), a0));
 }
 
 void EmitLoad(InstructionSelector* selector, Node* node, InstructionCode opcode,
@@ -422,7 +422,8 @@ void InstructionSelector::VisitStore(Node* node) {
   MachineRepresentation rep = store_rep.representation();
 
   // TODO(mips): I guess this could be done in a better way.
-  if (write_barrier_kind != kNoWriteBarrier) {
+  if (write_barrier_kind != kNoWriteBarrier &&
+      V8_LIKELY(!FLAG_disable_write_barriers)) {
     DCHECK(CanBeTaggedPointer(rep));
     InstructionOperand inputs[3];
     size_t input_count = 0;
@@ -2090,6 +2091,15 @@ void VisitAtomicBinop(InstructionSelector* selector, Node* node,
 
 }  // namespace
 
+void InstructionSelector::VisitStackPointerGreaterThan(
+    Node* node, FlagsContinuation* cont) {
+  Node* const value = node->InputAt(0);
+  InstructionCode opcode = kArchStackPointerGreaterThan;
+
+  Mips64OperandGenerator g(this);
+  EmitWithContinuation(opcode, g.UseRegister(value), cont);
+}
+
 // Shared routine for word comparisons against zero.
 void InstructionSelector::VisitWordCompareZero(Node* user, Node* value,
                                                FlagsContinuation* cont) {
@@ -2199,6 +2209,9 @@ void InstructionSelector::VisitWordCompareZero(Node* user, Node* value,
       case IrOpcode::kWord32And:
       case IrOpcode::kWord64And:
         return VisitWordCompare(this, value, kMips64Tst, cont, true);
+      case IrOpcode::kStackPointerGreaterThan:
+        cont->OverwriteAndNegateIfEqual(kStackPointerGreaterThanCondition);
+        return VisitStackPointerGreaterThan(value, cont);
       default:
         break;
     }
@@ -2406,6 +2419,11 @@ void InstructionSelector::VisitFloat64InsertHighWord32(Node* node) {
   Node* right = node->InputAt(1);
   Emit(kMips64Float64InsertHighWord32, g.DefineSameAsFirst(node),
        g.UseRegister(left), g.UseRegister(right));
+}
+
+void InstructionSelector::VisitMemoryBarrier(Node* node) {
+  Mips64OperandGenerator g(this);
+  Emit(kMips64Sync, g.NoOutput());
 }
 
 void InstructionSelector::VisitWord32AtomicLoad(Node* node) {
@@ -2699,6 +2717,7 @@ void InstructionSelector::VisitInt64AbsWithOverflow(Node* node) {
   V(F32x4AddHoriz, kMips64F32x4AddHoriz)           \
   V(F32x4Sub, kMips64F32x4Sub)                     \
   V(F32x4Mul, kMips64F32x4Mul)                     \
+  V(F32x4Div, kMips64F32x4Div)                     \
   V(F32x4Max, kMips64F32x4Max)                     \
   V(F32x4Min, kMips64F32x4Min)                     \
   V(F32x4Eq, kMips64F32x4Eq)                       \

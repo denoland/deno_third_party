@@ -287,7 +287,7 @@ UnoptimizedCompilationJob::Status AsmJsCompilationJob::FinalizeJobImpl(
               isolate, &thrower,
               wasm::ModuleWireBytes(module_->begin(), module_->end()),
               Vector<const byte>(asm_offsets_->begin(), asm_offsets_->size()),
-              uses_bitset)
+              uses_bitset, shared_info->language_mode())
           .ToHandleChecked();
   DCHECK(!thrower.error());
   compile_time_ = compile_timer.Elapsed().InMillisecondsF();
@@ -387,7 +387,12 @@ MaybeHandle<Object> AsmJs::InstantiateAsmWasm(Isolate* isolate,
       ReportInstantiationFailure(script, position, "Requires heap buffer");
       return MaybeHandle<Object>();
     }
-    wasm_engine->memory_tracker()->MarkWasmMemoryNotGrowable(memory);
+    // Mark the buffer as being used as an asm.js memory. This implies two
+    // things: 1) if the buffer is from a Wasm memory, that memory can no longer
+    // be grown, since that would detach this buffer, and 2) the buffer cannot
+    // be postMessage()'d, as that also detaches the buffer.
+    memory->set_is_asmjs_memory(true);
+    memory->set_is_detachable(false);
     size_t size = memory->byte_length();
     // Check the asm.js heap size against the valid limits.
     if (!IsValidAsmjsMemorySize(size)) {

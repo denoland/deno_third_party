@@ -641,7 +641,7 @@ void TestGeneralizeField(int detach_property_at_index, int property_index,
                                       from.representation, from.type);
     } else {
       map = expectations.AddDataField(map, NONE, PropertyConstness::kConst,
-                                      Representation::Double(), any_type);
+                                      Representation::Smi(), any_type);
       if (i == detach_property_at_index) {
         detach_point_map = map;
       }
@@ -654,10 +654,10 @@ void TestGeneralizeField(int detach_property_at_index, int property_index,
   if (is_detached_map) {
     detach_point_map = Map::ReconfigureProperty(
         isolate, detach_point_map, detach_property_at_index, kData, NONE,
-        Representation::Tagged(), any_type);
+        Representation::Double(), any_type);
     expectations.SetDataField(detach_property_at_index,
                               PropertyConstness::kConst,
-                              Representation::Tagged(), any_type);
+                              Representation::Double(), any_type);
     CHECK(map->is_deprecated());
     CHECK(expectations.Check(*detach_point_map,
                              detach_point_map->NumberOfOwnDescriptors()));
@@ -814,7 +814,9 @@ TEST(GeneralizeDoubleFieldToTagged) {
   TestGeneralizeField(
       {PropertyConstness::kMutable, Representation::Double(), any_type},
       {PropertyConstness::kMutable, Representation::HeapObject(), value_type},
-      {PropertyConstness::kMutable, Representation::Tagged(), any_type});
+      {PropertyConstness::kMutable, Representation::Tagged(), any_type},
+      FLAG_unbox_double_fields || !FLAG_modify_field_representation_inplace,
+      !FLAG_unbox_double_fields && FLAG_modify_field_representation_inplace);
 }
 
 TEST(GeneralizeHeapObjectFieldToTagged) {
@@ -2282,7 +2284,9 @@ TEST(ElementsKindTransitionFromMapOwningDescriptor) {
       {SEALED, factory->sealed_symbol(),
        FLAG_enable_sealed_frozen_elements_kind ? HOLEY_SEALED_ELEMENTS
                                                : DICTIONARY_ELEMENTS},
-      {NONE, factory->nonextensible_symbol(), DICTIONARY_ELEMENTS}};
+      {NONE, factory->nonextensible_symbol(),
+       FLAG_enable_sealed_frozen_elements_kind ? HOLEY_NONEXTENSIBLE_ELEMENTS
+                                               : DICTIONARY_ELEMENTS}};
   for (size_t i = 0; i < arraysize(configs); i++) {
     TestGeneralizeFieldWithSpecialTransition(
         configs[i],
@@ -2295,7 +2299,7 @@ TEST(ElementsKindTransitionFromMapOwningDescriptor) {
         {PropertyConstness::kMutable, Representation::Double(), any_type},
         {PropertyConstness::kMutable, Representation::HeapObject(), value_type},
         {PropertyConstness::kMutable, Representation::Tagged(), any_type},
-        true);
+        FLAG_unbox_double_fields || !FLAG_modify_field_representation_inplace);
   }
 }
 
@@ -2348,7 +2352,9 @@ TEST(ElementsKindTransitionFromMapNotOwningDescriptor) {
       {SEALED, factory->sealed_symbol(),
        FLAG_enable_sealed_frozen_elements_kind ? HOLEY_SEALED_ELEMENTS
                                                : DICTIONARY_ELEMENTS},
-      {NONE, factory->nonextensible_symbol(), DICTIONARY_ELEMENTS}};
+      {NONE, factory->nonextensible_symbol(),
+       FLAG_enable_sealed_frozen_elements_kind ? HOLEY_NONEXTENSIBLE_ELEMENTS
+                                               : DICTIONARY_ELEMENTS}};
   for (size_t i = 0; i < arraysize(configs); i++) {
     TestGeneralizeFieldWithSpecialTransition(
         configs[i],
@@ -2361,7 +2367,7 @@ TEST(ElementsKindTransitionFromMapNotOwningDescriptor) {
         {PropertyConstness::kMutable, Representation::Double(), any_type},
         {PropertyConstness::kMutable, Representation::HeapObject(), value_type},
         {PropertyConstness::kMutable, Representation::Tagged(), any_type},
-        true);
+        FLAG_unbox_double_fields || !FLAG_modify_field_representation_inplace);
   }
 }
 
@@ -2404,9 +2410,9 @@ TEST(PrototypeTransitionFromMapOwningDescriptor) {
   TestGeneralizeFieldWithSpecialTransition(
       config, {PropertyConstness::kMutable, Representation::Double(), any_type},
       {PropertyConstness::kMutable, Representation::HeapObject(), value_type},
-      {PropertyConstness::kMutable, Representation::Tagged(), any_type}, true);
+      {PropertyConstness::kMutable, Representation::Tagged(), any_type},
+      FLAG_unbox_double_fields || !FLAG_modify_field_representation_inplace);
 }
-
 
 TEST(PrototypeTransitionFromMapNotOwningDescriptor) {
   CcTest::InitializeVM();
@@ -2458,9 +2464,9 @@ TEST(PrototypeTransitionFromMapNotOwningDescriptor) {
   TestGeneralizeFieldWithSpecialTransition(
       config, {PropertyConstness::kMutable, Representation::Double(), any_type},
       {PropertyConstness::kMutable, Representation::HeapObject(), value_type},
-      {PropertyConstness::kMutable, Representation::Tagged(), any_type}, true);
+      {PropertyConstness::kMutable, Representation::Tagged(), any_type},
+      FLAG_unbox_double_fields || !FLAG_modify_field_representation_inplace);
 }
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // A set of tests for higher level transitioning mechanics.
@@ -2776,15 +2782,15 @@ TEST(TransitionAccessorConstantToSameAccessorConstant) {
 // TODO(ishell): add this test once IS_ACCESSOR_FIELD_SUPPORTED is supported.
 // TEST(TransitionAccessorConstantToAnotherAccessorConstant)
 
-TEST(HoleyMutableHeapNumber) {
+TEST(HoleyHeapNumber) {
   CcTest::InitializeVM();
   v8::HandleScope scope(CcTest::isolate());
   Isolate* isolate = CcTest::i_isolate();
 
-  auto mhn = isolate->factory()->NewMutableHeapNumberWithHoleNaN();
+  auto mhn = isolate->factory()->NewHeapNumberWithHoleNaN();
   CHECK_EQ(kHoleNanInt64, mhn->value_as_bits());
 
-  mhn = isolate->factory()->NewMutableHeapNumber(0.0);
+  mhn = isolate->factory()->NewHeapNumber(0.0);
   CHECK_EQ(uint64_t{0}, mhn->value_as_bits());
 
   mhn->set_value_as_bits(kHoleNanInt64);
@@ -2796,12 +2802,12 @@ TEST(HoleyMutableHeapNumber) {
   Handle<Object> obj =
       Object::NewStorageFor(isolate, isolate->factory()->uninitialized_value(),
                             Representation::Double());
-  CHECK(obj->IsMutableHeapNumber());
-  CHECK_EQ(kHoleNanInt64, MutableHeapNumber::cast(*obj).value_as_bits());
+  CHECK(obj->IsHeapNumber());
+  CHECK_EQ(kHoleNanInt64, HeapNumber::cast(*obj).value_as_bits());
 
   obj = Object::NewStorageFor(isolate, mhn, Representation::Double());
-  CHECK(obj->IsMutableHeapNumber());
-  CHECK_EQ(kHoleNanInt64, MutableHeapNumber::cast(*obj).value_as_bits());
+  CHECK(obj->IsHeapNumber());
+  CHECK_EQ(kHoleNanInt64, HeapNumber::cast(*obj).value_as_bits());
 }
 
 namespace {

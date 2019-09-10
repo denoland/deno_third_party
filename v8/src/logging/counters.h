@@ -764,6 +764,7 @@ class RuntimeCallTimer final {
   V(Int8Array_New)                                         \
   V(Isolate_DateTimeConfigurationChangeNotification)       \
   V(Isolate_LocaleConfigurationChangeNotification)         \
+  V(FinalizationGroup_Cleanup)                             \
   V(JSON_Parse)                                            \
   V(JSON_Stringify)                                        \
   V(Map_AsArray)                                           \
@@ -1140,7 +1141,7 @@ class WorkerThreadRuntimeCallStats final {
 // when it is destroyed.
 class WorkerThreadRuntimeCallStatsScope final {
  public:
-  WorkerThreadRuntimeCallStatsScope(
+  explicit WorkerThreadRuntimeCallStatsScope(
       WorkerThreadRuntimeCallStats* off_thread_stats);
   ~WorkerThreadRuntimeCallStatsScope();
 

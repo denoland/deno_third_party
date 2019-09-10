@@ -1799,36 +1799,6 @@ TEST(HeapNumberAlignment) {
   }
 }
 
-TEST(MutableHeapNumberAlignment) {
-  CcTest::InitializeVM();
-  Isolate* isolate = CcTest::i_isolate();
-  Factory* factory = isolate->factory();
-  Heap* heap = isolate->heap();
-  HandleScope sc(isolate);
-
-  const auto required_alignment =
-      HeapObject::RequiredAlignment(*factory->mutable_heap_number_map());
-  const int maximum_misalignment =
-      Heap::GetMaximumFillToAlign(required_alignment);
-
-  for (int offset = 0; offset <= maximum_misalignment; offset += kTaggedSize) {
-    AlignNewSpace(required_alignment, offset);
-    Handle<Object> number_new = factory->NewMutableHeapNumber(1.000123);
-    CHECK(number_new->IsMutableHeapNumber());
-    CHECK(Heap::InYoungGeneration(*number_new));
-    CHECK_EQ(0, Heap::GetFillToAlign(HeapObject::cast(*number_new).address(),
-                                     required_alignment));
-
-    AlignOldSpace(required_alignment, offset);
-    Handle<Object> number_old =
-        factory->NewMutableHeapNumber(1.000321, AllocationType::kOld);
-    CHECK(number_old->IsMutableHeapNumber());
-    CHECK(heap->InOldSpace(*number_old));
-    CHECK_EQ(0, Heap::GetFillToAlign(HeapObject::cast(*number_old).address(),
-                                     required_alignment));
-  }
-}
-
 TEST(TestSizeOfObjectsVsHeapObjectIteratorPrecision) {
   CcTest::InitializeVM();
   HeapObjectIterator iterator(CcTest::heap());
@@ -6278,16 +6248,16 @@ HEAP_TEST(MarkCompactEpochCounter) {
   CcTest::InitializeVM();
   v8::HandleScope scope(CcTest::isolate());
   Heap* heap = CcTest::heap();
-  uintptr_t epoch0 = heap->mark_compact_collector()->epoch();
+  unsigned epoch0 = heap->mark_compact_collector()->epoch();
   CcTest::CollectGarbage(OLD_SPACE);
-  uintptr_t epoch1 = heap->mark_compact_collector()->epoch();
+  unsigned epoch1 = heap->mark_compact_collector()->epoch();
   CHECK_EQ(epoch0 + 1, epoch1);
   heap::SimulateIncrementalMarking(heap, true);
   CcTest::CollectGarbage(OLD_SPACE);
-  uintptr_t epoch2 = heap->mark_compact_collector()->epoch();
+  unsigned epoch2 = heap->mark_compact_collector()->epoch();
   CHECK_EQ(epoch1 + 1, epoch2);
   CcTest::CollectGarbage(NEW_SPACE);
-  uintptr_t epoch3 = heap->mark_compact_collector()->epoch();
+  unsigned epoch3 = heap->mark_compact_collector()->epoch();
   CHECK_EQ(epoch2, epoch3);
 }
 
@@ -6523,9 +6493,8 @@ UNINITIALIZED_TEST(OutOfMemoryLargeObjects) {
     }
   }
   CHECK_LE(state.old_generation_capacity_at_oom, kOldGenerationLimit);
-  size_t size = std::max(state.old_generation_capacity_at_oom,
-                         state.memory_allocator_size_at_oom);
-  CHECK_LE(kOldGenerationLimit, size + state.new_space_capacity_at_oom +
+  CHECK_LE(kOldGenerationLimit, state.old_generation_capacity_at_oom +
+                                    state.new_space_capacity_at_oom +
                                     state.new_lo_space_size_at_oom +
                                     FixedArray::SizeFor(kFixedArrayLength));
   CHECK_LE(

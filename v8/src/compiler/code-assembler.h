@@ -5,9 +5,9 @@
 #ifndef V8_COMPILER_CODE_ASSEMBLER_H_
 #define V8_COMPILER_CODE_ASSEMBLER_H_
 
+#include <initializer_list>
 #include <map>
 #include <memory>
-#include <initializer_list>
 
 // Clients of this interface shouldn't depend on lots of compiler internals.
 // Do not include anything from src/compiler here!
@@ -43,7 +43,6 @@ class BigInt;
 class CallInterfaceDescriptor;
 class Callable;
 class Factory;
-class FinalizationGroupCleanupJobTask;
 class InterpreterData;
 class Isolate;
 class JSAsyncFunctionObject;
@@ -219,6 +218,10 @@ struct MachineRepresentationOf<
   static const MachineRepresentation value =
       MachineTypeOf<T>::value.representation();
 };
+template <>
+struct MachineRepresentationOf<ExternalReference> {
+  static const MachineRepresentation value = RawPtrT::kMachineRepresentation;
+};
 
 template <class T>
 struct is_valid_type_tag {
@@ -317,6 +320,7 @@ class CompilationCacheTable;
 class Constructor;
 class Filler;
 class FunctionTemplateRareData;
+class HeapNumber;
 class InternalizedString;
 class JSArgumentsObject;
 class JSArrayBufferView;
@@ -324,7 +328,6 @@ class JSContextExtensionObject;
 class JSError;
 class JSSloppyArgumentsObject;
 class MapCache;
-class MutableHeapNumber;
 class NativeContext;
 class NumberWrapper;
 class ScriptWrapper;
@@ -645,7 +648,7 @@ TNode<Float64T> Float64Add(TNode<Float64T> a, TNode<Float64T> b);
   V(BitcastInt32ToFloat32, Float32T, Word32T)                  \
   V(BitcastFloat32ToInt32, Uint32T, Float32T)                  \
   V(RoundFloat64ToInt32, Int32T, Float64T)                     \
-  V(RoundInt32ToFloat32, Int32T, Float32T)                     \
+  V(RoundInt32ToFloat32, Float32T, Int32T)                     \
   V(Float64SilenceNaN, Float64T, Float64T)                     \
   V(Float64RoundDown, Float64T, Float64T)                      \
   V(Float64RoundUp, Float64T, Float64T)                        \
@@ -657,7 +660,8 @@ TNode<Float64T> Float64Add(TNode<Float64T> a, TNode<Float64T> b);
   V(Int32AbsWithOverflow, PAIR_TYPE(Int32T, BoolT), Int32T)    \
   V(Int64AbsWithOverflow, PAIR_TYPE(Int64T, BoolT), Int64T)    \
   V(IntPtrAbsWithOverflow, PAIR_TYPE(IntPtrT, BoolT), IntPtrT) \
-  V(Word32BinaryNot, BoolT, Word32T)
+  V(Word32BinaryNot, BoolT, Word32T)                           \
+  V(StackPointerGreaterThan, BoolT, WordT)
 
 // A "public" interface used by components outside of compiler directory to
 // create code objects with TurboFan's backend. This class is mostly a thin
@@ -688,6 +692,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
                                    const AssemblerOptions& options);
 
   bool Is64() const;
+  bool Is32() const;
   bool IsFloat64RoundUpSupported() const;
   bool IsFloat64RoundDownSupported() const;
   bool IsFloat64RoundTiesEvenSupported() const;
@@ -738,7 +743,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
         if (std::is_same<PreviousType, MaybeObject>::value) {
           code_assembler_->GenerateCheckMaybeObjectIsObject(node_, location_);
         }
-        Node* function = code_assembler_->ExternalConstant(
+        TNode<ExternalReference> function = code_assembler_->ExternalConstant(
             ExternalReference::check_object_type());
         code_assembler_->CallCFunction(
             function, MachineType::AnyTagged(),
@@ -747,10 +752,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
                            code_assembler_->SmiConstant(
                                static_cast<int>(ObjectTypeOf<A>::value))),
             std::make_pair(MachineType::AnyTagged(),
-                           code_assembler_->StringConstant(
-                               (location_ + std::string("\n") +
-                                code_assembler_->CSADebugHint())
-                                   .c_str())));
+                           code_assembler_->StringConstant(location_)));
       }
 #endif
       return TNode<A>::UncheckedCast(node_);
@@ -845,7 +847,6 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   TNode<Oddball> BooleanConstant(bool value);
   TNode<ExternalReference> ExternalConstant(ExternalReference address);
   TNode<Float64T> Float64Constant(double value);
-  TNode<HeapNumber> NaNConstant();
   TNode<BoolT> Int32TrueConstant() {
     return ReinterpretCast<BoolT>(Int32Constant(1));
   }
@@ -856,15 +857,10 @@ class V8_EXPORT_PRIVATE CodeAssembler {
     return value ? Int32TrueConstant() : Int32FalseConstant();
   }
 
-  // TODO(jkummerow): The style guide wants pointers for output parameters.
-  // https://google.github.io/styleguide/cppguide.html#Output_Parameters
-  bool ToInt32Constant(Node* node,
-                       int32_t& out_value);  // NOLINT(runtime/references)
-  bool ToInt64Constant(Node* node,
-                       int64_t& out_value);  // NOLINT(runtime/references)
+  bool ToInt32Constant(Node* node, int32_t* out_value);
+  bool ToInt64Constant(Node* node, int64_t* out_value);
+  bool ToIntPtrConstant(Node* node, intptr_t* out_value);
   bool ToSmiConstant(Node* node, Smi* out_value);
-  bool ToIntPtrConstant(Node* node,
-                        intptr_t& out_value);  // NOLINT(runtime/references)
 
   bool IsUndefinedConstant(TNode<Object> node);
   bool IsNullConstant(TNode<Object> node);
@@ -893,7 +889,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
 
   void ReturnRaw(Node* value);
 
-  void DebugAbort(Node* message);
+  void AbortCSAAssert(Node* message);
   void DebugBreak();
   void Unreachable();
   void Comment(const char* msg) {
@@ -962,9 +958,6 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   TNode<RawPtrT> LoadFramePointer();
   TNode<RawPtrT> LoadParentFramePointer();
 
-  // Access to the stack pointer
-  TNode<RawPtrT> LoadStackPointer();
-
   // Poison |value| on speculative paths.
   TNode<Object> TaggedPoisonOnSpeculation(SloppyTNode<Object> value);
   TNode<WordT> WordPoisonOnSpeculation(SloppyTNode<WordT> value);
@@ -980,12 +973,24 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   }
   Node* Load(MachineType type, Node* base, Node* offset,
              LoadSensitivity needs_poisoning = LoadSensitivity::kSafe);
+  template <class Type>
+  TNode<Type> Load(Node* base,
+                   LoadSensitivity needs_poisoning = LoadSensitivity::kSafe) {
+    return UncheckedCast<Type>(
+        Load(MachineTypeOf<Type>::value, base, needs_poisoning));
+  }
+  template <class Type>
+  TNode<Type> Load(Node* base, SloppyTNode<WordT> offset,
+                   LoadSensitivity needs_poisoning = LoadSensitivity::kSafe) {
+    return UncheckedCast<Type>(
+        Load(MachineTypeOf<Type>::value, base, offset, needs_poisoning));
+  }
   Node* AtomicLoad(MachineType type, Node* base, Node* offset);
   // Load uncompressed tagged value from (most likely off JS heap) memory
   // location.
-  Node* LoadFullTagged(
+  TNode<Object> LoadFullTagged(
       Node* base, LoadSensitivity needs_poisoning = LoadSensitivity::kSafe);
-  Node* LoadFullTagged(
+  TNode<Object> LoadFullTagged(
       Node* base, Node* offset,
       LoadSensitivity needs_poisoning = LoadSensitivity::kSafe);
 
@@ -1122,50 +1127,13 @@ class V8_EXPORT_PRIVATE CodeAssembler {
         Word32Or(static_cast<Node*>(left), static_cast<Node*>(right)));
   }
 
-  template <class Left, class Right,
-            class = typename std::enable_if<
-                std::is_base_of<Object, Left>::value &&
-                std::is_base_of<Object, Right>::value>::type>
-  TNode<BoolT> WordEqual(TNode<Left> left, TNode<Right> right) {
-    return WordEqual(ReinterpretCast<WordT>(left),
-                     ReinterpretCast<WordT>(right));
-  }
-  TNode<BoolT> WordEqual(TNode<Object> left, Node* right) {
-    return WordEqual(ReinterpretCast<WordT>(left),
-                     ReinterpretCast<WordT>(right));
-  }
-  TNode<BoolT> WordEqual(Node* left, TNode<Object> right) {
-    return WordEqual(ReinterpretCast<WordT>(left),
-                     ReinterpretCast<WordT>(right));
-  }
-  template <class Left, class Right,
-            class = typename std::enable_if<
-                std::is_base_of<Object, Left>::value &&
-                std::is_base_of<Object, Right>::value>::type>
-  TNode<BoolT> WordNotEqual(TNode<Left> left, TNode<Right> right) {
-    return WordNotEqual(ReinterpretCast<WordT>(left),
-                        ReinterpretCast<WordT>(right));
-  }
-  TNode<BoolT> WordNotEqual(TNode<Object> left, Node* right) {
-    return WordNotEqual(ReinterpretCast<WordT>(left),
-                        ReinterpretCast<WordT>(right));
-  }
-  TNode<BoolT> WordNotEqual(Node* left, TNode<Object> right) {
-    return WordNotEqual(ReinterpretCast<WordT>(left),
-                        ReinterpretCast<WordT>(right));
-  }
-
-  TNode<BoolT> IntPtrEqual(SloppyTNode<WordT> left, SloppyTNode<WordT> right);
-  TNode<BoolT> WordEqual(SloppyTNode<WordT> left, SloppyTNode<WordT> right);
-  TNode<BoolT> WordNotEqual(SloppyTNode<WordT> left, SloppyTNode<WordT> right);
-  TNode<BoolT> Word32Equal(SloppyTNode<Word32T> left,
-                           SloppyTNode<Word32T> right);
-  TNode<BoolT> Word32NotEqual(SloppyTNode<Word32T> left,
-                              SloppyTNode<Word32T> right);
-  TNode<BoolT> Word64Equal(SloppyTNode<Word64T> left,
-                           SloppyTNode<Word64T> right);
-  TNode<BoolT> Word64NotEqual(SloppyTNode<Word64T> left,
-                              SloppyTNode<Word64T> right);
+  TNode<BoolT> IntPtrEqual(TNode<WordT> left, TNode<WordT> right);
+  TNode<BoolT> WordEqual(TNode<WordT> left, TNode<WordT> right);
+  TNode<BoolT> WordNotEqual(TNode<WordT> left, TNode<WordT> right);
+  TNode<BoolT> Word32Equal(TNode<Word32T> left, TNode<Word32T> right);
+  TNode<BoolT> Word32NotEqual(TNode<Word32T> left, TNode<Word32T> right);
+  TNode<BoolT> Word64Equal(TNode<Word64T> left, TNode<Word64T> right);
+  TNode<BoolT> Word64NotEqual(TNode<Word64T> left, TNode<Word64T> right);
 
   TNode<BoolT> Word32Or(TNode<BoolT> left, TNode<BoolT> right) {
     return UncheckedCast<BoolT>(
@@ -1237,6 +1205,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
     return UncheckedCast<IntPtrT>(WordSar(static_cast<Node*>(value), shift));
   }
   TNode<Word32T> Word32Shr(SloppyTNode<Word32T> value, int shift);
+  TNode<Word32T> Word32Sar(SloppyTNode<Word32T> value, int shift);
 
   TNode<WordT> WordOr(SloppyTNode<WordT> left, SloppyTNode<WordT> right);
   TNode<WordT> WordAnd(SloppyTNode<WordT> left, SloppyTNode<WordT> right);
@@ -1398,26 +1367,26 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   void TailCallStub(Callable const& callable, SloppyTNode<Object> context,
                     TArgs... args) {
     TNode<Code> target = HeapConstant(callable.code());
-    return TailCallStub(callable.descriptor(), target, context, args...);
+    TailCallStub(callable.descriptor(), target, context, args...);
   }
 
   template <class... TArgs>
   void TailCallStub(const CallInterfaceDescriptor& descriptor,
                     SloppyTNode<Code> target, SloppyTNode<Object> context,
                     TArgs... args) {
-    return TailCallStubImpl(descriptor, target, context, {args...});
+    TailCallStubImpl(descriptor, target, context, {args...});
   }
 
   template <class... TArgs>
-  Node* TailCallBytecodeDispatch(const CallInterfaceDescriptor& descriptor,
-                                 Node* target, TArgs... args);
+  void TailCallBytecodeDispatch(const CallInterfaceDescriptor& descriptor,
+                                TNode<RawPtrT> target, TArgs... args);
 
   template <class... TArgs>
-  Node* TailCallStubThenBytecodeDispatch(
+  void TailCallStubThenBytecodeDispatch(
       const CallInterfaceDescriptor& descriptor, Node* target, Node* context,
       TArgs... args) {
-    return TailCallStubThenBytecodeDispatchImpl(descriptor, target, context,
-                                                {args...});
+    TailCallStubThenBytecodeDispatchImpl(descriptor, target, context,
+                                         {args...});
   }
 
   // Tailcalls to the given code object with JSCall linkage. The JS arguments
@@ -1427,16 +1396,15 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   // Note that no arguments adaption is going on here - all the JavaScript
   // arguments are left on the stack unmodified. Therefore, this tail call can
   // only be used after arguments adaptation has been performed already.
-  TNode<Object> TailCallJSCode(TNode<Code> code, TNode<Context> context,
-                               TNode<JSFunction> function,
-                               TNode<Object> new_target,
-                               TNode<Int32T> arg_count);
+  void TailCallJSCode(TNode<Code> code, TNode<Context> context,
+                      TNode<JSFunction> function, TNode<Object> new_target,
+                      TNode<Int32T> arg_count);
 
   template <class... TArgs>
   Node* CallJS(Callable const& callable, Node* context, Node* function,
                Node* receiver, TArgs... args) {
     int argc = static_cast<int>(sizeof...(args));
-    Node* arity = Int32Constant(argc);
+    TNode<Int32T> arity = Int32Constant(argc);
     return CallStub(callable, context, function, arity, receiver, args...);
   }
 
@@ -1444,8 +1412,8 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   Node* ConstructJSWithTarget(Callable const& callable, Node* context,
                               Node* target, Node* new_target, TArgs... args) {
     int argc = static_cast<int>(sizeof...(args));
-    Node* arity = Int32Constant(argc);
-    Node* receiver = LoadRoot(RootIndex::kUndefinedValue);
+    TNode<Int32T> arity = Int32Constant(argc);
+    TNode<Object> receiver = LoadRoot(RootIndex::kUndefinedValue);
 
     // Construct(target, new_target, arity, receiver, arguments...)
     return CallStub(callable, context, target, new_target, arity, receiver,
@@ -1489,8 +1457,6 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   // Exception handling support.
   void GotoIfException(Node* node, Label* if_exception,
                        Variable* exception_var = nullptr);
-
-  std::string CSADebugHint();
 
   // Helpers which delegate to RawMachineAssembler.
   Factory* factory() const;
@@ -1548,15 +1514,14 @@ class V8_EXPORT_PRIVATE CodeAssembler {
                         TNode<Code> target, TNode<Object> context,
                         std::initializer_list<Node*> args);
 
-  Node* TailCallStubThenBytecodeDispatchImpl(
+  void TailCallStubThenBytecodeDispatchImpl(
       const CallInterfaceDescriptor& descriptor, Node* target, Node* context,
       std::initializer_list<Node*> args);
 
   Node* CallStubRImpl(StubCallMode call_mode,
                       const CallInterfaceDescriptor& descriptor,
-                      size_t result_size, Node* target,
-                      SloppyTNode<Object> context,
-                      std::initializer_list<Node*> args);
+                      size_t result_size, TNode<Object> target,
+                      TNode<Object> context, std::initializer_list<Node*> args);
 
   // These two don't have definitions and are here only for catching use cases
   // where the cast is not necessary.
@@ -1847,9 +1812,11 @@ class V8_EXPORT_PRIVATE CodeAssemblerScopedExceptionHandler {
 
 }  // namespace compiler
 
-#if defined(V8_HOST_ARCH_32_BIT)
+#if defined(V8_HOST_ARCH_32_BIT) || defined(V8_COMPRESS_POINTERS)
+#define BINT_IS_SMI
 using BInt = Smi;
 #elif defined(V8_HOST_ARCH_64_BIT)
+#define BINT_IS_INTPTR
 using BInt = IntPtrT;
 #else
 #error Unknown architecture.

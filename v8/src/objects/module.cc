@@ -107,20 +107,17 @@ void Module::Reset(Isolate* isolate, Handle<Module> module) {
   module->PrintStatusTransition(kUninstantiated);
 #endif  // DEBUG
 
-  int export_count;
+  const int export_count =
+      module->IsSourceTextModule()
+          ? Handle<SourceTextModule>::cast(module)->regular_exports().length()
+          : Handle<SyntheticModule>::cast(module)->export_names().length();
+  Handle<ObjectHashTable> exports = ObjectHashTable::New(isolate, export_count);
 
   if (module->IsSourceTextModule()) {
-    Handle<SourceTextModule> source_text_module =
-        Handle<SourceTextModule>::cast(module);
-    export_count = source_text_module->regular_exports().length();
-    SourceTextModule::Reset(isolate, source_text_module);
+    SourceTextModule::Reset(isolate, Handle<SourceTextModule>::cast(module));
   } else {
-    export_count =
-        Handle<SyntheticModule>::cast(module)->export_names().length();
     // Nothing to do here.
   }
-
-  Handle<ObjectHashTable> exports = ObjectHashTable::New(isolate, export_count);
 
   module->set_exports(*exports);
   module->set_status(kUninstantiated);
@@ -138,6 +135,9 @@ MaybeHandle<Cell> Module::ResolveExport(Isolate* isolate, Handle<Module> module,
                                         Handle<String> export_name,
                                         MessageLocation loc, bool must_resolve,
                                         Module::ResolveSet* resolve_set) {
+  DCHECK_GE(module->status(), kPreInstantiating);
+  DCHECK_NE(module->status(), kEvaluating);
+
   if (module->IsSourceTextModule()) {
     return SourceTextModule::ResolveExport(
         isolate, Handle<SourceTextModule>::cast(module), module_specifier,
@@ -145,7 +145,7 @@ MaybeHandle<Cell> Module::ResolveExport(Isolate* isolate, Handle<Module> module,
   } else {
     return SyntheticModule::ResolveExport(
         isolate, Handle<SyntheticModule>::cast(module), module_specifier,
-        export_name, loc, must_resolve, resolve_set);
+        export_name, loc, must_resolve);
   }
 }
 

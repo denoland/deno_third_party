@@ -92,16 +92,16 @@ BIT_FIELD_ACCESSORS(Map, bit_field3, may_have_interesting_symbols,
 BIT_FIELD_ACCESSORS(Map, bit_field3, construction_counter,
                     Map::ConstructionCounterBits)
 
-InterceptorInfo Map::GetNamedInterceptor() {
+DEF_GETTER(Map, GetNamedInterceptor, InterceptorInfo) {
   DCHECK(has_named_interceptor());
-  FunctionTemplateInfo info = GetFunctionTemplateInfo();
-  return InterceptorInfo::cast(info.GetNamedPropertyHandler());
+  FunctionTemplateInfo info = GetFunctionTemplateInfo(isolate);
+  return InterceptorInfo::cast(info.GetNamedPropertyHandler(isolate));
 }
 
-InterceptorInfo Map::GetIndexedInterceptor() {
+DEF_GETTER(Map, GetIndexedInterceptor, InterceptorInfo) {
   DCHECK(has_indexed_interceptor());
-  FunctionTemplateInfo info = GetFunctionTemplateInfo();
-  return InterceptorInfo::cast(info.GetIndexedPropertyHandler());
+  FunctionTemplateInfo info = GetFunctionTemplateInfo(isolate);
+  return InterceptorInfo::cast(info.GetIndexedPropertyHandler(isolate));
 }
 
 bool Map::IsMostGeneralFieldType(Representation representation,
@@ -507,8 +507,12 @@ bool Map::has_dictionary_elements() const {
   return IsDictionaryElementsKind(elements_kind());
 }
 
-bool Map::has_frozen_or_sealed_elements() const {
-  return IsFrozenOrSealedElementsKind(elements_kind());
+bool Map::has_any_nonextensible_elements() const {
+  return IsAnyNonextensibleElementsKind(elements_kind());
+}
+
+bool Map::has_nonextensible_elements() const {
+  return IsNonextensibleElementsKind(elements_kind());
 }
 
 bool Map::has_sealed_elements() const {

@@ -10,6 +10,7 @@
 #include "src/codegen/signature.h"
 #include "src/execution/messages.h"
 #include "src/runtime/runtime.h"
+#include "src/wasm/wasm-features.h"
 
 namespace v8 {
 namespace internal {
@@ -23,16 +24,17 @@ namespace wasm {
 #define CASE_F32_OP(name, str) CASE_OP(F32##name, "f32." str)
 #define CASE_F64_OP(name, str) CASE_OP(F64##name, "f64." str)
 #define CASE_REF_OP(name, str) CASE_OP(Ref##name, "ref." str)
-#define CASE_F32x4_OP(name, str) CASE_OP(F32x4##name, "f32x4." str)
-#define CASE_I32x4_OP(name, str) CASE_OP(I32x4##name, "i32x4." str)
-#define CASE_I64x2_OP(name, str) CASE_OP(I64x2##name, "i64x2." str)
 #define CASE_F64x2_OP(name, str) CASE_OP(F64x2##name, "f64x2." str)
+#define CASE_F32x4_OP(name, str) CASE_OP(F32x4##name, "f32x4." str)
+#define CASE_I64x2_OP(name, str) CASE_OP(I64x2##name, "i64x2." str)
+#define CASE_I32x4_OP(name, str) CASE_OP(I32x4##name, "i32x4." str)
 #define CASE_I16x8_OP(name, str) CASE_OP(I16x8##name, "i16x8." str)
 #define CASE_I8x16_OP(name, str) CASE_OP(I8x16##name, "i8x16." str)
 #define CASE_S128_OP(name, str) CASE_OP(S128##name, "s128." str)
 #define CASE_S32x4_OP(name, str) CASE_OP(S32x4##name, "s32x4." str)
 #define CASE_S16x8_OP(name, str) CASE_OP(S16x8##name, "s16x8." str)
 #define CASE_S8x16_OP(name, str) CASE_OP(S8x16##name, "s8x16." str)
+#define CASE_S1x2_OP(name, str) CASE_OP(S1x2##name, "s1x2." str)
 #define CASE_S1x4_OP(name, str) CASE_OP(S1x4##name, "s1x4." str)
 #define CASE_S1x8_OP(name, str) CASE_OP(S1x8##name, "s1x8." str)
 #define CASE_S1x16_OP(name, str) CASE_OP(S1x16##name, "s1x16." str)
@@ -77,9 +79,7 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
     // Standard opcodes
     CASE_INT_OP(Eqz, "eqz")
     CASE_ALL_OP(Eq, "eq")
-    CASE_I64x2_OP(Eq, "eq")
     CASE_ALL_OP(Ne, "ne")
-    CASE_I64x2_OP(Ne, "ne")
     CASE_ALL_OP(Add, "add")
     CASE_ALL_OP(Sub, "sub")
     CASE_ALL_OP(Mul, "mul")
@@ -221,20 +221,38 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
     // SIMD opcodes.
     CASE_SIMD_OP(Splat, "splat")
     CASE_SIMD_OP(Neg, "neg")
+    CASE_F64x2_OP(Neg, "neg")
     CASE_I64x2_OP(Neg, "neg")
     CASE_SIMD_OP(Eq, "eq")
+    CASE_F64x2_OP(Eq, "eq")
+    CASE_I64x2_OP(Eq, "eq")
     CASE_SIMD_OP(Ne, "ne")
+    CASE_F64x2_OP(Ne, "ne")
+    CASE_I64x2_OP(Ne, "ne")
     CASE_SIMD_OP(Add, "add")
+    CASE_F64x2_OP(Add, "add")
     CASE_I64x2_OP(Add, "add")
     CASE_SIMD_OP(Sub, "sub")
+    CASE_F64x2_OP(Sub, "sub")
     CASE_I64x2_OP(Sub, "sub")
     CASE_SIMD_OP(Mul, "mul")
+    CASE_F64x2_OP(Mul, "mul")
+    CASE_I64x2_OP(Mul, "mul")
+    CASE_F64x2_OP(Div, "div")
+    CASE_F32x4_OP(Div, "div")
     CASE_F64x2_OP(Splat, "splat")
+    CASE_F64x2_OP(Lt, "lt")
+    CASE_F64x2_OP(Le, "le")
+    CASE_F64x2_OP(Gt, "gt")
+    CASE_F64x2_OP(Ge, "ge")
+    CASE_F64x2_OP(Abs, "abs")
     CASE_F32x4_OP(Abs, "abs")
     CASE_F32x4_OP(AddHoriz, "add_horizontal")
     CASE_F32x4_OP(RecipApprox, "recip_approx")
     CASE_F32x4_OP(RecipSqrtApprox, "recip_sqrt_approx")
+    CASE_F64x2_OP(Min, "min")
     CASE_F32x4_OP(Min, "min")
+    CASE_F64x2_OP(Max, "max")
     CASE_F32x4_OP(Max, "max")
     CASE_F32x4_OP(Lt, "lt")
     CASE_F32x4_OP(Le, "le")
@@ -248,6 +266,8 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
     CASE_CONVERT_OP(Convert, I16x8, I8x16Low, "i32", "convert")
     CASE_CONVERT_OP(Convert, I16x8, I8x16High, "i32", "convert")
     CASE_CONVERT_OP(Convert, I8x16, I16x8, "i32", "convert")
+    CASE_F64x2_OP(ExtractLane, "extract_lane")
+    CASE_F64x2_OP(ReplaceLane, "replace_lane")
     CASE_F32x4_OP(ExtractLane, "extract_lane")
     CASE_F32x4_OP(ReplaceLane, "replace_lane")
     CASE_I64x2_OP(ExtractLane, "extract_lane")
@@ -255,11 +275,17 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
     CASE_SIMDI_OP(ExtractLane, "extract_lane")
     CASE_SIMDI_OP(ReplaceLane, "replace_lane")
     CASE_SIGN_OP(SIMDI, Min, "min")
+    CASE_SIGN_OP(I64x2, Min, "min")
     CASE_SIGN_OP(SIMDI, Max, "max")
+    CASE_SIGN_OP(I64x2, Max, "max")
     CASE_SIGN_OP(SIMDI, Lt, "lt")
+    CASE_SIGN_OP(I64x2, Lt, "lt")
     CASE_SIGN_OP(SIMDI, Le, "le")
+    CASE_SIGN_OP(I64x2, Le, "le")
     CASE_SIGN_OP(SIMDI, Gt, "gt")
+    CASE_SIGN_OP(I64x2, Gt, "gt")
     CASE_SIGN_OP(SIMDI, Ge, "ge")
+    CASE_SIGN_OP(I64x2, Ge, "ge")
     CASE_SIGN_OP(SIMDI, Shr, "shr")
     CASE_SIGN_OP(I64x2, Shr, "shr")
     CASE_SIMDI_OP(Shl, "shl")
@@ -277,6 +303,8 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
     CASE_S128_OP(Not, "not")
     CASE_S128_OP(Select, "select")
     CASE_S8x16_OP(Shuffle, "shuffle")
+    CASE_S1x2_OP(AnyTrue, "any_true")
+    CASE_S1x2_OP(AllTrue, "all_true")
     CASE_S1x4_OP(AnyTrue, "any_true")
     CASE_S1x4_OP(AllTrue, "all_true")
     CASE_S1x8_OP(AnyTrue, "any_true")
@@ -287,6 +315,7 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
     // Atomic operations.
     CASE_OP(AtomicNotify, "atomic.notify")
     CASE_INT_OP(AtomicWait, "atomic.wait")
+    CASE_OP(AtomicFence, "atomic.fence")
     CASE_UNSIGNED_ALL_OP(AtomicLoad, "atomic.load")
     CASE_UNSIGNED_ALL_OP(AtomicStore, "atomic.store")
     CASE_UNSIGNED_ALL_OP(AtomicAdd, "atomic.add")
@@ -308,7 +337,9 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
 #undef CASE_F32_OP
 #undef CASE_F64_OP
 #undef CASE_REF_OP
+#undef CASE_F64x2_OP
 #undef CASE_F32x4_OP
+#undef CASE_I64x2_OP
 #undef CASE_I32x4_OP
 #undef CASE_I16x8_OP
 #undef CASE_I8x16_OP
@@ -316,6 +347,7 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
 #undef CASE_S32x4_OP
 #undef CASE_S16x8_OP
 #undef CASE_S8x16_OP
+#undef CASE_S1x2_OP
 #undef CASE_S1x4_OP
 #undef CASE_S1x8_OP
 #undef CASE_S1x16_OP
@@ -417,12 +449,13 @@ std::ostream& operator<<(std::ostream& os, const FunctionSig& sig) {
   return os;
 }
 
-bool IsJSCompatibleSignature(const FunctionSig* sig, bool has_bigint_feature) {
-  if (sig->return_count() > 1) {
+bool IsJSCompatibleSignature(const FunctionSig* sig,
+                             const WasmFeatures& enabled_features) {
+  if (!enabled_features.mv && sig->return_count() > 1) {
     return false;
   }
   for (auto type : sig->all()) {
-    if (!has_bigint_feature && type == kWasmI64) {
+    if (!enabled_features.bigint && type == kWasmI64) {
       return false;
     }
 
@@ -487,7 +520,8 @@ struct GetSimdOpcodeSigIndex {
 struct GetAtomicOpcodeSigIndex {
   constexpr WasmOpcodeSig operator()(byte opcode) const {
 #define CASE(name, opc, sig) opcode == (opc & 0xFF) ? kSigEnum_##sig:
-    return FOREACH_ATOMIC_OPCODE(CASE) kSigEnum_None;
+    return FOREACH_ATOMIC_OPCODE(CASE) FOREACH_ATOMIC_0_OPERAND_OPCODE(CASE)
+        kSigEnum_None;
 #undef CASE
 }
 };

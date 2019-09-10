@@ -10,6 +10,7 @@
 #include "include/v8.h"
 #include "src/api/api-inl.h"
 #include "src/base/build_config.h"
+#include "src/objects/backing-store.h"
 #include "src/objects/objects-inl.h"
 #include "src/wasm/wasm-objects.h"
 #include "test/unittests/test-utils.h"
@@ -1987,22 +1988,43 @@ class ValueSerializerTestWithSharedArrayBufferClone
   ValueSerializerTestWithSharedArrayBufferClone()
       : serializer_delegate_(this), deserializer_delegate_(this) {}
 
-  void InitializeData(const std::vector<uint8_t>& data) {
+  void InitializeData(const std::vector<uint8_t>& data, bool is_wasm_memory) {
     data_ = data;
     {
       Context::Scope scope(serialization_context());
       input_buffer_ =
-          SharedArrayBuffer::New(isolate(), data_.data(), data_.size());
+          NewSharedArrayBuffer(data_.data(), data_.size(), is_wasm_memory);
     }
     {
       Context::Scope scope(deserialization_context());
       output_buffer_ =
-          SharedArrayBuffer::New(isolate(), data_.data(), data_.size());
+          NewSharedArrayBuffer(data_.data(), data_.size(), is_wasm_memory);
     }
   }
 
   const Local<SharedArrayBuffer>& input_buffer() { return input_buffer_; }
   const Local<SharedArrayBuffer>& output_buffer() { return output_buffer_; }
+
+  Local<SharedArrayBuffer> NewSharedArrayBuffer(void* data, size_t byte_length,
+                                                bool is_wasm_memory) {
+    if (is_wasm_memory) {
+      // TODO(titzer): there is no way to create Wasm memory backing stores
+      // through the API, or to create a shared array buffer whose backing
+      // store is wasm memory, so use the internal API.
+      DCHECK_EQ(0, byte_length % i::wasm::kWasmPageSize);
+      auto pages = byte_length / i::wasm::kWasmPageSize;
+      auto i_isolate = reinterpret_cast<i::Isolate*>(isolate());
+      auto backing_store = i::BackingStore::AllocateWasmMemory(
+          i_isolate, pages, pages, i::SharedFlag::kShared);
+      memcpy(backing_store->buffer_start(), data, byte_length);
+      i::Handle<i::JSArrayBuffer> buffer =
+          i_isolate->factory()->NewJSSharedArrayBuffer();
+      buffer->Attach(std::move(backing_store));
+      return Utils::ToLocalShared(buffer);
+    } else {
+      return SharedArrayBuffer::New(isolate(), data, byte_length);
+    }
+  }
 
   static void SetUpTestCase() {
     flag_was_enabled_ = i::FLAG_harmony_sharedarraybuffer;
@@ -2075,7 +2097,7 @@ bool ValueSerializerTestWithSharedArrayBufferClone::flag_was_enabled_ = false;
 
 TEST_F(ValueSerializerTestWithSharedArrayBufferClone,
        RoundTripSharedArrayBufferClone) {
-  InitializeData({0x00, 0x01, 0x80, 0xFF});
+  InitializeData({0x00, 0x01, 0x80, 0xFF}, false);
 
   EXPECT_CALL(serializer_delegate_,
               GetSharedArrayBufferId(isolate(), input_buffer()))
@@ -2114,7 +2136,7 @@ TEST_F(ValueSerializerTestWithSharedArrayBufferClone,
 
   std::vector<uint8_t> data = {0x00, 0x01, 0x80, 0xFF};
   data.resize(65536);
-  InitializeData(data);
+  InitializeData(data, true);
 
   EXPECT_CALL(serializer_delegate_,
               GetSharedArrayBufferId(isolate(), input_buffer()))
@@ -2883,6 +2905,69 @@ TEST_F(ValueSerializerTestWithLimitedMemory, FailIfNoMemoryInWriteHostObject) {
   EvaluateScriptForInput("gotA = false");
   InvalidEncodeTest("[new ExampleHostObject, {get a() { gotA = true; }}]");
   EXPECT_TRUE(EvaluateScriptForInput("gotA")->IsFalse());
+}
+
+// We only have basic tests and tests for .stack here, because we have more
+// comprehensive tests as web platform tests.
+TEST_F(ValueSerializerTest, RoundTripError) {
+  Local<Value> value = RoundTripTest("Error('hello')");
+  ASSERT_TRUE(value->IsObject());
+  Local<Object> error = value.As<Object>();
+
+  Local<Value> name;
+  Local<Value> message;
+
+  {
+    Context::Scope scope(deserialization_context());
+    EXPECT_EQ(error->GetPrototype(), Exception::Error(String::Empty(isolate()))
+                                         .As<Object>()
+                                         ->GetPrototype());
+  }
+  ASSERT_TRUE(error->Get(deserialization_context(), StringFromUtf8("name"))
+                  .ToLocal(&name));
+  ASSERT_TRUE(name->IsString());
+  EXPECT_EQ(Utf8Value(name), "Error");
+
+  ASSERT_TRUE(error->Get(deserialization_context(), StringFromUtf8("message"))
+                  .ToLocal(&message));
+  ASSERT_TRUE(message->IsString());
+  EXPECT_EQ(Utf8Value(message), "hello");
+}
+
+TEST_F(ValueSerializerTest, DefaultErrorStack) {
+  Local<Value> value =
+      RoundTripTest("function hkalkcow() { return Error(); } hkalkcow();");
+  ASSERT_TRUE(value->IsObject());
+  Local<Object> error = value.As<Object>();
+
+  Local<Value> stack;
+  ASSERT_TRUE(error->Get(deserialization_context(), StringFromUtf8("stack"))
+                  .ToLocal(&stack));
+  ASSERT_TRUE(stack->IsString());
+  EXPECT_NE(Utf8Value(stack).find("hkalkcow"), std::string::npos);
+}
+
+TEST_F(ValueSerializerTest, ModifiedErrorStack) {
+  Local<Value> value = RoundTripTest("let e = Error(); e.stack = 'hello'; e");
+  ASSERT_TRUE(value->IsObject());
+  Local<Object> error = value.As<Object>();
+
+  Local<Value> stack;
+  ASSERT_TRUE(error->Get(deserialization_context(), StringFromUtf8("stack"))
+                  .ToLocal(&stack));
+  ASSERT_TRUE(stack->IsString());
+  EXPECT_EQ(Utf8Value(stack), "hello");
+}
+
+TEST_F(ValueSerializerTest, NonStringErrorStack) {
+  Local<Value> value = RoundTripTest("let e = Error(); e.stack = 17; e");
+  ASSERT_TRUE(value->IsObject());
+  Local<Object> error = value.As<Object>();
+
+  Local<Value> stack;
+  ASSERT_TRUE(error->Get(deserialization_context(), StringFromUtf8("stack"))
+                  .ToLocal(&stack));
+  EXPECT_TRUE(stack->IsUndefined());
 }
 
 }  // namespace

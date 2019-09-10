@@ -10,6 +10,7 @@
 
 #include "src/objects/allocation-site.h"
 #include "src/objects/api-callbacks.h"
+#include "src/objects/backing-store.h"
 #include "src/objects/code.h"
 #include "src/objects/js-array.h"
 #include "src/objects/map.h"
@@ -56,7 +57,7 @@ class V8_EXPORT_PRIVATE Deserializer : public SerializerDeserializer {
     allocator()->DecodeReservation(data->Reservations());
     // We start the indices here at 1, so that we can distinguish between an
     // actual index and a nullptr in a deserialized object requiring fix-up.
-    off_heap_backing_stores_.push_back(nullptr);
+    backing_stores_.push_back({});
   }
 
   void Initialize(Isolate* isolate);
@@ -69,7 +70,7 @@ class V8_EXPORT_PRIVATE Deserializer : public SerializerDeserializer {
 
   // This returns the address of an object that has been described in the
   // snapshot by chunk index and offset.
-  HeapObject GetBackReferencedObject(int space);
+  HeapObject GetBackReferencedObject(SnapshotSpace space);
 
   // Add an object to back an attached reference. The order to add objects must
   // mirror the order they are added in the serializer.
@@ -126,11 +127,13 @@ class V8_EXPORT_PRIVATE Deserializer : public SerializerDeserializer {
   // object, i.e. if we are writing a series of tagged values that are not on
   // the heap. Return false if the object content has been deferred.
   template <typename TSlot>
-  bool ReadData(TSlot start, TSlot end, int space, Address object_address);
+  bool ReadData(TSlot start, TSlot end, SnapshotSpace space,
+                Address object_address);
 
   // A helper function for ReadData, templatized on the bytecode for efficiency.
   // Returns the new value of {current}.
-  template <typename TSlot, Bytecode bytecode, int space_number_if_any>
+  template <typename TSlot, Bytecode bytecode,
+            SnapshotSpace space_number_if_any>
   inline TSlot ReadDataCase(Isolate* isolate, TSlot current,
                             Address current_object_address, byte data,
                             bool write_barrier_needed);
@@ -139,8 +142,9 @@ class V8_EXPORT_PRIVATE Deserializer : public SerializerDeserializer {
   inline Address ReadExternalReferenceCase();
 
   HeapObject ReadObject();
-  HeapObject ReadObject(int space_number);
-  void ReadCodeObjectBody(int space_number, Address code_object_address);
+  HeapObject ReadObject(SnapshotSpace space_number);
+  void ReadCodeObjectBody(SnapshotSpace space_number,
+                          Address code_object_address);
 
  public:
   void VisitCodeTarget(Code host, RelocInfo* rinfo);
@@ -155,7 +159,7 @@ class V8_EXPORT_PRIVATE Deserializer : public SerializerDeserializer {
   TSlot ReadRepeatedObject(TSlot current, int repeat_count);
 
   // Special handling for serialized code like hooking up internalized strings.
-  HeapObject PostProcessNewObject(HeapObject obj, int space);
+  HeapObject PostProcessNewObject(HeapObject obj, SnapshotSpace space);
 
   // Objects from the attached object descriptions in the serialized user code.
   std::vector<Handle<HeapObject>> attached_objects_;
@@ -170,7 +174,7 @@ class V8_EXPORT_PRIVATE Deserializer : public SerializerDeserializer {
   std::vector<CallHandlerInfo> call_handler_infos_;
   std::vector<Handle<String>> new_internalized_strings_;
   std::vector<Handle<Script>> new_scripts_;
-  std::vector<byte*> off_heap_backing_stores_;
+  std::vector<std::shared_ptr<BackingStore>> backing_stores_;
 
   DeserializerAllocator allocator_;
   const bool deserializing_user_code_;

@@ -322,10 +322,9 @@ void TurboAssembler::DecompressRegisterAnyTagged(Register destination,
     // masked_root = HAS_SMI_TAG(destination) ? 0 : kRootRegister;
     STATIC_ASSERT((kSmiTagSize == 1) && (kSmiTag < 32));
     Register masked_root = scratch;
-    movl(masked_root, destination);
-    andl(masked_root, Immediate(kSmiTagMask));
-    negq(masked_root);
-    andq(masked_root, kRootRegister);
+    xorq(masked_root, masked_root);
+    Condition smi = CheckSmi(destination);
+    cmovq(NegateCondition(smi), masked_root, kRootRegister);
     // Now this add operation will either leave the value unchanged if it is
     // a smi or add the isolate root if it is a heap object.
     addq(destination, masked_root);
@@ -506,8 +505,9 @@ void MacroAssembler::RecordWrite(Register object, Register address,
   DCHECK(value != address);
   AssertNotSmi(object);
 
-  if (remembered_set_action == OMIT_REMEMBERED_SET &&
-      !FLAG_incremental_marking) {
+  if ((remembered_set_action == OMIT_REMEMBERED_SET &&
+       !FLAG_incremental_marking) ||
+      FLAG_disable_write_barriers) {
     return;
   }
 
@@ -1524,9 +1524,10 @@ void MacroAssembler::Pop(Operand dst) { popq(dst); }
 
 void MacroAssembler::PopQuad(Operand dst) { popq(dst); }
 
-void TurboAssembler::Jump(ExternalReference ext) {
-  LoadAddress(kScratchRegister, ext);
-  jmp(kScratchRegister);
+void TurboAssembler::Jump(const ExternalReference& reference) {
+  DCHECK(root_array_available());
+  jmp(Operand(kRootRegister, RootRegisterOffsetForExternalReferenceTableEntry(
+                                 isolate(), reference)));
 }
 
 void TurboAssembler::Jump(Operand op) { jmp(op); }
@@ -1595,12 +1596,7 @@ void TurboAssembler::Call(Handle<Code> code_object, RelocInfo::Mode rmode) {
     if (isolate()->builtins()->IsBuiltinHandle(code_object, &builtin_index) &&
         Builtins::IsIsolateIndependent(builtin_index)) {
       // Inline the trampoline.
-      RecordCommentForOffHeapTrampoline(builtin_index);
-      CHECK_NE(builtin_index, Builtins::kNoBuiltinId);
-      EmbeddedData d = EmbeddedData::FromBlob();
-      Address entry = d.InstructionStartOfBuiltin(builtin_index);
-      Move(kScratchRegister, entry, RelocInfo::OFF_HEAP_TARGET);
-      call(kScratchRegister);
+      CallBuiltin(builtin_index);
       return;
     }
   }
@@ -1633,6 +1629,17 @@ Operand TurboAssembler::EntryFromBuiltinIndexAsOperand(Register builtin_index) {
 
 void TurboAssembler::CallBuiltinByIndex(Register builtin_index) {
   Call(EntryFromBuiltinIndexAsOperand(builtin_index));
+}
+
+void TurboAssembler::CallBuiltin(int builtin_index) {
+  DCHECK(Builtins::IsBuiltinId(builtin_index));
+  DCHECK(FLAG_embedded_builtins);
+  RecordCommentForOffHeapTrampoline(builtin_index);
+  CHECK_NE(builtin_index, Builtins::kNoBuiltinId);
+  EmbeddedData d = EmbeddedData::FromBlob();
+  Address entry = d.InstructionStartOfBuiltin(builtin_index);
+  Move(kScratchRegister, entry, RelocInfo::OFF_HEAP_TARGET);
+  call(kScratchRegister);
 }
 
 void TurboAssembler::LoadCodeObjectEntry(Register destination,
@@ -1769,6 +1776,46 @@ void TurboAssembler::Pinsrd(XMMRegister dst, Operand src, int8_t imm8) {
   } else {
     DCHECK_EQ(0, imm8);
     Movss(dst, kScratchDoubleReg);
+  }
+}
+
+void TurboAssembler::Psllq(XMMRegister dst, byte imm8) {
+  if (CpuFeatures::IsSupported(AVX)) {
+    CpuFeatureScope scope(this, AVX);
+    vpsllq(dst, dst, imm8);
+  } else {
+    DCHECK(!IsEnabled(AVX));
+    psllq(dst, imm8);
+  }
+}
+
+void TurboAssembler::Psrlq(XMMRegister dst, byte imm8) {
+  if (CpuFeatures::IsSupported(AVX)) {
+    CpuFeatureScope scope(this, AVX);
+    vpsrlq(dst, dst, imm8);
+  } else {
+    DCHECK(!IsEnabled(AVX));
+    psrlq(dst, imm8);
+  }
+}
+
+void TurboAssembler::Pslld(XMMRegister dst, byte imm8) {
+  if (CpuFeatures::IsSupported(AVX)) {
+    CpuFeatureScope scope(this, AVX);
+    vpslld(dst, dst, imm8);
+  } else {
+    DCHECK(!IsEnabled(AVX));
+    pslld(dst, imm8);
+  }
+}
+
+void TurboAssembler::Psrld(XMMRegister dst, byte imm8) {
+  if (CpuFeatures::IsSupported(AVX)) {
+    CpuFeatureScope scope(this, AVX);
+    vpsrld(dst, dst, imm8);
+  } else {
+    DCHECK(!IsEnabled(AVX));
+    psrld(dst, imm8);
   }
 }
 

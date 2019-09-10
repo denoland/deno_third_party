@@ -4,6 +4,7 @@
 
 # Use this to run several variants of the tests.
 ALL_VARIANT_FLAGS = {
+  "assert_types": [["--assert-types"]],
   "code_serializer": [["--cache=code"]],
   "default": [[]],
   "future": [["--future"]],
@@ -22,7 +23,7 @@ ALL_VARIANT_FLAGS = {
   "nooptimization": [["--no-opt", "--liftoff", "--no-wasm-tier-up"]],
   "slow_path": [["--force-slow-path"]],
   "stress": [["--stress-opt", "--always-opt", "--no-liftoff",
-              "--no-wasm-tier-up"]],
+              "--no-wasm-tier-up", '--stress-lazy-source-positions']],
   "stress_js_bg_compile_wasm_code_gc": [["--stress-background-compile",
                                          "--wasm-code-gc",
                                          "--stress-wasm-code-gc"]],
