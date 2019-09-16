@@ -29,6 +29,7 @@ namespace internal {
 
 constexpr MachineType MachineTypeOf<Smi>::value;
 constexpr MachineType MachineTypeOf<Object>::value;
+constexpr MachineType MachineTypeOf<MaybeObject>::value;
 
 namespace compiler {
 
@@ -1913,7 +1914,7 @@ CodeAssemblerScopedExceptionHandler::CodeAssemblerScopedExceptionHandler(
       compatibility_label_(label),
       exception_(exception) {
   if (has_handler_) {
-    label_ = base::make_unique<CodeAssemblerExceptionHandlerLabel>(
+    label_ = std::make_unique<CodeAssemblerExceptionHandlerLabel>(
         assembler, CodeAssemblerLabel::kDeferred);
     assembler_->state()->PushExceptionHandler(label_.get());
   }

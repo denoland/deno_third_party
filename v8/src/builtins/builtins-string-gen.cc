@@ -17,8 +17,6 @@ namespace v8 {
 namespace internal {
 
 using Node = compiler::Node;
-template <class T>
-using TNode = compiler::TNode<T>;
 
 Node* StringBuiltinsAssembler::DirectStringData(Node* string,
                                                 Node* string_instance_type) {
@@ -120,14 +118,14 @@ Node* StringBuiltinsAssembler::CallSearchStringRaw(Node* const subject_ptr,
   return result;
 }
 
-TNode<IntPtrT> StringBuiltinsAssembler::PointerToStringDataAtIndex(
-    Node* const string_data, Node* const index, String::Encoding encoding) {
+TNode<RawPtrT> StringBuiltinsAssembler::PointerToStringDataAtIndex(
+    TNode<RawPtrT> string_data, TNode<IntPtrT> index,
+    String::Encoding encoding) {
   const ElementsKind kind = (encoding == String::ONE_BYTE_ENCODING)
                                 ? UINT8_ELEMENTS
                                 : UINT16_ELEMENTS;
-  TNode<IntPtrT> const offset_in_bytes =
-      ElementOffsetFromIndex(index, kind, INTPTR_PARAMETERS);
-  return Signed(IntPtrAdd(string_data, offset_in_bytes));
+  TNode<IntPtrT> offset_in_bytes = ElementOffsetFromIndex(index, kind);
+  return RawPtrAdd(string_data, offset_in_bytes);
 }
 
 void StringBuiltinsAssembler::GenerateStringEqual(TNode<String> left,
@@ -558,7 +556,7 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
       UncheckedCast<Int32T>(Parameter(Descriptor::kJSActualArgumentsCount));
   Node* context = Parameter(Descriptor::kContext);
 
-  CodeStubArguments arguments(this, ChangeInt32ToIntPtr(argc));
+  CodeStubArguments arguments(this, argc);
   // Check if we have exactly one argument (plus the implicit receiver), i.e.
   // if the parent frame is not an arguments adaptor frame.
   Label if_oneargument(this), if_notoneargument(this);
@@ -585,15 +583,13 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
     // Assume that the resulting string contains only one-byte characters.
     TNode<String> one_byte_result = AllocateSeqOneByteString(Unsigned(argc));
 
-    TVARIABLE(IntPtrT, var_max_index);
-    var_max_index = IntPtrConstant(0);
+    TVARIABLE(IntPtrT, var_max_index, IntPtrConstant(0));
 
     // Iterate over the incoming arguments, converting them to 8-bit character
     // codes. Stop if any of the conversions generates a code that doesn't fit
     // in 8 bits.
     CodeStubAssembler::VariableList vars({&var_max_index}, zone());
-    arguments.ForEach(vars, [this, context, &two_byte, &var_max_index, &code16,
-                             one_byte_result](Node* arg) {
+    arguments.ForEach(vars, [&](TNode<Object> arg) {
       Node* code32 = TruncateTaggedToWord32(context, arg);
       code16 = Word32And(code32, Int32Constant(String::kMaxUtf16CodeUnit));
 
@@ -604,7 +600,6 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
       // The {code16} fits into the SeqOneByteString {one_byte_result}.
       TNode<IntPtrT> offset = ElementOffsetFromIndex(
           var_max_index.value(), UINT8_ELEMENTS,
-          CodeStubAssembler::INTPTR_PARAMETERS,
           SeqOneByteString::kHeaderSize - kHeapObjectTag);
       StoreNoWriteBarrier(MachineRepresentation::kWord8, one_byte_result,
                           offset, code16);
@@ -629,7 +624,6 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
     // Write the character that caused the 8-bit to 16-bit fault.
     TNode<IntPtrT> max_index_offset =
         ElementOffsetFromIndex(var_max_index.value(), UINT16_ELEMENTS,
-                               CodeStubAssembler::INTPTR_PARAMETERS,
                                SeqTwoByteString::kHeaderSize - kHeapObjectTag);
     StoreNoWriteBarrier(MachineRepresentation::kWord16, two_byte_result,
                         max_index_offset, code16);
@@ -640,14 +634,13 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
     // using a 16-bit representation.
     arguments.ForEach(
         vars,
-        [this, context, two_byte_result, &var_max_index](Node* arg) {
-          Node* code32 = TruncateTaggedToWord32(context, arg);
+        [&](TNode<Object> arg) {
+          TNode<Word32T> code32 = TruncateTaggedToWord32(context, arg);
           TNode<Word32T> code16 =
               Word32And(code32, Int32Constant(String::kMaxUtf16CodeUnit));
 
           TNode<IntPtrT> offset = ElementOffsetFromIndex(
               var_max_index.value(), UINT16_ELEMENTS,
-              CodeStubAssembler::INTPTR_PARAMETERS,
               SeqTwoByteString::kHeaderSize - kHeapObjectTag);
           StoreNoWriteBarrier(MachineRepresentation::kWord16, two_byte_result,
                               offset, code16);
@@ -723,9 +716,9 @@ void StringBuiltinsAssembler::StringIndexOf(
 
   BIND(&one_one);
   {
-    TNode<IntPtrT> const adjusted_subject_ptr = PointerToStringDataAtIndex(
+    TNode<RawPtrT> const adjusted_subject_ptr = PointerToStringDataAtIndex(
         subject_ptr, subject_offset, String::ONE_BYTE_ENCODING);
-    TNode<IntPtrT> const adjusted_search_ptr = PointerToStringDataAtIndex(
+    TNode<RawPtrT> const adjusted_search_ptr = PointerToStringDataAtIndex(
         search_ptr, search_offset, String::ONE_BYTE_ENCODING);
 
     Label direct_memchr_call(this), generic_fast_path(this);
@@ -736,8 +729,8 @@ void StringBuiltinsAssembler::StringIndexOf(
     // search strings.
     BIND(&direct_memchr_call);
     {
-      TNode<IntPtrT> const string_addr =
-          IntPtrAdd(adjusted_subject_ptr, start_position);
+      TNode<RawPtrT> const string_addr =
+          RawPtrAdd(adjusted_subject_ptr, start_position);
       TNode<IntPtrT> const search_length =
           IntPtrSub(subject_length, start_position);
       TNode<IntPtrT> const search_byte =
@@ -745,14 +738,14 @@ void StringBuiltinsAssembler::StringIndexOf(
 
       TNode<ExternalReference> const memchr =
           ExternalConstant(ExternalReference::libc_memchr_function());
-      TNode<IntPtrT> const result_address = UncheckedCast<IntPtrT>(
+      TNode<RawPtrT> const result_address = UncheckedCast<RawPtrT>(
           CallCFunction(memchr, MachineType::Pointer(),
                         std::make_pair(MachineType::Pointer(), string_addr),
                         std::make_pair(MachineType::IntPtr(), search_byte),
                         std::make_pair(MachineType::UintPtr(), search_length)));
       GotoIf(WordEqual(result_address, int_zero), &return_minus_1);
       TNode<IntPtrT> const result_index =
-          IntPtrAdd(IntPtrSub(result_address, string_addr), start_position);
+          IntPtrAdd(RawPtrSub(result_address, string_addr), start_position);
       f_return(SmiTag(result_index));
     }
 
@@ -767,9 +760,9 @@ void StringBuiltinsAssembler::StringIndexOf(
 
   BIND(&one_two);
   {
-    TNode<IntPtrT> const adjusted_subject_ptr = PointerToStringDataAtIndex(
+    TNode<RawPtrT> const adjusted_subject_ptr = PointerToStringDataAtIndex(
         subject_ptr, subject_offset, String::ONE_BYTE_ENCODING);
-    TNode<IntPtrT> const adjusted_search_ptr = PointerToStringDataAtIndex(
+    TNode<RawPtrT> const adjusted_search_ptr = PointerToStringDataAtIndex(
         search_ptr, search_offset, String::TWO_BYTE_ENCODING);
 
     Node* const result = CallSearchStringRaw<onebyte_t, twobyte_t>(
@@ -780,9 +773,9 @@ void StringBuiltinsAssembler::StringIndexOf(
 
   BIND(&two_one);
   {
-    TNode<IntPtrT> const adjusted_subject_ptr = PointerToStringDataAtIndex(
+    TNode<RawPtrT> const adjusted_subject_ptr = PointerToStringDataAtIndex(
         subject_ptr, subject_offset, String::TWO_BYTE_ENCODING);
-    TNode<IntPtrT> const adjusted_search_ptr = PointerToStringDataAtIndex(
+    TNode<RawPtrT> const adjusted_search_ptr = PointerToStringDataAtIndex(
         search_ptr, search_offset, String::ONE_BYTE_ENCODING);
 
     Node* const result = CallSearchStringRaw<twobyte_t, onebyte_t>(
@@ -793,9 +786,9 @@ void StringBuiltinsAssembler::StringIndexOf(
 
   BIND(&two_two);
   {
-    TNode<IntPtrT> const adjusted_subject_ptr = PointerToStringDataAtIndex(
+    TNode<RawPtrT> const adjusted_subject_ptr = PointerToStringDataAtIndex(
         subject_ptr, subject_offset, String::TWO_BYTE_ENCODING);
-    TNode<IntPtrT> const adjusted_search_ptr = PointerToStringDataAtIndex(
+    TNode<RawPtrT> const adjusted_search_ptr = PointerToStringDataAtIndex(
         search_ptr, search_offset, String::TWO_BYTE_ENCODING);
 
     Node* const result = CallSearchStringRaw<twobyte_t, twobyte_t>(
@@ -1368,9 +1361,9 @@ TNode<JSArray> StringBuiltinsAssembler::StringToArray(
     TNode<IntPtrT> string_data_offset = to_direct.offset();
     TNode<FixedArray> cache = SingleCharacterStringCacheConstant();
 
-    BuildFastLoop(
+    BuildFastLoop<IntPtrT>(
         IntPtrConstant(0), length,
-        [&](Node* index) {
+        [&](TNode<IntPtrT> index) {
           // TODO(jkummerow): Implement a CSA version of DisallowHeapAllocation
           // and use that to guard ToDirectStringAssembler.PointerToData().
           CSA_ASSERT(this, WordEqual(to_direct.PointerToData(&call_runtime),
@@ -1387,7 +1380,7 @@ TNode<JSArray> StringBuiltinsAssembler::StringToArray(
 
           StoreFixedArrayElement(elements, index, entry);
         },
-        1, ParameterMode::INTPTR_PARAMETERS, IndexAdvanceMode::kPost);
+        1, IndexAdvanceMode::kPost);
 
     TNode<Map> array_map = LoadJSArrayElementsMap(PACKED_ELEMENTS, context);
     result_array = AllocateJSArray(array_map, elements, length_smi);

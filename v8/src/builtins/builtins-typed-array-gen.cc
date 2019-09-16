@@ -15,8 +15,6 @@ namespace v8 {
 namespace internal {
 
 using compiler::Node;
-template <class T>
-using TNode = compiler::TNode<T>;
 
 // -----------------------------------------------------------------------------
 // ES6 section 22.2 TypedArray Objects
@@ -117,8 +115,8 @@ TF_BUILTIN(TypedArrayConstructor, TypedArrayBuiltinsAssembler) {
 // ES6 #sec-get-%typedarray%.prototype.bytelength
 TF_BUILTIN(TypedArrayPrototypeByteLength, TypedArrayBuiltinsAssembler) {
   const char* const kMethodName = "get TypedArray.prototype.byteLength";
-  Node* context = Parameter(Descriptor::kContext);
-  Node* receiver = Parameter(Descriptor::kReceiver);
+  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
+  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
 
   // Check if the {receiver} is actually a JSTypedArray.
   ThrowIfNotInstanceType(context, receiver, JS_TYPED_ARRAY_TYPE, kMethodName);
@@ -135,8 +133,8 @@ TF_BUILTIN(TypedArrayPrototypeByteLength, TypedArrayBuiltinsAssembler) {
 // ES6 #sec-get-%typedarray%.prototype.byteoffset
 TF_BUILTIN(TypedArrayPrototypeByteOffset, TypedArrayBuiltinsAssembler) {
   const char* const kMethodName = "get TypedArray.prototype.byteOffset";
-  Node* context = Parameter(Descriptor::kContext);
-  Node* receiver = Parameter(Descriptor::kReceiver);
+  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
+  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
 
   // Check if the {receiver} is actually a JSTypedArray.
   ThrowIfNotInstanceType(context, receiver, JS_TYPED_ARRAY_TYPE, kMethodName);
@@ -153,8 +151,8 @@ TF_BUILTIN(TypedArrayPrototypeByteOffset, TypedArrayBuiltinsAssembler) {
 // ES6 #sec-get-%typedarray%.prototype.length
 TF_BUILTIN(TypedArrayPrototypeLength, TypedArrayBuiltinsAssembler) {
   const char* const kMethodName = "get TypedArray.prototype.length";
-  Node* context = Parameter(Descriptor::kContext);
-  Node* receiver = Parameter(Descriptor::kReceiver);
+  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
+  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
 
   // Check if the {receiver} is actually a JSTypedArray.
   ThrowIfNotInstanceType(context, receiver, JS_TYPED_ARRAY_TYPE, kMethodName);
@@ -541,10 +539,10 @@ TNode<BoolT> TypedArrayBuiltinsAssembler::IsSharedArrayBuffer(
 // ES #sec-get-%typedarray%.prototype.set
 TF_BUILTIN(TypedArrayPrototypeSet, TypedArrayBuiltinsAssembler) {
   const char* method_name = "%TypedArray%.prototype.set";
+  TNode<Int32T> argc =
+      UncheckedCast<Int32T>(Parameter(Descriptor::kJSActualArgumentsCount));
   TNode<Context> context = CAST(Parameter(Descriptor::kContext));
-  CodeStubArguments args(
-      this,
-      ChangeInt32ToIntPtr(Parameter(Descriptor::kJSActualArgumentsCount)));
+  CodeStubArguments args(this, argc);
 
   Label if_source_is_typed_array(this), if_source_is_fast_jsarray(this),
       if_offset_is_out_of_bounds(this, Label::kDeferred),
@@ -618,7 +616,7 @@ TF_BUILTIN(TypedArrayPrototypeSet, TypedArrayBuiltinsAssembler) {
 
 // ES #sec-get-%typedarray%.prototype-@@tostringtag
 TF_BUILTIN(TypedArrayPrototypeToStringTag, TypedArrayBuiltinsAssembler) {
-  Node* receiver = Parameter(Descriptor::kReceiver);
+  TNode<Object> receiver = CAST(Parameter(Descriptor::kReceiver));
   Label if_receiverisheapobject(this), return_undefined(this);
   Branch(TaggedIsSmi(receiver), &return_undefined, &if_receiverisheapobject);
 
@@ -645,12 +643,12 @@ TF_BUILTIN(TypedArrayPrototypeToStringTag, TypedArrayBuiltinsAssembler) {
 #undef TYPED_ARRAY_CASE
   };
 
-  // We offset the dispatch by FIRST_FIXED_TYPED_ARRAY_ELEMENTS_KIND, so
-  // that this can be turned into a non-sparse table switch for ideal
-  // performance.
+  // We offset the dispatch by FIRST_FIXED_TYPED_ARRAY_ELEMENTS_KIND, so that
+  // this can be turned into a non-sparse table switch for ideal performance.
   BIND(&if_receiverisheapobject);
+  TNode<HeapObject> receiver_heap_object = CAST(receiver);
   TNode<Int32T> elements_kind =
-      Int32Sub(LoadElementsKind(receiver),
+      Int32Sub(LoadElementsKind(receiver_heap_object),
                Int32Constant(FIRST_FIXED_TYPED_ARRAY_ELEMENTS_KIND));
   Switch(elements_kind, &return_undefined, elements_kinds, elements_kind_labels,
          kTypedElementsKindCount);
@@ -710,8 +708,7 @@ TF_BUILTIN(TypedArrayOf, TypedArrayBuiltinsAssembler) {
   TNode<IntPtrT> length = ChangeInt32ToIntPtr(
       UncheckedCast<Int32T>(Parameter(Descriptor::kJSActualArgumentsCount)));
   // 2. Let items be the List of arguments passed to this function.
-  CodeStubArguments args(this, length, nullptr, INTPTR_PARAMETERS,
-                         CodeStubArguments::ReceiverMode::kHasReceiver);
+  CodeStubArguments args(this, length);
 
   Label if_not_constructor(this, Label::kDeferred),
       if_detached(this, Label::kDeferred);
@@ -737,10 +734,10 @@ TF_BUILTIN(TypedArrayOf, TypedArrayBuiltinsAssembler) {
   DispatchTypedArrayByElementsKind(
       elements_kind,
       [&](ElementsKind kind, int size, int typed_array_fun_index) {
-        BuildFastLoop(
+        BuildFastLoop<IntPtrT>(
             IntPtrConstant(0), length,
-            [&](Node* index) {
-              TNode<Object> item = args.AtIndex(index, INTPTR_PARAMETERS);
+            [&](TNode<IntPtrT> index) {
+              TNode<Object> item = args.AtIndex(index);
               Node* value =
                   PrepareValueForWriteToTypedArray(item, kind, context);
 
@@ -757,7 +754,7 @@ TF_BUILTIN(TypedArrayOf, TypedArrayBuiltinsAssembler) {
               StoreElement(backing_store, kind, index, value,
                            INTPTR_PARAMETERS);
             },
-            1, ParameterMode::INTPTR_PARAMETERS, IndexAdvanceMode::kPost);
+            1, IndexAdvanceMode::kPost);
       });
 
   // 8. Return newObj.
@@ -773,6 +770,8 @@ TF_BUILTIN(TypedArrayOf, TypedArrayBuiltinsAssembler) {
 
 // ES6 #sec-%typedarray%.from
 TF_BUILTIN(TypedArrayFrom, TypedArrayBuiltinsAssembler) {
+  TNode<Int32T> argc =
+      UncheckedCast<Int32T>(Parameter(Descriptor::kJSActualArgumentsCount));
   TNode<Context> context = CAST(Parameter(Descriptor::kContext));
 
   Label check_iterator(this), from_array_like(this), fast_path(this),
@@ -782,9 +781,7 @@ TF_BUILTIN(TypedArrayFrom, TypedArrayBuiltinsAssembler) {
       if_iterator_fn_not_callable(this, Label::kDeferred),
       if_detached(this, Label::kDeferred);
 
-  CodeStubArguments args(
-      this,
-      ChangeInt32ToIntPtr(Parameter(Descriptor::kJSActualArgumentsCount)));
+  CodeStubArguments args(this, argc);
   TNode<Object> source = args.GetOptionalArgumentValue(0);
 
   // 5. If thisArg is present, let T be thisArg; else let T be undefined.
@@ -950,9 +947,9 @@ TF_BUILTIN(TypedArrayFrom, TypedArrayBuiltinsAssembler) {
   TNode<Int32T> elements_kind = LoadElementsKind(target_obj.value());
 
   // 7e/13 : Copy the elements
-  BuildFastLoop(
+  BuildFastLoop<Smi>(
       SmiConstant(0), final_length.value(),
-      [&](Node* index) {
+      [&](TNode<Smi> index) {
         TNode<Object> const k_value =
             GetProperty(context, final_source.value(), index);
 
@@ -980,7 +977,7 @@ TF_BUILTIN(TypedArrayFrom, TypedArrayBuiltinsAssembler) {
                            SMI_PARAMETERS);
             });
       },
-      1, ParameterMode::SMI_PARAMETERS, IndexAdvanceMode::kPost);
+      1, IndexAdvanceMode::kPost);
 
   args.PopAndReturn(target_obj.value());
 

@@ -48,8 +48,8 @@ TF_BUILTIN(LoadIC_StringLength, CodeStubAssembler) {
 }
 
 TF_BUILTIN(LoadIC_StringWrapperLength, CodeStubAssembler) {
-  Node* value = Parameter(Descriptor::kReceiver);
-  Node* string = LoadJSPrimitiveWrapperValue(value);
+  TNode<JSPrimitiveWrapper> value = CAST(Parameter(Descriptor::kReceiver));
+  TNode<String> string = CAST(LoadJSPrimitiveWrapperValue(value));
   Return(LoadStringLengthAsSmi(string));
 }
 
@@ -489,17 +489,6 @@ TF_BUILTIN(KeyedStoreIC_SloppyArguments_NoTransitionIgnoreOOB,
 TF_BUILTIN(KeyedStoreIC_SloppyArguments_NoTransitionHandleCOW,
            HandlerBuiltinsAssembler) {
   Generate_KeyedStoreIC_SloppyArguments();
-}
-
-TF_BUILTIN(StoreInterceptorIC, CodeStubAssembler) {
-  Node* receiver = Parameter(Descriptor::kReceiver);
-  Node* name = Parameter(Descriptor::kName);
-  Node* value = Parameter(Descriptor::kValue);
-  Node* slot = Parameter(Descriptor::kSlot);
-  Node* vector = Parameter(Descriptor::kVector);
-  Node* context = Parameter(Descriptor::kContext);
-  TailCallRuntime(Runtime::kStorePropertyWithInterceptor, context, value, slot,
-                  vector, receiver, name);
 }
 
 TF_BUILTIN(LoadIndexedInterceptorIC, CodeStubAssembler) {

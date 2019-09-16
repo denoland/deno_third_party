@@ -1331,6 +1331,11 @@ class ParserBase {
     return expression_scope_;
   }
 
+  bool MaybeParsingArrowhead() const {
+    return expression_scope_ != nullptr &&
+           expression_scope_->has_possible_arrow_parameter_in_scope_chain();
+  }
+
   class AcceptINScope final {
    public:
     AcceptINScope(ParserBase* parser, bool accept_IN)
@@ -4435,7 +4440,9 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseClassLiteral(
   }
 
   if (class_info.requires_brand) {
-    class_scope->DeclareBrandVariable(ast_value_factory(), kNoSourcePosition);
+    // TODO(joyee): implement static brand checking
+    class_scope->DeclareBrandVariable(
+        ast_value_factory(), IsStaticFlag::kNotStatic, kNoSourcePosition);
   }
 
   return impl()->RewriteClassLiteral(class_scope, name, &class_info,

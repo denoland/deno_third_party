@@ -15,7 +15,6 @@
 #include "src/api/api-inl.h"
 #include "src/ast/ast-value-factory.h"
 #include "src/ast/scopes.h"
-#include "src/base/adapters.h"
 #include "src/base/hashmap.h"
 #include "src/base/platform/platform.h"
 #include "src/base/sys-info.h"
@@ -321,7 +320,9 @@ Isolate::FindOrAllocatePerThreadDataForThisThread() {
     base::MutexGuard lock_guard(&thread_data_table_mutex_);
     per_thread = thread_data_table_.Lookup(thread_id);
     if (per_thread == nullptr) {
-      base::OS::AdjustSchedulingParams();
+      if (FLAG_adjust_os_scheduling_parameters) {
+        base::OS::AdjustSchedulingParams();
+      }
       per_thread = new PerIsolateThreadData(this, thread_id);
       thread_data_table_.Insert(per_thread);
     }
@@ -1763,16 +1764,10 @@ Object Isolate::UnwindAndFindHandler() {
         // Some stubs are able to handle exceptions.
         if (!catchable_by_js) break;
         StubFrame* stub_frame = static_cast<StubFrame*>(frame);
+#ifdef DEBUG
         wasm::WasmCodeRefScope code_ref_scope;
-        wasm::WasmCode* wasm_code =
-            wasm_engine()->code_manager()->LookupCode(frame->pc());
-        if (wasm_code != nullptr) {
-          // It is safe to skip Wasm runtime stubs as none of them contain local
-          // exception handlers.
-          CHECK_EQ(wasm::WasmCode::kRuntimeStub, wasm_code->kind());
-          CHECK_EQ(0, wasm_code->handler_table_size());
-          break;
-        }
+        DCHECK_NULL(wasm_engine()->code_manager()->LookupCode(frame->pc()));
+#endif  // DEBUG
         Code code = stub_frame->LookupCode();
         if (!code.IsCode() || code.kind() != Code::BUILTIN ||
             !code.has_handler_table() || !code.is_turbofanned()) {
@@ -2059,7 +2054,7 @@ void Isolate::PrintCurrentStackTrace(FILE* out) {
   for (int i = 0; i < frames->length(); ++i) {
     Handle<StackTraceFrame> frame(StackTraceFrame::cast(frames->get(i)), this);
 
-    SerializeStackTraceFrame(this, frame, builder);
+    SerializeStackTraceFrame(this, frame, &builder);
   }
 
   Handle<String> stack_trace = builder.Finish().ToHandleChecked();
@@ -2817,7 +2812,7 @@ Isolate* Isolate::New(IsolateAllocationMode mode) {
   // IsolateAllocator allocates the memory for the Isolate object according to
   // the given allocation mode.
   std::unique_ptr<IsolateAllocator> isolate_allocator =
-      base::make_unique<IsolateAllocator>(mode);
+      std::make_unique<IsolateAllocator>(mode);
   // Construct Isolate object in the allocated memory.
   void* isolate_ptr = isolate_allocator->isolate_memory();
   Isolate* isolate = new (isolate_ptr) Isolate(std::move(isolate_allocator));
@@ -3936,23 +3931,6 @@ bool Isolate::IsPromiseResolveLookupChainIntact() {
   return is_promise_resolve_protector_intact;
 }
 
-bool Isolate::IsPromiseThenLookupChainIntact() {
-  PropertyCell promise_then_cell = heap()->promise_then_protector();
-  bool is_promise_then_protector_intact =
-      Smi::ToInt(promise_then_cell.value()) == kProtectorValid;
-  return is_promise_then_protector_intact;
-}
-
-bool Isolate::IsPromiseThenLookupChainIntact(Handle<JSReceiver> receiver) {
-  DisallowHeapAllocation no_gc;
-  if (!receiver->IsJSPromise()) return false;
-  if (!IsInAnyContext(receiver->map().prototype(),
-                      Context::PROMISE_PROTOTYPE_INDEX)) {
-    return false;
-  }
-  return IsPromiseThenLookupChainIntact();
-}
-
 void Isolate::UpdateNoElementsProtectorOnSetElement(Handle<JSObject> object) {
   DisallowHeapAllocation no_gc;
   if (!object->map().is_prototype_map()) return;
@@ -3987,26 +3965,6 @@ void Isolate::InvalidateIsConcatSpreadableProtector() {
   factory()->is_concat_spreadable_protector()->set_value(
       Smi::FromInt(kProtectorInvalid));
   DCHECK(!IsIsConcatSpreadableLookupChainIntact());
-}
-
-void Isolate::InvalidateArrayConstructorProtector() {
-  DCHECK(factory()->array_constructor_protector()->value().IsSmi());
-  DCHECK(IsArrayConstructorIntact());
-  if (FLAG_trace_protector_invalidation) {
-    TraceProtectorInvalidation("array_constructor_protector");
-  }
-  factory()->array_constructor_protector()->set_value(
-      Smi::FromInt(kProtectorInvalid));
-  DCHECK(!IsArrayConstructorIntact());
-}
-
-void Isolate::InvalidatePromiseSpeciesProtector() {
-  DCHECK(factory()->promise_species_protector()->value().IsSmi());
-  DCHECK(IsPromiseSpeciesLookupChainIntact());
-  PropertyCell::SetValueWithInvalidation(
-      this, "promise_species_protector", factory()->promise_species_protector(),
-      handle(Smi::FromInt(kProtectorInvalid), this));
-  DCHECK(!IsPromiseSpeciesLookupChainIntact());
 }
 
 void Isolate::InvalidateStringLengthOverflowProtector() {
@@ -4084,15 +4042,6 @@ void Isolate::InvalidatePromiseResolveProtector() {
   factory()->promise_resolve_protector()->set_value(
       Smi::FromInt(kProtectorInvalid));
   DCHECK(!IsPromiseResolveLookupChainIntact());
-}
-
-void Isolate::InvalidatePromiseThenProtector() {
-  DCHECK(factory()->promise_then_protector()->value().IsSmi());
-  DCHECK(IsPromiseThenLookupChainIntact());
-  PropertyCell::SetValueWithInvalidation(
-      this, "promise_then_protector", factory()->promise_then_protector(),
-      handle(Smi::FromInt(kProtectorInvalid), this));
-  DCHECK(!IsPromiseThenLookupChainIntact());
 }
 
 bool Isolate::IsAnyInitialArrayPrototype(Handle<JSArray> array) {

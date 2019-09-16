@@ -1,0 +1,13 @@
+{
+  "format_version": "1.1",
+  "package_name": "chromium/llvm-build-tools/dsymutil",
+  "install_mode": "copy",
+  "files": [
+    {
+      "name": "bin/dsymutil",
+      "size": 38539060,
+      "executable": true,
+      "hash": "BuPYzE94PFV0CqRPo7clo50pXRqlwZ2z4L1dCa78pjoC"
+    }
+  ]
+}

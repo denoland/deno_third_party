@@ -57,10 +57,12 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
 
   // Loads {var_string_start} and {var_string_end} with the corresponding
   // offsets into the given {string_data}.
-  void GetStringPointers(Node* const string_data, Node* const offset,
-                         Node* const last_index, Node* const string_length,
-                         String::Encoding encoding, Variable* var_string_start,
-                         Variable* var_string_end);
+  void GetStringPointers(TNode<RawPtrT> string_data, TNode<IntPtrT> offset,
+                         TNode<IntPtrT> last_index,
+                         TNode<IntPtrT> string_length,
+                         String::Encoding encoding,
+                         TVariable<RawPtrT>* var_string_start,
+                         TVariable<RawPtrT>* var_string_end);
 
   // Low level logic around the actual call into pattern matching code.
   TNode<HeapObject> RegExpExecInternal(TNode<Context> context,
@@ -185,15 +187,10 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
                                          TNode<String> const string,
                                          const bool is_fastpath);
 
-  void RegExpPrototypeSearchBodyFast(TNode<Context> context,
-                                     TNode<JSRegExp> regexp,
-                                     TNode<String> string);
-  void RegExpPrototypeSearchBodySlow(TNode<Context> context, Node* const regexp,
-                                     Node* const string);
-
-  void RegExpPrototypeSplitBody(TNode<Context> context, TNode<JSRegExp> regexp,
-                                TNode<String> const string,
-                                TNode<Smi> const limit);
+  TNode<JSArray> RegExpPrototypeSplitBody(TNode<Context> context,
+                                          TNode<JSRegExp> regexp,
+                                          TNode<String> const string,
+                                          TNode<Smi> const limit);
 };
 
 class RegExpMatchAllAssembler : public RegExpBuiltinsAssembler {

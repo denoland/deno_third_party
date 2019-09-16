@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Tier-up behavior differs between slow and fast paths in functional
-// RegExp.prototype.replace.
-// Flags: --regexp-tier-up --allow-natives-syntax --no-force-slow-path
+// Tier-up behavior differs between slow and fast paths in
+// RegExp.prototype.replace with a function as an argument.
+// Flags: --regexp-tier-up --regexp-tier-up-ticks=1
+// Flags: --allow-natives-syntax --no-force-slow-path --no-regexp-interpret-all
 
 const kLatin1 = true;
 const kUnicode = false;
