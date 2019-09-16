@@ -629,16 +629,12 @@ LoadElimination::AbstractState::KillFields(Node* object, MaybeHandle<Name> name,
 
 LoadElimination::AbstractState const* LoadElimination::AbstractState::KillAll(
     Zone* zone) const {
-  // TODO(tebbi): This is not a good way to disable const load elimination.
-  //              It's just the safest to back-merge for crbug:983764.
-  if (FLAG_turbo_load_elimination_use_constness) {
-    // Kill everything except for const fields
-    for (size_t i = 0; i < const_fields_.size(); ++i) {
-      if (const_fields_[i]) {
-        AbstractState* that = new (zone) AbstractState();
-        that->const_fields_ = const_fields_;
-        return that;
-      }
+  // Kill everything except for const fields
+  for (size_t i = 0; i < const_fields_.size(); ++i) {
+    if (const_fields_[i]) {
+      AbstractState* that = new (zone) AbstractState();
+      that->const_fields_ = const_fields_;
+      return that;
     }
   }
   return LoadElimination::empty_state();
@@ -666,16 +662,14 @@ LoadElimination::FieldInfo const* LoadElimination::AbstractState::LookupField(
     if (!result.has_value()) {
       result = info;
     } else {
-      if (**result != *info) {
-        // We detected a partially overlapping access here.
-        // We currently don't seem to have such accesses, so this code path is
-        // unreachable, but if we eventually have them, it is safe to return
-        // nullptr and continue the analysis. But store-store elimination is
-        // currently unsafe for such overlapping accesses, so when we remove
-        // this UNREACHABLE(), we should double-check that store-store
-        // elimination can handle it too.
-        UNREACHABLE();
-      }
+      // We detected a partially overlapping access here.
+      // We currently don't seem to have such accesses, so this code path is
+      // unreachable, but if we eventually have them, it is safe to return
+      // nullptr and continue the analysis. But store-store elimination is
+      // currently unsafe for such overlapping accesses, so when we remove
+      // this check, we should double-check that store-store elimination can
+      // handle it too.
+      DCHECK_EQ(**result, *info);
     }
   }
   return *result;

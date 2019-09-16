@@ -262,7 +262,7 @@ String16 scopeType(v8::debug::ScopeIterator::ScopeType type) {
 Response buildScopes(v8::Isolate* isolate, v8::debug::ScopeIterator* iterator,
                      InjectedScript* injectedScript,
                      std::unique_ptr<Array<Scope>>* scopes) {
-  *scopes = v8::base::make_unique<Array<Scope>>();
+  *scopes = std::make_unique<Array<Scope>>();
   if (!injectedScript) return Response::OK();
   if (iterator->Done()) return Response::OK();
 
@@ -472,7 +472,7 @@ Response V8DebuggerAgentImpl::setBreakpointByUrl(
     Maybe<int> optionalColumnNumber, Maybe<String16> optionalCondition,
     String16* outBreakpointId,
     std::unique_ptr<protocol::Array<protocol::Debugger::Location>>* locations) {
-  *locations = v8::base::make_unique<Array<protocol::Debugger::Location>>();
+  *locations = std::make_unique<Array<protocol::Debugger::Location>>();
 
   int specified = (optionalURL.isJust() ? 1 : 0) +
                   (optionalURLRegex.isJust() ? 1 : 0) +
@@ -708,8 +708,8 @@ Response V8DebuggerAgentImpl::getPossibleBreakpoints(
         v8Start, v8End, restrictToFunction.fromMaybe(false), &v8Locations);
   }
 
-  *locations = v8::base::make_unique<
-      protocol::Array<protocol::Debugger::BreakLocation>>();
+  *locations =
+      std::make_unique<protocol::Array<protocol::Debugger::BreakLocation>>();
   for (size_t i = 0; i < v8Locations.size(); ++i) {
     std::unique_ptr<protocol::Debugger::BreakLocation> breakLocation =
         protocol::Debugger::BreakLocation::create()
@@ -872,11 +872,10 @@ Response V8DebuggerAgentImpl::searchInContent(
   if (it == m_scripts.end())
     return Response::Error("No script for id: " + scriptId);
 
-  *results =
-      v8::base::make_unique<protocol::Array<protocol::Debugger::SearchMatch>>(
-          searchInTextByLinesImpl(m_session, it->second->source(0), query,
-                                  optionalCaseSensitive.fromMaybe(false),
-                                  optionalIsRegex.fromMaybe(false)));
+  *results = std::make_unique<protocol::Array<protocol::Debugger::SearchMatch>>(
+      searchInTextByLinesImpl(m_session, it->second->source(0), query,
+                              optionalCaseSensitive.fromMaybe(false),
+                              optionalIsRegex.fromMaybe(false)));
   return Response::OK();
 }
 
@@ -1040,13 +1039,7 @@ Response V8DebuggerAgentImpl::stepOut() {
 
 Response V8DebuggerAgentImpl::pauseOnAsyncCall(
     std::unique_ptr<protocol::Runtime::StackTraceId> inParentStackTraceId) {
-  bool isOk = false;
-  int64_t stackTraceId = inParentStackTraceId->getId().toInteger64(&isOk);
-  if (!isOk) {
-    return Response::Error("Invalid stack trace id");
-  }
-  m_debugger->pauseOnAsyncCall(m_session->contextGroupId(), stackTraceId,
-                               inParentStackTraceId->getDebuggerId(String16()));
+  // Deprecated, just return OK.
   return Response::OK();
 }
 
@@ -1270,11 +1263,11 @@ Response V8DebuggerAgentImpl::setBlackboxedRanges(
 Response V8DebuggerAgentImpl::currentCallFrames(
     std::unique_ptr<Array<CallFrame>>* result) {
   if (!isPaused()) {
-    *result = v8::base::make_unique<Array<CallFrame>>();
+    *result = std::make_unique<Array<CallFrame>>();
     return Response::OK();
   }
   v8::HandleScope handles(m_isolate);
-  *result = v8::base::make_unique<Array<CallFrame>>();
+  *result = std::make_unique<Array<CallFrame>>();
   auto iterator = v8::debug::StackTraceIterator::Create(m_isolate);
   int frameOrdinal = 0;
   for (; !iterator->Done(); iterator->Advance(), frameOrdinal++) {
@@ -1375,24 +1368,6 @@ V8DebuggerAgentImpl::currentExternalStackTrace() {
       .setId(stackTraceIdToString(externalParent.id))
       .setDebuggerId(debuggerIdToString(externalParent.debugger_id))
       .build();
-}
-
-std::unique_ptr<protocol::Runtime::StackTraceId>
-V8DebuggerAgentImpl::currentScheduledAsyncCall() {
-  v8_inspector::V8StackTraceId scheduledAsyncCall =
-      m_debugger->scheduledAsyncCall();
-  if (scheduledAsyncCall.IsInvalid()) return nullptr;
-  std::unique_ptr<protocol::Runtime::StackTraceId> asyncCallStackTrace =
-      protocol::Runtime::StackTraceId::create()
-          .setId(stackTraceIdToString(scheduledAsyncCall.id))
-          .build();
-  // TODO(kozyatinskiy): extract this check to IsLocal function.
-  if (scheduledAsyncCall.debugger_id.first ||
-      scheduledAsyncCall.debugger_id.second) {
-    asyncCallStackTrace->setDebuggerId(
-        debuggerIdToString(scheduledAsyncCall.debugger_id));
-  }
-  return asyncCallStackTrace;
 }
 
 bool V8DebuggerAgentImpl::isPaused() const {
@@ -1602,7 +1577,7 @@ void V8DebuggerAgentImpl::didPause(
     }
   }
 
-  auto hitBreakpointIds = v8::base::make_unique<Array<String16>>();
+  auto hitBreakpointIds = std::make_unique<Array<String16>>();
 
   for (const auto& id : hitBreakpoints) {
     auto it = m_breakpointsOnScriptRun.find(id);
@@ -1655,12 +1630,11 @@ void V8DebuggerAgentImpl::didPause(
   std::unique_ptr<Array<CallFrame>> protocolCallFrames;
   Response response = currentCallFrames(&protocolCallFrames);
   if (!response.isSuccess())
-    protocolCallFrames = v8::base::make_unique<Array<CallFrame>>();
+    protocolCallFrames = std::make_unique<Array<CallFrame>>();
 
   m_frontend.paused(std::move(protocolCallFrames), breakReason,
                     std::move(breakAuxData), std::move(hitBreakpointIds),
-                    currentAsyncStackTrace(), currentExternalStackTrace(),
-                    currentScheduledAsyncCall());
+                    currentAsyncStackTrace(), currentExternalStackTrace());
 }
 
 void V8DebuggerAgentImpl::didContinue() {

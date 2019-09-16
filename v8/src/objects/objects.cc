@@ -3816,8 +3816,7 @@ bool DescriptorArray::IsEqualUpTo(DescriptorArray desc, int nof_descriptors) {
 
 Handle<FixedArray> FixedArray::SetAndGrow(Isolate* isolate,
                                           Handle<FixedArray> array, int index,
-                                          Handle<Object> value,
-                                          AllocationType allocation) {
+                                          Handle<Object> value) {
   if (index < array->length()) {
     array->set(index, *value);
     return array;
@@ -3827,7 +3826,7 @@ Handle<FixedArray> FixedArray::SetAndGrow(Isolate* isolate,
     capacity = JSObject::NewElementsCapacity(capacity);
   } while (capacity <= index);
   Handle<FixedArray> new_array =
-      isolate->factory()->NewUninitializedFixedArray(capacity, allocation);
+      isolate->factory()->NewUninitializedFixedArray(capacity);
   array->CopyTo(0, *new_array, 0, array->length());
   new_array->FillWithHoles(array->length(), new_array->length());
   new_array->set(index, *value);
@@ -4147,12 +4146,10 @@ Handle<FrameArray> FrameArray::EnsureSpace(Isolate* isolate,
 
 Handle<DescriptorArray> DescriptorArray::Allocate(Isolate* isolate,
                                                   int nof_descriptors,
-                                                  int slack,
-                                                  AllocationType allocation) {
+                                                  int slack) {
   return nof_descriptors + slack == 0
              ? isolate->factory()->empty_descriptor_array()
-             : isolate->factory()->NewDescriptorArray(nof_descriptors, slack,
-                                                      allocation);
+             : isolate->factory()->NewDescriptorArray(nof_descriptors, slack);
 }
 
 void DescriptorArray::Initialize(EnumCache enum_cache,
@@ -4972,24 +4969,6 @@ void SharedFunctionInfo::ScriptIterator::Reset(Isolate* isolate,
   index_ = 0;
 }
 
-SharedFunctionInfo::GlobalIterator::GlobalIterator(Isolate* isolate)
-    : isolate_(isolate),
-      script_iterator_(isolate),
-      noscript_sfi_iterator_(isolate->heap()->noscript_shared_function_infos()),
-      sfi_iterator_(isolate, script_iterator_.Next()) {}
-
-SharedFunctionInfo SharedFunctionInfo::GlobalIterator::Next() {
-  HeapObject next = noscript_sfi_iterator_.Next();
-  if (!next.is_null()) return SharedFunctionInfo::cast(next);
-  for (;;) {
-    next = sfi_iterator_.Next();
-    if (!next.is_null()) return SharedFunctionInfo::cast(next);
-    Script next_script = script_iterator_.Next();
-    if (next_script.is_null()) return SharedFunctionInfo();
-    sfi_iterator_.Reset(isolate_, next_script);
-  }
-}
-
 void SharedFunctionInfo::SetScript(Handle<SharedFunctionInfo> shared,
                                    Handle<Object> script_object,
                                    int function_literal_id,
@@ -5020,30 +4999,8 @@ void SharedFunctionInfo::SetScript(Handle<SharedFunctionInfo> shared,
     }
 #endif
     list->Set(function_literal_id, HeapObjectReference::Weak(*shared));
-
-    // Remove shared function info from root array.
-    WeakArrayList noscript_list =
-        isolate->heap()->noscript_shared_function_infos();
-    CHECK(noscript_list.RemoveOne(MaybeObjectHandle::Weak(shared)));
   } else {
     DCHECK(shared->script().IsScript());
-    Handle<WeakArrayList> list =
-        isolate->factory()->noscript_shared_function_infos();
-
-#ifdef DEBUG
-    if (FLAG_enable_slow_asserts) {
-      WeakArrayList::Iterator iterator(*list);
-      for (HeapObject next = iterator.Next(); !next.is_null();
-           next = iterator.Next()) {
-        DCHECK_NE(next, *shared);
-      }
-    }
-#endif  // DEBUG
-
-    list =
-        WeakArrayList::AddToEnd(isolate, list, MaybeObjectHandle::Weak(shared));
-
-    isolate->heap()->SetRootNoScriptSharedFunctionInfos(*list);
 
     // Remove shared function info from old script's list.
     Script old_script = Script::cast(shared->script());
@@ -5929,17 +5886,25 @@ MaybeHandle<Object> JSPromise::Resolve(Handle<JSPromise> promise,
 
   // 8. Let then be Get(resolution, "then").
   MaybeHandle<Object> then;
-  if (isolate->IsPromiseThenLookupChainIntact(
-          Handle<JSReceiver>::cast(resolution))) {
+  Handle<JSReceiver> receiver(Handle<JSReceiver>::cast(resolution));
+
+  // Make sure a lookup of "then" on any JSPromise whose [[Prototype]] is the
+  // initial %PromisePrototype% yields the initial method. In addition this
+  // protector also guards the negative lookup of "then" on the intrinsic
+  // %ObjectPrototype%, meaning that such lookups are guaranteed to yield
+  // undefined without triggering any side-effects.
+  if (receiver->IsJSPromise() &&
+      isolate->IsInAnyContext(receiver->map().prototype(),
+                              Context::PROMISE_PROTOTYPE_INDEX) &&
+      Protectors::IsPromiseThenLookupChainIntact(isolate)) {
     // We can skip the "then" lookup on {resolution} if its [[Prototype]]
     // is the (initial) Promise.prototype and the Promise#then protector
     // is intact, as that guards the lookup path for the "then" property
     // on JSPromise instances which have the (initial) %PromisePrototype%.
     then = isolate->promise_then();
   } else {
-    then =
-        JSReceiver::GetProperty(isolate, Handle<JSReceiver>::cast(resolution),
-                                isolate->factory()->then_string());
+    then = JSReceiver::GetProperty(isolate, receiver,
+                                   isolate->factory()->then_string());
   }
 
   // 9. If then is an abrupt completion, then
@@ -6153,27 +6118,40 @@ bool JSRegExp::ShouldProduceBytecode() {
 }
 
 // An irregexp is considered to be marked for tier up if the tier-up ticks value
-// is not zero. An atom is not subject to tier-up implementation, so the tier-up
-// ticks value is not set.
+// reaches zero. An atom is not subject to tier-up implementation, so the
+// tier-up ticks value is not set.
 bool JSRegExp::MarkedForTierUp() {
   DCHECK(data().IsFixedArray());
-  if (TypeTag() == JSRegExp::ATOM) {
+  if (TypeTag() == JSRegExp::ATOM || !FLAG_regexp_tier_up) {
     return false;
   }
-  return Smi::ToInt(DataAt(kIrregexpTierUpTicksIndex)) != 0;
+  return Smi::ToInt(DataAt(kIrregexpTicksUntilTierUpIndex)) == 0;
 }
 
-void JSRegExp::ResetTierUp() {
+void JSRegExp::ResetLastTierUpTick() {
   DCHECK(FLAG_regexp_tier_up);
   DCHECK_EQ(TypeTag(), JSRegExp::IRREGEXP);
-  FixedArray::cast(data()).set(JSRegExp::kIrregexpTierUpTicksIndex, Smi::kZero);
+  int tier_up_ticks = Smi::ToInt(DataAt(kIrregexpTicksUntilTierUpIndex)) + 1;
+  FixedArray::cast(data()).set(JSRegExp::kIrregexpTicksUntilTierUpIndex,
+                               Smi::FromInt(tier_up_ticks));
+}
+
+void JSRegExp::TierUpTick() {
+  DCHECK(FLAG_regexp_tier_up);
+  DCHECK_EQ(TypeTag(), JSRegExp::IRREGEXP);
+  int tier_up_ticks = Smi::ToInt(DataAt(kIrregexpTicksUntilTierUpIndex));
+  if (tier_up_ticks == 0) {
+    return;
+  }
+  FixedArray::cast(data()).set(JSRegExp::kIrregexpTicksUntilTierUpIndex,
+                               Smi::FromInt(tier_up_ticks - 1));
 }
 
 void JSRegExp::MarkTierUpForNextExec() {
   DCHECK(FLAG_regexp_tier_up);
   DCHECK_EQ(TypeTag(), JSRegExp::IRREGEXP);
-  FixedArray::cast(data()).set(JSRegExp::kIrregexpTierUpTicksIndex,
-                               Smi::FromInt(1));
+  FixedArray::cast(data()).set(JSRegExp::kIrregexpTicksUntilTierUpIndex,
+                               Smi::kZero);
 }
 
 namespace {
@@ -6940,7 +6918,7 @@ void AddToFeedbackCellsMap(Handle<CompilationCacheTable> cache, int cache_entry,
     if (entry < 0) {
       // Copy old optimized code map and append one new entry.
       new_literals_map = isolate->factory()->CopyWeakFixedArrayAndGrow(
-          old_literals_map, kLiteralEntryLength, AllocationType::kOld);
+          old_literals_map, kLiteralEntryLength);
       entry = old_literals_map->length();
     }
   }

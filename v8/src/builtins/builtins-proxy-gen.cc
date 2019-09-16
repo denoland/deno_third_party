@@ -14,7 +14,7 @@
 namespace v8 {
 namespace internal {
 
-compiler::TNode<JSProxy> ProxiesCodeStubAssembler::AllocateProxy(
+TNode<JSProxy> ProxiesCodeStubAssembler::AllocateProxy(
     TNode<Context> context, TNode<JSReceiver> target,
     TNode<JSReceiver> handler) {
   VARIABLE(map, MachineRepresentation::kTagged);
@@ -80,7 +80,7 @@ Node* ProxiesCodeStubAssembler::AllocateJSArrayForCodeStubArguments(
 
     GotoIf(SmiGreaterThan(length, SmiConstant(FixedArray::kMaxRegularLength)),
            &if_large_object);
-    args.ForEach(list, [=, &offset](Node* arg) {
+    args.ForEach(list, [&](TNode<Object> arg) {
       StoreNoWriteBarrier(MachineRepresentation::kTagged, allocated_elements,
                           offset.value(), arg);
       Increment(&offset, kTaggedSize);
@@ -89,7 +89,7 @@ Node* ProxiesCodeStubAssembler::AllocateJSArrayForCodeStubArguments(
 
     BIND(&if_large_object);
     {
-      args.ForEach(list, [=, &offset](Node* arg) {
+      args.ForEach(list, [&](TNode<Object> arg) {
         Store(allocated_elements, offset.value(), arg);
         Increment(&offset, kTaggedSize);
       });
@@ -124,9 +124,8 @@ Node* ProxiesCodeStubAssembler::CreateProxyRevokeFunctionContext(
   return context;
 }
 
-compiler::TNode<JSFunction>
-ProxiesCodeStubAssembler::AllocateProxyRevokeFunction(TNode<Context> context,
-                                                      TNode<JSProxy> proxy) {
+TNode<JSFunction> ProxiesCodeStubAssembler::AllocateProxyRevokeFunction(
+    TNode<Context> context, TNode<JSProxy> proxy) {
   TNode<NativeContext> const native_context = LoadNativeContext(context);
 
   Node* const proxy_context =

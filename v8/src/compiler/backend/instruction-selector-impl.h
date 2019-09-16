@@ -29,8 +29,8 @@ inline bool operator<(const CaseInfo& l, const CaseInfo& r) {
 // Helper struct containing data about a table or lookup switch.
 class SwitchInfo {
  public:
-  SwitchInfo(ZoneVector<CaseInfo>& cases,  // NOLINT(runtime/references)
-             int32_t min_value, int32_t max_value, BasicBlock* default_branch)
+  SwitchInfo(ZoneVector<CaseInfo> const& cases, int32_t min_value,
+             int32_t max_value, BasicBlock* default_branch)
       : cases_(cases),
         min_value_(min_value),
         max_value_(max_value),
@@ -191,17 +191,6 @@ class OperandGenerator {
   InstructionOperand UseFixed(Node* node, FPRegType reg) {
     return Use(node, UnallocatedOperand(UnallocatedOperand::FIXED_FP_REGISTER,
                                         reg.code(), GetVReg(node)));
-  }
-
-  InstructionOperand UseExplicit(LinkageLocation location) {
-    MachineRepresentation rep = InstructionSequence::DefaultRepresentation();
-    if (location.IsRegister()) {
-      return ExplicitOperand(LocationOperand::REGISTER, rep,
-                             location.AsRegister());
-    } else {
-      return ExplicitOperand(LocationOperand::STACK_SLOT, rep,
-                             location.GetLocation());
-    }
   }
 
   InstructionOperand UseImmediate(int immediate) {

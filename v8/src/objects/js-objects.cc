@@ -1094,8 +1094,7 @@ Maybe<bool> SetPropertyWithInterceptorInternal(
 
 Maybe<bool> DefinePropertyWithInterceptorInternal(
     LookupIterator* it, Handle<InterceptorInfo> interceptor,
-    Maybe<ShouldThrow> should_throw,
-    PropertyDescriptor& desc) {  // NOLINT(runtime/references)
+    Maybe<ShouldThrow> should_throw, PropertyDescriptor* desc) {
   Isolate* isolate = it->isolate();
   // Make sure that the top context does not change when doing callbacks or
   // interceptor calls.
@@ -1116,23 +1115,23 @@ Maybe<bool> DefinePropertyWithInterceptorInternal(
 
   std::unique_ptr<v8::PropertyDescriptor> descriptor(
       new v8::PropertyDescriptor());
-  if (PropertyDescriptor::IsAccessorDescriptor(&desc)) {
+  if (PropertyDescriptor::IsAccessorDescriptor(desc)) {
     descriptor.reset(new v8::PropertyDescriptor(
-        v8::Utils::ToLocal(desc.get()), v8::Utils::ToLocal(desc.set())));
-  } else if (PropertyDescriptor::IsDataDescriptor(&desc)) {
-    if (desc.has_writable()) {
+        v8::Utils::ToLocal(desc->get()), v8::Utils::ToLocal(desc->set())));
+  } else if (PropertyDescriptor::IsDataDescriptor(desc)) {
+    if (desc->has_writable()) {
       descriptor.reset(new v8::PropertyDescriptor(
-          v8::Utils::ToLocal(desc.value()), desc.writable()));
+          v8::Utils::ToLocal(desc->value()), desc->writable()));
     } else {
       descriptor.reset(
-          new v8::PropertyDescriptor(v8::Utils::ToLocal(desc.value())));
+          new v8::PropertyDescriptor(v8::Utils::ToLocal(desc->value())));
     }
   }
-  if (desc.has_enumerable()) {
-    descriptor->set_enumerable(desc.enumerable());
+  if (desc->has_enumerable()) {
+    descriptor->set_enumerable(desc->enumerable());
   }
-  if (desc.has_configurable()) {
-    descriptor->set_configurable(desc.configurable());
+  if (desc->has_configurable()) {
+    descriptor->set_configurable(desc->configurable());
   }
 
   if (it->IsElement()) {
@@ -1166,7 +1165,7 @@ Maybe<bool> JSReceiver::OrdinaryDefineOwnProperty(
     if (it->state() == LookupIterator::INTERCEPTOR) {
       if (it->HolderIsReceiverOrHiddenPrototype()) {
         Maybe<bool> result = DefinePropertyWithInterceptorInternal(
-            it, it->GetInterceptor(), should_throw, *desc);
+            it, it->GetInterceptor(), should_throw, desc);
         if (result.IsNothing() || result.FromJust()) {
           return result;
         }
@@ -2796,7 +2795,6 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
           index, HeapNumber::cast(value).value_as_bits());
       if (i < old_number_of_fields && !old_map->IsUnboxedDoubleField(index)) {
         // Transition from tagged to untagged slot.
-        heap->ClearRecordedSlot(*object, object->RawField(index.offset()));
         MemoryChunk* chunk = MemoryChunk::FromHeapObject(*object);
         chunk->InvalidateRecordedSlots(*object);
       } else {
@@ -3355,8 +3353,8 @@ void JSObject::MigrateSlowToFast(Handle<JSObject> object,
   }
 
   // Allocate the instance descriptor.
-  Handle<DescriptorArray> descriptors = DescriptorArray::Allocate(
-      isolate, instance_descriptor_length, 0, AllocationType::kOld);
+  Handle<DescriptorArray> descriptors =
+      DescriptorArray::Allocate(isolate, instance_descriptor_length, 0);
 
   int number_of_allocated_fields =
       number_of_fields + unused_property_fields - inobject_props;

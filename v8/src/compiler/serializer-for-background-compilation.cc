@@ -1969,20 +1969,32 @@ void SerializerForBackgroundCompilation::ProcessBuiltinCall(
     case Builtins::kPromiseResolveTrampoline:
       // For JSCallReducer::ReducePromiseInternalResolve and
       // JSNativeContextSpecialization::ReduceJSResolvePromise.
-      if (arguments.size() >= 2) {
-        Hints const& resolution_hints = arguments[1];
+      // TODO(mslekova): Check if this condition is redundant.
+      if (arguments.size() >= 1) {
+        Hints const& resolution_hints =
+            arguments.size() >= 2
+                ? arguments[1]
+                : Hints::SingleConstant(
+                      broker()->isolate()->factory()->undefined_value(),
+                      zone());
         ProcessHintsForPromiseResolve(resolution_hints);
       }
       break;
     case Builtins::kPromiseInternalResolve:
       // For JSCallReducer::ReducePromiseInternalResolve and
       // JSNativeContextSpecialization::ReduceJSResolvePromise.
-      if (arguments.size() >= 3) {
-        Hints const& resolution_hints = arguments[2];
+      if (arguments.size() >= 2) {
+        Hints const& resolution_hints =
+            arguments.size() >= 3
+                ? arguments[2]
+                : Hints::SingleConstant(
+                      broker()->isolate()->factory()->undefined_value(),
+                      zone());
         ProcessHintsForPromiseResolve(resolution_hints);
       }
       break;
     case Builtins::kRegExpPrototypeTest:
+    case Builtins::kRegExpPrototypeTestFast:
       // For JSCallReducer::ReduceRegExpPrototypeTest.
       if (arguments.size() >= 1 &&
           speculation_mode != SpeculationMode::kDisallowSpeculation) {
@@ -2487,8 +2499,13 @@ SerializerForBackgroundCompilation::ProcessMapForNamedPropertyAccess(
 
   // For JSNativeContextSpecialization::ReduceNamedAccess.
   if (receiver_map.IsMapOfTargetGlobalProxy()) {
-    broker()->target_native_context().global_proxy_object().GetPropertyCell(
+    JSGlobalProxyRef global_proxy =
+        broker()->target_native_context().global_proxy_object();
+    base::Optional<PropertyCellRef> cell = global_proxy.GetPropertyCell(
         name, SerializationPolicy::kSerializeIfNeeded);
+    if (access_mode == AccessMode::kLoad && cell.has_value()) {
+      new_accumulator_hints->AddConstant(cell->value().object());
+    }
   }
 
   PropertyAccessInfo access_info = broker()->GetPropertyAccessInfo(
@@ -2521,6 +2538,10 @@ SerializerForBackgroundCompilation::ProcessMapForNamedPropertyAccess(
       FunctionTemplateInfoRef fti(broker(), access_info.constant());
       if (fti.has_call_code()) fti.SerializeCallCode();
     }
+  } else if (access_info.IsModuleExport()) {
+    // For JSNativeContextSpecialization::BuildPropertyLoad
+    DCHECK(!access_info.constant().is_null());
+    CellRef(broker(), access_info.constant());
   }
 
   // For PropertyAccessBuilder::TryBuildLoadConstantDataField
@@ -2641,8 +2662,6 @@ void SerializerForBackgroundCompilation::ProcessNamedAccess(
                                      base::nullopt, new_accumulator_hints);
   }
 
-  JSGlobalProxyRef global_proxy =
-      broker()->target_native_context().global_proxy_object();
   for (Handle<Object> hint : receiver.constants()) {
     ObjectRef object(broker(), hint);
     if (access_mode == AccessMode::kLoad && object.IsJSObject()) {
@@ -2650,13 +2669,6 @@ void SerializerForBackgroundCompilation::ProcessNamedAccess(
       ProcessMapForNamedPropertyAccess(map_ref, feedback.name(), access_mode,
                                        object.AsJSObject(),
                                        new_accumulator_hints);
-    }
-    // For JSNativeContextSpecialization::ReduceNamedAccessFromNexus.
-    if (object.equals(global_proxy)) {
-      // TODO(neis): Record accumulator hint? Also for string.length and maybe
-      // more.
-      global_proxy.GetPropertyCell(feedback.name(),
-                                   SerializationPolicy::kSerializeIfNeeded);
     }
     // For JSNativeContextSpecialization::ReduceJSLoadNamed.
     if (access_mode == AccessMode::kLoad && object.IsJSFunction() &&
@@ -2668,6 +2680,8 @@ void SerializerForBackgroundCompilation::ProcessNamedAccess(
         new_accumulator_hints->AddConstant(function.prototype().object());
       }
     }
+    // TODO(neis): Also record accumulator hint for string.length and maybe
+    // more?
   }
 }
 

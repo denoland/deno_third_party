@@ -22,8 +22,6 @@ namespace interpreter {
 
 using compiler::CodeAssemblerState;
 using compiler::Node;
-template <class T>
-using TNode = compiler::TNode<T>;
 
 InterpreterAssembler::InterpreterAssembler(CodeAssemblerState* state,
                                            Bytecode bytecode,
@@ -208,8 +206,9 @@ void InterpreterAssembler::GotoIfHasContextExtensionUpToDepth(
   TVARIABLE(Context, cur_context, context);
   TVARIABLE(Uint32T, cur_depth, depth);
 
-  Variable* context_search_loop_variables[2] = {&cur_depth, &cur_context};
-  Label context_search(this, 2, context_search_loop_variables);
+  VariableList context_search_loop_variables({&cur_depth, &cur_context},
+                                             zone());
+  Label context_search(this, context_search_loop_variables);
 
   // Loop until the depth is 0.
   Goto(&context_search);
@@ -931,12 +930,10 @@ TNode<Object> InterpreterAssembler::Construct(
       Branch(TaggedEqual(target, array_function), &create_allocation_site,
              &store_weak_reference);
 
-      TNode<IntPtrT> slot_id_int_ptr = Signed(slot_id);
-
       BIND(&create_allocation_site);
       {
-        var_site = CreateAllocationSiteInFeedbackVector(
-            feedback_vector, SmiTag(slot_id_int_ptr));
+        var_site =
+            CreateAllocationSiteInFeedbackVector(feedback_vector, slot_id);
         ReportFeedbackUpdate(feedback_vector, slot_id,
                              "Construct:CreateAllocationSite");
         Goto(&construct_array);
@@ -944,7 +941,7 @@ TNode<Object> InterpreterAssembler::Construct(
 
       BIND(&store_weak_reference);
       {
-        StoreWeakReferenceInFeedbackVector(feedback_vector, slot_id_int_ptr,
+        StoreWeakReferenceInFeedbackVector(feedback_vector, slot_id,
                                            CAST(new_target));
         ReportFeedbackUpdate(feedback_vector, slot_id,
                              "Construct:StoreWeakReference");
@@ -1628,8 +1625,8 @@ void InterpreterAssembler::ToNumberOrNumeric(Object::Conversion mode) {
   TNode<Object> object = GetAccumulator();
   TNode<Context> context = GetContext();
 
-  Variable var_type_feedback(this, MachineRepresentation::kTaggedSigned);
-  Variable var_result(this, MachineRepresentation::kTagged);
+  TVARIABLE(Smi, var_type_feedback);
+  TVARIABLE(Numeric, var_result);
   Label if_done(this), if_objectissmi(this), if_objectisheapnumber(this),
       if_objectisother(this, Label::kDeferred);
 
@@ -1638,15 +1635,15 @@ void InterpreterAssembler::ToNumberOrNumeric(Object::Conversion mode) {
 
   BIND(&if_objectissmi);
   {
-    var_result.Bind(object);
-    var_type_feedback.Bind(SmiConstant(BinaryOperationFeedback::kSignedSmall));
+    var_result = CAST(object);
+    var_type_feedback = SmiConstant(BinaryOperationFeedback::kSignedSmall);
     Goto(&if_done);
   }
 
   BIND(&if_objectisheapnumber);
   {
-    var_result.Bind(object);
-    var_type_feedback.Bind(SmiConstant(BinaryOperationFeedback::kNumber));
+    var_result = CAST(object);
+    var_type_feedback = SmiConstant(BinaryOperationFeedback::kNumber);
     Goto(&if_done);
   }
 
@@ -1659,16 +1656,16 @@ void InterpreterAssembler::ToNumberOrNumeric(Object::Conversion mode) {
       Label not_bigint(this);
       GotoIfNot(IsBigInt(CAST(object)), &not_bigint);
       {
-        var_result.Bind(object);
-        var_type_feedback.Bind(SmiConstant(BinaryOperationFeedback::kBigInt));
+        var_result = CAST(object);
+        var_type_feedback = SmiConstant(BinaryOperationFeedback::kBigInt);
         Goto(&if_done);
       }
       BIND(&not_bigint);
     }
 
     // Convert {object} by calling out to the appropriate builtin.
-    var_result.Bind(CallBuiltin(builtin, context, object));
-    var_type_feedback.Bind(SmiConstant(BinaryOperationFeedback::kAny));
+    var_result = CAST(CallBuiltin(builtin, context, object));
+    var_type_feedback = SmiConstant(BinaryOperationFeedback::kAny);
     Goto(&if_done);
   }
 

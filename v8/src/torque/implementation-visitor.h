@@ -5,6 +5,7 @@
 #ifndef V8_TORQUE_IMPLEMENTATION_VISITOR_H_
 #define V8_TORQUE_IMPLEMENTATION_VISITOR_H_
 
+#include <memory>
 #include <string>
 
 #include "src/base/macros.h"
@@ -260,7 +261,7 @@ class BlockBindings {
   void Add(std::string name, T value, bool mark_as_used = false) {
     ReportErrorIfAlreadyBound(name);
     auto binding =
-        base::make_unique<Binding<T>>(manager_, name, std::move(value));
+        std::make_unique<Binding<T>>(manager_, name, std::move(value));
     if (mark_as_used) binding->SetUsed();
     bindings_.push_back(std::move(binding));
   }
@@ -268,7 +269,7 @@ class BlockBindings {
   void Add(const Identifier* name, T value, bool mark_as_used = false) {
     ReportErrorIfAlreadyBound(name->value);
     auto binding =
-        base::make_unique<Binding<T>>(manager_, name, std::move(value));
+        std::make_unique<Binding<T>>(manager_, name, std::move(value));
     if (mark_as_used) binding->SetUsed();
     bindings_.push_back(std::move(binding));
   }
