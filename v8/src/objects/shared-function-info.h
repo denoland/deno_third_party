@@ -5,6 +5,8 @@
 #ifndef V8_OBJECTS_SHARED_FUNCTION_INFO_H_
 #define V8_OBJECTS_SHARED_FUNCTION_INFO_H_
 
+#include <memory>
+
 #include "src/codegen/bailout-reason.h"
 #include "src/objects/compressed-slots.h"
 #include "src/objects/function-kind.h"
@@ -600,21 +602,6 @@ class SharedFunctionInfo : public HeapObject {
     Handle<WeakFixedArray> shared_function_infos_;
     int index_;
     DISALLOW_COPY_AND_ASSIGN(ScriptIterator);
-  };
-
-  // Iterate over all shared function infos on the heap.
-  class GlobalIterator {
-   public:
-    V8_EXPORT_PRIVATE explicit GlobalIterator(Isolate* isolate);
-    V8_EXPORT_PRIVATE SharedFunctionInfo Next();
-
-   private:
-    Isolate* isolate_;
-    Script::Iterator script_iterator_;
-    WeakArrayList::Iterator noscript_sfi_iterator_;
-    SharedFunctionInfo::ScriptIterator sfi_iterator_;
-    DISALLOW_HEAP_ALLOCATION(no_gc_)
-    DISALLOW_COPY_AND_ASSIGN(GlobalIterator);
   };
 
   DECL_CAST(SharedFunctionInfo)

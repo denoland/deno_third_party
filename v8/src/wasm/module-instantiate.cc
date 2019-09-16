@@ -1185,13 +1185,8 @@ bool InstanceBuilder::ProcessImportedGlobal(Handle<WasmInstanceObject> instance,
     return true;
   }
 
-  if (enabled_.bigint && global.type == kWasmI64) {
-    Handle<BigInt> bigint;
-
-    if (!BigInt::FromObject(isolate_, value).ToHandle(&bigint)) {
-      return false;
-    }
-    WriteGlobalValue(global, bigint->AsInt64());
+  if (enabled_.bigint && global.type == kWasmI64 && value->IsBigInt()) {
+    WriteGlobalValue(global, BigInt::cast(*value).AsInt64());
     return true;
   }
 
@@ -1240,7 +1235,7 @@ void InstanceBuilder::CompileImportWrappers(
   CancelableTaskManager task_manager;
   const int max_background_tasks = GetMaxBackgroundTasks();
   for (int i = 0; i < max_background_tasks; ++i) {
-    auto task = base::make_unique<CompileImportWrapperTask>(
+    auto task = std::make_unique<CompileImportWrapperTask>(
         &task_manager, isolate_->wasm_engine(), isolate_->counters(),
         native_module, &import_wrapper_queue, &cache_scope);
     V8::GetCurrentPlatform()->CallOnWorkerThread(std::move(task));

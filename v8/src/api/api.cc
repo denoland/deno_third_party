@@ -2613,7 +2613,7 @@ ScriptCompiler::ScriptStreamingTask* ScriptCompiler::StartStreamingScript(
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(v8_isolate);
   i::ScriptStreamingData* data = source->impl();
   std::unique_ptr<i::BackgroundCompileTask> task =
-      base::make_unique<i::BackgroundCompileTask>(data, isolate);
+      std::make_unique<i::BackgroundCompileTask>(data, isolate);
   data->task = std::move(task);
   return new ScriptCompiler::ScriptStreamingTask(data);
 }
@@ -8350,6 +8350,15 @@ bool Isolate::GetHeapCodeAndMetadataStatistics(
   return true;
 }
 
+v8::MaybeLocal<v8::Promise> Isolate::MeasureMemory(
+    v8::Local<v8::Context> context, MeasureMemoryMode mode) {
+  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
+  i::Handle<i::NativeContext> native_context =
+      handle(Utils::OpenHandle(*context)->native_context(), isolate);
+  return v8::Utils::PromiseToLocal(
+      isolate->heap()->MeasureMemory(native_context, mode));
+}
+
 void Isolate::GetStackSample(const RegisterState& state, void** frames,
                              size_t frames_limit, SampleInfo* sample_info) {
   RegisterState regs = state;
@@ -10048,10 +10057,6 @@ void CpuProfiler::SetUsePreciseSampling(bool use_precise_sampling) {
       use_precise_sampling);
 }
 
-void CpuProfiler::CollectSample() {
-  reinterpret_cast<i::CpuProfiler*>(this)->CollectSample();
-}
-
 void CpuProfiler::StartProfiling(Local<String> title,
                                  CpuProfilingOptions options) {
   reinterpret_cast<i::CpuProfiler*>(this)->StartProfiling(
@@ -10077,12 +10082,6 @@ CpuProfile* CpuProfiler::StopProfiling(Local<String> title) {
   return reinterpret_cast<CpuProfile*>(
       reinterpret_cast<i::CpuProfiler*>(this)->StopProfiling(
           *Utils::OpenHandle(*title)));
-}
-
-void CpuProfiler::SetIdle(bool is_idle) {
-  i::CpuProfiler* profiler = reinterpret_cast<i::CpuProfiler*>(this);
-  i::Isolate* isolate = profiler->isolate();
-  isolate->SetIdle(is_idle);
 }
 
 void CpuProfiler::UseDetailedSourcePositionsForProfiling(Isolate* isolate) {

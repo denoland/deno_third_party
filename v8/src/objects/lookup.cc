@@ -4,6 +4,7 @@
 
 #include "src/objects/lookup.h"
 
+#include "include/v8config.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/execution/isolate-inl.h"
 #include "src/execution/protectors-inl.h"
@@ -248,7 +249,7 @@ void LookupIterator::InternalUpdateProtector() {
     }
 
     if (!Protectors::IsArraySpeciesLookupChainIntact(isolate_) &&
-        !isolate_->IsPromiseSpeciesLookupChainIntact() &&
+        !Protectors::IsPromiseSpeciesLookupChainIntact(isolate_) &&
         !Protectors::IsRegExpSpeciesLookupChainProtectorIntact(
             native_context) &&
         !Protectors::IsTypedArraySpeciesLookupChainIntact(isolate_)) {
@@ -262,8 +263,8 @@ void LookupIterator::InternalUpdateProtector() {
       Protectors::InvalidateArraySpeciesLookupChain(isolate_);
       return;
     } else if (receiver->IsJSPromise(isolate_)) {
-      if (!isolate_->IsPromiseSpeciesLookupChainIntact()) return;
-      isolate_->InvalidatePromiseSpeciesProtector();
+      if (!Protectors::IsPromiseSpeciesLookupChainIntact(isolate_)) return;
+      Protectors::InvalidatePromiseSpeciesLookupChain(isolate_);
       return;
     } else if (receiver->IsJSRegExp(isolate_)) {
       if (!Protectors::IsRegExpSpeciesLookupChainProtectorIntact(
@@ -293,8 +294,8 @@ void LookupIterator::InternalUpdateProtector() {
         Protectors::InvalidateArraySpeciesLookupChain(isolate_);
       } else if (isolate_->IsInAnyContext(*receiver,
                                           Context::PROMISE_PROTOTYPE_INDEX)) {
-        if (!isolate_->IsPromiseSpeciesLookupChainIntact()) return;
-        isolate_->InvalidatePromiseSpeciesProtector();
+        if (!Protectors::IsPromiseSpeciesLookupChainIntact(isolate_)) return;
+        Protectors::InvalidatePromiseSpeciesLookupChain(isolate_);
       } else if (isolate_->IsInAnyContext(*receiver,
                                           Context::REGEXP_PROTOTYPE_INDEX)) {
         if (!Protectors::IsRegExpSpeciesLookupChainProtectorIntact(
@@ -344,7 +345,7 @@ void LookupIterator::InternalUpdateProtector() {
     }
 
     if (!Protectors::IsArraySpeciesLookupChainIntact(isolate_) &&
-        !isolate_->IsPromiseSpeciesLookupChainIntact() &&
+        !Protectors::IsPromiseSpeciesLookupChainIntact(isolate_) &&
         !Protectors::IsRegExpSpeciesLookupChainProtectorIntact(
             native_context) &&
         !Protectors::IsTypedArraySpeciesLookupChainIntact(isolate_)) {
@@ -359,8 +360,8 @@ void LookupIterator::InternalUpdateProtector() {
       Protectors::InvalidateArraySpeciesLookupChain(isolate_);
     } else if (isolate_->IsInAnyContext(*receiver,
                                         Context::PROMISE_FUNCTION_INDEX)) {
-      if (!isolate_->IsPromiseSpeciesLookupChainIntact()) return;
-      isolate_->InvalidatePromiseSpeciesProtector();
+      if (!Protectors::IsPromiseSpeciesLookupChainIntact(isolate_)) return;
+      Protectors::InvalidatePromiseSpeciesLookupChain(isolate_);
     } else if (isolate_->IsInAnyContext(*receiver,
                                         Context::REGEXP_FUNCTION_INDEX)) {
       if (!Protectors::IsRegExpSpeciesLookupChainProtectorIntact(
@@ -419,7 +420,7 @@ void LookupIterator::InternalUpdateProtector() {
       isolate_->InvalidatePromiseResolveProtector();
     }
   } else if (*name_ == roots.then_string()) {
-    if (!isolate_->IsPromiseThenLookupChainIntact()) return;
+    if (!Protectors::IsPromiseThenLookupChainIntact(isolate_)) return;
     // Setting the "then" property on any JSPromise instance or on the
     // initial %PromisePrototype% invalidates the Promise#then protector.
     // Also setting the "then" property on the initial %ObjectPrototype%
@@ -431,7 +432,7 @@ void LookupIterator::InternalUpdateProtector() {
         isolate_->IsInAnyContext(*receiver,
                                  Context::INITIAL_OBJECT_PROTOTYPE_INDEX) ||
         isolate_->IsInAnyContext(*receiver, Context::PROMISE_PROTOTYPE_INDEX)) {
-      isolate_->InvalidatePromiseThenProtector();
+      Protectors::InvalidatePromiseThenLookupChain(isolate_);
     }
   }
 }
@@ -978,7 +979,12 @@ Handle<Map> LookupIterator::GetFieldOwnerMap() const {
                 isolate_);
 }
 
-FieldIndex LookupIterator::GetFieldIndex() const {
+#if defined(__clang__) && defined(V8_OS_WIN)
+// Force function alignment to work around CPU bug: https://crbug.com/968683
+__attribute__((__aligned__(32)))
+#endif
+FieldIndex
+LookupIterator::GetFieldIndex() const {
   DCHECK(has_property_);
   DCHECK(holder_->HasFastProperties(isolate_));
   DCHECK_EQ(kField, property_details_.location());

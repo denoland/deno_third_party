@@ -616,17 +616,17 @@ void Heap::CreateInitialObjects() {
 
   // The -0 value must be set before NewNumber works.
   set_minus_zero_value(
-      *factory->NewHeapNumber(-0.0, AllocationType::kReadOnly));
+      *factory->NewHeapNumber<AllocationType::kReadOnly>(-0.0));
   DCHECK(std::signbit(roots.minus_zero_value().Number()));
 
-  set_nan_value(*factory->NewHeapNumber(
-      std::numeric_limits<double>::quiet_NaN(), AllocationType::kReadOnly));
-  set_hole_nan_value(*factory->NewHeapNumberFromBits(
-      kHoleNanInt64, AllocationType::kReadOnly));
+  set_nan_value(*factory->NewHeapNumber<AllocationType::kReadOnly>(
+      std::numeric_limits<double>::quiet_NaN()));
+  set_hole_nan_value(*factory->NewHeapNumberFromBits<AllocationType::kReadOnly>(
+      kHoleNanInt64));
   set_infinity_value(
-      *factory->NewHeapNumber(V8_INFINITY, AllocationType::kReadOnly));
+      *factory->NewHeapNumber<AllocationType::kReadOnly>(V8_INFINITY));
   set_minus_infinity_value(
-      *factory->NewHeapNumber(-V8_INFINITY, AllocationType::kReadOnly));
+      *factory->NewHeapNumber<AllocationType::kReadOnly>(-V8_INFINITY));
 
   set_hash_seed(*factory->NewByteArray(kInt64Size, AllocationType::kReadOnly));
   InitializeHashSeed();
@@ -704,8 +704,7 @@ void Heap::CreateInitialObjects() {
                            Oddball::kStaleRegister));
 
   // Initialize the self-reference marker.
-  set_self_reference_marker(
-      *factory->NewSelfReferenceMarker(AllocationType::kReadOnly));
+  set_self_reference_marker(*factory->NewSelfReferenceMarker());
 
   set_interpreter_entry_trampoline_for_profiling(roots.undefined_value());
 
@@ -840,9 +839,12 @@ void Heap::CreateInitialObjects() {
   script->set_origin_options(ScriptOriginOptions(true, false));
   set_empty_script(*script);
 
-  Handle<Cell> array_constructor_cell = factory->NewCell(
-      handle(Smi::FromInt(Isolate::kProtectorValid), isolate()));
-  set_array_constructor_protector(*array_constructor_cell);
+  {
+    Handle<PropertyCell> cell =
+        factory->NewPropertyCell(factory->empty_string());
+    cell->set_value(Smi::FromInt(Isolate::kProtectorValid));
+    set_array_constructor_protector(*cell);
+  }
 
   Handle<PropertyCell> cell = factory->NewPropertyCell(factory->empty_string());
   cell->set_value(Smi::FromInt(Isolate::kProtectorValid));
@@ -907,8 +909,6 @@ void Heap::CreateInitialObjects() {
 
   set_serialized_objects(roots.empty_fixed_array());
   set_serialized_global_proxy_sizes(roots.empty_fixed_array());
-
-  set_noscript_shared_function_infos(roots.empty_weak_array_list());
 
   /* Canonical off-heap trampoline data */
   set_off_heap_trampoline_relocation_info(

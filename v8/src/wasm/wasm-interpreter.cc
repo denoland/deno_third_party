@@ -2317,8 +2317,10 @@ class ThreadImpl {
   }
       UNOP_CASE(F64x2Abs, f64x2, float2, 2, std::abs(a))
       UNOP_CASE(F64x2Neg, f64x2, float2, 2, -a)
+      UNOP_CASE(F64x2Sqrt, f64x2, float2, 2, std::sqrt(a))
       UNOP_CASE(F32x4Abs, f32x4, float4, 4, std::abs(a))
       UNOP_CASE(F32x4Neg, f32x4, float4, 4, -a)
+      UNOP_CASE(F32x4Sqrt, f32x4, float4, 4, std::sqrt(a))
       UNOP_CASE(F32x4RecipApprox, f32x4, float4, 4, base::Recip(a))
       UNOP_CASE(F32x4RecipSqrtApprox, f32x4, float4, 4, base::RecipSqrt(a))
       UNOP_CASE(I64x2Neg, i64x2, int2, 2, base::NegateWithWraparound(a))
@@ -2448,19 +2450,26 @@ class ThreadImpl {
     Push(WasmValue(Simd128(res)));               \
     return true;                                 \
   }
-        SHIFT_CASE(I64x2Shl, i64x2, int2, 2, static_cast<uint64_t>(a) << shift)
-        SHIFT_CASE(I64x2ShrS, i64x2, int2, 2, a >> shift)
-        SHIFT_CASE(I64x2ShrU, i64x2, int2, 2, static_cast<uint64_t>(a) >> shift)
-        SHIFT_CASE(I32x4Shl, i32x4, int4, 4, static_cast<uint32_t>(a) << shift)
-        SHIFT_CASE(I32x4ShrS, i32x4, int4, 4, a >> shift)
-        SHIFT_CASE(I32x4ShrU, i32x4, int4, 4, static_cast<uint32_t>(a) >> shift)
-        SHIFT_CASE(I16x8Shl, i16x8, int8, 8, static_cast<uint16_t>(a) << shift)
-        SHIFT_CASE(I16x8ShrS, i16x8, int8, 8, a >> shift)
-        SHIFT_CASE(I16x8ShrU, i16x8, int8, 8, static_cast<uint16_t>(a) >> shift)
-        SHIFT_CASE(I8x16Shl, i8x16, int16, 16, static_cast<uint8_t>(a) << shift)
-        SHIFT_CASE(I8x16ShrS, i8x16, int16, 16, a >> shift)
+        SHIFT_CASE(I64x2Shl, i64x2, int2, 2,
+                   static_cast<uint64_t>(a) << (shift % 64))
+        SHIFT_CASE(I64x2ShrS, i64x2, int2, 2, a >> (shift % 64))
+        SHIFT_CASE(I64x2ShrU, i64x2, int2, 2,
+                   static_cast<uint64_t>(a) >> (shift % 64))
+        SHIFT_CASE(I32x4Shl, i32x4, int4, 4,
+                   static_cast<uint32_t>(a) << (shift % 32))
+        SHIFT_CASE(I32x4ShrS, i32x4, int4, 4, a >> (shift % 32))
+        SHIFT_CASE(I32x4ShrU, i32x4, int4, 4,
+                   static_cast<uint32_t>(a) >> (shift % 32))
+        SHIFT_CASE(I16x8Shl, i16x8, int8, 8,
+                   static_cast<uint16_t>(a) << (shift % 16))
+        SHIFT_CASE(I16x8ShrS, i16x8, int8, 8, a >> (shift % 16))
+        SHIFT_CASE(I16x8ShrU, i16x8, int8, 8,
+                   static_cast<uint16_t>(a) >> (shift % 16))
+        SHIFT_CASE(I8x16Shl, i8x16, int16, 16,
+                   static_cast<uint8_t>(a) << (shift % 8))
+        SHIFT_CASE(I8x16ShrS, i8x16, int16, 16, a >> (shift % 8))
         SHIFT_CASE(I8x16ShrU, i8x16, int16, 16,
-                   static_cast<uint8_t>(a) >> shift)
+                   static_cast<uint8_t>(a) >> (shift % 8))
 #undef SHIFT_CASE
 #define CONVERT_CASE(op, src_type, name, dst_type, count, start_index, ctype, \
                      expr)                                                    \
@@ -3770,7 +3779,8 @@ class ThreadImpl {
   static WasmCode* GetTargetCode(Isolate* isolate, Address target) {
     WasmCodeManager* code_manager = isolate->wasm_engine()->code_manager();
     NativeModule* native_module = code_manager->LookupNativeModule(target);
-    if (native_module->is_jump_table_slot(target)) {
+    WasmCode* code = native_module->Lookup(target);
+    if (code->kind() == WasmCode::kJumpTable) {
       uint32_t func_index =
           native_module->GetFunctionIndexFromJumpTableSlot(target);
 
@@ -3784,7 +3794,6 @@ class ThreadImpl {
 
       return native_module->GetCode(func_index);
     }
-    WasmCode* code = native_module->Lookup(target);
     DCHECK_EQ(code->instruction_start(), target);
     return code;
   }

@@ -553,14 +553,6 @@ StackFrame::Type StackFrame::ComputeType(const StackFrameIteratorBase* iterator,
           return WASM_EXIT;
         case wasm::WasmCode::kWasmToJsWrapper:
           return WASM_TO_JS;
-        case wasm::WasmCode::kRuntimeStub:
-          // Some stubs, like e.g. {WasmCode::kWasmCompileLazy} build their own
-          // specialized frame which already carries a type marker.
-          // TODO(mstarzinger): This is only needed for the case where embedded
-          // builtins are disabled. It can be removed once all non-embedded
-          // builtins are gone.
-          if (StackFrame::IsTypeMarker(marker)) break;
-          return STUB;
         case wasm::WasmCode::kInterpreterEntry:
           return WASM_INTERPRETER_ENTRY;
         default:
@@ -1271,6 +1263,7 @@ void JavaScriptFrame::CollectFunctionAndOffsetForICStats(JSFunction function,
   if (maybe_script.IsScript()) {
     Script script = Script::cast(maybe_script);
     ic_info.line_num = script.GetLineNumber(source_pos) + 1;
+    ic_info.column_num = script.GetColumnNumber(source_pos);
     ic_info.script_name = ic_stats->GetOrCacheScriptName(script);
   }
 }

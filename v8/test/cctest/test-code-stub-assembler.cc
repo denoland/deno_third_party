@@ -123,6 +123,62 @@ TEST(CallCFunctionWithCallerSavedRegisters) {
   CHECK_EQ(3, Handle<Smi>::cast(result)->value());
 }
 
+TEST(NumberToString) {
+  Isolate* isolate(CcTest::InitIsolateOnce());
+  Factory* factory = isolate->factory();
+
+  const int kNumParams = 1;
+  CodeAssemblerTester asm_tester(isolate, kNumParams);
+  CodeStubAssembler m(asm_tester.state());
+
+  {
+    TNode<Number> input = m.CAST(m.Parameter(0));
+
+    Label bailout(&m);
+    m.Return(m.NumberToString(input, &bailout));
+
+    m.BIND(&bailout);
+    m.Return(m.UndefinedConstant());
+  }
+
+  FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
+
+  // clang-format off
+  double inputs[] = {
+     1, 2, 42, 153, -1, -100, 0, 51095154, -1241950,
+     std::nan("-1"), std::nan("1"), std::nan("2"),
+    -std::numeric_limits<double>::infinity(),
+     std::numeric_limits<double>::infinity(),
+    -0.0, -0.001, -0.5, -0.999, -1.0,
+     0.0,  0.001,  0.5,  0.999,  1.0,
+    -2147483647.9, -2147483648.0, -2147483648.5, -2147483648.9,  // SmiMin.
+     2147483646.9,  2147483647.0,  2147483647.5,  2147483647.9,  // SmiMax.
+    -4294967295.9, -4294967296.0, -4294967296.5, -4294967297.0,  // - 2^32.
+     4294967295.9,  4294967296.0,  4294967296.5,  4294967297.0,  //   2^32.
+  };
+  // clang-format on
+
+  const int kFullCacheSize = isolate->heap()->MaxNumberToStringCacheSize();
+  const int test_count = arraysize(inputs);
+  for (int i = 0; i < test_count; i++) {
+    int cache_length_before_addition = factory->number_string_cache()->length();
+    Handle<Object> input = factory->NewNumber(inputs[i]);
+    Handle<String> expected = factory->NumberToString(input);
+
+    Handle<Object> result = ft.Call(input).ToHandleChecked();
+    if (result->IsUndefined(isolate)) {
+      // Query may fail if cache was resized, in which case the entry is not
+      // added to the cache.
+      CHECK_LT(cache_length_before_addition, kFullCacheSize);
+      CHECK_EQ(factory->number_string_cache()->length(), kFullCacheSize);
+      expected = factory->NumberToString(input);
+      result = ft.Call(input).ToHandleChecked();
+    }
+    CHECK(!result->IsUndefined(isolate));
+    CHECK_EQ(*expected, *result);
+  }
+}
+
 namespace {
 
 void CheckToUint32Result(uint32_t expected, Handle<Object> result) {
@@ -1941,12 +1997,9 @@ TEST(Arguments) {
 
   CodeStubArguments arguments(&m, m.IntPtrConstant(3));
 
-  CSA_ASSERT(
-      &m, m.TaggedEqual(arguments.AtIndex(0), m.SmiConstant(Smi::FromInt(12))));
-  CSA_ASSERT(
-      &m, m.TaggedEqual(arguments.AtIndex(1), m.SmiConstant(Smi::FromInt(13))));
-  CSA_ASSERT(
-      &m, m.TaggedEqual(arguments.AtIndex(2), m.SmiConstant(Smi::FromInt(14))));
+  CSA_ASSERT(&m, m.TaggedEqual(arguments.AtIndex(0), m.SmiConstant(12)));
+  CSA_ASSERT(&m, m.TaggedEqual(arguments.AtIndex(1), m.SmiConstant(13)));
+  CSA_ASSERT(&m, m.TaggedEqual(arguments.AtIndex(2), m.SmiConstant(14)));
 
   arguments.PopAndReturn(arguments.GetReceiver());
 
@@ -1966,21 +2019,14 @@ TEST(ArgumentsWithSmiConstantIndices) {
   CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
 
-  CodeStubArguments arguments(&m, m.SmiConstant(3), nullptr,
-                              CodeStubAssembler::SMI_PARAMETERS);
+  CodeStubArguments arguments(&m, m.SmiConstant(3));
 
-  CSA_ASSERT(&m,
-             m.TaggedEqual(arguments.AtIndex(m.SmiConstant(0),
-                                             CodeStubAssembler::SMI_PARAMETERS),
-                           m.SmiConstant(Smi::FromInt(12))));
-  CSA_ASSERT(&m,
-             m.TaggedEqual(arguments.AtIndex(m.SmiConstant(1),
-                                             CodeStubAssembler::SMI_PARAMETERS),
-                           m.SmiConstant(Smi::FromInt(13))));
-  CSA_ASSERT(&m,
-             m.TaggedEqual(arguments.AtIndex(m.SmiConstant(2),
-                                             CodeStubAssembler::SMI_PARAMETERS),
-                           m.SmiConstant(Smi::FromInt(14))));
+  CSA_ASSERT(&m, m.TaggedEqual(arguments.AtIndex(m.SmiConstant(0)),
+                               m.SmiConstant(12)));
+  CSA_ASSERT(&m, m.TaggedEqual(arguments.AtIndex(m.SmiConstant(1)),
+                               m.SmiConstant(13)));
+  CSA_ASSERT(&m, m.TaggedEqual(arguments.AtIndex(m.SmiConstant(2)),
+                               m.SmiConstant(14)));
 
   arguments.PopAndReturn(arguments.GetReceiver());
 
@@ -2019,21 +2065,14 @@ TEST(ArgumentsWithSmiIndices) {
   CodeAssemblerTester asm_tester(isolate, kNumParams);
   CodeStubAssembler m(asm_tester.state());
 
-  CodeStubArguments arguments(&m, m.SmiConstant(3), nullptr,
-                              CodeStubAssembler::SMI_PARAMETERS);
+  CodeStubArguments arguments(&m, m.SmiConstant(3));
 
-  CSA_ASSERT(&m,
-             m.TaggedEqual(arguments.AtIndex(NonConstantSmi(&m, 0),
-                                             CodeStubAssembler::SMI_PARAMETERS),
-                           m.SmiConstant(Smi::FromInt(12))));
-  CSA_ASSERT(&m,
-             m.TaggedEqual(arguments.AtIndex(NonConstantSmi(&m, 1),
-                                             CodeStubAssembler::SMI_PARAMETERS),
-                           m.SmiConstant(Smi::FromInt(13))));
-  CSA_ASSERT(&m,
-             m.TaggedEqual(arguments.AtIndex(NonConstantSmi(&m, 2),
-                                             CodeStubAssembler::SMI_PARAMETERS),
-                           m.SmiConstant(Smi::FromInt(14))));
+  CSA_ASSERT(&m, m.TaggedEqual(arguments.AtIndex(NonConstantSmi(&m, 0)),
+                               m.SmiConstant(12)));
+  CSA_ASSERT(&m, m.TaggedEqual(arguments.AtIndex(NonConstantSmi(&m, 1)),
+                               m.SmiConstant(13)));
+  CSA_ASSERT(&m, m.TaggedEqual(arguments.AtIndex(NonConstantSmi(&m, 2)),
+                               m.SmiConstant(14)));
 
   arguments.PopAndReturn(arguments.GetReceiver());
 
@@ -2060,7 +2099,7 @@ TEST(ArgumentsForEach) {
 
   sum = m.SmiConstant(0);
 
-  arguments.ForEach(list, [&m, &sum](Node* arg) {
+  arguments.ForEach(list, [&](TNode<Object> arg) {
     sum = m.SmiAdd(sum.value(), m.CAST(arg));
   });
 
@@ -3122,7 +3161,7 @@ TEST(CloneEmptyFixedArray) {
   CodeAssemblerTester asm_tester(isolate, kNumParams);
   {
     CodeStubAssembler m(asm_tester.state());
-    m.Return(m.CloneFixedArray(m.Parameter(0)));
+    m.Return(m.CloneFixedArray(m.CAST(m.Parameter(0))));
   }
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
 
@@ -3139,7 +3178,7 @@ TEST(CloneFixedArray) {
   CodeAssemblerTester asm_tester(isolate, kNumParams);
   {
     CodeStubAssembler m(asm_tester.state());
-    m.Return(m.CloneFixedArray(m.Parameter(0)));
+    m.Return(m.CloneFixedArray(m.CAST(m.Parameter(0))));
   }
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
 
@@ -3161,7 +3200,7 @@ TEST(CloneFixedArrayCOW) {
   CodeAssemblerTester asm_tester(isolate, kNumParams);
   {
     CodeStubAssembler m(asm_tester.state());
-    m.Return(m.CloneFixedArray(m.Parameter(0)));
+    m.Return(m.CloneFixedArray(m.CAST(m.Parameter(0))));
   }
   FunctionTester ft(asm_tester.GenerateCode(), kNumParams);
 

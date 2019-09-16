@@ -230,7 +230,6 @@ namespace internal {
   TFH(StoreInArrayLiteralIC_Slow, StoreWithVector)                             \
   TFH(KeyedLoadIC_SloppyArguments, LoadWithVector)                             \
   TFH(LoadIndexedInterceptorIC, LoadWithVector)                                \
-  TFH(StoreInterceptorIC, StoreWithVector)                                     \
   TFH(KeyedStoreIC_SloppyArguments_Standard, StoreWithVector)                  \
   TFH(KeyedStoreIC_SloppyArguments_GrowNoTransitionHandleCOW, StoreWithVector) \
   TFH(KeyedStoreIC_SloppyArguments_NoTransitionIgnoreOOB, StoreWithVector)     \
@@ -852,20 +851,14 @@ namespace internal {
   TFJ(RegExpPrototypeExec, 1, kReceiver, kString)                              \
   /* https://tc39.github.io/proposal-string-matchall/ */                       \
   TFJ(RegExpPrototypeMatchAll, 1, kReceiver, kString)                          \
-  /* ES #sec-regexp.prototype-@@search */                                      \
-  TFJ(RegExpPrototypeSearch, 1, kReceiver, kString)                            \
   CPP(RegExpPrototypeToString)                                                 \
   CPP(RegExpRightContextGetter)                                                \
                                                                                \
-  /* ES #sec-regexp.prototype-@@split */                                       \
-  TFJ(RegExpPrototypeSplit, SharedFunctionInfo::kDontAdaptArgumentsSentinel)   \
   /* RegExp helpers */                                                         \
   TFS(RegExpExecAtom, kRegExp, kString, kLastIndex, kMatchInfo)                \
   TFS(RegExpExecInternal, kRegExp, kString, kLastIndex, kMatchInfo)            \
   ASM(RegExpInterpreterTrampoline, CCall)                                      \
   TFS(RegExpPrototypeExecSlow, kReceiver, kString)                             \
-  TFS(RegExpSearchFast, kReceiver, kPattern)                                   \
-  TFS(RegExpSplit, kRegExp, kString, kLimit)                                   \
                                                                                \
   /* RegExp String Iterator */                                                 \
   /* https://tc39.github.io/proposal-string-matchall/ */                       \
@@ -1134,7 +1127,14 @@ namespace internal {
   CPP(FinalizationGroupRegister)                                               \
   CPP(FinalizationGroupUnregister)                                             \
   CPP(WeakRefConstructor)                                                      \
-  CPP(WeakRefDeref)
+  CPP(WeakRefDeref)                                                            \
+                                                                               \
+  /* Async modules */                                                          \
+  TFJ(AsyncModuleEvaluate, SharedFunctionInfo::kDontAdaptArgumentsSentinel)    \
+                                                                               \
+  /* CallAsyncModule* are spec anonymyous functions */                         \
+  CPP(CallAsyncModuleFulfilled)                                                \
+  CPP(CallAsyncModuleRejected)
 
 #ifdef V8_INTL_SUPPORT
 #define BUILTIN_LIST_INTL(CPP, TFJ, TFS)                               \

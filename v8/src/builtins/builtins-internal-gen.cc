@@ -18,9 +18,6 @@
 namespace v8 {
 namespace internal {
 
-template <typename T>
-using TNode = compiler::TNode<T>;
-
 // -----------------------------------------------------------------------------
 // Stack checks.
 
@@ -32,12 +29,14 @@ void Builtins::Generate_StackCheck(MacroAssembler* masm) {
 // TurboFan support builtins.
 
 TF_BUILTIN(CopyFastSmiOrObjectElements, CodeStubAssembler) {
-  Node* object = Parameter(Descriptor::kObject);
+  TNode<JSObject> js_object = CAST(Parameter(Descriptor::kObject));
 
   // Load the {object}s elements.
-  TNode<Object> source = LoadObjectField(object, JSObject::kElementsOffset);
-  Node* target = CloneFixedArray(source, ExtractFixedArrayFlag::kFixedArrays);
-  StoreObjectField(object, JSObject::kElementsOffset, target);
+  TNode<FixedArrayBase> source =
+      CAST(LoadObjectField(js_object, JSObject::kElementsOffset));
+  TNode<FixedArrayBase> target =
+      CloneFixedArray(source, ExtractFixedArrayFlag::kFixedArrays);
+  StoreObjectField(js_object, JSObject::kElementsOffset, target);
   Return(target);
 }
 
@@ -719,11 +718,11 @@ TF_BUILTIN(SetDataProperties, SetOrCopyDataPropertiesAssembler) {
 }
 
 TF_BUILTIN(ForInEnumerate, CodeStubAssembler) {
-  Node* receiver = Parameter(Descriptor::kReceiver);
-  Node* context = Parameter(Descriptor::kContext);
+  TNode<HeapObject> receiver = CAST(Parameter(Descriptor::kReceiver));
+  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
 
   Label if_empty(this), if_runtime(this, Label::kDeferred);
-  Node* receiver_map = CheckEnumCache(receiver, &if_empty, &if_runtime);
+  TNode<Map> receiver_map = CheckEnumCache(receiver, &if_empty, &if_runtime);
   Return(receiver_map);
 
   BIND(&if_empty);

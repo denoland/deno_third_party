@@ -37,21 +37,23 @@ enum ContextLookupFlags {
 // must always be allocated via Heap::AllocateContext() or
 // Factory::NewContext.
 
-#define NATIVE_CONTEXT_INTRINSIC_FUNCTIONS(V)                           \
-  V(GENERATOR_NEXT_INTERNAL, JSFunction, generator_next_internal)       \
-  V(MAKE_ERROR_INDEX, JSFunction, make_error)                           \
-  V(MAKE_RANGE_ERROR_INDEX, JSFunction, make_range_error)               \
-  V(MAKE_SYNTAX_ERROR_INDEX, JSFunction, make_syntax_error)             \
-  V(MAKE_TYPE_ERROR_INDEX, JSFunction, make_type_error)                 \
-  V(MAKE_URI_ERROR_INDEX, JSFunction, make_uri_error)                   \
-  V(OBJECT_CREATE, JSFunction, object_create)                           \
-  V(REFLECT_APPLY_INDEX, JSFunction, reflect_apply)                     \
-  V(REFLECT_CONSTRUCT_INDEX, JSFunction, reflect_construct)             \
-  V(MATH_FLOOR_INDEX, JSFunction, math_floor)                           \
-  V(MATH_POW_INDEX, JSFunction, math_pow)                               \
-  V(PROMISE_INTERNAL_CONSTRUCTOR_INDEX, JSFunction,                     \
-    promise_internal_constructor)                                       \
-  V(IS_PROMISE_INDEX, JSFunction, is_promise)                           \
+#define NATIVE_CONTEXT_INTRINSIC_FUNCTIONS(V)                     \
+  V(GENERATOR_NEXT_INTERNAL, JSFunction, generator_next_internal) \
+  V(ASYNC_MODULE_EVALUATE_INTERNAL, JSFunction,                   \
+    async_module_evaluate_internal)                               \
+  V(MAKE_ERROR_INDEX, JSFunction, make_error)                     \
+  V(MAKE_RANGE_ERROR_INDEX, JSFunction, make_range_error)         \
+  V(MAKE_SYNTAX_ERROR_INDEX, JSFunction, make_syntax_error)       \
+  V(MAKE_TYPE_ERROR_INDEX, JSFunction, make_type_error)           \
+  V(MAKE_URI_ERROR_INDEX, JSFunction, make_uri_error)             \
+  V(OBJECT_CREATE, JSFunction, object_create)                     \
+  V(REFLECT_APPLY_INDEX, JSFunction, reflect_apply)               \
+  V(REFLECT_CONSTRUCT_INDEX, JSFunction, reflect_construct)       \
+  V(MATH_FLOOR_INDEX, JSFunction, math_floor)                     \
+  V(MATH_POW_INDEX, JSFunction, math_pow)                         \
+  V(PROMISE_INTERNAL_CONSTRUCTOR_INDEX, JSFunction,               \
+    promise_internal_constructor)                                 \
+  V(IS_PROMISE_INDEX, JSFunction, is_promise)                     \
   V(PROMISE_THEN_INDEX, JSFunction, promise_then)
 
 #define NATIVE_CONTEXT_FIELDS(V)                                               \
@@ -104,6 +106,8 @@ enum ContextLookupFlags {
   V(CALL_AS_CONSTRUCTOR_DELEGATE_INDEX, JSFunction,                            \
     call_as_constructor_delegate)                                              \
   V(CALL_AS_FUNCTION_DELEGATE_INDEX, JSFunction, call_as_function_delegate)    \
+  V(CALL_ASYNC_MODULE_FULFILLED, JSFunction, call_async_module_fulfilled)      \
+  V(CALL_ASYNC_MODULE_REJECTED, JSFunction, call_async_module_rejected)        \
   V(CALLSITE_FUNCTION_INDEX, JSFunction, callsite_function)                    \
   V(CONTEXT_EXTENSION_FUNCTION_INDEX, JSFunction, context_extension_function)  \
   V(DATA_PROPERTY_DESCRIPTOR_MAP_INDEX, Map, data_property_descriptor_map)     \
@@ -159,6 +163,11 @@ enum ContextLookupFlags {
   V(INTL_NUMBER_FORMAT_FUNCTION_INDEX, JSFunction,                             \
     intl_number_format_function)                                               \
   V(INTL_LOCALE_FUNCTION_INDEX, JSFunction, intl_locale_function)              \
+  V(INTL_LIST_FORMAT_FUNCTION_INDEX, JSFunction, intl_list_format_function)    \
+  V(INTL_PLURAL_RULES_FUNCTION_INDEX, JSFunction, intl_plural_rules_function)  \
+  V(INTL_RELATIVE_TIME_FORMAT_FUNCTION_INDEX, JSFunction,                      \
+    intl_relative_time_format_function)                                        \
+  V(INTL_SEGMENTER_FUNCTION_INDEX, JSFunction, intl_segmenter_function)        \
   V(INTL_SEGMENT_ITERATOR_MAP_INDEX, Map, intl_segment_iterator_map)           \
   V(ITERATOR_RESULT_MAP_INDEX, Map, iterator_result_map)                       \
   V(JS_ARRAY_PACKED_SMI_ELEMENTS_MAP_INDEX, Map,                               \
@@ -518,7 +527,7 @@ class Context : public HeapObject {
 
     // These slots hold values in debug evaluate contexts.
     WRAPPED_CONTEXT_INDEX = MIN_CONTEXT_SLOTS,
-    WHITE_LIST_INDEX = MIN_CONTEXT_SLOTS + 1
+    BLACK_LIST_INDEX = MIN_CONTEXT_SLOTS + 1
   };
 
   // A region of native context entries containing maps for functions created
