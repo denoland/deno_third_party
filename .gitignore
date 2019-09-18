@@ -4,15 +4,7 @@
 /depot_tools/.versions/
 /depot_tools/external_bin/
 
-/rust_crates/git/.cargo-lock-git
-/rust_crates/git/db/
-/rust_crates/registry/cache/
-/rust_crates/registry/index/
-
 v8/buildtools/*/clang-format
 v8/buildtools/*/gn
 v8/buildtools/win/*.exe
 v8/third_party/llvm-build/
-
-# ts-simple-ast should use the same version of typescript
-/node_modules/ts-simple-ast/node_modules

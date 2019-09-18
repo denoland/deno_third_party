@@ -3,5 +3,4 @@
 
 # Tell git which symlinks point to files, and which ones point to directories.
 # This is revelevant for Windows only, and requires git >= 2.19.2 to work.
-/v8/build symlink=dir
 **/node_modules/.bin/* symlink=file
