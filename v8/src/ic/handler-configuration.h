@@ -197,12 +197,12 @@ class StoreHandler final : public DataHandler {
     kApiSetterHolderIsPrototype,
     kGlobalProxy,
     kNormal,
+    kInterceptor,
+    kSlow,
     kProxy,
     kKindsNumber  // Keep last
   };
   using KindBits = BitField<Kind, 0, 4>;
-
-  enum FieldRepresentation { kSmi, kDouble, kHeapObject, kTagged };
 
   // Applicable to kGlobalProxy, kProxy kinds.
 
@@ -231,10 +231,10 @@ class StoreHandler final : public DataHandler {
   // Encoding when KindBits contains kField or kTransitionToField.
   //
   using IsInobjectBits = DescriptorBits::Next<bool, 1>;
-  using FieldRepresentationBits = IsInobjectBits::Next<FieldRepresentation, 2>;
+  using RepresentationBits = IsInobjectBits::Next<Representation::Kind, 3>;
   // +1 here is to cover all possible JSObject header sizes.
   using FieldIndexBits =
-      FieldRepresentationBits::Next<unsigned, kDescriptorIndexBitCount + 1>;
+      RepresentationBits::Next<unsigned, kDescriptorIndexBitCount + 1>;
   // Make sure we don't overflow the smi.
   STATIC_ASSERT(FieldIndexBits::kLastUsedBit < kSmiValueSize);
 
@@ -282,6 +282,12 @@ class StoreHandler final : public DataHandler {
 
   // Creates a Smi-handler for storing a property to a slow object.
   static inline Handle<Smi> StoreNormal(Isolate* isolate);
+
+  // Creates a Smi-handler for storing a property to an interceptor.
+  static inline Handle<Smi> StoreInterceptor(Isolate* isolate);
+
+  // Creates a Smi-handler for storing a property.
+  static inline Handle<Smi> StoreSlow(Isolate* isolate);
 
   // Creates a Smi-handler for storing a property on a proxy.
   static inline Handle<Smi> StoreProxy(Isolate* isolate);

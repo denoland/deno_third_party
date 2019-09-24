@@ -9,7 +9,6 @@
 #include <memory>
 #include <sstream>
 
-#include "src/base/adapters.h"
 #include "src/base/optional.h"
 #include "src/base/platform/elapsed-timer.h"
 #include "src/codegen/assembler-inl.h"
@@ -97,6 +96,35 @@ namespace v8 {
 namespace internal {
 namespace compiler {
 
+static constexpr char kCodegenZoneName[] = "codegen-zone";
+static constexpr char kGraphZoneName[] = "graph-zone";
+static constexpr char kInstructionZoneName[] = "instruction-zone";
+static constexpr char kMachineGraphVerifierZoneName[] =
+    "machine-graph-verifier-zone";
+static constexpr char kPipelineCompilationJobZoneName[] =
+    "pipeline-compilation-job-zone";
+static constexpr char kRegisterAllocationZoneName[] =
+    "register-allocation-zone";
+static constexpr char kRegisterAllocatorVerifierZoneName[] =
+    "register-allocator-verifier-zone";
+namespace {
+
+Maybe<OuterContext> GetModuleContext(Handle<JSFunction> closure) {
+  Context current = closure->context();
+  size_t distance = 0;
+  while (!current.IsNativeContext()) {
+    if (current.IsModuleContext()) {
+      return Just(
+          OuterContext(handle(current, current.GetIsolate()), distance));
+    }
+    current = current.previous();
+    distance++;
+  }
+  return Nothing<OuterContext>();
+}
+
+}  // anonymous namespace
+
 class PipelineData {
  public:
   // For main entry point.
@@ -113,15 +141,16 @@ class PipelineData {
         roots_relative_addressing_enabled_(
             !isolate->serializer_enabled() &&
             !isolate->IsGeneratingEmbeddedBuiltins()),
-        graph_zone_scope_(zone_stats_, ZONE_NAME),
+        graph_zone_scope_(zone_stats_, kGraphZoneName),
         graph_zone_(graph_zone_scope_.zone()),
-        instruction_zone_scope_(zone_stats_, ZONE_NAME),
+        instruction_zone_scope_(zone_stats_, kInstructionZoneName),
         instruction_zone_(instruction_zone_scope_.zone()),
-        codegen_zone_scope_(zone_stats_, ZONE_NAME),
+        codegen_zone_scope_(zone_stats_, kCodegenZoneName),
         codegen_zone_(codegen_zone_scope_.zone()),
         broker_(new JSHeapBroker(isolate_, info_->zone(),
                                  info_->trace_heap_broker_enabled())),
-        register_allocation_zone_scope_(zone_stats_, ZONE_NAME),
+        register_allocation_zone_scope_(zone_stats_,
+                                        kRegisterAllocationZoneName),
         register_allocation_zone_(register_allocation_zone_scope_.zone()),
         assembler_options_(AssemblerOptions::Default(isolate)) {
     PhaseScope scope(pipeline_statistics, "V8.TFInitPipelineData");
@@ -158,7 +187,7 @@ class PipelineData {
         may_have_unverifiable_graph_(false),
         zone_stats_(zone_stats),
         pipeline_statistics_(pipeline_statistics),
-        graph_zone_scope_(zone_stats_, ZONE_NAME),
+        graph_zone_scope_(zone_stats_, kGraphZoneName),
         graph_zone_(graph_zone_scope_.zone()),
         graph_(mcgraph->graph()),
         source_positions_(source_positions),
@@ -166,11 +195,12 @@ class PipelineData {
         machine_(mcgraph->machine()),
         common_(mcgraph->common()),
         mcgraph_(mcgraph),
-        instruction_zone_scope_(zone_stats_, ZONE_NAME),
+        instruction_zone_scope_(zone_stats_, kInstructionZoneName),
         instruction_zone_(instruction_zone_scope_.zone()),
-        codegen_zone_scope_(zone_stats_, ZONE_NAME),
+        codegen_zone_scope_(zone_stats_, kCodegenZoneName),
         codegen_zone_(codegen_zone_scope_.zone()),
-        register_allocation_zone_scope_(zone_stats_, ZONE_NAME),
+        register_allocation_zone_scope_(zone_stats_,
+                                        kRegisterAllocationZoneName),
         register_allocation_zone_(register_allocation_zone_scope_.zone()),
         assembler_options_(assembler_options) {}
 
@@ -185,17 +215,18 @@ class PipelineData {
         info_(info),
         debug_name_(info_->GetDebugName()),
         zone_stats_(zone_stats),
-        graph_zone_scope_(zone_stats_, ZONE_NAME),
+        graph_zone_scope_(zone_stats_, kGraphZoneName),
         graph_zone_(graph_zone_scope_.zone()),
         graph_(graph),
         source_positions_(source_positions),
         node_origins_(node_origins),
         schedule_(schedule),
-        instruction_zone_scope_(zone_stats_, ZONE_NAME),
+        instruction_zone_scope_(zone_stats_, kInstructionZoneName),
         instruction_zone_(instruction_zone_scope_.zone()),
-        codegen_zone_scope_(zone_stats_, ZONE_NAME),
+        codegen_zone_scope_(zone_stats_, kCodegenZoneName),
         codegen_zone_(codegen_zone_scope_.zone()),
-        register_allocation_zone_scope_(zone_stats_, ZONE_NAME),
+        register_allocation_zone_scope_(zone_stats_,
+                                        kRegisterAllocationZoneName),
         register_allocation_zone_(register_allocation_zone_scope_.zone()),
         jump_optimization_info_(jump_opt),
         assembler_options_(assembler_options) {
@@ -218,13 +249,14 @@ class PipelineData {
         info_(info),
         debug_name_(info_->GetDebugName()),
         zone_stats_(zone_stats),
-        graph_zone_scope_(zone_stats_, ZONE_NAME),
-        instruction_zone_scope_(zone_stats_, ZONE_NAME),
+        graph_zone_scope_(zone_stats_, kGraphZoneName),
+        instruction_zone_scope_(zone_stats_, kInstructionZoneName),
         instruction_zone_(sequence->zone()),
         sequence_(sequence),
-        codegen_zone_scope_(zone_stats_, ZONE_NAME),
+        codegen_zone_scope_(zone_stats_, kCodegenZoneName),
         codegen_zone_(codegen_zone_scope_.zone()),
-        register_allocation_zone_scope_(zone_stats_, ZONE_NAME),
+        register_allocation_zone_scope_(zone_stats_,
+                                        kRegisterAllocationZoneName),
         register_allocation_zone_(register_allocation_zone_scope_.zone()),
         assembler_options_(AssemblerOptions::Default(isolate)) {}
 
@@ -321,6 +353,20 @@ class PipelineData {
 
   const AssemblerOptions& assembler_options() const {
     return assembler_options_;
+  }
+
+  void ChooseSpecializationContext() {
+    if (info()->is_function_context_specializing()) {
+      DCHECK(info()->has_context());
+      specialization_context_ =
+          Just(OuterContext(handle(info()->context(), isolate()), 0));
+    } else {
+      specialization_context_ = GetModuleContext(info()->closure());
+    }
+  }
+
+  Maybe<OuterContext> specialization_context() const {
+    return specialization_context_;
   }
 
   size_t* address_of_max_unoptimized_frame_height() {
@@ -531,6 +577,7 @@ class PipelineData {
 
   JumpOptimizationInfo* jump_optimization_info_ = nullptr;
   AssemblerOptions assembler_options_;
+  Maybe<OuterContext> specialization_context_ = Nothing<OuterContext>();
 
   // The maximal combined height of all inlined frames in their unoptimized
   // state. Calculated during instruction selection, applied during code
@@ -548,7 +595,10 @@ class PipelineImpl final {
   template <typename Phase, typename... Args>
   void Run(Args&&... args);
 
-  // Step A. Run the graph creation and initial optimization passes.
+  // Step A.1. Serialize the data needed for the compilation front-end.
+  void Serialize();
+
+  // Step A.2. Run the graph creation and initial optimization passes.
   bool CreateGraph();
 
   // Step B. Run the concurrent optimization passes.
@@ -646,8 +696,6 @@ void PrintInlinedFunctionInfo(
 // compilation. For inlined functions print source position of their inlining.
 void PrintParticipatingSource(OptimizedCompilationInfo* info,
                               Isolate* isolate) {
-  AllowDeferredHandleDereference allow_deference_for_print_code;
-
   SourceIdAssigner id_assigner(info->inlined_functions().size());
   PrintFunctionSource(info, isolate, -1, info->shared_info());
   const auto& inlined = info->inlined_functions();
@@ -666,7 +714,6 @@ void PrintCode(Isolate* isolate, Handle<Code> code,
   }
 
 #ifdef ENABLE_DISASSEMBLER
-  AllowDeferredHandleDereference allow_deference_for_print_code;
   bool print_code =
       FLAG_print_code ||
       (info->IsOptimizing() && FLAG_print_opt_code &&
@@ -804,7 +851,7 @@ class PipelineRunScope {
  public:
   PipelineRunScope(PipelineData* data, const char* phase_name)
       : phase_scope_(data->pipeline_statistics(), phase_name),
-        zone_scope_(data->zone_stats(), ZONE_NAME),
+        zone_scope_(data->zone_stats(), phase_name),
         origin_scope_(data->node_origins(), phase_name) {}
 
   Zone* zone() { return zone_scope_.zone(); }
@@ -890,7 +937,7 @@ class PipelineCompilationJob final : public OptimizedCompilationJob {
   PipelineCompilationJob(Isolate* isolate,
                          Handle<SharedFunctionInfo> shared_info,
                          Handle<JSFunction> function);
-  ~PipelineCompilationJob();
+  ~PipelineCompilationJob() final;
 
  protected:
   Status PrepareJobImpl(Isolate* isolate) final;
@@ -919,7 +966,8 @@ PipelineCompilationJob::PipelineCompilationJob(
     // we pass it to the CompilationJob constructor, but it is not
     // dereferenced there.
     : OptimizedCompilationJob(&compilation_info_, "TurboFan"),
-      zone_(function->GetIsolate()->allocator(), ZONE_NAME),
+      zone_(function->GetIsolate()->allocator(),
+            kPipelineCompilationJobZoneName),
       zone_stats_(function->GetIsolate()->allocator()),
       compilation_info_(&zone_, function->GetIsolate(), shared_info, function),
       pipeline_statistics_(CreatePipelineStatistics(
@@ -983,6 +1031,7 @@ PipelineCompilationJob::Status PipelineCompilationJob::PrepareJobImpl(
   if (compilation_info()->closure()->raw_feedback_cell().map() ==
       ReadOnlyRoots(isolate).one_closure_cell_map()) {
     compilation_info()->MarkAsFunctionContextSpecializing();
+    data_.ChooseSpecializationContext();
   }
 
   if (compilation_info()->is_source_positions_enabled()) {
@@ -1003,9 +1052,13 @@ PipelineCompilationJob::Status PipelineCompilationJob::PrepareJobImpl(
   // assembly.
   Deoptimizer::EnsureCodeForDeoptimizationEntries(isolate);
 
-  if (!pipeline_.CreateGraph()) {
-    CHECK(!isolate->has_pending_exception());
-    return AbortOptimization(BailoutReason::kGraphBuildingFailed);
+  pipeline_.Serialize();
+
+  if (!FLAG_concurrent_inlining) {
+    if (!pipeline_.CreateGraph()) {
+      CHECK(!isolate->has_pending_exception());
+      return AbortOptimization(BailoutReason::kGraphBuildingFailed);
+    }
   }
 
   return SUCCEEDED;
@@ -1016,6 +1069,13 @@ PipelineCompilationJob::Status PipelineCompilationJob::ExecuteJobImpl() {
       TRACE_DISABLED_BY_DEFAULT("v8.compile"), "v8.optimizingCompile.execute",
       this, TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT, "function",
       compilation_info()->shared_info()->TraceIDRef());
+
+  if (FLAG_concurrent_inlining) {
+    if (!pipeline_.CreateGraph()) {
+      return AbortOptimization(BailoutReason::kGraphBuildingFailed);
+    }
+  }
+
   bool success;
   if (FLAG_turboprop) {
     success = pipeline_.OptimizeGraphForMidTier(linkage_);
@@ -1102,8 +1162,6 @@ class WasmHeapStubCompilationJob final : public OptimizedCompilationJob {
         pipeline_(&data_),
         wasm_engine_(wasm_engine) {}
 
-  ~WasmHeapStubCompilationJob() = default;
-
  protected:
   Status PrepareJobImpl(Isolate* isolate) final;
   Status ExecuteJobImpl() final;
@@ -1130,7 +1188,7 @@ Pipeline::NewWasmHeapStubCompilationJob(
     CallDescriptor* call_descriptor, std::unique_ptr<Zone> zone, Graph* graph,
     Code::Kind kind, std::unique_ptr<char[]> debug_name,
     const AssemblerOptions& options, SourcePositionTable* source_positions) {
-  return base::make_unique<WasmHeapStubCompilationJob>(
+  return std::make_unique<WasmHeapStubCompilationJob>(
       isolate, wasm_engine, call_descriptor, std::move(zone), graph, kind,
       std::move(debug_name), options, source_positions);
 }
@@ -1223,38 +1281,10 @@ struct GraphBuilderPhase {
   }
 };
 
-namespace {
-
-Maybe<OuterContext> GetModuleContext(Handle<JSFunction> closure) {
-  Context current = closure->context();
-  size_t distance = 0;
-  while (!current.IsNativeContext()) {
-    if (current.IsModuleContext()) {
-      return Just(
-          OuterContext(handle(current, current.GetIsolate()), distance));
-    }
-    current = current.previous();
-    distance++;
-  }
-  return Nothing<OuterContext>();
-}
-
-Maybe<OuterContext> ChooseSpecializationContext(
-    Isolate* isolate, OptimizedCompilationInfo* info) {
-  if (info->is_function_context_specializing()) {
-    DCHECK(info->has_context());
-    return Just(OuterContext(handle(info->context(), isolate), 0));
-  }
-  return GetModuleContext(info->closure());
-}
-
-}  // anonymous namespace
-
 struct InliningPhase {
   static const char* phase_name() { return "V8.TFInlining"; }
 
   void Run(PipelineData* data, Zone* temp_zone) {
-    Isolate* isolate = data->isolate();
     OptimizedCompilationInfo* info = data->info();
     GraphReducer graph_reducer(temp_zone, data->graph(), &info->tick_counter(),
                                data->jsgraph()->Dead());
@@ -1271,7 +1301,7 @@ struct InliningPhase {
                                data->dependencies());
     JSContextSpecialization context_specialization(
         &graph_reducer, data->jsgraph(), data->broker(),
-        ChooseSpecializationContext(isolate, data->info()),
+        data->specialization_context(),
         data->info()->is_function_context_specializing()
             ? data->info()->closure()
             : MaybeHandle<JSFunction>());
@@ -1400,9 +1430,13 @@ struct SerializationPhase {
       flags |=
           SerializerForBackgroundCompilationFlag::kAnalyzeEnvironmentLiveness;
     }
-    RunSerializerForBackgroundCompilation(data->broker(), data->dependencies(),
-                                          temp_zone, data->info()->closure(),
-                                          flags, data->info()->osr_offset());
+    RunSerializerForBackgroundCompilation(
+        data->zone_stats(), data->broker(), data->dependencies(),
+        data->info()->closure(), flags, data->info()->osr_offset());
+    if (data->specialization_context().IsJust()) {
+      ContextRef(data->broker(),
+                 data->specialization_context().FromJust().context);
+    }
   }
 };
 
@@ -2088,7 +2122,7 @@ struct JumpThreadingPhase {
 
   void Run(PipelineData* data, Zone* temp_zone, bool frame_at_start) {
     ZoneVector<RpoNumber> result(temp_zone);
-    if (JumpThreading::ComputeForwarding(temp_zone, result, data->sequence(),
+    if (JumpThreading::ComputeForwarding(temp_zone, &result, data->sequence(),
                                          frame_at_start)) {
       JumpThreading::ApplyForwarding(temp_zone, result, data->sequence());
     }
@@ -2187,10 +2221,10 @@ void PipelineImpl::RunPrintAndVerify(const char* phase, bool untyped) {
   }
 }
 
-bool PipelineImpl::CreateGraph() {
+void PipelineImpl::Serialize() {
   PipelineData* data = this->data_;
 
-  data->BeginPhaseKind("V8.TFGraphCreation");
+  data->BeginPhaseKind("V8.TFBrokerInitAndSerialization");
 
   if (info()->trace_turbo_json_enabled() ||
       info()->trace_turbo_graph_enabled()) {
@@ -2214,7 +2248,15 @@ bool PipelineImpl::CreateGraph() {
   if (FLAG_concurrent_inlining) {
     Run<HeapBrokerInitializationPhase>();
     Run<SerializationPhase>();
+    data->broker()->StopSerializing();
   }
+  data->EndPhaseKind();
+}
+
+bool PipelineImpl::CreateGraph() {
+  PipelineData* data = this->data_;
+
+  data->BeginPhaseKind("V8.TFGraphCreation");
 
   Run<GraphBuilderPhase>();
   RunPrintAndVerify(GraphBuilderPhase::phase_name(), true);
@@ -2243,12 +2285,7 @@ bool PipelineImpl::CreateGraph() {
 
   // Run the type-sensitive lowerings and optimizations on the graph.
   {
-    if (FLAG_concurrent_inlining) {
-      // TODO(neis): Remove CopyMetadataForConcurrentCompilePhase call once
-      // brokerization of JSNativeContextSpecialization is complete.
-      Run<CopyMetadataForConcurrentCompilePhase>();
-      data->broker()->StopSerializing();
-    } else {
+    if (!FLAG_concurrent_inlining) {
       Run<HeapBrokerInitializationPhase>();
       Run<CopyMetadataForConcurrentCompilePhase>();
       data->broker()->StopSerializing();
@@ -2650,6 +2687,7 @@ MaybeHandle<Code> Pipeline::GenerateCodeForTesting(
   Linkage linkage(Linkage::ComputeIncoming(data.instruction_zone(), info));
   Deoptimizer::EnsureCodeForDeoptimizationEntries(isolate);
 
+  pipeline.Serialize();
   if (!pipeline.CreateGraph()) return MaybeHandle<Code>();
   if (!pipeline.OptimizeGraph(&linkage)) return MaybeHandle<Code>();
   pipeline.AssembleCode(&linkage);
@@ -2707,7 +2745,7 @@ std::unique_ptr<OptimizedCompilationJob> Pipeline::NewCompilationJob(
     Isolate* isolate, Handle<JSFunction> function, bool has_script) {
   Handle<SharedFunctionInfo> shared =
       handle(function->shared(), function->GetIsolate());
-  return base::make_unique<PipelineCompilationJob>(isolate, shared, function);
+  return std::make_unique<PipelineCompilationJob>(isolate, shared, function);
 }
 
 // static
@@ -2788,7 +2826,7 @@ void Pipeline::GenerateCodeForWasmFunction(
   if (!pipeline.SelectInstructions(&linkage)) return;
   pipeline.AssembleCode(&linkage, instruction_buffer->CreateView());
 
-  auto result = base::make_unique<wasm::WasmCompilationResult>();
+  auto result = std::make_unique<wasm::WasmCompilationResult>();
   CodeGenerator* code_generator = pipeline.code_generator();
   code_generator->tasm()->GetCode(
       nullptr, &result->code_desc, code_generator->safepoint_table_builder(),
@@ -2897,7 +2935,7 @@ bool PipelineImpl::SelectInstructions(Linkage* linkage) {
          << "--- End of " << data->debug_name() << " generated by TurboFan\n"
          << "--------------------------------------------------\n";
     }
-    Zone temp_zone(data->allocator(), ZONE_NAME);
+    Zone temp_zone(data->allocator(), kMachineGraphVerifierZoneName);
     MachineGraphVerifier::Run(
         data->graph(), data->schedule(), linkage,
         data->info()->IsNotOptimizedFunctionOrWasmFunction(),
@@ -3179,7 +3217,8 @@ void PipelineImpl::AllocateRegisters(const RegisterConfiguration* config,
   std::unique_ptr<Zone> verifier_zone;
   RegisterAllocatorVerifier* verifier = nullptr;
   if (run_verifier) {
-    verifier_zone.reset(new Zone(data->allocator(), ZONE_NAME));
+    verifier_zone.reset(
+        new Zone(data->allocator(), kRegisterAllocatorVerifierZoneName));
     verifier = new (verifier_zone.get()) RegisterAllocatorVerifier(
         verifier_zone.get(), config, data->sequence());
   }

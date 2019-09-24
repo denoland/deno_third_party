@@ -52,9 +52,7 @@ function testPokeMemory() {
   var array = new Int8Array(buffer);
   assertEquals(kMemSize, array.length);
 
-  for (var i = 0; i < kMemSize; i++) {
-    assertEquals(0, array[i]);
-  }
+  assertTrue(array.every((e => e === 0)));
 
   for (var i = 0; i < 10; i++) {
     assertEquals(0, main(kMemSize - 4));
@@ -99,9 +97,7 @@ function testPokeOuterMemory() {
   var array = new Int8Array(buffer.buffer);
   assertEquals(kMemSize, array.length);
 
-  for (var i = 0; i < kMemSize; i++) {
-    assertEquals(0, array[i]);
-  }
+  assertTrue(array.every((e => e === 0)));
 
   for (var i = 0; i < 10; i++) {
     assertEquals(0, main(kMemSize - 4));
@@ -149,23 +145,20 @@ function testOOBThrows() {
     .exportFunc();
 
   var module = builder.instantiate();
-  var offset;
 
-  function read() { return module.exports.geti(0, offset); }
-  function write() { return module.exports.geti(offset, 0); }
+  let read = offset => module.exports.geti(0, offset);
+  let write = offset =>  module.exports.geti(offset, 0);
 
-  for (offset = 0; offset < 65533; offset++) {
-    assertEquals(0, read());
-    assertEquals(0, write());
-  }
+  assertEquals(0, read(65532));
+  assertEquals(0, write(65532));
 
   // Note that this test might be run concurrently in multiple Isolates, which
   // makes an exact comparison of the expected trap count unreliable. But is is
   // still possible to check the lower bound for the expected trap count.
-  for (offset = 65534; offset < 66536; offset++) {
+  for (let offset = 65534; offset < 66536; offset++) {
     const trap_count = %GetWasmRecoveredTrapCount();
-    assertTraps(kTrapMemOutOfBounds, read);
-    assertTraps(kTrapMemOutOfBounds, write);
+    assertTraps(kTrapMemOutOfBounds, () => read(offset));
+    assertTraps(kTrapMemOutOfBounds, () => write(offset));
     if (%IsWasmTrapHandlerEnabled()) {
       assertTrue(trap_count + 2 <= %GetWasmRecoveredTrapCount());
     }

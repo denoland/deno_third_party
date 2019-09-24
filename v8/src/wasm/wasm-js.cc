@@ -206,20 +206,20 @@ i::wasm::ModuleWireBytes GetFirstArgumentAsBytes(
   if (source->IsArrayBuffer()) {
     // A raw array buffer was passed.
     Local<ArrayBuffer> buffer = Local<ArrayBuffer>::Cast(source);
-    ArrayBuffer::Contents contents = buffer->GetContents();
+    auto backing_store = buffer->GetBackingStore();
 
-    start = reinterpret_cast<const uint8_t*>(contents.Data());
-    length = contents.ByteLength();
+    start = reinterpret_cast<const uint8_t*>(backing_store->Data());
+    length = backing_store->ByteLength();
     *is_shared = buffer->IsSharedArrayBuffer();
   } else if (source->IsTypedArray()) {
     // A TypedArray was passed.
     Local<TypedArray> array = Local<TypedArray>::Cast(source);
     Local<ArrayBuffer> buffer = array->Buffer();
 
-    ArrayBuffer::Contents contents = buffer->GetContents();
+    auto backing_store = buffer->GetBackingStore();
 
-    start =
-        reinterpret_cast<const uint8_t*>(contents.Data()) + array->ByteOffset();
+    start = reinterpret_cast<const uint8_t*>(backing_store->Data()) +
+            array->ByteOffset();
     length = array->ByteLength();
     *is_shared = buffer->IsSharedArrayBuffer();
   } else {
@@ -433,8 +433,8 @@ class AsyncInstantiateCompileResultResolver
     finished_ = true;
     isolate_->wasm_engine()->AsyncInstantiate(
         isolate_,
-        base::make_unique<InstantiateBytesResultResolver>(isolate_, promise_,
-                                                          result),
+        std::make_unique<InstantiateBytesResultResolver>(isolate_, promise_,
+                                                         result),
         result, maybe_imports_);
   }
 
@@ -596,7 +596,7 @@ void WebAssemblyCompileStreaming(
   i::Handle<i::Managed<WasmStreaming>> data =
       i::Managed<WasmStreaming>::Allocate(
           i_isolate, 0,
-          base::make_unique<WasmStreaming::WasmStreamingImpl>(
+          std::make_unique<WasmStreaming::WasmStreamingImpl>(
               isolate, kAPIMethodName, resolver));
 
   DCHECK_NOT_NULL(i_isolate->wasm_streaming_callback());
@@ -875,7 +875,7 @@ void WebAssemblyInstantiateStreaming(
   i::Handle<i::Managed<WasmStreaming>> data =
       i::Managed<WasmStreaming>::Allocate(
           i_isolate, 0,
-          base::make_unique<WasmStreaming::WasmStreamingImpl>(
+          std::make_unique<WasmStreaming::WasmStreamingImpl>(
               isolate, kAPIMethodName, compilation_resolver));
 
   DCHECK_NOT_NULL(i_isolate->wasm_streaming_callback());

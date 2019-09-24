@@ -650,7 +650,14 @@ Operand TurboAssembler::MoveImmediateForShiftedOp(const Register& dst,
     // The move was successful; nothing to do here.
   } else {
     // Pre-shift the immediate to the least-significant bits of the register.
-    int shift_low = CountTrailingZeros(imm, reg_size);
+    int shift_low;
+    if (reg_size == 64) {
+      shift_low = base::bits::CountTrailingZeros(imm);
+    } else {
+      DCHECK_EQ(reg_size, 32);
+      shift_low = base::bits::CountTrailingZeros(static_cast<uint32_t>(imm));
+    }
+
     if (mode == kLimitShiftForSP) {
       // When applied to the stack pointer, the subsequent arithmetic operation
       // can use the extend form to shift left by a maximum of four bits. Right
@@ -1454,15 +1461,6 @@ void TurboAssembler::LoadRoot(Register destination, RootIndex index) {
   // without a load. Refer to the ARM back end for details.
   Ldr(destination,
       MemOperand(kRootRegister, RootRegisterOffsetForRootIndex(index)));
-}
-
-void MacroAssembler::LoadObject(Register result, Handle<Object> object) {
-  AllowDeferredHandleDereference heap_object_check;
-  if (object->IsHeapObject()) {
-    Mov(result, Handle<HeapObject>::cast(object));
-  } else {
-    Mov(result, Operand(Smi::cast(*object)));
-  }
 }
 
 void TurboAssembler::Move(Register dst, Smi src) { Mov(dst, src); }

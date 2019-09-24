@@ -42,6 +42,9 @@
   V(Promotion)                                            \
   V(Regression39128)                                      \
   V(ResetWeakHandle)                                      \
+  V(StoreBuffer_CreateFromOldToYoung)                     \
+  V(StoreBuffer_Overflow)                                 \
+  V(StoreBuffer_NotUsedOnAgingObjectWithRefsToYounger)    \
   V(StressHandles)                                        \
   V(TestMemoryReducerSampleJsCalls)                       \
   V(TestSizeOfObjects)                                    \
@@ -56,6 +59,7 @@
   V(Regress791582)                                        \
   V(Regress845060)                                        \
   V(RegressMissingWriteBarrierInAllocate)                 \
+  V(RememberedSet_LargePage)                              \
   V(WriteBarriersInCopyJSObject)
 
 #define HEAP_TEST(Name)                                                   \

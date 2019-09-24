@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <map>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -47,6 +48,9 @@ class TestMemoryAllocatorScope;
 class IncrementalMarking;
 class BackingStore;
 class JSArrayBuffer;
+class JSPromise;
+class NativeContext;
+
 using v8::MemoryPressureLevel;
 
 class AllocationObserver;
@@ -63,6 +67,7 @@ class Isolate;
 class JSFinalizationGroup;
 class LocalEmbedderHeapTracer;
 class MemoryAllocator;
+class MemoryMeasurement;
 class MemoryReducer;
 class MinorMarkCompactCollector;
 class ObjectIterator;
@@ -563,6 +568,9 @@ class Heap {
 
   void RecordStats(HeapStats* stats, bool take_snapshot = false);
 
+  Handle<JSPromise> MeasureMemory(Handle<NativeContext> context,
+                                  v8::MeasureMemoryMode mode);
+
   // Check new space expansion criteria and expand semispaces if it was hit.
   void CheckNewSpaceExpansionCriteria();
 
@@ -842,12 +850,11 @@ class Heap {
 
   void SetIsMarkingFlag(uint8_t flag) { is_marking_flag_ = flag; }
 
-  Address* store_buffer_top_address();
+  V8_EXPORT_PRIVATE Address* store_buffer_top_address();
   static intptr_t store_buffer_mask_constant();
   static Address store_buffer_overflow_function_address();
 
   void MoveStoreBufferEntriesToRememberedSet();
-
   void ClearRecordedSlot(HeapObject object, ObjectSlot slot);
   void ClearRecordedSlotRange(Address start, Address end);
 
@@ -1339,9 +1346,7 @@ class Heap {
     // per call to mmap(). The page is only reclaimed when the process is
     // killed. Confine the hint to a 32-bit section of the virtual address
     // space. See crbug.com/700928.
-    uintptr_t offset =
-        reinterpret_cast<uintptr_t>(v8::internal::GetRandomMmapAddr()) &
-        kMmapRegionMask;
+    uintptr_t offset = reinterpret_cast<uintptr_t>(result) & kMmapRegionMask;
     result = reinterpret_cast<void*>(mmap_region_base_ + offset);
 #endif  // V8_OS_MACOSX
 #endif  // V8_TARGET_ARCH_X64
@@ -1471,9 +1476,7 @@ class Heap {
 
   StoreBuffer* store_buffer() { return store_buffer_.get(); }
 
-  void set_current_gc_flags(int flags) {
-    current_gc_flags_ = flags;
-  }
+  void set_current_gc_flags(int flags) { current_gc_flags_ = flags; }
 
   inline bool ShouldReduceMemory() const {
     return (current_gc_flags_ & kReduceMemoryFootprintMask) != 0;
@@ -1739,20 +1742,23 @@ class Heap {
       AllocationOrigin origin = AllocationOrigin::kRuntime,
       AllocationAlignment alignment = kWordAligned);
 
+  // This method will try to allocate objects quickly (AllocationType::kYoung)
+  // otherwise it falls back to a slower path indicated by the mode.
+  enum AllocationRetryMode { kLightRetry, kRetryOrFail };
+  template <AllocationRetryMode mode>
+  V8_WARN_UNUSED_RESULT inline HeapObject AllocateRawWith(
+      int size, AllocationType allocation,
+      AllocationOrigin origin = AllocationOrigin::kRuntime,
+      AllocationAlignment alignment = kWordAligned);
+
   // This method will try to perform an allocation of a given size of a given
   // AllocationType. If the allocation fails, a regular full garbage collection
   // is triggered and the allocation is retried. This is performed multiple
   // times. If after that retry procedure the allocation still fails nullptr is
   // returned.
-  HeapObject AllocateRawWithLightRetry(
+  V8_WARN_UNUSED_RESULT HeapObject AllocateRawWithLightRetrySlowPath(
       int size, AllocationType allocation, AllocationOrigin origin,
       AllocationAlignment alignment = kWordAligned);
-  HeapObject AllocateRawWithLightRetry(
-      int size, AllocationType allocation,
-      AllocationAlignment alignment = kWordAligned) {
-    return AllocateRawWithLightRetry(size, allocation,
-                                     AllocationOrigin::kRuntime, alignment);
-  }
 
   // This method will try to perform an allocation of a given size of a given
   // AllocationType. If the allocation fails, a regular full garbage collection
@@ -1760,17 +1766,11 @@ class Heap {
   // times. If after that retry procedure the allocation still fails a "hammer"
   // garbage collection is triggered which tries to significantly reduce memory.
   // If the allocation still fails after that a fatal error is thrown.
-  HeapObject AllocateRawWithRetryOrFail(
+  V8_WARN_UNUSED_RESULT HeapObject AllocateRawWithRetryOrFailSlowPath(
       int size, AllocationType allocation, AllocationOrigin origin,
       AllocationAlignment alignment = kWordAligned);
-  HeapObject AllocateRawWithRetryOrFail(
-      int size, AllocationType allocation,
-      AllocationAlignment alignment = kWordAligned) {
-    return AllocateRawWithRetryOrFail(size, allocation,
-                                      AllocationOrigin::kRuntime, alignment);
-  }
 
-  HeapObject AllocateRawCodeInLargeObjectSpace(int size);
+  V8_WARN_UNUSED_RESULT HeapObject AllocateRawCodeInLargeObjectSpace(int size);
 
   // Allocates a heap object based on the map.
   V8_WARN_UNUSED_RESULT AllocationResult Allocate(Map map,
@@ -1991,6 +1991,7 @@ class Heap {
   std::unique_ptr<IncrementalMarking> incremental_marking_;
   std::unique_ptr<ConcurrentMarking> concurrent_marking_;
   std::unique_ptr<GCIdleTimeHandler> gc_idle_time_handler_;
+  std::unique_ptr<MemoryMeasurement> memory_measurement_;
   std::unique_ptr<MemoryReducer> memory_reducer_;
   std::unique_ptr<ObjectStats> live_object_stats_;
   std::unique_ptr<ObjectStats> dead_object_stats_;
@@ -2159,7 +2160,6 @@ class HeapStats {
   intptr_t* end_marker;                    // 27
 };
 
-
 class AlwaysAllocateScope {
  public:
   explicit inline AlwaysAllocateScope(Heap* heap);
@@ -2239,7 +2239,6 @@ class VerifyPointersVisitor : public ObjectVisitor, public RootVisitor {
   Heap* heap_;
 };
 
-
 // Verify that all objects are Smis.
 class VerifySmisVisitor : public RootVisitor {
  public:
@@ -2270,7 +2269,7 @@ class V8_EXPORT_PRIVATE SpaceIterator : public Malloced {
 
  private:
   Heap* heap_;
-  int current_space_;         // from enum AllocationSpace.
+  int current_space_;  // from enum AllocationSpace.
 };
 
 // A HeapObjectIterator provides iteration over the entire non-read-only heap.

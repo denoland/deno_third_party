@@ -23,11 +23,10 @@ vars = {
   'android_url': 'https://android.googlesource.com',
   'download_gcmole': False,
   'download_jsfunfuzz': False,
-  'download_mips_toolchain': False,
   'check_v8_header_includes': False,
 
   # GN CIPD package version.
-  'gn_version': 'git_revision:152c5144ceed9592c20f0c8fd55769646077569b',
+  'gn_version': 'git_revision:ad9e442d92dcd9ee73a557428cfc336b55cbd533',
 
   # luci-go CIPD package version.
   'luci_go': 'git_revision:7d11fd9e66407c49cb6c8546a2ae45ea993a240c',
@@ -72,15 +71,15 @@ vars = {
 
 deps = {
   'v8/build':
-    Var('chromium_url') + '/chromium/src/build.git' + '@' + '6ff11c8756c66a1344632ab8ae8b7bfe0719a572',
+    Var('chromium_url') + '/chromium/src/build.git' + '@' + '04fbb767db0ae090c49509c60b6764830280263c',
   'v8/third_party/depot_tools':
-    Var('chromium_url') + '/chromium/tools/depot_tools.git' + '@' + 'efce0d1b7657c440c90f0f4bce614b96672b9e0b',
+    Var('chromium_url') + '/chromium/tools/depot_tools.git' + '@' + 'ba5bc99b6ab9b2e39188ce6054c00e301dd86c1b',
   'v8/third_party/icu':
-    Var('chromium_url') + '/chromium/deps/icu.git' + '@' + '53f6b233a41ec982d8445996247093f7aaf41639',
+    Var('chromium_url') + '/chromium/deps/icu.git' + '@' + '2ecd66c696c46e255cd634d3175b1072f4499949',
   'v8/third_party/instrumented_libraries':
     Var('chromium_url') + '/chromium/src/third_party/instrumented_libraries.git' + '@' + 'e2897773b97b65f70b0bb15b753c73d9f6e3afdb',
   'v8/buildtools':
-    Var('chromium_url') + '/chromium/src/buildtools.git' + '@' + '74cfb57006f83cfe050817526db359d5c8a11628',
+    Var('chromium_url') + '/chromium/src/buildtools.git' + '@' + 'cf454b247c611167388742c7a31ef138a6031172',
   'v8/buildtools/clang_format/script':
     Var('chromium_url') + '/chromium/llvm-project/cfe/tools/clang-format.git' + '@' + '96636aa0e9f047f17447f2d45a094d0b59ed7917',
   'v8/buildtools/linux64': {
@@ -168,7 +167,7 @@ deps = {
       'dep_type': 'cipd',
   },
   'v8/third_party/catapult': {
-    'url': Var('chromium_url') + '/catapult.git' + '@' + 'fcd6915ca2835406610c37f80f312a514e4ce403',
+    'url': Var('chromium_url') + '/catapult.git' + '@' + '8669b37aa2b0ac1156f97eda45219e36b72e79a6',
     'condition': 'checkout_android',
   },
   'v8/third_party/colorama/src': {
@@ -180,19 +179,19 @@ deps = {
     'condition': 'checkout_fuchsia',
   },
   'v8/third_party/googletest/src':
-    Var('chromium_url') + '/external/github.com/google/googletest.git' + '@' + '3f05f651ae3621db58468153e32016bc1397800b',
+    Var('chromium_url') + '/external/github.com/google/googletest.git' + '@' + 'f2fb48c3b3d79a75a88a99fba6576b25d42ec528',
   'v8/third_party/jinja2':
     Var('chromium_url') + '/chromium/src/third_party/jinja2.git' + '@' + 'b41863e42637544c2941b574c7877d3e1f663e25',
   'v8/third_party/markupsafe':
     Var('chromium_url') + '/chromium/src/third_party/markupsafe.git' + '@' + '8f45f5cfa0009d2a70589bcda0349b8cb2b72783',
   'v8/tools/swarming_client':
-    Var('chromium_url') + '/infra/luci/client-py.git' + '@' + '96f125709acfd0b48fc1e5dae7d6ea42291726ac',
+    Var('chromium_url') + '/infra/luci/client-py.git' + '@' + '885b3febcc170a60f25795304e60927b77d1e92d',
   'v8/test/benchmarks/data':
     Var('chromium_url') + '/v8/deps/third_party/benchmarks.git' + '@' + '05d7188267b4560491ff9155c5ee13e207ecd65f',
   'v8/test/mozilla/data':
     Var('chromium_url') + '/v8/deps/third_party/mozilla-tests.git' + '@' + 'f6c578a10ea707b1a8ab0b88943fe5115ce2b9be',
   'v8/test/test262/data':
-    Var('chromium_url') + '/external/github.com/tc39/test262.git' + '@' + '59a1a016b7cf5cf43f66b274c7d1db4ec6066935',
+    Var('chromium_url') + '/external/github.com/tc39/test262.git' + '@' + 'ef7fd2bc27e7c10b4a71d2edc632a2934742a13e',
   'v8/test/test262/harness':
     Var('chromium_url') + '/external/github.com/test262-utils/test262-harness-py.git' + '@' + '4555345a943d0c99a9461182705543fb171dda4b',
   'v8/third_party/qemu-linux-x64': {
@@ -216,7 +215,7 @@ deps = {
       'dep_type': 'cipd',
   },
   'v8/tools/clang':
-    Var('chromium_url') + '/chromium/src/tools/clang.git' + '@' + '51c4acfabc9cf60ef77a7740f91d73956b77879d',
+    Var('chromium_url') + '/chromium/src/tools/clang.git' + '@' + 'e51419986b8e021bf1c2eacbd7bd39784b4e1e0b',
   'v8/tools/luci-go': {
       'packages': [
         {
@@ -392,13 +391,6 @@ hooks = [
                '--arch=x86'],
   },
   {
-    'name': 'sysroot_mips',
-    'pattern': '.',
-    'condition': '(checkout_linux and checkout_mips)',
-    'action': ['python', 'v8/build/linux/sysroot_scripts/install-sysroot.py',
-               '--arch=mips'],
-  },
-  {
     'name': 'sysroot_x64',
     'pattern': '.',
     'condition': 'checkout_linux and checkout_x64',
@@ -494,19 +486,6 @@ hooks = [
     'pattern': '.',
     'condition': 'host_os == "mac" and checkout_fuchsia',
     'action': ['python', 'v8/tools/clang/scripts/download_objdump.py'],
-  },
-  {
-    'name': 'mips_toolchain',
-    'pattern': '.',
-    'condition': 'download_mips_toolchain',
-    'action': [ 'download_from_google_storage',
-                '--no_resume',
-                '--platform=linux',
-                '--no_auth',
-                '-u',
-                '--bucket', 'chromium-v8',
-                '-s', 'v8/tools/mips_toolchain.tar.gz.sha1',
-    ],
   },
   # Download and initialize "vpython" VirtualEnv environment packages.
   {

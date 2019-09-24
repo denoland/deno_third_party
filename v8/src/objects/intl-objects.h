@@ -10,6 +10,7 @@
 #define V8_OBJECTS_INTL_OBJECTS_H_
 
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 
@@ -164,7 +165,7 @@ class Intl {
 
   V8_WARN_UNUSED_RESULT static MaybeHandle<Object> StringLocaleCompare(
       Isolate* isolate, Handle<String> s1, Handle<String> s2,
-      Handle<Object> locales, Handle<Object> options);
+      Handle<Object> locales, Handle<Object> options, const char* method);
 
   V8_WARN_UNUSED_RESULT static Handle<Object> CompareStrings(
       Isolate* isolate, const icu::Collator& collator, Handle<String> s1,
@@ -173,7 +174,7 @@ class Intl {
   // ecma402/#sup-properties-of-the-number-prototype-object
   V8_WARN_UNUSED_RESULT static MaybeHandle<String> NumberToLocaleString(
       Isolate* isolate, Handle<Object> num, Handle<Object> locales,
-      Handle<Object> options);
+      Handle<Object> options, const char* method);
 
   // ecma402/#sec-setnfdigitoptions
   struct NumberFormatDigitOptions {
@@ -336,6 +337,8 @@ class Intl {
   static const std::set<std::string>& GetAvailableLocalesForLocale();
 
   static const std::set<std::string>& GetAvailableLocalesForDateFormat();
+
+  static bool IsStructurallyValidLanguageTag(const std::string& tag);
 };
 
 }  // namespace internal

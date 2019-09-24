@@ -427,6 +427,7 @@ Parser::Parser(ParseInfo* info)
   set_allow_harmony_nullish(info->allow_harmony_nullish());
   set_allow_harmony_optional_chaining(info->allow_harmony_optional_chaining());
   set_allow_harmony_private_methods(info->allow_harmony_private_methods());
+  set_allow_harmony_top_level_await(info->allow_harmony_top_level_await());
   for (int feature = 0; feature < v8::Isolate::kUseCounterFeatureCount;
        ++feature) {
     use_counts_[feature] = 0;
@@ -576,8 +577,32 @@ FunctionLiteral* Parser::DoParseProgram(Isolate* isolate, ParseInfo* info) {
           BuildInitialYield(kNoSourcePosition, kGeneratorFunction);
       body.Add(
           factory()->NewExpressionStatement(initial_yield, kNoSourcePosition));
-
-      ParseModuleItemList(&body);
+      if (allow_harmony_top_level_await()) {
+        // First parse statements into a buffer. Then, if there was a
+        // top level await, create an inner block and rewrite the body of the
+        // module as an async function. Otherwise merge the statements back
+        // into the main body.
+        BlockT block = impl()->NullBlock();
+        {
+          StatementListT statements(pointer_buffer());
+          ParseModuleItemList(&statements);
+          // Modules will always have an initial yield. If there are any
+          // additional suspends, i.e. awaits, then we treat the module as an
+          // AsyncModule.
+          if (function_state.suspend_count() > 1) {
+            scope->set_is_async_module();
+            block = factory()->NewBlock(true, statements);
+          } else {
+            statements.MergeInto(&body);
+          }
+        }
+        if (IsAsyncModule(scope->function_kind())) {
+          impl()->RewriteAsyncFunctionBody(
+              &body, block, factory()->NewUndefinedLiteral(kNoSourcePosition));
+        }
+      } else {
+        ParseModuleItemList(&body);
+      }
       if (!has_error() &&
           !module()->Validate(this->scope()->AsModuleScope(),
                               pending_error_handler(), zone())) {
@@ -2555,7 +2580,7 @@ bool Parser::SkipFunction(const AstRawString* function_name, FunctionKind kind,
       private_name_scope_iter.GetScope()->MigrateUnresolvedPrivateNameTail(
           factory(), unresolved_private_tail);
     }
-    function_scope->AnalyzePartially(this, factory());
+    function_scope->AnalyzePartially(this, factory(), MaybeParsingArrowhead());
   }
 
   return true;
@@ -2782,13 +2807,15 @@ Variable* Parser::CreateSyntheticContextVariable(const AstRawString* name) {
 
 Variable* Parser::CreatePrivateNameVariable(ClassScope* scope,
                                             VariableMode mode,
+                                            IsStaticFlag is_static_flag,
                                             const AstRawString* name) {
   DCHECK_NOT_NULL(name);
   int begin = position();
   int end = end_position();
   bool was_added = false;
   DCHECK(IsConstVariableMode(mode));
-  Variable* var = scope->DeclarePrivateName(name, mode, &was_added);
+  Variable* var =
+      scope->DeclarePrivateName(name, mode, is_static_flag, &was_added);
   if (!was_added) {
     Scanner::Location loc(begin, end);
     ReportMessageAt(loc, MessageTemplate::kVarRedeclaration, var->raw_name());
@@ -2834,8 +2861,10 @@ void Parser::DeclarePrivateClassMember(ClassScope* scope,
     }
   }
 
-  Variable* private_name_var =
-      CreatePrivateNameVariable(scope, GetVariableMode(kind), property_name);
+  Variable* private_name_var = CreatePrivateNameVariable(
+      scope, GetVariableMode(kind),
+      is_static ? IsStaticFlag::kStatic : IsStaticFlag::kNotStatic,
+      property_name);
   int pos = property->value()->position();
   if (pos == kNoSourcePosition) {
     pos = property->key()->position();

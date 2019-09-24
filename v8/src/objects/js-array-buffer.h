@@ -84,19 +84,17 @@ class JSArrayBuffer : public JSObject {
   // (note: this registers it with src/heap/array-buffer-tracker.h)
   V8_EXPORT_PRIVATE void Attach(std::shared_ptr<BackingStore> backing_store);
 
-  // Detach the backing store from this array buffer if it is detachable
-  // and return a reference to the backing store object. This sets the
-  // internal pointer and length to 0 and unregisters the backing store
-  // from the array buffer tracker.
-  // If the array buffer is not detachable, this is a nop.
+  // Detach the backing store from this array buffer if it is detachable.
+  // This sets the internal pointer and length to 0 and unregisters the backing
+  // store from the array buffer tracker. If the array buffer is not detachable,
+  // this is a nop.
   //
   // Array buffers that wrap wasm memory objects are special in that they
   // are normally not detachable, but can become detached as a side effect
   // of growing the underlying memory object. The {force_for_wasm_memory} flag
   // is used by the implementation of Wasm memory growth in order to bypass the
   // non-detachable check.
-  V8_EXPORT_PRIVATE std::shared_ptr<BackingStore> Detach(
-      bool force_for_wasm_memory = false);
+  V8_EXPORT_PRIVATE void Detach(bool force_for_wasm_memory = false);
 
   // Get a reference to backing store of this array buffer, if there is a
   // backing store. Returns nullptr if there is no backing store (e.g. detached
@@ -177,12 +175,6 @@ class JSTypedArray : public JSArrayBufferView {
   // [length]: length of typed array in elements.
   DECL_PRIMITIVE_ACCESSORS(length, size_t)
 
-  // [external_pointer]: TODO(v8:4153)
-  DECL_PRIMITIVE_ACCESSORS(external_pointer, void*)
-
-  // [base_pointer]: TODO(v8:4153)
-  DECL_ACCESSORS(base_pointer, Object)
-
   // ES6 9.4.5.3
   V8_WARN_UNUSED_RESULT static Maybe<bool> DefineOwnProperty(
       Isolate* isolate, Handle<JSTypedArray> o, Handle<Object> key,
@@ -198,10 +190,26 @@ class JSTypedArray : public JSArrayBufferView {
   // Use with care: returns raw pointer into heap.
   inline void* DataPtr();
 
+  inline void SetOffHeapDataPtr(void* base, Address offset);
+  inline void SetOnHeapDataPtr(HeapObject base, Address offset);
+
   // Whether the buffer's backing store is on-heap or off-heap.
   inline bool is_on_heap() const;
 
-  static inline void* ExternalPointerForOnHeapArray();
+  // Note: this is a pointer compression specific optimization.
+  // Normally, on-heap typed arrays contain HeapObject value in |base_pointer|
+  // field and an offset in |external_pointer|.
+  // When pointer compression is enabled we want to combine decompression with
+  // the offset addition. In order to do that we add an isolate root to the
+  // |external_pointer| value and therefore the data pointer computation can
+  // is a simple addition of a (potentially sign-extended) |base_pointer| loaded
+  // as Tagged_t value and an |external_pointer| value.
+  // For full-pointer mode the compensation value is zero.
+  static inline Address ExternalPointerCompensationForOnHeapArray(
+      Isolate* isolate);
+
+  // Subtracts external pointer compensation from the external pointer value.
+  inline void RemoveExternalPointerCompensationForSerialization();
 
   static inline MaybeHandle<JSTypedArray> Validate(Isolate* isolate,
                                                    Handle<Object> receiver,
@@ -240,6 +248,14 @@ class JSTypedArray : public JSArrayBufferView {
 #endif
 
  private:
+  friend class Deserializer;
+
+  // [base_pointer]: TODO(v8:4153)
+  DECL_ACCESSORS(base_pointer, Object)
+
+  // [external_pointer]: TODO(v8:4153)
+  DECL_PRIMITIVE_ACCESSORS(external_pointer, Address)
+
   OBJECT_CONSTRUCTORS(JSTypedArray, JSArrayBufferView);
 };
 

@@ -4,6 +4,7 @@
 
 #include "src/objects/lookup.h"
 
+#include "include/v8config.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/execution/isolate-inl.h"
 #include "src/execution/protectors-inl.h"
@@ -248,7 +249,7 @@ void LookupIterator::InternalUpdateProtector() {
     }
 
     if (!Protectors::IsArraySpeciesLookupChainIntact(isolate_) &&
-        !isolate_->IsPromiseSpeciesLookupChainIntact() &&
+        !Protectors::IsPromiseSpeciesLookupChainIntact(isolate_) &&
         !Protectors::IsRegExpSpeciesLookupChainProtectorIntact(
             native_context) &&
         !Protectors::IsTypedArraySpeciesLookupChainIntact(isolate_)) {
@@ -262,8 +263,8 @@ void LookupIterator::InternalUpdateProtector() {
       Protectors::InvalidateArraySpeciesLookupChain(isolate_);
       return;
     } else if (receiver->IsJSPromise(isolate_)) {
-      if (!isolate_->IsPromiseSpeciesLookupChainIntact()) return;
-      isolate_->InvalidatePromiseSpeciesProtector();
+      if (!Protectors::IsPromiseSpeciesLookupChainIntact(isolate_)) return;
+      Protectors::InvalidatePromiseSpeciesLookupChain(isolate_);
       return;
     } else if (receiver->IsJSRegExp(isolate_)) {
       if (!Protectors::IsRegExpSpeciesLookupChainProtectorIntact(
@@ -293,8 +294,8 @@ void LookupIterator::InternalUpdateProtector() {
         Protectors::InvalidateArraySpeciesLookupChain(isolate_);
       } else if (isolate_->IsInAnyContext(*receiver,
                                           Context::PROMISE_PROTOTYPE_INDEX)) {
-        if (!isolate_->IsPromiseSpeciesLookupChainIntact()) return;
-        isolate_->InvalidatePromiseSpeciesProtector();
+        if (!Protectors::IsPromiseSpeciesLookupChainIntact(isolate_)) return;
+        Protectors::InvalidatePromiseSpeciesLookupChain(isolate_);
       } else if (isolate_->IsInAnyContext(*receiver,
                                           Context::REGEXP_PROTOTYPE_INDEX)) {
         if (!Protectors::IsRegExpSpeciesLookupChainProtectorIntact(
@@ -316,26 +317,26 @@ void LookupIterator::InternalUpdateProtector() {
             *receiver, Context::INITIAL_ARRAY_ITERATOR_PROTOTYPE_INDEX)) {
       // Setting the next property of %ArrayIteratorPrototype% also needs to
       // invalidate the array iterator protector.
-      if (!isolate_->IsArrayIteratorLookupChainIntact()) return;
-      isolate_->InvalidateArrayIteratorProtector();
+      if (!Protectors::IsArrayIteratorLookupChainIntact(isolate_)) return;
+      Protectors::InvalidateArrayIteratorLookupChain(isolate_);
     } else if (receiver->IsJSMapIterator() ||
                isolate_->IsInAnyContext(
                    *receiver, Context::INITIAL_MAP_ITERATOR_PROTOTYPE_INDEX)) {
-      if (!isolate_->IsMapIteratorLookupChainIntact()) return;
-      isolate_->InvalidateMapIteratorProtector();
+      if (!Protectors::IsMapIteratorLookupChainIntact(isolate_)) return;
+      Protectors::InvalidateMapIteratorLookupChain(isolate_);
     } else if (receiver->IsJSSetIterator() ||
                isolate_->IsInAnyContext(
                    *receiver, Context::INITIAL_SET_ITERATOR_PROTOTYPE_INDEX)) {
-      if (!isolate_->IsSetIteratorLookupChainIntact()) return;
-      isolate_->InvalidateSetIteratorProtector();
+      if (!Protectors::IsSetIteratorLookupChainIntact(isolate_)) return;
+      Protectors::InvalidateSetIteratorLookupChain(isolate_);
     } else if (receiver->IsJSStringIterator() ||
                isolate_->IsInAnyContext(
                    *receiver,
                    Context::INITIAL_STRING_ITERATOR_PROTOTYPE_INDEX)) {
       // Setting the next property of %StringIteratorPrototype% invalidates the
       // string iterator protector.
-      if (!isolate_->IsStringIteratorLookupChainIntact()) return;
-      isolate_->InvalidateStringIteratorProtector();
+      if (!Protectors::IsStringIteratorLookupChainIntact(isolate_)) return;
+      Protectors::InvalidateStringIteratorLookupChain(isolate_);
     }
   } else if (*name_ == roots.species_symbol()) {
     // Fetching the context in here since the operation is rather expensive.
@@ -344,7 +345,7 @@ void LookupIterator::InternalUpdateProtector() {
     }
 
     if (!Protectors::IsArraySpeciesLookupChainIntact(isolate_) &&
-        !isolate_->IsPromiseSpeciesLookupChainIntact() &&
+        !Protectors::IsPromiseSpeciesLookupChainIntact(isolate_) &&
         !Protectors::IsRegExpSpeciesLookupChainProtectorIntact(
             native_context) &&
         !Protectors::IsTypedArraySpeciesLookupChainIntact(isolate_)) {
@@ -359,8 +360,8 @@ void LookupIterator::InternalUpdateProtector() {
       Protectors::InvalidateArraySpeciesLookupChain(isolate_);
     } else if (isolate_->IsInAnyContext(*receiver,
                                         Context::PROMISE_FUNCTION_INDEX)) {
-      if (!isolate_->IsPromiseSpeciesLookupChainIntact()) return;
-      isolate_->InvalidatePromiseSpeciesProtector();
+      if (!Protectors::IsPromiseSpeciesLookupChainIntact(isolate_)) return;
+      Protectors::InvalidatePromiseSpeciesLookupChain(isolate_);
     } else if (isolate_->IsInAnyContext(*receiver,
                                         Context::REGEXP_FUNCTION_INDEX)) {
       if (!Protectors::IsRegExpSpeciesLookupChainProtectorIntact(
@@ -374,33 +375,33 @@ void LookupIterator::InternalUpdateProtector() {
       Protectors::InvalidateTypedArraySpeciesLookupChain(isolate_);
     }
   } else if (*name_ == roots.is_concat_spreadable_symbol()) {
-    if (!isolate_->IsIsConcatSpreadableLookupChainIntact()) return;
-    isolate_->InvalidateIsConcatSpreadableProtector();
+    if (!Protectors::IsIsConcatSpreadableLookupChainIntact(isolate_)) return;
+    Protectors::InvalidateIsConcatSpreadableLookupChain(isolate_);
   } else if (*name_ == roots.iterator_symbol()) {
     if (receiver->IsJSArray(isolate_)) {
-      if (!isolate_->IsArrayIteratorLookupChainIntact()) return;
-      isolate_->InvalidateArrayIteratorProtector();
+      if (!Protectors::IsArrayIteratorLookupChainIntact(isolate_)) return;
+      Protectors::InvalidateArrayIteratorLookupChain(isolate_);
     } else if (receiver->IsJSSet(isolate_) || receiver->IsJSSetIterator() ||
                isolate_->IsInAnyContext(
                    *receiver, Context::INITIAL_SET_ITERATOR_PROTOTYPE_INDEX) ||
                isolate_->IsInAnyContext(*receiver,
                                         Context::INITIAL_SET_PROTOTYPE_INDEX)) {
-      if (isolate_->IsSetIteratorLookupChainIntact()) {
-        isolate_->InvalidateSetIteratorProtector();
+      if (Protectors::IsSetIteratorLookupChainIntact(isolate_)) {
+        Protectors::InvalidateSetIteratorLookupChain(isolate_);
       }
     } else if (receiver->IsJSMapIterator() ||
                isolate_->IsInAnyContext(
                    *receiver, Context::INITIAL_MAP_ITERATOR_PROTOTYPE_INDEX)) {
-      if (isolate_->IsMapIteratorLookupChainIntact()) {
-        isolate_->InvalidateMapIteratorProtector();
+      if (Protectors::IsMapIteratorLookupChainIntact(isolate_)) {
+        Protectors::InvalidateMapIteratorLookupChain(isolate_);
       }
     } else if (isolate_->IsInAnyContext(
                    *receiver, Context::INITIAL_ITERATOR_PROTOTYPE_INDEX)) {
-      if (isolate_->IsMapIteratorLookupChainIntact()) {
-        isolate_->InvalidateMapIteratorProtector();
+      if (Protectors::IsMapIteratorLookupChainIntact(isolate_)) {
+        Protectors::InvalidateMapIteratorLookupChain(isolate_);
       }
-      if (isolate_->IsSetIteratorLookupChainIntact()) {
-        isolate_->InvalidateSetIteratorProtector();
+      if (Protectors::IsSetIteratorLookupChainIntact(isolate_)) {
+        Protectors::InvalidateSetIteratorLookupChain(isolate_);
       }
     } else if (isolate_->IsInAnyContext(
                    *receiver, Context::INITIAL_STRING_PROTOTYPE_INDEX)) {
@@ -408,18 +409,18 @@ void LookupIterator::InternalUpdateProtector() {
       // the string iterator protector. Symbol.iterator can also be set on a
       // String wrapper, but not on a primitive string. We only support
       // protector for primitive strings.
-      if (!isolate_->IsStringIteratorLookupChainIntact()) return;
-      isolate_->InvalidateStringIteratorProtector();
+      if (!Protectors::IsStringIteratorLookupChainIntact(isolate_)) return;
+      Protectors::InvalidateStringIteratorLookupChain(isolate_);
     }
   } else if (*name_ == roots.resolve_string()) {
-    if (!isolate_->IsPromiseResolveLookupChainIntact()) return;
+    if (!Protectors::IsPromiseResolveLookupChainIntact(isolate_)) return;
     // Setting the "resolve" property on any %Promise% intrinsic object
     // invalidates the Promise.resolve protector.
     if (isolate_->IsInAnyContext(*receiver, Context::PROMISE_FUNCTION_INDEX)) {
-      isolate_->InvalidatePromiseResolveProtector();
+      Protectors::InvalidatePromiseResolveLookupChain(isolate_);
     }
   } else if (*name_ == roots.then_string()) {
-    if (!isolate_->IsPromiseThenLookupChainIntact()) return;
+    if (!Protectors::IsPromiseThenLookupChainIntact(isolate_)) return;
     // Setting the "then" property on any JSPromise instance or on the
     // initial %PromisePrototype% invalidates the Promise#then protector.
     // Also setting the "then" property on the initial %ObjectPrototype%
@@ -431,7 +432,7 @@ void LookupIterator::InternalUpdateProtector() {
         isolate_->IsInAnyContext(*receiver,
                                  Context::INITIAL_OBJECT_PROTOTYPE_INDEX) ||
         isolate_->IsInAnyContext(*receiver, Context::PROMISE_PROTOTYPE_INDEX)) {
-      isolate_->InvalidatePromiseThenProtector();
+      Protectors::InvalidatePromiseThenLookupChain(isolate_);
     }
   }
 }
@@ -978,7 +979,12 @@ Handle<Map> LookupIterator::GetFieldOwnerMap() const {
                 isolate_);
 }
 
-FieldIndex LookupIterator::GetFieldIndex() const {
+#if defined(__clang__) && defined(V8_OS_WIN)
+// Force function alignment to work around CPU bug: https://crbug.com/968683
+__attribute__((__aligned__(32)))
+#endif
+FieldIndex
+LookupIterator::GetFieldIndex() const {
   DCHECK(has_property_);
   DCHECK(holder_->HasFastProperties(isolate_));
   DCHECK_EQ(kField, property_details_.location());

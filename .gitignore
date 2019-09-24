@@ -1,3 +1,4 @@
+/.cipd/
 *.pyc
 
 /depot_tools/.cipd_**

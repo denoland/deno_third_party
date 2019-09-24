@@ -272,8 +272,8 @@ void Assembler::AllocateAndInstallRequestedHeapObjects(Isolate* isolate) {
     Handle<HeapObject> object;
     switch (request.kind()) {
       case HeapObjectRequest::kHeapNumber:
-        object = isolate->factory()->NewHeapNumber(request.heap_number(),
-                                                   AllocationType::kOld);
+        object = isolate->factory()->NewHeapNumber<AllocationType::kOld>(
+            request.heap_number());
         break;
       case HeapObjectRequest::kStringConstant: {
         const StringConstantBase* str = request.string();
@@ -2231,6 +2231,13 @@ void Assembler::rcpps(XMMRegister dst, Operand src) {
   EnsureSpace ensure_space(this);
   EMIT(0x0F);
   EMIT(0x53);
+  emit_sse_operand(dst, src);
+}
+
+void Assembler::sqrtps(XMMRegister dst, Operand src) {
+  EnsureSpace ensure_space(this);
+  EMIT(0x0F);
+  EMIT(0x51);
   emit_sse_operand(dst, src);
 }
 

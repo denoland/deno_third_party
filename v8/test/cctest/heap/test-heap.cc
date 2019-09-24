@@ -1791,7 +1791,7 @@ TEST(HeapNumberAlignment) {
 
     AlignOldSpace(required_alignment, offset);
     Handle<Object> number_old =
-        factory->NewNumber(1.000321, AllocationType::kOld);
+        factory->NewNumber<AllocationType::kOld>(1.000321);
     CHECK(number_old->IsHeapNumber());
     CHECK(heap->InOldSpace(*number_old));
     CHECK_EQ(0, Heap::GetFillToAlign(HeapObject::cast(*number_old).address(),
@@ -3663,9 +3663,58 @@ TEST(DeferredHandles) {
   DeferredHandleScope deferred(isolate);
   DummyVisitor visitor;
   isolate->handle_scope_implementer()->Iterate(&visitor);
-  delete deferred.Detach();
+  deferred.Detach();
 }
 
+static void TestFillersFromDeferredHandles(bool promote) {
+  // We assume that the fillers can only arise when left-trimming arrays.
+  Isolate* isolate = CcTest::i_isolate();
+  Heap* heap = isolate->heap();
+  v8::HandleScope scope(reinterpret_cast<v8::Isolate*>(isolate));
+
+  const size_t n = 10;
+  Handle<FixedArray> array = isolate->factory()->NewFixedArray(n);
+
+  if (promote) {
+    // Age the array so it's ready for promotion on next GC.
+    CcTest::CollectGarbage(NEW_SPACE);
+  }
+  CHECK(Heap::InYoungGeneration(*array));
+
+  DeferredHandleScope deferred_scope(isolate);
+
+  // Trim the array three times to different sizes so all kinds of fillers are
+  // created and tracked by the deferred handles.
+  Handle<FixedArrayBase> filler_1 = Handle<FixedArrayBase>(*array, isolate);
+  Handle<FixedArrayBase> filler_2 =
+      Handle<FixedArrayBase>(heap->LeftTrimFixedArray(*filler_1, 1), isolate);
+  Handle<FixedArrayBase> filler_3 =
+      Handle<FixedArrayBase>(heap->LeftTrimFixedArray(*filler_2, 2), isolate);
+  Handle<FixedArrayBase> tail =
+      Handle<FixedArrayBase>(heap->LeftTrimFixedArray(*filler_3, 3), isolate);
+
+  std::unique_ptr<DeferredHandles> deferred_handles(deferred_scope.Detach());
+
+  // GC should retain the trimmed array but drop all of the three fillers.
+  CcTest::CollectGarbage(NEW_SPACE);
+  if (promote) {
+    CHECK(heap->InOldSpace(*tail));
+  } else {
+    CHECK(Heap::InYoungGeneration(*tail));
+  }
+  CHECK_EQ(n - 6, (*tail).length());
+  CHECK(!filler_1->IsHeapObject());
+  CHECK(!filler_2->IsHeapObject());
+  CHECK(!filler_3->IsHeapObject());
+}
+
+TEST(DoNotEvacuateFillersFromDeferredHandles) {
+  TestFillersFromDeferredHandles(false /*promote*/);
+}
+
+TEST(DoNotPromoteFillersFromDeferredHandles) {
+  TestFillersFromDeferredHandles(true /*promote*/);
+}
 
 TEST(IncrementalMarkingStepMakesBigProgressWithLargeObjects) {
   if (!FLAG_incremental_marking) return;
@@ -5267,34 +5316,6 @@ TEST(ScriptIterator) {
   }
 
   CHECK_EQ(0, script_count);
-}
-
-
-TEST(SharedFunctionInfoIterator) {
-  CcTest::InitializeVM();
-  v8::HandleScope scope(CcTest::isolate());
-  Isolate* isolate = CcTest::i_isolate();
-  Heap* heap = CcTest::heap();
-  LocalContext context;
-
-  CcTest::CollectAllGarbage();
-  CcTest::CollectAllGarbage();
-
-  int sfi_count = 0;
-  {
-    HeapObjectIterator it(heap);
-    for (HeapObject obj = it.Next(); !obj.is_null(); obj = it.Next()) {
-      if (!obj.IsSharedFunctionInfo()) continue;
-      sfi_count++;
-    }
-  }
-
-  {
-    SharedFunctionInfo::GlobalIterator iterator(isolate);
-    while (!iterator.Next().is_null()) sfi_count--;
-  }
-
-  CHECK_EQ(0, sfi_count);
 }
 
 // This is the same as Factory::NewByteArray, except it doesn't retry on

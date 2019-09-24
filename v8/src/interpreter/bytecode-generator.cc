@@ -3084,7 +3084,8 @@ void BytecodeGenerator::BuildAsyncReturn(int source_position) {
         .StoreAccumulatorInRegister(args[2])  // done
         .CallRuntime(Runtime::kInlineAsyncGeneratorResolve, args);
   } else {
-    DCHECK(IsAsyncFunction(info()->literal()->kind()));
+    DCHECK(IsAsyncFunction(info()->literal()->kind()) ||
+           IsAsyncModule(info()->literal()->kind()));
     RegisterList args = register_allocator()->NewRegisterList(3);
     builder()
         ->MoveRegister(generator_object(), args[0])  // generator
@@ -5431,16 +5432,11 @@ void BytecodeGenerator::BuildGetIterator(IteratorType hint) {
           feedback_index(feedback_spec()->AddCallICSlot());
 
       // Let method be GetMethod(obj, @@iterator) and
-      // iterator be Call(method, obj).
+      // iterator be Call(method, obj). If Type(iterator) is not Object,
+      // throw a SymbolIteratorInvalid exception.
       builder()->StoreAccumulatorInRegister(obj).GetIterator(
           obj, load_feedback_index, call_feedback_index);
     }
-
-    // If Type(iterator) is not Object, throw a TypeError exception.
-    BytecodeLabel no_type_error;
-    builder()->JumpIfJSReceiver(&no_type_error);
-    builder()->CallRuntime(Runtime::kThrowSymbolIteratorInvalid);
-    builder()->Bind(&no_type_error);
   }
 }
 
@@ -5588,9 +5584,9 @@ void BytecodeGenerator::VisitTemplateLiteral(TemplateLiteral* expr) {
 void BytecodeGenerator::BuildThisVariableLoad() {
   DeclarationScope* receiver_scope = closure_scope()->GetReceiverScope();
   Variable* var = receiver_scope->receiver();
-  // TODO(littledan): implement 'this' hole check elimination.
   HoleCheckMode hole_check_mode =
-      IsDerivedConstructor(receiver_scope->function_kind())
+      (IsDerivedConstructor(receiver_scope->function_kind()) &&
+       !receiver_scope->can_elide_this_hole_checks())
           ? HoleCheckMode::kRequired
           : HoleCheckMode::kElided;
   BuildVariableLoad(var, hole_check_mode);
@@ -6099,8 +6095,9 @@ void BytecodeGenerator::BuildGeneratorObjectVariableInitialization() {
   RegisterAllocationScope register_scope(this);
   RegisterList args = register_allocator()->NewRegisterList(2);
   Runtime::FunctionId function_id =
-      (IsAsyncFunction(info()->literal()->kind()) &&
-       !IsAsyncGeneratorFunction(info()->literal()->kind()))
+      ((IsAsyncFunction(info()->literal()->kind()) &&
+        !IsAsyncGeneratorFunction(info()->literal()->kind())) ||
+       IsAsyncModule(info()->literal()->kind()))
           ? Runtime::kInlineAsyncFunctionEnter
           : Runtime::kInlineCreateJSGeneratorObject;
   builder()

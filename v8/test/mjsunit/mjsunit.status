@@ -81,6 +81,9 @@
   'wasm/shared-memory-worker-explicit-gc-stress': [PASS, ['mode == debug', SKIP], ['tsan', SKIP]],
   'wasm/shared-memory-worker-gc-stress': [PASS, ['mode == debug', SKIP]],
 
+  # Slow in simulator runs.
+  'random-bit-correlations': [PASS, ['simulator_run == True', SLOW]],
+
   ##############################################################################
   # Only RegExp stuff tested, no need for extensive optimizing compiler tests.
   'regexp-global': [PASS, NO_VARIANTS],
@@ -292,7 +295,6 @@
   'compare-known-objects-slow': [SKIP],
   'compiler/array-multiple-receiver-maps': [SKIP],
   # Tests taking too long
-  'packed-elements': [SKIP],
   'regress/regress-1122': [SKIP],
   'regress/regress-331444': [SKIP],
   'regress/regress-353551': [SKIP],
@@ -341,9 +343,6 @@
   'es6/regress/regress-crbug-465671-null': [SKIP],
   'regress/regress-148378': [SKIP],
   'regress/regress-crbug-762472': [SKIP],
-
-  # https://crbug.com/v8/9221
-  'wasm/grow-shared-memory': [SKIP],
 }],  # 'gc_stress == True'
 
 ##############################################################################
@@ -396,13 +395,14 @@
   'regress/regress-crbug-759327': [SKIP],
   'regress/regress-crbug-898974': [SKIP],
   'regexp-tier-up': [SKIP],
+  'regexp-tier-up-multiple': [SKIP],
+  'regress/regress-996234': [SKIP],
 
   # These tests check that we can trace the compiler.
   'tools/compiler-trace-flags': [SKIP],
   'tools/compiler-trace-flags-wasm': [SKIP],
 
   # Too slow on arm64 simulator and debug: https://crbug.com/v8/7783
-  'bit-not': [PASS, ['arch == arm64 and mode == debug and simulator_run', SKIP]],
   'md5': [PASS, ['arch == arm64 and mode == debug and simulator_run', SKIP]],
 
   # Slow with pointer compression.
@@ -474,7 +474,6 @@
   'array-sort': [PASS, SLOW],
   'array-splice': [PASS, SLOW],
   'array-store-and-grow': [PASS, SLOW],
-  'bit-not': [PASS, SLOW],
   'compiler/alloc-number': [PASS, SLOW],
   'compiler/osr-with-args': [PASS, SLOW],
   'generated-transition-stub': [PASS, SLOW],
@@ -483,7 +482,6 @@
   'math-floor-of-div-nosudiv': [PASS, SLOW],
   'math-floor-of-div': [PASS, SLOW],
   'messages': [PASS, SLOW],
-  'packed-elements': [PASS, SLOW],
   'regress/regress-2790': [PASS, SLOW],
   'regress/regress-331444': [PASS, SLOW],
   'regress/regress-490': [PASS, SLOW],
@@ -515,9 +513,6 @@
   'json': [PASS, SLOW],
   'sealed-array-reduce': [PASS, SLOW],
   'try': [PASS, SLOW],
-
-  # Slow without pointer compression
-  'wasm/asm-wasm-u32': [PASS, ['not pointer_compression', SLOW]],
 }],  # 'arch == arm64 and simulator_run'
 
 ##############################################################################
@@ -525,7 +520,6 @@
 
   # Pass but take too long with the simulator in debug mode.
   'array-sort': [PASS, SLOW],
-  'packed-elements': [SKIP],
   'regexp-global': [SKIP],
   'math-floor-of-div': [PASS, SLOW],
   'math-floor-of-div-nosudiv': [PASS, SLOW],
@@ -660,7 +654,6 @@
   # Slow tests.
   'array-sort': [PASS, SLOW],
   'compiler/osr-with-args': [PASS, SLOW],
-  'packed-elements': [PASS, SLOW],
   'regress/regress-2790': [PASS, SLOW],
   'regress/regress-91008': [PASS, SLOW],
   'regress/regress-json-stringify-gc': [PASS, SLOW],
@@ -932,6 +925,10 @@
   'wasm/atomics-stress': [SKIP],
   'wasm/atomics64-stress': [SKIP],
   'wasm/futex': [SKIP],
+
+  # Deadlocks on predictable platform (https://crbug.com/v8/9760).
+  'wasm/async-compile': [SKIP],
+  'wasm/streaming-compile': [SKIP],
 }],  # 'predictable == True'
 
 ##############################################################################
@@ -944,7 +941,6 @@
   'regress/regress-crbug-482998': [PASS, SLOW],
   'regress/regress-91008': [PASS, SLOW],
   'regress/regress-779407': [PASS, SLOW],
-  'packed-elements': [PASS, SLOW],
   'harmony/regexp-property-lu-ui': [PASS, SLOW],
   'whitespaces': [PASS, SLOW],
   'generated-transition-stub': [PASS, SLOW],
@@ -983,6 +979,7 @@
 
   # The RegExp code cache means running this test multiple times is invalid.
   'regexp-tier-up': [SKIP],
+  'regexp-tier-up-multiple': [SKIP],
 
   # Flaky crash on Odroid devices: https://crbug.com/v8/7678
   'regress/regress-336820': [PASS, ['arch == arm and not simulator_run', SKIP]],
@@ -1016,10 +1013,8 @@
 }],  # variant == stress and (arch == arm or arch == arm64) and simulator_run
 
 ##############################################################################
-['variant == nooptimization and (arch == arm or arch == arm64) and simulator_run', {
+['variant in (nooptimization, jitless) and arch in (arm, arm64) and simulator_run', {
   # Slow tests: https://crbug.com/v8/7783
-  'md5': [SKIP],
-  'packed-elements': [SKIP],
   'regress/regress-crbug-319860': [SKIP],
   'wasm/asm-wasm-f32': [SKIP],
   'wasm/asm-wasm-f64': [SKIP],
@@ -1111,5 +1106,27 @@
   # Explicitly sets jitless flag.
   'regress/regress-992389': [SKIP],
 }], # not embedded_builtins
+
+##############################################################################
+['variant == turboprop', {
+  # Deopts differently than TurboFan.
+  'parallel-optimize-disabled': [SKIP],
+  'compiler/native-context-specialization-hole-check': [SKIP],
+  'compiler/number-comparison-truncations': [SKIP],
+  'compiler/redundancy-elimination': [SKIP],
+
+  # Static asserts for optimizations don't hold due to removed optimization
+  # phases.
+  'compiler/concurrent-inlining-1': [SKIP],
+  'compiler/concurrent-inlining-2': [SKIP],
+  'compiler/diamond-followedby-branch': [SKIP],
+  'compiler/load-elimination-const-field': [SKIP],
+}],  # variant == turboprop
+
+##############################################################################
+['variant == top_level_await', {
+  # specifically expects to fail on top level await.
+  'harmony/modules-import-15': [SKIP],
+}], # variant == top_level_await
 
 ]

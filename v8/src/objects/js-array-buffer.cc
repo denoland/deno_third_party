@@ -5,6 +5,7 @@
 #include "src/objects/js-array-buffer.h"
 #include "src/objects/js-array-buffer-inl.h"
 
+#include "src/execution/protectors-inl.h"
 #include "src/logging/counters.h"
 #include "src/objects/property-descriptor.h"
 
@@ -40,26 +41,29 @@ void JSArrayBuffer::SetupEmpty(SharedFlag shared) {
   set_is_detachable(shared != SharedFlag::kShared);
   set_backing_store(nullptr);
   set_byte_length(0);
+  for (int i = 0; i < v8::ArrayBuffer::kEmbedderFieldCount; i++) {
+    SetEmbedderField(i, Smi::kZero);
+  }
 }
 
-std::shared_ptr<BackingStore> JSArrayBuffer::Detach(
-    bool force_for_wasm_memory) {
-  if (was_detached()) return nullptr;
+void JSArrayBuffer::Detach(bool force_for_wasm_memory) {
+  if (was_detached()) return;
 
   if (force_for_wasm_memory) {
     // Skip the is_detachable() check.
   } else if (!is_detachable()) {
     // Not detachable, do nothing.
-    return nullptr;
+    return;
   }
 
   Isolate* const isolate = GetIsolate();
-  auto backing_store = isolate->heap()->UnregisterBackingStore(*this);
-  CHECK_IMPLIES(force_for_wasm_memory && backing_store,
-                backing_store->is_wasm_memory());
+  if (backing_store()) {
+    auto backing_store = isolate->heap()->UnregisterBackingStore(*this);
+    CHECK_IMPLIES(force_for_wasm_memory, backing_store->is_wasm_memory());
+  }
 
-  if (isolate->IsArrayBufferDetachingIntact()) {
-    isolate->InvalidateArrayBufferDetachingProtector();
+  if (Protectors::IsArrayBufferDetachingIntact(isolate)) {
+    Protectors::InvalidateArrayBufferDetaching(isolate);
   }
 
   DCHECK(!is_shared());
@@ -67,8 +71,6 @@ std::shared_ptr<BackingStore> JSArrayBuffer::Detach(
   set_backing_store(nullptr);
   set_byte_length(0);
   set_was_detached(true);
-
-  return backing_store;
 }
 
 void JSArrayBuffer::Attach(std::shared_ptr<BackingStore> backing_store) {
@@ -123,8 +125,7 @@ Handle<JSArrayBuffer> JSTypedArray::GetBuffer() {
 
   // Clear the elements of the typed array.
   self->set_elements(ReadOnlyRoots(isolate).empty_byte_array());
-  self->set_external_pointer(array_buffer->backing_store());
-  self->set_base_pointer(Smi::kZero);
+  self->SetOffHeapDataPtr(array_buffer->backing_store(), 0);
   DCHECK(!self->is_on_heap());
 
   return array_buffer;

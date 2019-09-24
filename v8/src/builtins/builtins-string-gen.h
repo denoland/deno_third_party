@@ -33,6 +33,8 @@ class StringBuiltinsAssembler : public CodeStubAssembler {
                                     SloppyTNode<IntPtrT> index,
                                     UnicodeEncoding encoding);
 
+  TNode<String> StringFromSingleUTF16EncodedCodePoint(TNode<Int32T> codepoint);
+
  protected:
   void StringEqual_Loop(Node* lhs, Node* lhs_instance_type,
                         MachineType lhs_type, Node* rhs,
@@ -51,8 +53,8 @@ class StringBuiltinsAssembler : public CodeStubAssembler {
                             Node* const search_ptr, Node* const search_length,
                             Node* const start_position);
 
-  TNode<IntPtrT> PointerToStringDataAtIndex(Node* const string_data,
-                                            Node* const index,
+  TNode<RawPtrT> PointerToStringDataAtIndex(TNode<RawPtrT> string_data,
+                                            TNode<IntPtrT> index,
                                             String::Encoding encoding);
 
   // substr and slice have a common way of handling the {start} argument.
@@ -81,6 +83,38 @@ class StringBuiltinsAssembler : public CodeStubAssembler {
   TNode<BoolT> SmiIsNegative(TNode<Smi> value) {
     return SmiLessThan(value, SmiConstant(0));
   }
+
+  TNode<String> AllocateConsString(TNode<Uint32T> length, TNode<String> left,
+                                   TNode<String> right);
+
+  TNode<String> StringAdd(Node* context, TNode<String> left,
+                          TNode<String> right);
+
+  // Check if |string| is an indirect (thin or flat cons) string type that can
+  // be dereferenced by DerefIndirectString.
+  void BranchIfCanDerefIndirectString(TNode<String> string,
+                                      TNode<Int32T> instance_type,
+                                      Label* can_deref, Label* cannot_deref);
+  // Allocate an appropriate one- or two-byte ConsString with the first and
+  // second parts specified by |left| and |right|.
+  // Unpack an indirect (thin or flat cons) string type.
+  void DerefIndirectString(TVariable<String>* var_string,
+                           TNode<Int32T> instance_type);
+  // Check if |var_string| has an indirect (thin or flat cons) string type, and
+  // unpack it if so.
+  void MaybeDerefIndirectString(TVariable<String>* var_string,
+                                TNode<Int32T> instance_type, Label* did_deref,
+                                Label* cannot_deref);
+  // Check if |var_left| or |var_right| has an indirect (thin or flat cons)
+  // string type, and unpack it/them if so. Fall through if nothing was done.
+  void MaybeDerefIndirectStrings(TVariable<String>* var_left,
+                                 TNode<Int32T> left_instance_type,
+                                 TVariable<String>* var_right,
+                                 TNode<Int32T> right_instance_type,
+                                 Label* did_something);
+  TNode<String> DerefIndirectString(TNode<String> string,
+                                    TNode<Int32T> instance_type,
+                                    Label* cannot_deref);
 
   // Implements boilerplate logic for {match, split, replace, search} of the
   // form:

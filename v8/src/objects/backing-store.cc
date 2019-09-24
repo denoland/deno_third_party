@@ -123,6 +123,7 @@ BackingStore::~BackingStore() {
   if (buffer_start_ == nullptr) return;  // nothing to deallocate
 
   if (is_wasm_memory_) {
+    DCHECK(free_on_destruct_);
     TRACE_BS("BSw:free  bs=%p mem=%p (length=%zu, capacity=%zu)\n", this,
              buffer_start_, byte_length(), byte_capacity_);
     if (is_shared_) {
@@ -454,6 +455,19 @@ std::unique_ptr<BackingStore> BackingStore::WrapAllocation(
   return std::unique_ptr<BackingStore>(result);
 }
 
+std::unique_ptr<BackingStore> BackingStore::NewEmptyBackingStore(
+    SharedFlag shared) {
+  auto result = new BackingStore(nullptr,  // start
+                                 0,        // length
+                                 0,        // capacity
+                                 shared,   // shared
+                                 false,    // is_wasm_memory
+                                 false,    // free_on_destruct
+                                 false);   // has_guard_regions
+
+  return std::unique_ptr<BackingStore>(result);
+}
+
 void* BackingStore::get_v8_api_array_buffer_allocator() {
   CHECK(!is_wasm_memory_);
   auto array_buffer_allocator =
@@ -485,7 +499,15 @@ inline GlobalBackingStoreRegistryImpl* impl() {
 
 void GlobalBackingStoreRegistry::Register(
     std::shared_ptr<BackingStore> backing_store) {
-  if (!backing_store) return;
+  if (!backing_store || !backing_store->buffer_start()) return;
+
+  if (!backing_store->free_on_destruct()) {
+    // If the backing store buffer is managed by the embedder,
+    // then we don't have to guarantee that there is single unique
+    // BackingStore per buffer_start() because the destructor of
+    // of the BackingStore will be a no-op in that case.
+    return;
+  }
 
   base::MutexGuard scope_lock(&impl()->mutex_);
   if (backing_store->globally_registered_) return;
@@ -500,6 +522,8 @@ void GlobalBackingStoreRegistry::Register(
 
 void GlobalBackingStoreRegistry::Unregister(BackingStore* backing_store) {
   if (!backing_store->globally_registered_) return;
+
+  DCHECK_NOT_NULL(backing_store->buffer_start());
 
   base::MutexGuard scope_lock(&impl()->mutex_);
   const auto& result = impl()->map_.find(backing_store->buffer_start());

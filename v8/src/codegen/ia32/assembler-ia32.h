@@ -38,6 +38,7 @@
 #define V8_CODEGEN_IA32_ASSEMBLER_IA32_H_
 
 #include <deque>
+#include <memory>
 
 #include "src/codegen/assembler.h"
 #include "src/codegen/ia32/constants-ia32.h"
@@ -874,6 +875,8 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void divps(XMMRegister dst, XMMRegister src) { divps(dst, Operand(src)); }
   void rcpps(XMMRegister dst, Operand src);
   void rcpps(XMMRegister dst, XMMRegister src) { rcpps(dst, Operand(src)); }
+  void sqrtps(XMMRegister dst, Operand src);
+  void sqrtps(XMMRegister dst, XMMRegister src) { sqrtps(dst, Operand(src)); }
   void rsqrtps(XMMRegister dst, Operand src);
   void rsqrtps(XMMRegister dst, XMMRegister src) { rsqrtps(dst, Operand(src)); }
   void haddps(XMMRegister dst, Operand src);
@@ -1297,6 +1300,10 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void vrcpps(XMMRegister dst, XMMRegister src) { vrcpps(dst, Operand(src)); }
   void vrcpps(XMMRegister dst, Operand src) {
     vinstr(0x53, dst, xmm0, src, kNone, k0F, kWIG);
+  }
+  void vsqrtps(XMMRegister dst, XMMRegister src) { vsqrtps(dst, Operand(src)); }
+  void vsqrtps(XMMRegister dst, Operand src) {
+    vinstr(0x51, dst, xmm0, src, kNone, k0F, kWIG);
   }
   void vrsqrtps(XMMRegister dst, XMMRegister src) {
     vrsqrtps(dst, Operand(src));

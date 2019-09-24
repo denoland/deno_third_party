@@ -31,9 +31,8 @@ void CheckInvariantsOfAbortedPage(Page* page) {
   CHECK(!page->IsFlagSet(Page::COMPACTION_WAS_ABORTED));
 }
 
-void CheckAllObjectsOnPage(
-    std::vector<Handle<FixedArray>>& handles,  // NOLINT(runtime/references)
-    Page* page) {
+void CheckAllObjectsOnPage(const std::vector<Handle<FixedArray>>& handles,
+                           Page* page) {
   for (Handle<FixedArray> fixed_array : handles) {
     CHECK(Page::FromHeapObject(*fixed_array) == page);
   }
@@ -85,6 +84,18 @@ HEAP_TEST(CompactionFullAbortedPage) {
   }
 }
 
+namespace {
+
+int GetObjectSize(int objects_per_page) {
+  int allocatable =
+      static_cast<int>(MemoryChunkLayout::AllocatableMemoryInDataPage());
+  // Make sure that object_size is a multiple of kTaggedSize.
+  int object_size =
+      ((allocatable / kTaggedSize) / objects_per_page) * kTaggedSize;
+  return Min(kMaxRegularHeapObjectSize, object_size);
+}
+
+}  // namespace
 
 HEAP_TEST(CompactionPartiallyAbortedPage) {
   if (FLAG_never_compact) return;
@@ -97,10 +108,7 @@ HEAP_TEST(CompactionPartiallyAbortedPage) {
   FLAG_manual_evacuation_candidates_selection = true;
 
   const int objects_per_page = 10;
-  const int object_size =
-      Min(kMaxRegularHeapObjectSize,
-          static_cast<int>(MemoryChunkLayout::AllocatableMemoryInDataPage()) /
-              objects_per_page);
+  const int object_size = GetObjectSize(objects_per_page);
 
   CcTest::InitializeVM();
   Isolate* isolate = CcTest::i_isolate();
@@ -177,10 +185,7 @@ HEAP_TEST(CompactionPartiallyAbortedPageIntraAbortedPointers) {
   FLAG_manual_evacuation_candidates_selection = true;
 
   const int objects_per_page = 10;
-  const int object_size =
-      Min(kMaxRegularHeapObjectSize,
-          static_cast<int>(MemoryChunkLayout::AllocatableMemoryInDataPage()) /
-              objects_per_page);
+  const int object_size = GetObjectSize(objects_per_page);
 
   CcTest::InitializeVM();
   Isolate* isolate = CcTest::i_isolate();
@@ -271,10 +276,7 @@ HEAP_TEST(CompactionPartiallyAbortedPageWithStoreBufferEntries) {
   FLAG_manual_evacuation_candidates_selection = true;
 
   const int objects_per_page = 10;
-  const int object_size =
-      Min(kMaxRegularHeapObjectSize,
-          static_cast<int>(MemoryChunkLayout::AllocatableMemoryInDataPage()) /
-              objects_per_page);
+  const int object_size = GetObjectSize(objects_per_page);
 
   CcTest::InitializeVM();
   Isolate* isolate = CcTest::i_isolate();

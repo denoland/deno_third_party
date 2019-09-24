@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/base/adapters.h"
+#include "src/base/iterator.h"
 #include "src/compiler/backend/instruction-selector-impl.h"
 #include "src/compiler/node-matchers.h"
 #include "src/compiler/node-properties.h"
@@ -888,6 +888,10 @@ void InstructionSelector::VisitWord64ReverseBytes(Node* node) { UNREACHABLE(); }
 void InstructionSelector::VisitWord32ReverseBytes(Node* node) {
   IA32OperandGenerator g(this);
   Emit(kIA32Bswap, g.DefineSameAsFirst(node), g.UseRegister(node->InputAt(0)));
+}
+
+void InstructionSelector::VisitSimd128ReverseBytes(Node* node) {
+  UNREACHABLE();
 }
 
 void InstructionSelector::VisitInt32Add(Node* node) {
@@ -1971,6 +1975,7 @@ void InstructionSelector::VisitWord32AtomicPairCompareExchange(Node* node) {
 #define SIMD_UNOP_PREFIX_LIST(V) \
   V(F32x4Abs)                    \
   V(F32x4Neg)                    \
+  V(F32x4Sqrt)                   \
   V(S128Not)
 
 #define SIMD_ANYTRUE_LIST(V) \

@@ -130,15 +130,15 @@ static bool isValidCpuTraceMarkFunctionName() {
 }
 
 void Bootstrapper::InitializeOncePerProcess() {
-  v8::RegisterExtension(v8::base::make_unique<FreeBufferExtension>());
-  v8::RegisterExtension(v8::base::make_unique<GCExtension>(GCFunctionName()));
-  v8::RegisterExtension(v8::base::make_unique<ExternalizeStringExtension>());
-  v8::RegisterExtension(v8::base::make_unique<StatisticsExtension>());
-  v8::RegisterExtension(v8::base::make_unique<TriggerFailureExtension>());
-  v8::RegisterExtension(v8::base::make_unique<IgnitionStatisticsExtension>());
+  v8::RegisterExtension(std::make_unique<FreeBufferExtension>());
+  v8::RegisterExtension(std::make_unique<GCExtension>(GCFunctionName()));
+  v8::RegisterExtension(std::make_unique<ExternalizeStringExtension>());
+  v8::RegisterExtension(std::make_unique<StatisticsExtension>());
+  v8::RegisterExtension(std::make_unique<TriggerFailureExtension>());
+  v8::RegisterExtension(std::make_unique<IgnitionStatisticsExtension>());
   if (isValidCpuTraceMarkFunctionName()) {
-    v8::RegisterExtension(v8::base::make_unique<CpuTraceMarkExtension>(
-        FLAG_expose_cputracemark_as));
+    v8::RegisterExtension(
+        std::make_unique<CpuTraceMarkExtension>(FLAG_expose_cputracemark_as));
   }
 }
 
@@ -869,6 +869,29 @@ void Genesis::CreateIteratorMaps(Handle<JSFunction> empty) {
                            Builtins::kGeneratorPrototypeNext, 1, false);
   generator_next_internal->shared().set_native(false);
   native_context()->set_generator_next_internal(*generator_next_internal);
+
+  // Internal version of async module functions, flagged as non-native such
+  // that they don't show up in Error traces.
+  {
+    Handle<JSFunction> async_module_evaluate_internal =
+        SimpleCreateFunction(isolate(), factory()->next_string(),
+                             Builtins::kAsyncModuleEvaluate, 1, false);
+    async_module_evaluate_internal->shared().set_native(false);
+    native_context()->set_async_module_evaluate_internal(
+        *async_module_evaluate_internal);
+
+    Handle<JSFunction> call_async_module_fulfilled =
+        SimpleCreateFunction(isolate(), factory()->empty_string(),
+                             Builtins::kCallAsyncModuleFulfilled, 1, false);
+    native_context()->set_call_async_module_fulfilled(
+        *call_async_module_fulfilled);
+
+    Handle<JSFunction> call_async_module_rejected =
+        SimpleCreateFunction(isolate(), factory()->empty_string(),
+                             Builtins::kCallAsyncModuleRejected, 1, false);
+    native_context()->set_call_async_module_rejected(
+        *call_async_module_rejected);
+  }
 
   // Create maps for generator functions and their prototypes.  Store those
   // maps in the native context. The "prototype" property descriptor is
@@ -2917,6 +2940,13 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
 
       SimpleInstallGetter(isolate_, prototype, factory->format_string(),
                           Builtins::kDateTimeFormatPrototypeFormat, false);
+
+      SimpleInstallFunction(isolate_, prototype, "formatRange",
+                            Builtins::kDateTimeFormatPrototypeFormatRange, 2,
+                            false);
+      SimpleInstallFunction(
+          isolate_, prototype, "formatRangeToParts",
+          Builtins::kDateTimeFormatPrototypeFormatRangeToParts, 2, false);
     }
 
     {  // -- N u m b e r F o r m a t
@@ -3017,6 +3047,9 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
           JSPluralRules::kSize, 0, factory->the_hole_value(),
           Builtins::kPluralRulesConstructor);
       plural_rules_constructor->shared().DontAdaptArguments();
+      InstallWithIntrinsicDefaultProto(
+          isolate_, plural_rules_constructor,
+          Context::INTL_PLURAL_RULES_FUNCTION_INDEX);
 
       SimpleInstallFunction(isolate(), plural_rules_constructor,
                             "supportedLocalesOf",
@@ -3035,13 +3068,16 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
                             Builtins::kPluralRulesPrototypeSelect, 1, false);
     }
 
-    {  // -- R e l a t i v e T i m e F o r m a t e
+    {  // -- R e l a t i v e T i m e F o r m a t
       Handle<JSFunction> relative_time_format_fun = InstallFunction(
           isolate(), intl, "RelativeTimeFormat",
           JS_INTL_RELATIVE_TIME_FORMAT_TYPE, JSRelativeTimeFormat::kSize, 0,
           factory->the_hole_value(), Builtins::kRelativeTimeFormatConstructor);
       relative_time_format_fun->shared().set_length(0);
       relative_time_format_fun->shared().DontAdaptArguments();
+      InstallWithIntrinsicDefaultProto(
+          isolate_, relative_time_format_fun,
+          Context::INTL_RELATIVE_TIME_FORMAT_FUNCTION_INDEX);
 
       SimpleInstallFunction(
           isolate(), relative_time_format_fun, "supportedLocalesOf",
@@ -3072,6 +3108,8 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
           Builtins::kListFormatConstructor);
       list_format_fun->shared().set_length(0);
       list_format_fun->shared().DontAdaptArguments();
+      InstallWithIntrinsicDefaultProto(
+          isolate_, list_format_fun, Context::INTL_LIST_FORMAT_FUNCTION_INDEX);
 
       SimpleInstallFunction(isolate(), list_format_fun, "supportedLocalesOf",
                             Builtins::kListFormatSupportedLocalesOf, 1, false);
@@ -3526,6 +3564,7 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
     Handle<Map> map = factory->NewMap(
         JS_MODULE_NAMESPACE_TYPE, JSModuleNamespace::kSize,
         TERMINAL_FAST_ELEMENTS_KIND, JSModuleNamespace::kInObjectFieldCount);
+    map->SetConstructor(native_context()->object_function());
     Map::SetPrototype(isolate(), map, isolate_->factory()->null_value());
     Map::EnsureDescriptorSlack(isolate_, map, 1);
     native_context()->set_js_module_namespace_map(*map);
@@ -4268,16 +4307,14 @@ EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_import_meta)
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_regexp_sequence)
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_optional_chaining)
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_nullish)
+EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_top_level_await)
 
 #ifdef V8_INTL_SUPPORT
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_add_calendar_numbering_system)
-EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_bigint)
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_dateformat_day_period)
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(
     harmony_intl_dateformat_fractional_second_digits)
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_dateformat_quarter)
-EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_datetime_style)
-EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_numberformat_unified)
 #endif  // V8_INTL_SUPPORT
 
 #undef EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE
@@ -4436,32 +4473,6 @@ void Genesis::InitializeGlobal_harmony_regexp_match_indices() {
 
 #ifdef V8_INTL_SUPPORT
 
-void Genesis::InitializeGlobal_harmony_intl_date_format_range() {
-  if (!FLAG_harmony_intl_date_format_range) return;
-
-  Handle<JSObject> intl = Handle<JSObject>::cast(
-      JSReceiver::GetProperty(
-          isolate(),
-          Handle<JSReceiver>(native_context()->global_object(), isolate()),
-          factory()->InternalizeUtf8String("Intl"))
-          .ToHandleChecked());
-
-  Handle<JSFunction> date_time_format_constructor = Handle<JSFunction>::cast(
-      JSReceiver::GetProperty(
-          isolate(), intl, factory()->InternalizeUtf8String("DateTimeFormat"))
-          .ToHandleChecked());
-
-  Handle<JSObject> prototype(
-      JSObject::cast(date_time_format_constructor->prototype()), isolate_);
-
-  SimpleInstallFunction(isolate_, prototype, "formatRange",
-                        Builtins::kDateTimeFormatPrototypeFormatRange, 2,
-                        false);
-  SimpleInstallFunction(isolate_, prototype, "formatRangeToParts",
-                        Builtins::kDateTimeFormatPrototypeFormatRangeToParts, 2,
-                        false);
-}
-
 void Genesis::InitializeGlobal_harmony_intl_segmenter() {
   if (!FLAG_harmony_intl_segmenter) return;
   Handle<JSObject> intl = Handle<JSObject>::cast(
@@ -4476,6 +4487,8 @@ void Genesis::InitializeGlobal_harmony_intl_segmenter() {
       0, factory()->the_hole_value(), Builtins::kSegmenterConstructor);
   segmenter_fun->shared().set_length(0);
   segmenter_fun->shared().DontAdaptArguments();
+  InstallWithIntrinsicDefaultProto(isolate_, segmenter_fun,
+                                   Context::INTL_SEGMENTER_FUNCTION_INDEX);
 
   SimpleInstallFunction(isolate(), segmenter_fun, "supportedLocalesOf",
                         Builtins::kSegmenterSupportedLocalesOf, 1, false);

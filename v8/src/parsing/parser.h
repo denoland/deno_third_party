@@ -172,8 +172,9 @@ class V8_EXPORT_PRIVATE Parser : public NON_EXPORTED_BASE(ParserBase<Parser>) {
       parsing::ReportErrorsAndStatisticsMode stats_mode);
 
   bool AllowsLazyParsingWithoutUnresolvedVariables() const {
-    return scope()->AllowsLazyParsingWithoutUnresolvedVariables(
-        original_scope_);
+    return !MaybeParsingArrowhead() &&
+           scope()->AllowsLazyParsingWithoutUnresolvedVariables(
+               original_scope_);
   }
 
   bool parse_lazily() const { return mode_ == PARSE_LAZILY; }
@@ -300,6 +301,7 @@ class V8_EXPORT_PRIVATE Parser : public NON_EXPORTED_BASE(ParserBase<Parser>) {
                              ZonePtrList<const AstRawString>* names);
   Variable* CreateSyntheticContextVariable(const AstRawString* synthetic_name);
   Variable* CreatePrivateNameVariable(ClassScope* scope, VariableMode mode,
+                                      IsStaticFlag is_static_flag,
                                       const AstRawString* name);
   FunctionLiteral* CreateInitializerFunction(
       const char* name, DeclarationScope* scope,

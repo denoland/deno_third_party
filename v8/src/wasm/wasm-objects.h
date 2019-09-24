@@ -5,13 +5,13 @@
 #ifndef V8_WASM_WASM_OBJECTS_H_
 #define V8_WASM_WASM_OBJECTS_H_
 
+#include <memory>
+
 #include "src/base/bits.h"
 #include "src/codegen/signature.h"
 #include "src/debug/debug.h"
-#include "src/debug/interface-types.h"
 #include "src/heap/heap.h"
 #include "src/objects/objects.h"
-#include "src/objects/script.h"
 #include "src/wasm/value-type.h"
 
 // Has to be the last include (doesn't have include guards)
@@ -197,33 +197,11 @@ class WasmModuleObject : public JSObject {
   // Does not allocate, hence gc-safe.
   Vector<const uint8_t> GetRawFunctionName(uint32_t func_index);
 
-  // Return the byte offset of the function identified by the given index.
-  // The offset will be relative to the start of the module bytes.
-  // Returns -1 if the function index is invalid.
-  int GetFunctionOffset(uint32_t func_index);
-
-  // Returns the function containing the given byte offset.
-  // Returns -1 if the byte offset is not contained in any function of this
-  // module.
-  int GetContainingFunction(uint32_t byte_offset);
-
-  // Translate from byte offset in the module to function number and byte offset
-  // within that function, encoded as line and column in the position info.
-  // Returns true if the position is valid inside this module, false otherwise.
-  bool GetPositionInfo(uint32_t position, Script::PositionInfo* info);
-
   // Get the source position from a given function index and byte offset,
   // for either asm.js or pure Wasm modules.
   static int GetSourcePosition(Handle<WasmModuleObject>, uint32_t func_index,
                                uint32_t byte_offset,
                                bool is_at_number_conversion);
-
-  // Compute the disassembly of a wasm function.
-  // Returns the disassembly string and a list of <byte_offset, line, column>
-  // entries, mapping wasm byte offsets to line and column in the disassembly.
-  // The list is guaranteed to be ordered by the byte_offset.
-  // Returns an empty string and empty vector if the function index is invalid.
-  V8_EXPORT_PRIVATE debug::WasmDisassembly DisassembleFunction(int func_index);
 
   // Extract a portion of the wire bytes as UTF-8 string.
   // Returns a null handle if the respective bytes do not form a valid UTF-8

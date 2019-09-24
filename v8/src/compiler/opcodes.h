@@ -669,9 +669,10 @@
   V(Word64Ctz)                              \
   V(Word64ReverseBits)                      \
   V(Word64ReverseBytes)                     \
+  V(Simd128ReverseBytes)                    \
   V(Int64AbsWithOverflow)                   \
   V(BitcastTaggedToWord)                    \
-  V(BitcastTaggedSignedToWord)              \
+  V(BitcastTaggedToWordForTagAndSmiBits)    \
   V(BitcastWordToTagged)                    \
   V(BitcastWordToTaggedSigned)              \
   V(BitcastWord32ToCompressedSigned)        \
@@ -749,6 +750,7 @@
   V(F64x2ReplaceLane)           \
   V(F64x2Abs)                   \
   V(F64x2Neg)                   \
+  V(F64x2Sqrt)                  \
   V(F64x2Add)                   \
   V(F64x2Sub)                   \
   V(F64x2Mul)                   \
@@ -759,6 +761,8 @@
   V(F64x2Ne)                    \
   V(F64x2Lt)                    \
   V(F64x2Le)                    \
+  V(F64x2Qfma)                  \
+  V(F64x2Qfms)                  \
   V(F32x4Splat)                 \
   V(F32x4ExtractLane)           \
   V(F32x4ReplaceLane)           \
@@ -766,6 +770,7 @@
   V(F32x4UConvertI32x4)         \
   V(F32x4Abs)                   \
   V(F32x4Neg)                   \
+  V(F32x4Sqrt)                  \
   V(F32x4RecipApprox)           \
   V(F32x4RecipSqrtApprox)       \
   V(F32x4Add)                   \
@@ -781,6 +786,8 @@
   V(F32x4Le)                    \
   V(F32x4Gt)                    \
   V(F32x4Ge)                    \
+  V(F32x4Qfma)                  \
+  V(F32x4Qfms)                  \
   V(I64x2Splat)                 \
   V(I64x2ExtractLane)           \
   V(I64x2ReplaceLane)           \

@@ -327,8 +327,9 @@ void Assembler::AllocateAndInstallRequestedHeapObjects(Isolate* isolate) {
     Address pc = reinterpret_cast<Address>(buffer_start_) + request.offset();
     switch (request.kind()) {
       case HeapObjectRequest::kHeapNumber: {
-        Handle<HeapNumber> object = isolate->factory()->NewHeapNumber(
-            request.heap_number(), AllocationType::kOld);
+        Handle<HeapNumber> object =
+            isolate->factory()->NewHeapNumber<AllocationType::kOld>(
+                request.heap_number());
         WriteUnalignedValue(pc, object);
         break;
       }
@@ -4102,6 +4103,42 @@ void Assembler::vfmass(byte op, XMMRegister dst, XMMRegister src1,
   DCHECK(IsEnabled(FMA3));
   EnsureSpace ensure_space(this);
   emit_vex_prefix(dst, src1, src2, kLIG, k66, k0F38, kW0);
+  emit(op);
+  emit_sse_operand(dst, src2);
+}
+
+void Assembler::vfmaps(byte op, XMMRegister dst, XMMRegister src1,
+                       XMMRegister src2) {
+  DCHECK(IsEnabled(FMA3));
+  EnsureSpace ensure_space(this);
+  emit_vex_prefix(dst, src1, src2, kL128, k66, k0F38, kW0);
+  emit(op);
+  emit_sse_operand(dst, src2);
+}
+
+void Assembler::vfmaps(byte op, XMMRegister dst, XMMRegister src1,
+                       Operand src2) {
+  DCHECK(IsEnabled(FMA3));
+  EnsureSpace ensure_space(this);
+  emit_vex_prefix(dst, src1, src2, kL128, k66, k0F38, kW0);
+  emit(op);
+  emit_sse_operand(dst, src2);
+}
+
+void Assembler::vfmapd(byte op, XMMRegister dst, XMMRegister src1,
+                       XMMRegister src2) {
+  DCHECK(IsEnabled(FMA3));
+  EnsureSpace ensure_space(this);
+  emit_vex_prefix(dst, src1, src2, kL128, k66, k0F38, kW1);
+  emit(op);
+  emit_sse_operand(dst, src2);
+}
+
+void Assembler::vfmapd(byte op, XMMRegister dst, XMMRegister src1,
+                       Operand src2) {
+  DCHECK(IsEnabled(FMA3));
+  EnsureSpace ensure_space(this);
+  emit_vex_prefix(dst, src1, src2, kL128, k66, k0F38, kW1);
   emit(op);
   emit_sse_operand(dst, src2);
 }

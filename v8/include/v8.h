@@ -4711,6 +4711,33 @@ class V8_EXPORT WasmModuleObjectBuilderStreaming final {
 
 enum class ArrayBufferCreationMode { kInternalized, kExternalized };
 
+/**
+ * A wrapper around the backing store (i.e. the raw memory) of an array buffer.
+ *
+ * The allocation and destruction of backing stores is generally managed by
+ * V8. Clients should always use standard C++ memory ownership types (i.e.
+ * std::unique_ptr and std::shared_ptr) to manage lifetimes of backing stores
+ * properly, since V8 internal objects may alias backing stores.
+ */
+class V8_EXPORT BackingStore : public v8::internal::BackingStoreBase {
+ public:
+  ~BackingStore();
+
+  /**
+   * Return a pointer to the beginning of the memory block for this backing
+   * store. The pointer is only valid as long as this backing store object
+   * lives.
+   */
+  void* Data() const;
+
+  /**
+   * The length (in bytes) of this backing store.
+   */
+  size_t ByteLength() const;
+
+ private:
+  BackingStore();
+};
 
 /**
  * An instance of the built-in ArrayBuffer constructor (ES6 draft 15.13.5).
@@ -4848,6 +4875,21 @@ class V8_EXPORT ArrayBuffer : public Object {
       ArrayBufferCreationMode mode = ArrayBufferCreationMode::kExternalized);
 
   /**
+   * Create a new ArrayBuffer with an existing backing store.
+   * The created array keeps a reference to the backing store until the array
+   * is garbage collected. Note that the IsExternal bit does not affect this
+   * reference from the array to the backing store.
+   *
+   * In future IsExternal bit will be removed. Until then the bit is set as
+   * follows. If the backing store does not own the underlying buffer, then
+   * the array is created in externalized state. Otherwise, the array is created
+   * in internalized state. In the latter case the array can be transitioned
+   * to the externalized state using Externalize(backing_store).
+   */
+  static Local<ArrayBuffer> New(Isolate* isolate,
+                                std::shared_ptr<BackingStore> backing_store);
+
+  /**
    * Returns true if ArrayBuffer is externalized, that is, does not
    * own its memory block.
    */
@@ -4858,12 +4900,6 @@ class V8_EXPORT ArrayBuffer : public Object {
    */
   bool IsDetachable() const;
 
-  // TODO(913887): fix the use of 'neuter' in the API.
-  V8_DEPRECATED("Use IsDetachable() instead.",
-                inline bool IsNeuterable() const) {
-    return IsDetachable();
-  }
-
   /**
    * Detaches this ArrayBuffer and all its views (typed arrays).
    * Detaching sets the byte length of the buffer and all typed arrays to zero,
@@ -4871,9 +4907,6 @@ class V8_EXPORT ArrayBuffer : public Object {
    * ArrayBuffer should have been externalized and must be detachable.
    */
   void Detach();
-
-  // TODO(913887): fix the use of 'neuter' in the API.
-  V8_DEPRECATED("Use Detach() instead.", inline void Neuter()) { Detach(); }
 
   /**
    * Make this ArrayBuffer external. The pointer to underlying memory block
@@ -4888,6 +4921,15 @@ class V8_EXPORT ArrayBuffer : public Object {
   Contents Externalize();
 
   /**
+   * Marks this ArrayBuffer external given a witness that the embedder
+   * has fetched the backing store using the new GetBackingStore() function.
+   *
+   * With the new lifetime management of backing stores there is no need for
+   * externalizing, so this function exists only to make the transition easier.
+   */
+  void Externalize(const std::shared_ptr<BackingStore>& backing_store);
+
+  /**
    * Get a pointer to the ArrayBuffer's underlying memory block without
    * externalizing it. If the ArrayBuffer is not externalized, this pointer
    * will become invalid as soon as the ArrayBuffer gets garbage collected.
@@ -4896,6 +4938,16 @@ class V8_EXPORT ArrayBuffer : public Object {
    * ArrayBuffer while accessing this pointer.
    */
   Contents GetContents();
+
+  /**
+   * Get a shared pointer to the backing store of this array buffer. This
+   * pointer coordinates the lifetime management of the internal storage
+   * with any live ArrayBuffers on the heap, even across isolates. The embedder
+   * should not attempt to manage lifetime of the storage through other means.
+   *
+   * This function replaces both Externalize() and GetContents().
+   */
+  std::shared_ptr<BackingStore> GetBackingStore();
 
   V8_INLINE static ArrayBuffer* Cast(Value* obj);
 
@@ -5273,6 +5325,21 @@ class V8_EXPORT SharedArrayBuffer : public Object {
       ArrayBufferCreationMode mode = ArrayBufferCreationMode::kExternalized);
 
   /**
+   * Create a new SharedArrayBuffer with an existing backing store.
+   * The created array keeps a reference to the backing store until the array
+   * is garbage collected. Note that the IsExternal bit does not affect this
+   * reference from the array to the backing store.
+   *
+   * In future IsExternal bit will be removed. Until then the bit is set as
+   * follows. If the backing store does not own the underlying buffer, then
+   * the array is created in externalized state. Otherwise, the array is created
+   * in internalized state. In the latter case the array can be transitioned
+   * to the externalized state using Externalize(backing_store).
+   */
+  static Local<SharedArrayBuffer> New(
+      Isolate* isolate, std::shared_ptr<BackingStore> backing_store);
+
+  /**
    * Create a new SharedArrayBuffer over an existing memory block. Propagate
    * flags to indicate whether the underlying buffer can be grown.
    */
@@ -5303,6 +5370,15 @@ class V8_EXPORT SharedArrayBuffer : public Object {
   Contents Externalize();
 
   /**
+   * Marks this SharedArrayBuffer external given a witness that the embedder
+   * has fetched the backing store using the new GetBackingStore() function.
+   *
+   * With the new lifetime management of backing stores there is no need for
+   * externalizing, so this function exists only to make the transition easier.
+   */
+  void Externalize(const std::shared_ptr<BackingStore>& backing_store);
+
+  /**
    * Get a pointer to the ArrayBuffer's underlying memory block without
    * externalizing it. If the ArrayBuffer is not externalized, this pointer
    * will become invalid as soon as the ArrayBuffer became garbage collected.
@@ -5315,6 +5391,16 @@ class V8_EXPORT SharedArrayBuffer : public Object {
    * v8::Isolate::CreateParams::array_buffer_allocator.
    */
   Contents GetContents();
+
+  /**
+   * Get a shared pointer to the backing store of this array buffer. This
+   * pointer coordinates the lifetime management of the internal storage
+   * with any live ArrayBuffers on the heap, even across isolates. The embedder
+   * should not attempt to manage lifetime of the storage through other means.
+   *
+   * This function replaces both Externalize() and GetContents().
+   */
+  std::shared_ptr<BackingStore> GetBackingStore();
 
   V8_INLINE static SharedArrayBuffer* Cast(Value* obj);
 
@@ -7569,6 +7655,8 @@ struct DeserializeInternalFieldsCallback {
 };
 typedef DeserializeInternalFieldsCallback DeserializeEmbedderFieldsCallback;
 
+enum class MeasureMemoryMode { kSummary, kDetailed };
+
 /**
  * Isolate represents an isolated instance of the V8 engine.  V8 isolates have
  * completely separate states.  Objects from one isolate must not be used in
@@ -8088,6 +8176,17 @@ class V8_EXPORT Isolate {
    * \returns true on success.
    */
   bool GetHeapCodeAndMetadataStatistics(HeapCodeStatistics* object_statistics);
+
+  /**
+   * Enqueues a memory measurement request for the given context and mode.
+   * This API is experimental and may change significantly.
+   *
+   * \param mode Indicates whether the result should include per-context
+   *   memory usage or just the total memory usage.
+   * \returns a promise that will be resolved with memory usage estimate.
+   */
+  v8::MaybeLocal<v8::Promise> MeasureMemory(v8::Local<v8::Context> context,
+                                            MeasureMemoryMode mode);
 
   /**
    * Get a call stack sample from the isolate.

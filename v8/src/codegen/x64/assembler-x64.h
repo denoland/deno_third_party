@@ -39,6 +39,7 @@
 
 #include <deque>
 #include <map>
+#include <memory>
 #include <vector>
 
 #include "src/codegen/assembler.h"
@@ -1299,6 +1300,36 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void vfmass(byte op, XMMRegister dst, XMMRegister src1, XMMRegister src2);
   void vfmass(byte op, XMMRegister dst, XMMRegister src1, Operand src2);
 
+  void vfmadd231ps(XMMRegister dst, XMMRegister src1, XMMRegister src2) {
+    vfmaps(0xb8, dst, src1, src2);
+  }
+  void vfmadd231ps(XMMRegister dst, XMMRegister src1, Operand src2) {
+    vfmaps(0xb8, dst, src1, src2);
+  }
+  void vfnmadd231ps(XMMRegister dst, XMMRegister src1, XMMRegister src2) {
+    vfmaps(0xbc, dst, src1, src2);
+  }
+  void vfnmadd231ps(XMMRegister dst, XMMRegister src1, Operand src2) {
+    vfmaps(0xbc, dst, src1, src2);
+  }
+  void vfmaps(byte op, XMMRegister dst, XMMRegister src1, XMMRegister src2);
+  void vfmaps(byte op, XMMRegister dst, XMMRegister src1, Operand src2);
+
+  void vfmadd231pd(XMMRegister dst, XMMRegister src1, XMMRegister src2) {
+    vfmapd(0xb8, dst, src1, src2);
+  }
+  void vfmadd231pd(XMMRegister dst, XMMRegister src1, Operand src2) {
+    vfmapd(0xb8, dst, src1, src2);
+  }
+  void vfnmadd231pd(XMMRegister dst, XMMRegister src1, XMMRegister src2) {
+    vfmapd(0xbc, dst, src1, src2);
+  }
+  void vfnmadd231pd(XMMRegister dst, XMMRegister src1, Operand src2) {
+    vfmapd(0xbc, dst, src1, src2);
+  }
+  void vfmapd(byte op, XMMRegister dst, XMMRegister src1, XMMRegister src2);
+  void vfmapd(byte op, XMMRegister dst, XMMRegister src1, Operand src2);
+
   void vmovd(XMMRegister dst, Register src);
   void vmovd(XMMRegister dst, Operand src);
   void vmovd(Register dst, XMMRegister src);
@@ -1334,7 +1365,9 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
     impl(opcode, dst, src1, src2);                                  \
   }
 
-  AVX_SP_3(vsqrt, 0x51)
+  // vsqrtpd is defined by sqrtpd in SSE2_INSTRUCTION_LIST
+  AVX_S_3(vsqrt, 0x51)
+  AVX_3(vsqrtps, 0x51, vps)
   AVX_S_3(vadd, 0x58)
   AVX_S_3(vsub, 0x5c)
   AVX_S_3(vmul, 0x59)

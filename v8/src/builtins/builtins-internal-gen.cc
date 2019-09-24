@@ -18,9 +18,6 @@
 namespace v8 {
 namespace internal {
 
-template <typename T>
-using TNode = compiler::TNode<T>;
-
 // -----------------------------------------------------------------------------
 // Stack checks.
 
@@ -32,12 +29,14 @@ void Builtins::Generate_StackCheck(MacroAssembler* masm) {
 // TurboFan support builtins.
 
 TF_BUILTIN(CopyFastSmiOrObjectElements, CodeStubAssembler) {
-  Node* object = Parameter(Descriptor::kObject);
+  TNode<JSObject> js_object = CAST(Parameter(Descriptor::kObject));
 
   // Load the {object}s elements.
-  TNode<Object> source = LoadObjectField(object, JSObject::kElementsOffset);
-  Node* target = CloneFixedArray(source, ExtractFixedArrayFlag::kFixedArrays);
-  StoreObjectField(object, JSObject::kElementsOffset, target);
+  TNode<FixedArrayBase> source =
+      CAST(LoadObjectField(js_object, JSObject::kElementsOffset));
+  TNode<FixedArrayBase> target =
+      CloneFixedArray(source, ExtractFixedArrayFlag::kFixedArrays);
+  StoreObjectField(js_object, JSObject::kElementsOffset, target);
   Return(target);
 }
 
@@ -532,8 +531,8 @@ TF_BUILTIN(DeleteProperty, DeletePropertyBaseAssembler) {
   TNode<Smi> language_mode = CAST(Parameter(Descriptor::kLanguageMode));
   TNode<Context> context = CAST(Parameter(Descriptor::kContext));
 
-  VARIABLE(var_index, MachineType::PointerRepresentation());
-  VARIABLE(var_unique, MachineRepresentation::kTagged, key);
+  TVARIABLE(IntPtrT, var_index);
+  TVARIABLE(Name, var_unique);
   Label if_index(this), if_unique_name(this), if_notunique(this),
       if_notfound(this), slow(this), if_proxy(this);
 
@@ -554,8 +553,7 @@ TF_BUILTIN(DeleteProperty, DeletePropertyBaseAssembler) {
   BIND(&if_unique_name);
   {
     Comment("key is unique name");
-    TNode<Name> unique = CAST(var_unique.value());
-    CheckForAssociatedProtector(unique, &slow);
+    CheckForAssociatedProtector(var_unique.value(), &slow);
 
     Label dictionary(this), dont_delete(this);
     GotoIf(IsDictionaryMap(receiver_map), &dictionary);
@@ -570,8 +568,8 @@ TF_BUILTIN(DeleteProperty, DeletePropertyBaseAssembler) {
 
       TNode<NameDictionary> properties =
           CAST(LoadSlowProperties(CAST(receiver)));
-      DeleteDictionaryProperty(receiver, properties, unique, context,
-                               &dont_delete, &if_notfound);
+      DeleteDictionaryProperty(receiver, properties, var_unique.value(),
+                               context, &dont_delete, &if_notfound);
     }
 
     BIND(&dont_delete);
@@ -587,7 +585,7 @@ TF_BUILTIN(DeleteProperty, DeletePropertyBaseAssembler) {
   {
     // If the string was not found in the string table, then no object can
     // have a property with that name.
-    TryInternalizeString(key, &if_index, &var_index, &if_unique_name,
+    TryInternalizeString(CAST(key), &if_index, &var_index, &if_unique_name,
                          &var_unique, &if_notfound, &slow);
   }
 
@@ -719,11 +717,11 @@ TF_BUILTIN(SetDataProperties, SetOrCopyDataPropertiesAssembler) {
 }
 
 TF_BUILTIN(ForInEnumerate, CodeStubAssembler) {
-  Node* receiver = Parameter(Descriptor::kReceiver);
-  Node* context = Parameter(Descriptor::kContext);
+  TNode<HeapObject> receiver = CAST(Parameter(Descriptor::kReceiver));
+  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
 
   Label if_empty(this), if_runtime(this, Label::kDeferred);
-  Node* receiver_map = CheckEnumCache(receiver, &if_empty, &if_runtime);
+  TNode<Map> receiver_map = CheckEnumCache(receiver, &if_empty, &if_runtime);
   Return(receiver_map);
 
   BIND(&if_empty);
@@ -933,12 +931,6 @@ void Builtins::Generate_MemCopyUint8Uint8(MacroAssembler* masm) {
   masm->Call(BUILTIN_CODE(masm->isolate(), Illegal), RelocInfo::CODE_TARGET);
 }
 #endif  // !defined(V8_TARGET_ARCH_ARM) && !defined(V8_TARGET_ARCH_MIPS)
-
-#ifndef V8_TARGET_ARCH_ARM
-void Builtins::Generate_MemCopyUint16Uint8(MacroAssembler* masm) {
-  masm->Call(BUILTIN_CODE(masm->isolate(), Illegal), RelocInfo::CODE_TARGET);
-}
-#endif  // V8_TARGET_ARCH_ARM
 
 #ifndef V8_TARGET_ARCH_IA32
 void Builtins::Generate_MemMove(MacroAssembler* masm) {

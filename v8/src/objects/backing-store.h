@@ -5,6 +5,9 @@
 #ifndef V8_OBJECTS_BACKING_STORE_H_
 #define V8_OBJECTS_BACKING_STORE_H_
 
+#include <memory>
+
+#include "include/v8-internal.h"
 #include "src/handles/handles.h"
 
 namespace v8 {
@@ -32,7 +35,7 @@ struct SharedWasmMemoryData;
 // and the destructor frees the memory (and page allocation if necessary).
 // Backing stores can also *wrap* embedder-allocated memory. In this case,
 // they do not own the memory, and upon destruction, they do not deallocate it.
-class V8_EXPORT_PRIVATE BackingStore {
+class V8_EXPORT_PRIVATE BackingStore : public BackingStoreBase {
  public:
   ~BackingStore();
 
@@ -59,6 +62,9 @@ class V8_EXPORT_PRIVATE BackingStore {
                                                       size_t allocation_length,
                                                       SharedFlag shared,
                                                       bool free_on_destruct);
+
+  // Create an empty backing store.
+  static std::unique_ptr<BackingStore> NewEmptyBackingStore(SharedFlag shared);
 
   // Accessors.
   void* buffer_start() const { return buffer_start_; }

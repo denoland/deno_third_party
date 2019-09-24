@@ -267,6 +267,7 @@ class ParserBase {
         allow_harmony_dynamic_import_(false),
         allow_harmony_import_meta_(false),
         allow_harmony_private_methods_(false),
+        allow_harmony_top_level_await_(false),
         allow_eval_cache_(true) {
     pointer_buffer_.reserve(32);
     variable_buffer_.reserve(32);
@@ -280,6 +281,7 @@ class ParserBase {
   ALLOW_ACCESSORS(harmony_dynamic_import)
   ALLOW_ACCESSORS(harmony_import_meta)
   ALLOW_ACCESSORS(harmony_private_methods)
+  ALLOW_ACCESSORS(harmony_top_level_await)
   ALLOW_ACCESSORS(eval_cache)
 
 #undef ALLOW_ACCESSORS
@@ -998,6 +1000,21 @@ class ParserBase {
     return var;
   }
 
+  // Similar to UseThis, but does not disable hole check elision.
+  V8_INLINE void CallsSuper() {
+    DeclarationScope* closure_scope = scope()->GetClosureScope();
+    DeclarationScope* receiver_scope = closure_scope->GetReceiverScope();
+    if (closure_scope == receiver_scope) {
+      // It's possible that we're parsing the head of an arrow function, in
+      // which case we haven't realized yet that closure_scope !=
+      // receiver_scope. Mark through the ExpressionScope for now.
+      expression_scope()->RecordCallsSuper();
+    } else {
+      Variable* var = receiver_scope->receiver();
+      var->ForceContextAllocation();
+    }
+  }
+
   V8_INLINE IdentifierT ParseAndClassifyIdentifier(Token::Value token);
   // Parses an identifier or a strict mode future reserved word. Allows passing
   // in function_kind for the case of parsing the identifier in a function
@@ -1091,6 +1108,8 @@ class ParserBase {
 
   ExpressionT ParseArrowFunctionLiteral(const FormalParametersT& parameters);
   void ParseAsyncFunctionBody(Scope* scope, StatementListT* body);
+  void ParseDerivedConstructorBody(StatementListT* body,
+                                   Token::Value end_token);
   ExpressionT ParseAsyncFunctionLiteral();
   ExpressionT ParseClassLiteral(IdentifierT name,
                                 Scanner::Location class_name_location,
@@ -1331,6 +1350,11 @@ class ParserBase {
     return expression_scope_;
   }
 
+  bool MaybeParsingArrowhead() const {
+    return expression_scope_ != nullptr &&
+           expression_scope_->has_possible_arrow_parameter_in_scope_chain();
+  }
+
   class AcceptINScope final {
    public:
     AcceptINScope(ParserBase* parser, bool accept_IN)
@@ -1451,6 +1475,7 @@ class ParserBase {
   bool allow_harmony_dynamic_import_;
   bool allow_harmony_import_meta_;
   bool allow_harmony_private_methods_;
+  bool allow_harmony_top_level_await_;
   bool allow_eval_cache_;
 };
 
@@ -3058,7 +3083,9 @@ ParserBase<Impl>::ParseUnaryExpression() {
 
   Token::Value op = peek();
   if (Token::IsUnaryOrCountOp(op)) return ParseUnaryOrPrefixExpression();
-  if (is_async_function() && op == Token::AWAIT) {
+  if ((is_async_function() || (allow_harmony_top_level_await() &&
+                               IsModule(function_state_->kind()))) &&
+      op == Token::AWAIT) {
     return ParseAwaitExpression();
   }
   return ParsePostfixExpression();
@@ -3468,8 +3495,7 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseSuperExpression(
     if (!is_new && peek() == Token::LPAREN && IsDerivedConstructor(kind)) {
       // TODO(rossberg): This might not be the correct FunctionState for the
       // method here.
-      expression_scope()->RecordThisUse();
-      UseThis();
+      CallsSuper();
       return impl()->NewSuperCallReference(pos);
     }
   }
@@ -4040,16 +4066,18 @@ void ParserBase<Impl>::ParseFunctionBody(
         impl()->ParseAndRewriteGeneratorFunctionBody(pos, kind, &inner_body);
       } else if (IsAsyncFunction(kind)) {
         ParseAsyncFunctionBody(inner_scope, &inner_body);
+      } else if (IsDerivedConstructor(kind)) {
+        ParseDerivedConstructorBody(&inner_body, closing_token);
+        {
+          ExpressionParsingScope expression_scope(impl());
+          inner_body.Add(factory()->NewReturnStatement(impl()->ThisExpression(),
+                                                       kNoSourcePosition));
+          expression_scope.ValidateExpression();
+        }
       } else {
         ParseStatementList(&inner_body, closing_token);
       }
 
-      if (IsDerivedConstructor(kind)) {
-        ExpressionParsingScope expression_scope(impl());
-        inner_body.Add(factory()->NewReturnStatement(impl()->ThisExpression(),
-                                                     kNoSourcePosition));
-        expression_scope.ValidateExpression();
-      }
       Expect(closing_token);
     }
   }
@@ -4435,7 +4463,9 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseClassLiteral(
   }
 
   if (class_info.requires_brand) {
-    class_scope->DeclareBrandVariable(ast_value_factory(), kNoSourcePosition);
+    // TODO(joyee): implement static brand checking
+    class_scope->DeclareBrandVariable(
+        ast_value_factory(), IsStaticFlag::kNotStatic, kNoSourcePosition);
   }
 
   return impl()->RewriteClassLiteral(class_scope, name, &class_info,
@@ -4704,6 +4734,40 @@ typename ParserBase<Impl>::ExpressionT ParserBase<Impl>::ParseV8Intrinsic() {
   }
 
   return impl()->NewV8Intrinsic(name, args, pos);
+}
+template <typename Impl>
+void ParserBase<Impl>::ParseDerivedConstructorBody(StatementListT* body,
+                                                   Token::Value end_token) {
+  // Allocate a target stack to use for this set of source elements. This way,
+  // all scripts and functions get their own target stack thus avoiding illegal
+  // breaks and continues across functions.
+  TargetScopeT target_scope(this);
+  while (peek() != end_token) {
+    StatementT stat = impl()->NullStatement();
+    // We can elide some hole checks in a derived constructor with a top level
+    // 'super,' but only if 'this' has not been used before the super. For
+    // safety we also require hole checks if 'eval' was called before 'super.'
+    if (V8_UNLIKELY(peek() == Token::SUPER && PeekAhead() == Token::LPAREN) &&
+        !GetReceiverScope()->receiver()->is_used() &&
+        !GetReceiverScope()->inner_scope_calls_eval()) {
+      int pos = peek_position();
+      ExpressionT expr = ParseExpression();
+
+      // Check again to confirm the 'super' expression did not reference
+      // 'this' or use 'eval.'
+      DeclarationScope* receiver_scope = GetReceiverScope();
+      if (!receiver_scope->receiver()->is_used() &&
+          !receiver_scope->inner_scope_calls_eval()) {
+        receiver_scope->set_can_elide_this_hole_checks();
+      }
+      stat = factory()->NewExpressionStatement(expr, pos);
+    } else {
+      stat = ParseStatementListItem();
+    }
+    if (impl()->IsNull(stat)) return;
+    if (stat->IsEmptyStatement()) continue;
+    body->Add(stat);
+  }
 }
 
 template <typename Impl>

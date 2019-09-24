@@ -26,6 +26,7 @@
 #include "src/objects/field-type.h"
 #include "src/objects/foreign-inl.h"
 #include "src/objects/free-space-inl.h"
+#include "src/objects/function-kind.h"
 #include "src/objects/hash-table-inl.h"
 #include "src/objects/js-array-inl.h"
 #include "src/objects/layout-descriptor.h"
@@ -1050,7 +1051,7 @@ void SharedFunctionInfo::SharedFunctionInfoVerify(Isolate* isolate) {
   if (scope_info().length() > 0) {
     ScopeInfo info = scope_info();
     CHECK(kind() == info.function_kind());
-    CHECK_EQ(kind() == kModule, info.scope_type() == MODULE_SCOPE);
+    CHECK_EQ(internal::IsModule(kind()), info.scope_type() == MODULE_SCOPE);
   }
 
   if (IsApiFunction()) {
@@ -1449,7 +1450,7 @@ void JSRegExp::JSRegExpVerify(Isolate* isolate) {
 
       CHECK(arr.get(JSRegExp::kIrregexpCaptureCountIndex).IsSmi());
       CHECK(arr.get(JSRegExp::kIrregexpMaxRegisterCountIndex).IsSmi());
-      CHECK(arr.get(JSRegExp::kIrregexpTierUpTicksIndex).IsSmi());
+      CHECK(arr.get(JSRegExp::kIrregexpTicksUntilTierUpIndex).IsSmi());
       break;
     }
     default:
@@ -1543,10 +1544,18 @@ void Module::ModuleVerify(Isolate* isolate) {
 void SourceTextModule::SourceTextModuleVerify(Isolate* isolate) {
   TorqueGeneratedClassVerifiers::SourceTextModuleVerify(*this, isolate);
 
-  CHECK((status() >= kEvaluating && code().IsSourceTextModuleInfo()) ||
-        (status() == kInstantiated && code().IsJSGeneratorObject()) ||
-        (status() == kInstantiating && code().IsJSFunction()) ||
-        (code().IsSharedFunctionInfo()));
+  if (status() == kErrored) {
+    CHECK(code().IsSourceTextModuleInfo());
+  } else if (status() == kEvaluating || status() == kEvaluated) {
+    CHECK(code().IsJSGeneratorObject());
+  } else {
+    CHECK((status() == kInstantiated && code().IsJSGeneratorObject()) ||
+          (status() == kInstantiating && code().IsJSFunction()) ||
+          (status() == kPreInstantiating && code().IsSharedFunctionInfo()) ||
+          (status() == kUninstantiated && code().IsSharedFunctionInfo()));
+    CHECK(top_level_capability().IsUndefined() && !AsyncParentModuleCount() &&
+          !pending_async_dependencies() && !async_evaluating());
+  }
 
   CHECK_EQ(requested_modules().length(), info().module_requests().length());
 }

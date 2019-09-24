@@ -5,6 +5,8 @@
 #ifndef V8_WASM_WASM_INTERPRETER_H_
 #define V8_WASM_WASM_INTERPRETER_H_
 
+#include <memory>
+
 #include "src/wasm/wasm-opcodes.h"
 #include "src/wasm/wasm-value.h"
 #include "src/zone/zone-containers.h"
@@ -170,9 +172,12 @@ class V8_EXPORT_PRIVATE WasmInterpreter {
     uint32_t ActivationFrameBase(uint32_t activation_id);
   };
 
+  MOVE_ONLY_NO_DEFAULT_CONSTRUCTOR(WasmInterpreter);
+
   WasmInterpreter(Isolate* isolate, const WasmModule* module,
                   const ModuleWireBytes& wire_bytes,
                   Handle<WasmInstanceObject> instance);
+
   ~WasmInterpreter();
 
   //==========================================================================
@@ -214,7 +219,7 @@ class V8_EXPORT_PRIVATE WasmInterpreter {
 
  private:
   Zone zone_;
-  WasmInterpreterInternals* internals_;
+  std::unique_ptr<WasmInterpreterInternals> internals_;
 };
 
 }  // namespace wasm

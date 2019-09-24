@@ -10,6 +10,14 @@ namespace v8 {
 namespace internal {
 namespace torque {
 
+const char* tq_object_override_decls =
+    R"(  std::vector<std::unique_ptr<ObjectProperty>> GetProperties(
+      d::MemoryAccessor accessor) const override;
+  const char* GetName() const override;
+  void Visit(TqObjectVisitor* visitor) const override;
+  bool IsSuperclassOf(const TqObject* other) const override;
+)";
+
 namespace {
 void GenerateClassDebugReader(const ClassType& type, std::ostream& h_contents,
                               std::ostream& cc_contents, std::ostream& visitor,
@@ -32,10 +40,7 @@ void GenerateClassDebugReader(const ClassType& type, std::ostream& h_contents,
   h_contents << " public:\n";
   h_contents << "  inline Tq" << name << "(uintptr_t address) : Tq"
              << super_name << "(address) {}\n";
-  h_contents << "  std::vector<std::unique_ptr<ObjectProperty>> "
-                "GetProperties(d::MemoryAccessor accessor) const override;\n";
-  h_contents << "  const char* GetName() const override;\n";
-  h_contents << "  void Visit(TqObjectVisitor* visitor) const override;\n";
+  h_contents << tq_object_override_decls;
 
   cc_contents << "\nconst char* Tq" << name << "::GetName() const {\n";
   cc_contents << "  return \"v8::internal::" << name << "\";\n";
@@ -44,6 +49,13 @@ void GenerateClassDebugReader(const ClassType& type, std::ostream& h_contents,
   cc_contents << "\nvoid Tq" << name
               << "::Visit(TqObjectVisitor* visitor) const {\n";
   cc_contents << "  visitor->Visit" << name << "(this);\n";
+  cc_contents << "}\n";
+
+  cc_contents << "\nbool Tq" << name
+              << "::IsSuperclassOf(const TqObject* other) const {\n";
+  cc_contents
+      << "  return GetName() != other->GetName() && dynamic_cast<const Tq"
+      << name << "*>(other) != nullptr;\n";
   cc_contents << "}\n";
 
   visitor << "  virtual void Visit" << name << "(const Tq" << name
@@ -136,11 +148,10 @@ void GenerateClassDebugReader(const ClassType& type, std::ostream& h_contents,
       index_param = ", size_t offset";
       index_offset = " + offset * sizeof(value)";
     }
-    get_props_impl
-        << "  result.push_back(v8::base::make_unique<ObjectProperty>(\""
-        << field_name << "\", \"" << field_cc_type_compressed << "\", \""
-        << field_cc_type << "\", " << address_getter << "()"
-        << indexed_field_info << "));\n";
+    get_props_impl << "  result.push_back(std::make_unique<ObjectProperty>(\""
+                   << field_name << "\", \"" << field_cc_type_compressed
+                   << "\", \"" << field_cc_type << "\", " << address_getter
+                   << "()" << indexed_field_info << "));\n";
 
     h_contents << "  uintptr_t " << address_getter << "() const;\n";
     h_contents << "  Value<" << field_value_type << "> " << field_getter
@@ -158,7 +169,8 @@ void GenerateClassDebugReader(const ClassType& type, std::ostream& h_contents,
                 << address_getter << "()" << index_offset
                 << ", reinterpret_cast<uint8_t*>(&value), sizeof(value));\n";
     cc_contents << "  return {validity, "
-                << (is_field_tagged ? "Decompress(value, address_)" : "value")
+                << (is_field_tagged ? "EnsureDecompressed(value, address_)"
+                                    : "value")
                 << "};\n";
     cc_contents << "}\n";
   }

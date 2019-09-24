@@ -5,7 +5,7 @@
 #if V8_TARGET_ARCH_X64
 
 #include "src/api/api-arguments.h"
-#include "src/base/adapters.h"
+#include "src/base/iterator.h"
 #include "src/codegen/code-factory.h"
 #include "src/deoptimizer/deoptimizer.h"
 #include "src/execution/frame-constants.h"
@@ -401,13 +401,13 @@ void Generate_JSEntryVariant(MacroAssembler* masm, StackFrame::Type type,
     __ pushq(r13);
     __ pushq(r14);
     __ pushq(r15);
-#ifdef _WIN64
+#ifdef V8_TARGET_OS_WIN
     __ pushq(rdi);  // Only callee save in Win64 ABI, argument in AMD64 ABI.
     __ pushq(rsi);  // Only callee save in Win64 ABI, argument in AMD64 ABI.
 #endif
     __ pushq(rbx);
 
-#ifdef _WIN64
+#ifdef V8_TARGET_OS_WIN
     // On Win64 XMM6-XMM15 are callee-save.
     __ AllocateStackSpace(EntryFrameConstants::kXMMRegistersBlockSize);
     __ movdqu(Operand(rsp, EntryFrameConstants::kXMMRegisterSize * 0), xmm6);
@@ -507,7 +507,7 @@ void Generate_JSEntryVariant(MacroAssembler* masm, StackFrame::Type type,
   }
 
   // Restore callee-saved registers (X64 conventions).
-#ifdef _WIN64
+#ifdef V8_TARGET_OS_WIN
   // On Win64 XMM6-XMM15 are callee-save
   __ movdqu(xmm6, Operand(rsp, EntryFrameConstants::kXMMRegisterSize * 0));
   __ movdqu(xmm7, Operand(rsp, EntryFrameConstants::kXMMRegisterSize * 1));
@@ -523,7 +523,7 @@ void Generate_JSEntryVariant(MacroAssembler* masm, StackFrame::Type type,
 #endif
 
   __ popq(rbx);
-#ifdef _WIN64
+#ifdef V8_TARGET_OS_WIN
   // Callee save on in Win64 ABI, arguments/volatile in AMD64 ABI.
   __ popq(rsi);
   __ popq(rdi);
@@ -611,17 +611,17 @@ static void Generate_JSEntryTrampolineHelper(MacroAssembler* masm,
     __ Push(rdi);
     __ Push(arg_reg_4);
 
-#ifdef _WIN64
+#ifdef V8_TARGET_OS_WIN
     // Load the previous frame pointer to access C arguments on stack
     __ movq(kScratchRegister, Operand(rbp, 0));
     // Load the number of arguments and setup pointer to the arguments.
     __ movq(rax, Operand(kScratchRegister, EntryFrameConstants::kArgcOffset));
     __ movq(rbx, Operand(kScratchRegister, EntryFrameConstants::kArgvOffset));
-#else   // _WIN64
+#else   // V8_TARGET_OS_WIN
     // Load the number of arguments and setup pointer to the arguments.
     __ movq(rax, r8);
     __ movq(rbx, r9);
-#endif  // _WIN64
+#endif  // V8_TARGET_OS_WIN
 
     // Current stack contents:
     // [rsp + 2 * kSystemPointerSize ... ] : Internal frame
@@ -1154,11 +1154,11 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
     // If ok, push undefined as the initial value for all register file entries.
     Label loop_header;
     Label loop_check;
-    __ LoadRoot(rax, RootIndex::kUndefinedValue);
+    __ LoadRoot(kInterpreterAccumulatorRegister, RootIndex::kUndefinedValue);
     __ j(always, &loop_check, Label::kNear);
     __ bind(&loop_header);
     // TODO(rmcilroy): Consider doing more than one push per loop iteration.
-    __ Push(rax);
+    __ Push(kInterpreterAccumulatorRegister);
     // Continue loop if not done.
     __ bind(&loop_check);
     __ subq(rcx, Immediate(kSystemPointerSize));
@@ -1169,16 +1169,15 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
   // register, initialize it with incoming value which was passed in rdx.
   Label no_incoming_new_target_or_generator_register;
   __ movsxlq(
-      rax,
+      rcx,
       FieldOperand(kInterpreterBytecodeArrayRegister,
                    BytecodeArray::kIncomingNewTargetOrGeneratorRegisterOffset));
-  __ testl(rax, rax);
+  __ testl(rcx, rcx);
   __ j(zero, &no_incoming_new_target_or_generator_register, Label::kNear);
-  __ movq(Operand(rbp, rax, times_system_pointer_size, 0), rdx);
+  __ movq(Operand(rbp, rcx, times_system_pointer_size, 0), rdx);
   __ bind(&no_incoming_new_target_or_generator_register);
 
-  // Load accumulator with undefined.
-  __ LoadRoot(kInterpreterAccumulatorRegister, RootIndex::kUndefinedValue);
+  // The accumulator is already loaded with undefined.
 
   // Load the dispatch table into a register and dispatch to the bytecode
   // handler at the current bytecode offset.
@@ -2716,7 +2715,7 @@ void Builtins::Generate_CEntry(MacroAssembler* masm, int result_size,
   // If argv_mode == kArgvInRegister:
   // r15: pointer to the first argument
 
-#ifdef _WIN64
+#ifdef V8_TARGET_OS_WIN
   // Windows 64-bit ABI passes arguments in rcx, rdx, r8, r9. It requires the
   // stack to be aligned to 16 bytes. It only allows a single-word to be
   // returned in register rax. Larger return sizes must be written to an address
@@ -2738,7 +2737,7 @@ void Builtins::Generate_CEntry(MacroAssembler* masm, int result_size,
   const Register kCCallArg3 = rcx;
   const int kArgExtraStackSpace = 0;
   const int kMaxRegisterResultSize = 2;
-#endif  // _WIN64
+#endif  // V8_TARGET_OS_WIN
 
   // Enter the exit frame that transitions from JavaScript to C++.
   int arg_stack_space =

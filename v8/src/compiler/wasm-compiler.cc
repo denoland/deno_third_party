@@ -1114,6 +1114,10 @@ Node* WasmGraphBuilder::ZeroCheck64(wasm::TrapReason reason, Node* node,
 }
 
 Node* WasmGraphBuilder::Switch(unsigned count, Node* key) {
+  // The instruction selector will use {kArchTableSwitch} for large switches,
+  // which has limited input count, see {InstructionSelector::EmitTableSwitch}.
+  DCHECK_LE(count, Instruction::kMaxInputCount - 2);          // value_range + 2
+  DCHECK_LE(count, wasm::kV8MaxWasmFunctionBrTableSize + 1);  // plus IfDefault
   return graph()->NewNode(mcgraph()->common()->Switch(count), key, Control());
 }
 
@@ -1266,27 +1270,9 @@ Node* WasmGraphBuilder::BuildChangeEndiannessStore(
       case 8:
         result = graph()->NewNode(m->Word64ReverseBytes(), value);
         break;
-      case 16: {
-        Node* byte_reversed_lanes[4];
-        for (int lane = 0; lane < 4; lane++) {
-          byte_reversed_lanes[lane] = graph()->NewNode(
-              m->Word32ReverseBytes(),
-              graph()->NewNode(mcgraph()->machine()->I32x4ExtractLane(lane),
-                               value));
-        }
-
-        // This is making a copy of the value.
-        result =
-            graph()->NewNode(mcgraph()->machine()->S128And(), value, value);
-
-        for (int lane = 0; lane < 4; lane++) {
-          result =
-              graph()->NewNode(mcgraph()->machine()->I32x4ReplaceLane(3 - lane),
-                               result, byte_reversed_lanes[lane]);
-        }
-
+      case 16:
+        result = graph()->NewNode(m->Simd128ReverseBytes(), value);
         break;
-      }
       default:
         UNREACHABLE();
         break;
@@ -1405,27 +1391,9 @@ Node* WasmGraphBuilder::BuildChangeEndiannessLoad(Node* node,
       case 8:
         result = graph()->NewNode(m->Word64ReverseBytes(), value);
         break;
-      case 16: {
-        Node* byte_reversed_lanes[4];
-        for (int lane = 0; lane < 4; lane++) {
-          byte_reversed_lanes[lane] = graph()->NewNode(
-              m->Word32ReverseBytes(),
-              graph()->NewNode(mcgraph()->machine()->I32x4ExtractLane(lane),
-                               value));
-        }
-
-        // This is making a copy of the value.
-        result =
-            graph()->NewNode(mcgraph()->machine()->S128And(), value, value);
-
-        for (int lane = 0; lane < 4; lane++) {
-          result =
-              graph()->NewNode(mcgraph()->machine()->I32x4ReplaceLane(3 - lane),
-                               result, byte_reversed_lanes[lane]);
-        }
-
+      case 16:
+        result = graph()->NewNode(m->Simd128ReverseBytes(), value);
         break;
-      }
       default:
         UNREACHABLE();
     }
@@ -4008,6 +3976,8 @@ Node* WasmGraphBuilder::SimdOp(wasm::WasmOpcode opcode, Node* const* inputs) {
       return graph()->NewNode(mcgraph()->machine()->F64x2Abs(), inputs[0]);
     case wasm::kExprF64x2Neg:
       return graph()->NewNode(mcgraph()->machine()->F64x2Neg(), inputs[0]);
+    case wasm::kExprF64x2Sqrt:
+      return graph()->NewNode(mcgraph()->machine()->F64x2Sqrt(), inputs[0]);
     case wasm::kExprF64x2Add:
       return graph()->NewNode(mcgraph()->machine()->F64x2Add(), inputs[0],
                               inputs[1]);
@@ -4044,6 +4014,12 @@ Node* WasmGraphBuilder::SimdOp(wasm::WasmOpcode opcode, Node* const* inputs) {
     case wasm::kExprF64x2Ge:
       return graph()->NewNode(mcgraph()->machine()->F64x2Le(), inputs[1],
                               inputs[0]);
+    case wasm::kExprF64x2Qfma:
+      return graph()->NewNode(mcgraph()->machine()->F64x2Qfma(), inputs[0],
+                              inputs[1], inputs[2]);
+    case wasm::kExprF64x2Qfms:
+      return graph()->NewNode(mcgraph()->machine()->F64x2Qfms(), inputs[0],
+                              inputs[1], inputs[2]);
     case wasm::kExprF32x4Splat:
       return graph()->NewNode(mcgraph()->machine()->F32x4Splat(), inputs[0]);
     case wasm::kExprF32x4SConvertI32x4:
@@ -4056,6 +4032,8 @@ Node* WasmGraphBuilder::SimdOp(wasm::WasmOpcode opcode, Node* const* inputs) {
       return graph()->NewNode(mcgraph()->machine()->F32x4Abs(), inputs[0]);
     case wasm::kExprF32x4Neg:
       return graph()->NewNode(mcgraph()->machine()->F32x4Neg(), inputs[0]);
+    case wasm::kExprF32x4Sqrt:
+      return graph()->NewNode(mcgraph()->machine()->F32x4Sqrt(), inputs[0]);
     case wasm::kExprF32x4RecipApprox:
       return graph()->NewNode(mcgraph()->machine()->F32x4RecipApprox(),
                               inputs[0]);
@@ -4101,6 +4079,12 @@ Node* WasmGraphBuilder::SimdOp(wasm::WasmOpcode opcode, Node* const* inputs) {
     case wasm::kExprF32x4Ge:
       return graph()->NewNode(mcgraph()->machine()->F32x4Le(), inputs[1],
                               inputs[0]);
+    case wasm::kExprF32x4Qfma:
+      return graph()->NewNode(mcgraph()->machine()->F32x4Qfma(), inputs[0],
+                              inputs[1], inputs[2]);
+    case wasm::kExprF32x4Qfms:
+      return graph()->NewNode(mcgraph()->machine()->F32x4Qfms(), inputs[0],
+                              inputs[1], inputs[2]);
     case wasm::kExprI64x2Splat:
       return graph()->NewNode(mcgraph()->machine()->I64x2Splat(), inputs[0]);
     case wasm::kExprI64x2Neg:
@@ -5076,7 +5060,7 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
 
   CallDescriptor* GetI64ToBigIntCallDescriptor() {
     if (!lowering_special_case_) {
-      lowering_special_case_ = base::make_unique<Int64LoweringSpecialCase>();
+      lowering_special_case_ = std::make_unique<Int64LoweringSpecialCase>();
     }
 
     if (lowering_special_case_->i64_to_bigint_call_descriptor) {
@@ -5112,7 +5096,7 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
 
   CallDescriptor* GetBigIntToI64CallDescriptor() {
     if (!lowering_special_case_) {
-      lowering_special_case_ = base::make_unique<Int64LoweringSpecialCase>();
+      lowering_special_case_ = std::make_unique<Int64LoweringSpecialCase>();
     }
 
     if (lowering_special_case_->bigint_to_i64_call_descriptor) {
@@ -6132,8 +6116,8 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
     // Call the underlying closure.
     Vector<Node*> args = Buffer(wasm_count + 7);
     int pos = 0;
-    args[pos++] = graph()->NewNode(mcgraph()->common()->HeapConstant(
-        BUILTIN_CODE(isolate, Call_ReceiverIsAny)));
+    args[pos++] =
+        BuildLoadBuiltinFromIsolateRoot(Builtins::kCall_ReceiverIsAny);
     args[pos++] = callable;
     args[pos++] = mcgraph()->Int32Constant(wasm_count);   // argument count
     args[pos++] = BuildLoadUndefinedValueFromInstance();  // receiver
@@ -6287,7 +6271,7 @@ std::unique_ptr<OptimizedCompilationJob> NewJSToWasmCompilationJob(
   // Create the Graph.
   //----------------------------------------------------------------------------
   std::unique_ptr<Zone> zone =
-      base::make_unique<Zone>(wasm_engine->allocator(), ZONE_NAME);
+      std::make_unique<Zone>(wasm_engine->allocator(), ZONE_NAME);
   Graph* graph = new (zone.get()) Graph(zone.get());
   CommonOperatorBuilder common(zone.get());
   MachineOperatorBuilder machine(
@@ -6702,7 +6686,7 @@ wasm::WasmCompilationResult CompileWasmInterpreterEntry(
 MaybeHandle<Code> CompileJSToJSWrapper(Isolate* isolate,
                                        wasm::FunctionSig* sig) {
   std::unique_ptr<Zone> zone =
-      base::make_unique<Zone>(isolate->allocator(), ZONE_NAME);
+      std::make_unique<Zone>(isolate->allocator(), ZONE_NAME);
   Graph* graph = new (zone.get()) Graph(zone.get());
   CommonOperatorBuilder common(zone.get());
   MachineOperatorBuilder machine(
@@ -6749,7 +6733,7 @@ MaybeHandle<Code> CompileJSToJSWrapper(Isolate* isolate,
 
 MaybeHandle<Code> CompileCWasmEntry(Isolate* isolate, wasm::FunctionSig* sig) {
   std::unique_ptr<Zone> zone =
-      base::make_unique<Zone>(isolate->allocator(), ZONE_NAME);
+      std::make_unique<Zone>(isolate->allocator(), ZONE_NAME);
   Graph* graph = new (zone.get()) Graph(zone.get());
   CommonOperatorBuilder common(zone.get());
   MachineOperatorBuilder machine(
@@ -6916,6 +6900,7 @@ wasm::WasmCompilationResult ExecuteTurbofanWasmCompilation(
   counters->wasm_compile_function_peak_memory_bytes()->AddSample(
       static_cast<int>(mcgraph->graph()->zone()->allocation_size()));
   auto result = info.ReleaseWasmCompilationResult();
+  CHECK_NOT_NULL(result);  // Compilation expected to succeed.
   DCHECK_EQ(wasm::ExecutionTier::kTurbofan, result->result_tier);
   return std::move(*result);
 }

@@ -222,6 +222,8 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
     CASE_SIMD_OP(Splat, "splat")
     CASE_SIMD_OP(Neg, "neg")
     CASE_F64x2_OP(Neg, "neg")
+    CASE_F64x2_OP(Sqrt, "sqrt")
+    CASE_F32x4_OP(Sqrt, "sqrt")
     CASE_I64x2_OP(Neg, "neg")
     CASE_SIMD_OP(Eq, "eq")
     CASE_F64x2_OP(Eq, "eq")
@@ -311,6 +313,10 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
     CASE_S1x8_OP(AllTrue, "all_true")
     CASE_S1x16_OP(AnyTrue, "any_true")
     CASE_S1x16_OP(AllTrue, "all_true")
+    CASE_F64x2_OP(Qfma, "qfma")
+    CASE_F64x2_OP(Qfms, "qfms")
+    CASE_F32x4_OP(Qfma, "qfma")
+    CASE_F32x4_OP(Qfms, "qfms")
 
     // Atomic operations.
     CASE_OP(AtomicNotify, "atomic.notify")

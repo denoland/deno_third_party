@@ -101,7 +101,6 @@ void Code::CopyFromNoFlush(Heap* heap, const CodeDesc& desc) {
 
   // Unbox handles and relocate.
   Assembler* origin = desc.origin;
-  AllowDeferredHandleDereference embedding_raw_address;
   const int mode_mask = RelocInfo::PostCodegenRelocationMask();
   for (RelocIterator it(*this, mode_mask); !it.done(); it.next()) {
     RelocInfo::Mode mode = it.rinfo()->rmode();
@@ -991,8 +990,7 @@ Handle<DependentCode> DependentCode::EnsureSpace(
   int capacity = kCodesStartIndex + DependentCode::Grow(entries->count());
   int grow_by = capacity - entries->length();
   return Handle<DependentCode>::cast(
-      isolate->factory()->CopyWeakFixedArrayAndGrow(entries, grow_by,
-                                                    AllocationType::kOld));
+      isolate->factory()->CopyWeakFixedArrayAndGrow(entries, grow_by));
 }
 
 bool DependentCode::Compact() {

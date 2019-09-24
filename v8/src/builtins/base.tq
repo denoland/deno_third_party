@@ -232,6 +232,10 @@ extern class WeakFixedArray extends HeapObject { length: Smi; }
 
 extern class ByteArray extends FixedArrayBase {}
 
+@hasSameInstanceTypeAsParent
+extern class ArrayList extends FixedArray {
+}
+
 type LayoutDescriptor extends ByteArray
     generates 'TNode<LayoutDescriptor>';
 type TransitionArray extends WeakFixedArray
@@ -569,9 +573,12 @@ extern class SourceTextModule extends Module {
   // Lazily initialized on first access. It's the hole before first access and
   // a JSObject afterwards.
   import_meta: TheHole | JSObject;
-
+  async_parent_modules: ArrayList;
+  top_level_capability: JSPromise | Undefined;
   dfs_index: Smi;
   dfs_ancestor_index: Smi;
+  pending_async_dependencies: Smi;
+  flags: Smi;
 }
 
 @generateCppClass
@@ -656,7 +663,7 @@ extern class Script extends Struct {
   line_ends: Object;
   id: Smi;
   eval_from_shared_or_wrapped_arguments: Object;
-  eval_from_position: Smi;
+  eval_from_position: Smi | Foreign;  // Smi or Managed<wasm::NativeModule>
   shared_function_infos: Object;
   flags: Smi;
   source_url: Object;
@@ -720,7 +727,7 @@ extern class JSBoundFunction extends JSObject {
   bound_target_function: Callable;
   // The value that is always passed as the this value when calling the wrapped
   // function.
-  bound_this: JSAny;
+  bound_this: JSAny | SourceTextModule;
   // A list of values whose elements are used as the first arguments to any call
   // to the wrapped function.
   bound_arguments: FixedArray;
@@ -1322,9 +1329,6 @@ const kStrictReadOnlyProperty: constexpr MessageTemplate
 const kString: constexpr PrimitiveType
     generates 'PrimitiveType::kString';
 
-const kExternalPointerForOnHeapArray: constexpr RawPtr
-    generates 'JSTypedArray::ExternalPointerForOnHeapArray()';
-
 const kNameDictionaryInitialCapacity:
     constexpr int32 generates 'NameDictionary::kInitialCapacity';
 
@@ -1477,6 +1481,8 @@ extern class JSRegExpResultIndices extends JSArray {
   // The groups field is externally exposed.
   groups: JSAny;
 }
+
+transient type FastJSRegExpResult extends JSRegExpResult;
 
 @generateCppClass
 extern class JSRegExpStringIterator extends JSObject {
@@ -1708,6 +1714,8 @@ extern transitioning runtime ThrowTypeErrorIfStrict(implicit context: Context)(
     Smi, Object, Object): void;
 extern transitioning runtime ThrowCalledNonCallable(implicit context: Context)(
     JSAny): never;
+extern transitioning runtime ThrowSymbolIteratorInvalid(
+    implicit context: Context)(): never;
 
 extern transitioning macro ThrowIfNotJSReceiver(implicit context: Context)(
     JSAny, constexpr MessageTemplate, constexpr string): void;
@@ -2388,6 +2396,13 @@ Cast<JSRegExp>(o: HeapObject): JSRegExp
   goto CastError;
 }
 
+Cast<FastJSRegExpResult>(implicit context: Context)(o: HeapObject):
+    FastJSRegExpResult
+    labels CastError {
+  if (regexp::IsFastRegExpResult(o)) return %RawDownCast<FastJSRegExpResult>(o);
+  goto CastError;
+}
+
 Cast<Map>(implicit context: Context)(o: HeapObject): Map
     labels CastError {
   if (IsMap(o)) return %RawDownCast<Map>(o);
@@ -2852,8 +2867,7 @@ extern macro IsMockArrayBufferAllocatorFlag(): bool;
 extern macro IsPrototypeTypedArrayPrototype(implicit context: Context)(Map):
     bool;
 
-extern operator '.data_ptr' macro LoadJSTypedArrayBackingStore(JSTypedArray):
-    RawPtr;
+extern operator '.data_ptr' macro LoadJSTypedArrayDataPtr(JSTypedArray): RawPtr;
 
 extern operator '.elements_kind' macro LoadMapElementsKind(Map): ElementsKind;
 extern operator '.elements_kind' macro LoadElementsKind(JSTypedArray):
