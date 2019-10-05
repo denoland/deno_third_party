@@ -2163,70 +2163,6 @@ void Assembler::divsd(XMMRegister dst, Operand src) {
   emit_sse_operand(dst, src);
 }
 
-void Assembler::xorpd(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x66);
-  EMIT(0x0F);
-  EMIT(0x57);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::andps(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x0F);
-  EMIT(0x54);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::andnps(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x0F);
-  EMIT(0x55);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::orps(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x0F);
-  EMIT(0x56);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::xorps(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x0F);
-  EMIT(0x57);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::addps(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x0F);
-  EMIT(0x58);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::subps(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x0F);
-  EMIT(0x5C);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::mulps(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x0F);
-  EMIT(0x59);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::divps(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x0F);
-  EMIT(0x5E);
-  emit_sse_operand(dst, src);
-}
-
 void Assembler::rcpps(XMMRegister dst, Operand src) {
   EnsureSpace ensure_space(this);
   EMIT(0x0F);
@@ -2245,20 +2181,6 @@ void Assembler::rsqrtps(XMMRegister dst, Operand src) {
   EnsureSpace ensure_space(this);
   EMIT(0x0F);
   EMIT(0x52);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::minps(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x0F);
-  EMIT(0x5D);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::maxps(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x0F);
-  EMIT(0x5F);
   emit_sse_operand(dst, src);
 }
 
@@ -2284,22 +2206,6 @@ void Assembler::haddps(XMMRegister dst, Operand src) {
   EMIT(0xF2);
   EMIT(0x0F);
   EMIT(0x7C);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::andpd(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x66);
-  EMIT(0x0F);
-  EMIT(0x54);
-  emit_sse_operand(dst, src);
-}
-
-void Assembler::orpd(XMMRegister dst, Operand src) {
-  EnsureSpace ensure_space(this);
-  EMIT(0x66);
-  EMIT(0x0F);
-  EMIT(0x56);
   emit_sse_operand(dst, src);
 }
 
@@ -2399,6 +2305,16 @@ void Assembler::movups(Operand dst, XMMRegister src) {
 void Assembler::shufps(XMMRegister dst, XMMRegister src, byte imm8) {
   DCHECK(is_uint8(imm8));
   EnsureSpace ensure_space(this);
+  EMIT(0x0F);
+  EMIT(0xC6);
+  emit_sse_operand(dst, src);
+  EMIT(imm8);
+}
+
+void Assembler::shufpd(XMMRegister dst, XMMRegister src, byte imm8) {
+  DCHECK(is_uint8(imm8));
+  EnsureSpace ensure_space(this);
+  EMIT(0x66);
   EMIT(0x0F);
   EMIT(0xC6);
   emit_sse_operand(dst, src);
@@ -2783,6 +2699,23 @@ void Assembler::minss(XMMRegister dst, Operand src) {
   emit_sse_operand(dst, src);
 }
 
+// Packed single-precision floating-point SSE instructions.
+void Assembler::ps(byte opcode, XMMRegister dst, Operand src) {
+  EnsureSpace ensure_space(this);
+  EMIT(0x0F);
+  EMIT(opcode);
+  emit_sse_operand(dst, src);
+}
+
+// Packed double-precision floating-point SSE instructions.
+void Assembler::pd(byte opcode, XMMRegister dst, Operand src) {
+  EnsureSpace ensure_space(this);
+  EMIT(0x66);
+  EMIT(0x0F);
+  EMIT(opcode);
+  emit_sse_operand(dst, src);
+}
+
 // AVX instructions
 void Assembler::vfmasd(byte op, XMMRegister dst, XMMRegister src1,
                        Operand src2) {
@@ -2816,6 +2749,13 @@ void Assembler::vps(byte op, XMMRegister dst, XMMRegister src1, Operand src2) {
 
 void Assembler::vpd(byte op, XMMRegister dst, XMMRegister src1, Operand src2) {
   vinstr(op, dst, src1, src2, k66, k0F, kWIG);
+}
+
+void Assembler::vshufpd(XMMRegister dst, XMMRegister src1, Operand src2,
+                        byte imm8) {
+  DCHECK(is_uint8(imm8));
+  vpd(0xC6, dst, src1, src2);
+  EMIT(imm8);
 }
 
 void Assembler::vcmpps(XMMRegister dst, XMMRegister src1, Operand src2,
@@ -3165,11 +3105,10 @@ void Assembler::emit_operand(int code, Operand adr) {
   DCHECK_GT(length, 0);
 
   // Emit updated ModRM byte containing the given register.
-  pc_[0] = (adr.buf_[0] & ~0x38) | (code << 3);
+  EMIT((adr.buf_[0] & ~0x38) | (code << 3));
 
   // Emit the rest of the encoded operand.
-  for (unsigned i = 1; i < length; i++) pc_[i] = adr.buf_[i];
-  pc_ += length;
+  for (unsigned i = 1; i < length; i++) EMIT(adr.buf_[i]);
 
   // Emit relocation information if necessary.
   if (length >= sizeof(int32_t) && !RelocInfo::IsNone(adr.rmode_)) {

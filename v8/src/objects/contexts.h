@@ -7,6 +7,7 @@
 
 #include "src/objects/fixed-array.h"
 #include "src/objects/function-kind.h"
+#include "src/objects/osr-optimized-code-cache.h"
 #include "torque-generated/field-offsets-tq.h"
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -355,6 +356,7 @@ enum ContextLookupFlags {
   V(WEAKMAP_SET_INDEX, JSFunction, weakmap_set)                                \
   V(WEAKMAP_GET_INDEX, JSFunction, weakmap_get)                                \
   V(WEAKSET_ADD_INDEX, JSFunction, weakset_add)                                \
+  V(OSR_CODE_CACHE_INDEX, WeakFixedArray, osr_code_cache)                      \
   NATIVE_CONTEXT_INTRINSIC_FUNCTIONS(V)
 
 // A table of all script contexts. Every loaded top-level script with top-level
@@ -453,9 +455,19 @@ class Context : public HeapObject {
 
   DECL_CAST(Context)
 
+  enum class HasExtension { kYes, kNo };
+
   // [length]: length of the context.
   V8_INLINE int length() const;
-  V8_INLINE void set_length(int value);
+  V8_INLINE int synchronized_length() const;
+  V8_INLINE void initialize_length_and_extension_bit(
+      int len, HasExtension flag = HasExtension::kNo);
+
+  // We use the 30th bit. Otherwise if we set the 31st bit,
+  // the number would be pottentially bigger than an SMI.
+  // Any DCHECK(Smi::IsValue(...)) would fail.
+  using LengthField = BitField<int, 0, kSmiValueSize - 2>;
+  using HasExtensionField = BitField<int, kSmiValueSize - 2, 1>;
 
   // Setter and getter for elements.
   V8_INLINE Object get(int index) const;
@@ -568,7 +580,6 @@ class Context : public HeapObject {
 
   // Returns a JSGlobalProxy object or null.
   V8_EXPORT_PRIVATE JSGlobalProxy global_proxy();
-  void set_global_proxy(JSGlobalProxy global);
 
   // Get the JSGlobalObject object.
   V8_EXPORT_PRIVATE JSGlobalObject global_object();
@@ -662,6 +673,8 @@ class Context : public HeapObject {
 #endif
 
   OBJECT_CONSTRUCTORS(Context, HeapObject);
+  DECL_INT_ACCESSORS(length_and_extension_flag)
+  DECL_SYNCHRONIZED_INT_ACCESSORS(length_and_extension_flag)
 };
 
 class NativeContext : public Context {
@@ -705,6 +718,8 @@ class NativeContext : public Context {
   Object OptimizedCodeListHead();
   void SetDeoptimizedCodeListHead(Object head);
   Object DeoptimizedCodeListHead();
+
+  inline OSROptimizedCodeCache GetOSROptimizedCodeCache();
 
   void ResetErrorsThrown();
   void IncrementErrorsThrown();

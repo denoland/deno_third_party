@@ -158,9 +158,11 @@ class IterateAndScavengePromotedObjectsVisitor final : public ObjectVisitor {
         // Sweeper is stopped during scavenge, so we can directly
         // insert into its remembered set here.
         if (chunk->sweeping_slot_set()) {
-          RememberedSetSweeping::Insert(chunk, slot.address());
+          RememberedSetSweeping::Insert<AccessMode::ATOMIC>(chunk,
+                                                            slot.address());
         } else {
-          RememberedSet<OLD_TO_NEW>::Insert(chunk, slot.address());
+          RememberedSet<OLD_TO_NEW>::Insert<AccessMode::ATOMIC>(chunk,
+                                                                slot.address());
         }
       }
       SLOW_DCHECK(!MarkCompactCollector::IsOnEvacuationCandidate(
@@ -172,8 +174,8 @@ class IterateAndScavengePromotedObjectsVisitor final : public ObjectVisitor {
       // We cannot call MarkCompactCollector::RecordSlot because that checks
       // that the host page is not in young generation, which does not hold
       // for pending large pages.
-      RememberedSet<OLD_TO_OLD>::Insert(MemoryChunk::FromHeapObject(host),
-                                        slot.address());
+      RememberedSet<OLD_TO_OLD>::Insert<AccessMode::ATOMIC>(
+          MemoryChunk::FromHeapObject(host), slot.address());
     }
   }
 
@@ -344,11 +346,7 @@ void ScavengerCollector::CollectGarbage() {
   heap_->new_lo_space()->FreeDeadObjects([](HeapObject) { return true; });
 
   RememberedSet<OLD_TO_NEW>::IterateMemoryChunks(heap_, [](MemoryChunk* chunk) {
-    if (chunk->SweepingDone()) {
-      RememberedSet<OLD_TO_NEW>::FreeEmptyBuckets(chunk);
-    } else {
-      RememberedSet<OLD_TO_NEW>::PreFreeEmptyBuckets(chunk);
-    }
+    RememberedSet<OLD_TO_NEW>::FreeEmptyBuckets(chunk);
   });
 
   // Update how much has survived scavenge.
@@ -445,7 +443,7 @@ void Scavenger::ScavengePage(MemoryChunk* page) {
   RememberedSet<OLD_TO_NEW>::Iterate(
       page,
       [this, &filter](MaybeObjectSlot slot) {
-        CHECK(filter.IsValid(slot.address()));
+        if (!filter.IsValid(slot.address())) return REMOVE_SLOT;
         return CheckAndScavengeObject(heap_, slot);
       },
       SlotSet::KEEP_EMPTY_BUCKETS);
@@ -453,7 +451,7 @@ void Scavenger::ScavengePage(MemoryChunk* page) {
   RememberedSetSweeping::Iterate(
       page,
       [this, &filter](MaybeObjectSlot slot) {
-        CHECK(filter.IsValid(slot.address()));
+        if (!filter.IsValid(slot.address())) return REMOVE_SLOT;
         return CheckAndScavengeObject(heap_, slot);
       },
       SlotSet::KEEP_EMPTY_BUCKETS);

@@ -205,27 +205,32 @@ void InterpreterAssembler::GotoIfHasContextExtensionUpToDepth(
   TVARIABLE(Uint32T, cur_depth, depth);
 
   Label context_search(this, {&cur_depth, &cur_context});
+  Label no_extension(this);
 
   // Loop until the depth is 0.
   Goto(&context_search);
   BIND(&context_search);
   {
-    // TODO(leszeks): We only need to do this check if the context had a sloppy
-    // eval, we could pass in a context chain bitmask to figure out which
-    // contexts actually need to be checked.
-
-    TNode<Object> extension_slot =
-        LoadContextElement(cur_context.value(), Context::EXTENSION_INDEX);
+    // Check if context has an extension slot
+    TNode<BoolT> has_extension =
+        LoadContextHasExtensionField(cur_context.value());
+    GotoIfNot(has_extension, &no_extension);
 
     // Jump to the target if the extension slot is not a hole.
-    GotoIf(TaggedNotEqual(extension_slot, TheHoleConstant()), target);
+    TNode<Object> extension_slot =
+        LoadContextElement(cur_context.value(), Context::EXTENSION_INDEX);
+    Branch(TaggedNotEqual(extension_slot, TheHoleConstant()), target,
+           &no_extension);
 
-    cur_depth = Unsigned(Int32Sub(cur_depth.value(), Int32Constant(1)));
-    cur_context =
-        CAST(LoadContextElement(cur_context.value(), Context::PREVIOUS_INDEX));
+    BIND(&no_extension);
+    {
+      cur_depth = Unsigned(Int32Sub(cur_depth.value(), Int32Constant(1)));
+      cur_context = CAST(
+          LoadContextElement(cur_context.value(), Context::PREVIOUS_INDEX));
 
-    GotoIf(Word32NotEqual(cur_depth.value(), Int32Constant(0)),
-           &context_search);
+      GotoIf(Word32NotEqual(cur_depth.value(), Int32Constant(0)),
+             &context_search);
+    }
   }
 }
 
@@ -429,7 +434,7 @@ TNode<Word32T> InterpreterAssembler::BytecodeOperandReadUnaligned(
     MachineType machine_type = (i == 0) ? msb_type : MachineType::Uint8();
     TNode<IntPtrT> offset =
         IntPtrConstant(relative_offset + msb_offset + i * kStep);
-    TNode<WordT> array_offset = IntPtrAdd(BytecodeOffset(), offset);
+    TNode<IntPtrT> array_offset = IntPtrAdd(BytecodeOffset(), offset);
     bytes[i] =
         UncheckedCast<Word32T>(Load(machine_type, BytecodeArrayTaggedPointer(),
                                     array_offset, needs_poisoning));
@@ -829,7 +834,8 @@ TNode<Object> InterpreterAssembler::Construct(
   // Check if we have monomorphic {new_target} feedback already.
   TNode<MaybeObject> feedback =
       LoadFeedbackVectorSlot(feedback_vector, slot_id);
-  Branch(IsWeakReferenceTo(feedback, new_target), &construct, &extra_checks);
+  Branch(IsWeakReferenceToObject(feedback, new_target), &construct,
+         &extra_checks);
 
   BIND(&extra_checks);
   {
@@ -900,7 +906,7 @@ TNode<Object> InterpreterAssembler::Construct(
           // context.
           TNode<Context> current_context =
               CAST(LoadObjectField(current, JSFunction::kContextOffset));
-          TNode<Context> current_native_context =
+          TNode<NativeContext> current_native_context =
               LoadNativeContext(current_context);
           Branch(
               TaggedEqual(LoadNativeContext(context), current_native_context),
@@ -1011,7 +1017,8 @@ TNode<Object> InterpreterAssembler::ConstructWithSpread(
   // Check if we have monomorphic {new_target} feedback already.
   TNode<MaybeObject> feedback =
       LoadFeedbackVectorSlot(feedback_vector, slot_id);
-  Branch(IsWeakReferenceTo(feedback, new_target), &construct, &extra_checks);
+  Branch(IsWeakReferenceToObject(feedback, new_target), &construct,
+         &extra_checks);
 
   BIND(&extra_checks);
   {
@@ -1065,7 +1072,7 @@ TNode<Object> InterpreterAssembler::ConstructWithSpread(
           // context.
           TNode<Context> current_context =
               CAST(LoadObjectField(current, JSFunction::kContextOffset));
-          TNode<Context> current_native_context =
+          TNode<NativeContext> current_native_context =
               LoadNativeContext(current_context);
           Branch(
               TaggedEqual(LoadNativeContext(context), current_native_context),

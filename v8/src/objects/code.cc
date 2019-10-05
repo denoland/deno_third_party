@@ -669,8 +669,8 @@ inline void DisassembleCodeRange(Isolate* isolate, std::ostream& os, Code code,
 
 }  // namespace
 
-void Code::Disassemble(const char* name, std::ostream& os, Address current_pc) {
-  Isolate* isolate = GetIsolate();
+void Code::Disassemble(const char* name, std::ostream& os, Isolate* isolate,
+                       Address current_pc) {
   os << "kind = " << Kind2String(kind()) << "\n";
   if (name == nullptr) {
     name = GetName(isolate);
@@ -682,7 +682,7 @@ void Code::Disassemble(const char* name, std::ostream& os, Address current_pc) {
     os << "stack_slots = " << stack_slots() << "\n";
   }
   os << "compiler = " << (is_turbofanned() ? "turbofan" : "unknown") << "\n";
-  os << "address = " << static_cast<const void*>(this) << "\n\n";
+  os << "address = " << reinterpret_cast<void*>(ptr()) << "\n\n";
 
   if (is_off_heap_trampoline()) {
     int trampoline_size = raw_instruction_size();

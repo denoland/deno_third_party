@@ -784,7 +784,7 @@ Reduction JSNativeContextSpecialization::ReduceGlobalAccess(
     Node* node, Node* receiver, Node* value, NameRef const& name,
     AccessMode access_mode, Node* key) {
   base::Optional<PropertyCellRef> cell =
-      native_context().global_proxy_object().GetPropertyCell(name);
+      native_context().global_object().GetPropertyCell(name);
   return cell.has_value() ? ReduceGlobalAccess(node, receiver, value, name,
                                                access_mode, key, *cell)
                           : NoChange();
@@ -1082,7 +1082,9 @@ Reduction JSNativeContextSpecialization::ReduceNamedAccess(
   // corresponding global object instead.
   if (receiver_maps.size() == 1) {
     MapRef receiver_map(broker(), receiver_maps[0]);
-    if (receiver_map.IsMapOfTargetGlobalProxy()) {
+    if (receiver_map.equals(
+            broker()->target_native_context().global_proxy_object().map()) &&
+        !broker()->target_native_context().global_object().IsDetached()) {
       return ReduceGlobalAccess(node, receiver, value, feedback.name(),
                                 access_mode, key);
     }

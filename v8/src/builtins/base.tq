@@ -787,6 +787,8 @@ const PROXY_REVOCABLE_RESULT_MAP_INDEX: constexpr NativeContextSlot
     generates 'Context::PROXY_REVOCABLE_RESULT_MAP_INDEX';
 const REFLECT_APPLY_INDEX: constexpr NativeContextSlot
     generates 'Context::REFLECT_APPLY_INDEX';
+const REGEXP_FUNCTION_INDEX: constexpr NativeContextSlot
+    generates 'Context::REGEXP_FUNCTION_INDEX';
 const REGEXP_LAST_MATCH_INFO_INDEX: constexpr NativeContextSlot
     generates 'Context::REGEXP_LAST_MATCH_INFO_INDEX';
 const INITIAL_STRING_ITERATOR_MAP_INDEX: constexpr NativeContextSlot
@@ -909,7 +911,7 @@ extern class FunctionTemplateRareData extends Struct {
 @generateCppClass
 extern class FunctionTemplateInfo extends TemplateInfo {
   // Handler invoked when calling an instance of this FunctionTemplateInfo.
-  // Either CallInfoHandler or Undefined.
+  // Either CallHandlerInfo or Undefined.
   call_code: Object;
   class_name: Object;
   // If the signature is a FunctionTemplateInfo it is used to check whether the
@@ -1153,6 +1155,7 @@ extern class WasmIndirectFunctionTable extends Struct {
 extern class WasmDebugInfo extends Struct {
   instance: WasmInstanceObject;
   interpreter_handle: Foreign | Undefined;
+  interpreter_reference_stack: Cell;
   locals_names: FixedArray | Undefined;
   c_wasm_entries: FixedArray | Undefined;
   c_wasm_entry_map: Foreign | Undefined;  // Managed<wasm::SignatureMap>
@@ -2612,6 +2615,7 @@ extern macro BitcastWordToTaggedSigned(uintptr): Smi;
 extern macro BitcastWordToTagged(intptr): Object;
 extern macro BitcastWordToTagged(uintptr): Object;
 extern macro BitcastTaggedToWord(Tagged): intptr;
+extern macro BitcastTaggedToWordForTagAndSmiBits(Tagged): intptr;
 
 intrinsic %FromConstexpr<To: type, From: type>(b: From): To;
 macro FromConstexpr<To: type, From: type>(o: From): To;
@@ -2934,8 +2938,6 @@ extern macro LoadConstructorOrBackPointer(Map): Object;
 
 extern macro BasicLoadNumberDictionaryElement(NumberDictionary, intptr): JSAny
     labels NotData, IfHole;
-extern macro BasicStoreNumberDictionaryElement(NumberDictionary, intptr, JSAny)
-    labels NotData, IfHole, ReadOnly;
 
 extern macro IsFastElementsKind(ElementsKind): bool;
 extern macro IsDoubleElementsKind(ElementsKind): bool;

@@ -156,9 +156,7 @@ declare_args() {
 
   # List of extra files to snapshot. They will be snapshotted in order so
   # if files export symbols used by later files, they should go first.
-  #
-  # This default is used by cctests. Projects using V8 will want to override.
-  v8_extra_library_files = [ "//test/cctest/test-extra.js" ]
+  v8_extra_library_files = []
 
   v8_enable_gdbjit =
       ((v8_current_cpu == "x86" || v8_current_cpu == "x64") &&
@@ -257,6 +255,10 @@ assert(
     "Pointer compression is not supported with shared read-only heap enabled")
 assert(v8_use_snapshot || !v8_enable_shared_ro_heap,
        "Shared read-only heap requires snapshot")
+
+assert(v8_extra_library_files == [],
+       "v8_extra_library_files is no longer supported. Consider implementing " +
+           "custom API in C++ instead.")
 
 v8_random_seed = "314159265"
 v8_toolset_for_shell = "host"
@@ -1019,6 +1021,7 @@ torque_files = [
   "src/builtins/proxy.tq",
   "src/builtins/reflect.tq",
   "src/builtins/regexp-exec.tq",
+  "src/builtins/regexp-match-all.tq",
   "src/builtins/regexp-match.tq",
   "src/builtins/regexp-replace.tq",
   "src/builtins/regexp-search.tq",
@@ -1222,7 +1225,6 @@ template("run_mksnapshot") {
       "./" + rebase_path(get_label_info(":mksnapshot($v8_snapshot_toolchain)",
                                         "root_out_dir") + "/mksnapshot",
                          root_build_dir),
-      "--turbo_instruction_scheduling",
 
       # In cross builds, the snapshot may be generated for both the host and
       # target toolchains.  The same host binary is used to generate both, so
@@ -1880,6 +1882,8 @@ v8_compiler_sources = [
   "src/compiler/machine-operator.h",
   "src/compiler/map-inference.cc",
   "src/compiler/map-inference.h",
+  "src/compiler/memory-lowering.cc",
+  "src/compiler/memory-lowering.h",
   "src/compiler/memory-optimizer.cc",
   "src/compiler/memory-optimizer.h",
   "src/compiler/node-aux-data.h",
@@ -2648,6 +2652,9 @@ v8_source_set("v8_base_without_compiler") {
     "src/objects/ordered-hash-table-inl.h",
     "src/objects/ordered-hash-table.cc",
     "src/objects/ordered-hash-table.h",
+    "src/objects/osr-optimized-code-cache-inl.h",
+    "src/objects/osr-optimized-code-cache.cc",
+    "src/objects/osr-optimized-code-cache.h",
     "src/objects/promise-inl.h",
     "src/objects/promise.h",
     "src/objects/property-array-inl.h",
@@ -2773,6 +2780,9 @@ v8_source_set("v8_base_without_compiler") {
     "src/regexp/regexp-bytecode-generator-inl.h",
     "src/regexp/regexp-bytecode-generator.cc",
     "src/regexp/regexp-bytecode-generator.h",
+    "src/regexp/regexp-bytecode-peephole.cc",
+    "src/regexp/regexp-bytecode-peephole.h",
+    "src/regexp/regexp-bytecodes.cc",
     "src/regexp/regexp-bytecodes.h",
     "src/regexp/regexp-compiler-tonode.cc",
     "src/regexp/regexp-compiler.cc",
@@ -2789,13 +2799,13 @@ v8_source_set("v8_base_without_compiler") {
     "src/regexp/regexp-nodes.h",
     "src/regexp/regexp-parser.cc",
     "src/regexp/regexp-parser.h",
-    "src/regexp/regexp-special-case.h",
     "src/regexp/regexp-stack.cc",
     "src/regexp/regexp-stack.h",
     "src/regexp/regexp-utils.cc",
     "src/regexp/regexp-utils.h",
     "src/regexp/regexp.cc",
     "src/regexp/regexp.h",
+    "src/regexp/special-case.h",
     "src/roots/roots-inl.h",
     "src/roots/roots.cc",
     "src/roots/roots.h",

@@ -293,7 +293,7 @@ class V8_EXPORT_PRIVATE Operand {
   // Only valid if len_ > 4.
   RelocInfo::Mode rmode_ = RelocInfo::NONE;
 
-  // TODO(clemensh): Get rid of this friendship, or make Operand immutable.
+  // TODO(clemensb): Get rid of this friendship, or make Operand immutable.
   friend class Assembler;
 };
 ASSERT_TRIVIALLY_COPYABLE(Operand);
@@ -850,29 +850,13 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void movups(XMMRegister dst, Operand src);
   void movups(Operand dst, XMMRegister src);
   void shufps(XMMRegister dst, XMMRegister src, byte imm8);
+  void shufpd(XMMRegister dst, XMMRegister src, byte imm8);
 
   void maxss(XMMRegister dst, XMMRegister src) { maxss(dst, Operand(src)); }
   void maxss(XMMRegister dst, Operand src);
   void minss(XMMRegister dst, XMMRegister src) { minss(dst, Operand(src)); }
   void minss(XMMRegister dst, Operand src);
 
-  void andps(XMMRegister dst, Operand src);
-  void andps(XMMRegister dst, XMMRegister src) { andps(dst, Operand(src)); }
-  void andnps(XMMRegister dst, Operand src);
-  void andnps(XMMRegister dst, XMMRegister src) { andnps(dst, Operand(src)); }
-  void xorps(XMMRegister dst, Operand src);
-  void xorps(XMMRegister dst, XMMRegister src) { xorps(dst, Operand(src)); }
-  void orps(XMMRegister dst, Operand src);
-  void orps(XMMRegister dst, XMMRegister src) { orps(dst, Operand(src)); }
-
-  void addps(XMMRegister dst, Operand src);
-  void addps(XMMRegister dst, XMMRegister src) { addps(dst, Operand(src)); }
-  void subps(XMMRegister dst, Operand src);
-  void subps(XMMRegister dst, XMMRegister src) { subps(dst, Operand(src)); }
-  void mulps(XMMRegister dst, Operand src);
-  void mulps(XMMRegister dst, XMMRegister src) { mulps(dst, Operand(src)); }
-  void divps(XMMRegister dst, Operand src);
-  void divps(XMMRegister dst, XMMRegister src) { divps(dst, Operand(src)); }
   void rcpps(XMMRegister dst, Operand src);
   void rcpps(XMMRegister dst, XMMRegister src) { rcpps(dst, Operand(src)); }
   void sqrtps(XMMRegister dst, Operand src);
@@ -881,11 +865,10 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void rsqrtps(XMMRegister dst, XMMRegister src) { rsqrtps(dst, Operand(src)); }
   void haddps(XMMRegister dst, Operand src);
   void haddps(XMMRegister dst, XMMRegister src) { haddps(dst, Operand(src)); }
-
-  void minps(XMMRegister dst, Operand src);
-  void minps(XMMRegister dst, XMMRegister src) { minps(dst, Operand(src)); }
-  void maxps(XMMRegister dst, Operand src);
-  void maxps(XMMRegister dst, XMMRegister src) { maxps(dst, Operand(src)); }
+  void sqrtpd(XMMRegister dst, Operand src) {
+    sse2_instr(dst, src, 0x66, 0x0F, 0x51);
+  }
+  void sqrtpd(XMMRegister dst, XMMRegister src) { sqrtpd(dst, Operand(src)); }
 
   void cmpps(XMMRegister dst, Operand src, uint8_t cmp);
   void cmpps(XMMRegister dst, XMMRegister src, uint8_t cmp) {
@@ -944,15 +927,8 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void mulsd(XMMRegister dst, Operand src);
   void divsd(XMMRegister dst, XMMRegister src) { divsd(dst, Operand(src)); }
   void divsd(XMMRegister dst, Operand src);
-  void xorpd(XMMRegister dst, XMMRegister src) { xorpd(dst, Operand(src)); }
-  void xorpd(XMMRegister dst, Operand src);
   void sqrtsd(XMMRegister dst, XMMRegister src) { sqrtsd(dst, Operand(src)); }
   void sqrtsd(XMMRegister dst, Operand src);
-
-  void andpd(XMMRegister dst, XMMRegister src) { andpd(dst, Operand(src)); }
-  void andpd(XMMRegister dst, Operand src);
-  void orpd(XMMRegister dst, XMMRegister src) { orpd(dst, Operand(src)); }
-  void orpd(XMMRegister dst, Operand src);
 
   void ucomisd(XMMRegister dst, XMMRegister src) { ucomisd(dst, Operand(src)); }
   void ucomisd(XMMRegister dst, Operand src);
@@ -1317,14 +1293,24 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void vhaddps(XMMRegister dst, XMMRegister src1, Operand src2) {
     vinstr(0x7C, dst, src1, src2, kF2, k0F, kWIG);
   }
+  void vsqrtpd(XMMRegister dst, XMMRegister src) { vsqrtpd(dst, Operand(src)); }
+  void vsqrtpd(XMMRegister dst, Operand src) {
+    vinstr(0x51, dst, xmm0, src, k66, k0F, kWIG);
+  }
   void vmovaps(XMMRegister dst, XMMRegister src) { vmovaps(dst, Operand(src)); }
   void vmovaps(XMMRegister dst, Operand src) { vps(0x28, dst, xmm0, src); }
+  void vmovapd(XMMRegister dst, XMMRegister src) { vmovapd(dst, Operand(src)); }
+  void vmovapd(XMMRegister dst, Operand src) { vpd(0x28, dst, xmm0, src); }
   void vmovups(XMMRegister dst, XMMRegister src) { vmovups(dst, Operand(src)); }
   void vmovups(XMMRegister dst, Operand src) { vps(0x10, dst, xmm0, src); }
   void vshufps(XMMRegister dst, XMMRegister src1, XMMRegister src2, byte imm8) {
     vshufps(dst, src1, Operand(src2), imm8);
   }
   void vshufps(XMMRegister dst, XMMRegister src1, Operand src2, byte imm8);
+  void vshufpd(XMMRegister dst, XMMRegister src1, XMMRegister src2, byte imm8) {
+    vshufpd(dst, src1, Operand(src2), imm8);
+  }
+  void vshufpd(XMMRegister dst, XMMRegister src1, Operand src2, byte imm8);
 
   void vpsllw(XMMRegister dst, XMMRegister src, uint8_t imm8);
   void vpslld(XMMRegister dst, XMMRegister src, uint8_t imm8);
@@ -1496,6 +1482,11 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   }
   void rorx(Register dst, Operand src, byte imm8);
 
+  // Implementation of packed single-precision floating-point SSE instructions.
+  void ps(byte op, XMMRegister dst, Operand src);
+  // Implementation of packed double-precision floating-point SSE instructions.
+  void pd(byte op, XMMRegister dst, Operand src);
+
 #define PACKED_OP_LIST(V) \
   V(and, 0x54)            \
   V(andn, 0x55)           \
@@ -1507,6 +1498,19 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   V(min, 0x5d)            \
   V(div, 0x5e)            \
   V(max, 0x5f)
+
+#define SSE_PACKED_OP_DECLARE(name, opcode)                             \
+  void name##ps(XMMRegister dst, XMMRegister src) {                     \
+    ps(opcode, dst, Operand(src));                                      \
+  }                                                                     \
+  void name##ps(XMMRegister dst, Operand src) { ps(opcode, dst, src); } \
+  void name##pd(XMMRegister dst, XMMRegister src) {                     \
+    pd(opcode, dst, Operand(src));                                      \
+  }                                                                     \
+  void name##pd(XMMRegister dst, Operand src) { pd(opcode, dst, src); }
+
+  PACKED_OP_LIST(SSE_PACKED_OP_DECLARE)
+#undef SSE_PACKED_OP_DECLARE
 
 #define AVX_PACKED_OP_DECLARE(name, opcode)                               \
   void v##name##ps(XMMRegister dst, XMMRegister src1, XMMRegister src2) { \
@@ -1523,6 +1527,8 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   }
 
   PACKED_OP_LIST(AVX_PACKED_OP_DECLARE)
+#undef AVX_PACKED_OP_DECLARE
+#undef PACKED_OP_LIST
   void vps(byte op, XMMRegister dst, XMMRegister src1, Operand src2);
   void vpd(byte op, XMMRegister dst, XMMRegister src1, Operand src2);
 

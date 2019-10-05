@@ -36,7 +36,8 @@ class RememberedSetOperations {
     if (slots != nullptr) {
       size_t pages = (chunk->size() + Page::kPageSize - 1) / Page::kPageSize;
       for (size_t page = 0; page < pages; page++) {
-        slots[page].Iterate(callback, mode);
+        slots[page].Iterate(chunk->address() + page * Page::kPageSize, callback,
+                            mode);
       }
     }
   }
@@ -93,7 +94,7 @@ class RememberedSet : public AllStatic {
  public:
   // Given a page and a slot in that page, this function adds the slot to the
   // remembered set.
-  template <AccessMode access_mode = AccessMode::ATOMIC>
+  template <AccessMode access_mode>
   static void Insert(MemoryChunk* chunk, Address slot_addr) {
     DCHECK(chunk->Contains(slot_addr));
     SlotSet* slot_set = chunk->slot_set<type, access_mode>();
@@ -177,30 +178,6 @@ class RememberedSet : public AllStatic {
     RememberedSetOperations::Iterate(slots, chunk, callback, mode);
   }
 
-  static int NumberOfPreFreedEmptyBuckets(MemoryChunk* chunk) {
-    DCHECK(type == OLD_TO_NEW);
-    int result = 0;
-    SlotSet* slots = chunk->slot_set<type>();
-    if (slots != nullptr) {
-      size_t pages = (chunk->size() + Page::kPageSize - 1) / Page::kPageSize;
-      for (size_t page = 0; page < pages; page++) {
-        result += slots[page].NumberOfPreFreedEmptyBuckets();
-      }
-    }
-    return result;
-  }
-
-  static void PreFreeEmptyBuckets(MemoryChunk* chunk) {
-    DCHECK(type == OLD_TO_NEW);
-    SlotSet* slots = chunk->slot_set<type>();
-    if (slots != nullptr) {
-      size_t pages = (chunk->size() + Page::kPageSize - 1) / Page::kPageSize;
-      for (size_t page = 0; page < pages; page++) {
-        slots[page].PreFreeEmptyBuckets();
-      }
-    }
-  }
-
   static void FreeEmptyBuckets(MemoryChunk* chunk) {
     DCHECK(type == OLD_TO_NEW);
     SlotSet* slots = chunk->slot_set<type>();
@@ -208,7 +185,6 @@ class RememberedSet : public AllStatic {
       size_t pages = (chunk->size() + Page::kPageSize - 1) / Page::kPageSize;
       for (size_t page = 0; page < pages; page++) {
         slots[page].FreeEmptyBuckets();
-        slots[page].FreeToBeFreedBuckets();
       }
     }
   }
@@ -374,7 +350,7 @@ class UpdateTypedSlotHelper {
 
 class RememberedSetSweeping {
  public:
-  template <AccessMode access_mode = AccessMode::ATOMIC>
+  template <AccessMode access_mode>
   static void Insert(MemoryChunk* chunk, Address slot_addr) {
     DCHECK(chunk->Contains(slot_addr));
     SlotSet* slot_set = chunk->sweeping_slot_set<access_mode>();

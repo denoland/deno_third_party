@@ -711,6 +711,7 @@ RUNTIME_FUNCTION(Runtime_SimulateNewspaceFull) {
   Heap* heap = isolate->heap();
   NewSpace* space = heap->new_space();
   PauseAllocationObserversScope pause_observers(heap);
+  AlwaysAllocateScope always_allocate(heap);
   do {
     FillUpOneNewSpacePage(isolate, heap);
   } while (space->AddFreshPage());
@@ -1049,7 +1050,7 @@ RUNTIME_FUNCTION(Runtime_GetWasmRecoveredTrapCount) {
 RUNTIME_FUNCTION(Runtime_GetWasmExceptionId) {
   HandleScope scope(isolate);
   DCHECK_EQ(2, args.length());
-  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, exception, 0);
+  CONVERT_ARG_HANDLE_CHECKED(WasmExceptionPackage, exception, 0);
   CONVERT_ARG_HANDLE_CHECKED(WasmInstanceObject, instance, 1);
   Handle<Object> tag =
       WasmExceptionPackage::GetExceptionTag(isolate, exception);
@@ -1065,7 +1066,7 @@ RUNTIME_FUNCTION(Runtime_GetWasmExceptionId) {
 RUNTIME_FUNCTION(Runtime_GetWasmExceptionValues) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
-  CONVERT_ARG_HANDLE_CHECKED(JSReceiver, exception, 0);
+  CONVERT_ARG_HANDLE_CHECKED(WasmExceptionPackage, exception, 0);
   Handle<Object> values_obj =
       WasmExceptionPackage::GetExceptionValues(isolate, exception);
   CHECK(values_obj->IsFixedArray());  // Only called with correct input.

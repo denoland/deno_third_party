@@ -5723,6 +5723,11 @@ void v8::V8::InitializeExternalStartupData(const char* natives_blob,
   i::InitializeExternalStartupData(natives_blob, snapshot_blob);
 }
 
+// static
+void v8::V8::InitializeExternalStartupDataFromFile(const char* snapshot_blob) {
+  i::InitializeExternalStartupDataFromFile(snapshot_blob);
+}
+
 const char* v8::V8::GetVersion() { return i::Version::GetVersion(); }
 
 template <typename ObjectType>
@@ -9439,6 +9444,21 @@ int debug::WasmScript::NumImportedFunctions() const {
   return static_cast<int>(module->num_imported_functions);
 }
 
+bool debug::WasmScript::HasDwarf() const {
+  i::Handle<i::Script> script = Utils::OpenHandle(this);
+  DCHECK_EQ(i::Script::TYPE_WASM, script->type());
+  i::wasm::NativeModule* native_module = script->wasm_native_module();
+  const i::wasm::WasmModule* module = native_module->module();
+  return module->has_dwarf;
+}
+
+MemorySpan<const uint8_t> debug::WasmScript::Bytecode() const {
+  i::Handle<i::Script> script = Utils::OpenHandle(this);
+  i::Vector<const uint8_t> wire_bytes =
+      script->wasm_native_module()->wire_bytes();
+  return {wire_bytes.begin(), wire_bytes.size()};
+}
+
 std::pair<int, int> debug::WasmScript::GetFunctionRange(
     int function_index) const {
   i::DisallowHeapAllocation no_gc;
@@ -9718,14 +9738,14 @@ v8::Local<debug::GeneratorObject> debug::GeneratorObject::Cast(
 
 MaybeLocal<v8::Value> debug::EvaluateGlobal(v8::Isolate* isolate,
                                             v8::Local<v8::String> source,
-                                            bool throw_on_side_effect) {
+                                            EvaluateGlobalMode mode) {
   i::Isolate* internal_isolate = reinterpret_cast<i::Isolate*>(isolate);
   PREPARE_FOR_DEBUG_INTERFACE_EXECUTION_WITH_ISOLATE(internal_isolate, Value);
   Local<Value> result;
-  has_pending_exception = !ToLocal<Value>(
-      i::DebugEvaluate::Global(internal_isolate, Utils::OpenHandle(*source),
-                               throw_on_side_effect),
-      &result);
+  has_pending_exception =
+      !ToLocal<Value>(i::DebugEvaluate::Global(
+                          internal_isolate, Utils::OpenHandle(*source), mode),
+                      &result);
   RETURN_ON_FAILED_EXECUTION(Value);
   RETURN_ESCAPED(result);
 }
@@ -10512,17 +10532,6 @@ void Testing::DeoptimizeAll(Isolate* isolate) {
   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
   i::HandleScope scope(i_isolate);
   i::Deoptimizer::DeoptimizeAll(i_isolate);
-}
-
-void EmbedderHeapTracer::TracePrologue(TraceFlags flags) {
-#if __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated"
-#endif
-  TracePrologue();
-#if __clang__
-#pragma clang diagnostic pop
-#endif
 }
 
 void EmbedderHeapTracer::TraceEpilogue(TraceSummary* trace_summary) {

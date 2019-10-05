@@ -2795,7 +2795,6 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
           index, HeapNumber::cast(value).value_as_bits());
       if (i < old_number_of_fields && !old_map->IsUnboxedDoubleField(index)) {
         // Transition from tagged to untagged slot.
-        heap->ClearRecordedSlot(*object, object->RawField(index.offset()));
         MemoryChunk* chunk = MemoryChunk::FromHeapObject(*object);
         chunk->InvalidateRecordedSlots(*object);
       } else {
@@ -2922,10 +2921,6 @@ void MigrateFastToSlow(Isolate* isolate, Handle<JSObject> object,
   // garbage.
   int inobject_properties = new_map->GetInObjectProperties();
   if (inobject_properties) {
-    Heap* heap = isolate->heap();
-    heap->ClearRecordedSlotRange(
-        object->address() + map->GetInObjectPropertyOffset(0),
-        object->address() + new_instance_size);
     MemoryChunk* chunk = MemoryChunk::FromHeapObject(*object);
     chunk->InvalidateRecordedSlots(*object);
 

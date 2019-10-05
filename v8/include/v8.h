@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -7507,8 +7508,7 @@ class V8_EXPORT EmbedderHeapTracer {
   /**
    * Called at the beginning of a GC cycle.
    */
-  V8_DEPRECATED("Use version with flags.", virtual void TracePrologue()) {}
-  virtual void TracePrologue(TraceFlags flags);
+  virtual void TracePrologue(TraceFlags flags) {}
 
   /**
    * Called to advance tracing in the embedder.
@@ -7535,8 +7535,7 @@ class V8_EXPORT EmbedderHeapTracer {
    * overriden to fill a |TraceSummary| that is used by V8 to schedule future
    * garbage collections.
    */
-  V8_DEPRECATE_SOON("Use version with parameter.",
-                    virtual void TraceEpilogue()) {}
+  V8_DEPRECATED("Use version with parameter.", virtual void TraceEpilogue()) {}
   virtual void TraceEpilogue(TraceSummary* trace_summary);
 
   /**
@@ -9003,7 +9002,8 @@ class V8_EXPORT V8 {
    *   handled entirely on the embedders' side.
    * - The call will abort if the data is invalid.
    */
-  static void SetNativesDataBlob(StartupData* startup_blob);
+  V8_DEPRECATED("The natives blob is deprecated (https://crbug.com/v8/7624).",
+                static void SetNativesDataBlob(StartupData* startup_blob));
   static void SetSnapshotDataBlob(StartupData* startup_blob);
 
   /** Set the callback to invoke in case of Dcheck failures. */
@@ -9099,8 +9099,11 @@ class V8_EXPORT V8 {
    *   not perform any file IO.
    */
   static void InitializeExternalStartupData(const char* directory_path);
-  static void InitializeExternalStartupData(const char* natives_blob,
-                                            const char* snapshot_blob);
+  V8_DEPRECATED("The natives blob is deprecated (https://crbug.com/v8/7624).",
+                static void InitializeExternalStartupData(
+                    const char* natives_blob, const char* snapshot_blob));
+  static void InitializeExternalStartupDataFromFile(const char* snapshot_blob);
+
   /**
    * Sets the v8::Platform to use. This should be invoked before V8 is
    * initialized.

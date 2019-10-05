@@ -350,6 +350,13 @@ DEF_GETTER(HeapObject, IsDependentCode, bool) {
   return true;
 }
 
+DEF_GETTER(HeapObject, IsOSROptimizedCodeCache, bool) {
+  if (!IsWeakFixedArray(isolate)) return false;
+  // There's actually no way to see the difference between a weak fixed array
+  // and a osr optimized code cache.
+  return true;
+}
+
 DEF_GETTER(HeapObject, IsAbstractCode, bool) {
   return IsBytecodeArray(isolate) || IsCode(isolate);
 }
@@ -409,6 +416,12 @@ DEF_GETTER(HeapObject, IsHashTableBase, bool) { return IsHashTable(isolate); }
 DEF_GETTER(HeapObject, IsSmallOrderedHashTable, bool) {
   return IsSmallOrderedHashSet(isolate) || IsSmallOrderedHashMap(isolate) ||
          IsSmallOrderedNameDictionary(isolate);
+}
+
+DEF_GETTER(HeapObject, IsWasmExceptionPackage, bool) {
+  // It is not possible to check for the existence of certain properties on the
+  // underlying {JSReceiver} here because that requires calling handlified code.
+  return IsJSReceiver(isolate);
 }
 
 bool Object::IsPrimitive() const {

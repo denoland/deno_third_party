@@ -1781,7 +1781,7 @@ bool Object::IterationHasObservableEffects() {
   // the prototype. This could have different results if the prototype has been
   // changed.
   if (IsHoleyElementsKind(array_kind) &&
-      isolate->IsNoElementsProtectorIntact()) {
+      Protectors::IsNoElementsIntact(isolate)) {
     return false;
   }
   return true;
@@ -2188,7 +2188,8 @@ int HeapObject::SizeFromMap(Map map) const {
   }
   if (IsInRange(instance_type, FIRST_CONTEXT_TYPE, LAST_CONTEXT_TYPE)) {
     if (instance_type == NATIVE_CONTEXT_TYPE) return NativeContext::kSize;
-    return Context::SizeFor(Context::unchecked_cast(*this).length());
+    return Context::SizeFor(
+        Context::unchecked_cast(*this).synchronized_length());
   }
   if (instance_type == ONE_BYTE_STRING_TYPE ||
       instance_type == ONE_BYTE_INTERNALIZED_STRING_TYPE) {
@@ -7896,9 +7897,6 @@ void PropertyCell::SetValueWithInvalidation(Isolate* isolate,
                                             Handle<PropertyCell> cell,
                                             Handle<Object> new_value) {
   if (cell->value() != *new_value) {
-    if (FLAG_trace_protector_invalidation) {
-      isolate->TraceProtectorInvalidation(cell_name);
-    }
     cell->set_value(*new_value);
     cell->dependent_code().DeoptimizeDependentCodeGroup(
         isolate, DependentCode::kPropertyCellChangedGroup);

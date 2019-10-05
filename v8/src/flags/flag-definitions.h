@@ -212,9 +212,7 @@ DEFINE_IMPLICATION(harmony_import_meta, harmony_dynamic_import)
   V(harmony_top_level_await, "harmony top level await")
 
 #ifdef V8_INTL_SUPPORT
-#define HARMONY_INPROGRESS(V)                              \
-  HARMONY_INPROGRESS_BASE(V)                               \
-  V(harmony_intl_dateformat_quarter, "Add quarter option to DateTimeFormat")
+#define HARMONY_INPROGRESS(V) HARMONY_INPROGRESS_BASE(V)
 #else
 #define HARMONY_INPROGRESS(V) HARMONY_INPROGRESS_BASE(V)
 #endif
@@ -224,14 +222,15 @@ DEFINE_IMPLICATION(harmony_import_meta, harmony_dynamic_import)
   V(harmony_optional_chaining, "harmony optional chaining syntax")
 
 #ifdef V8_INTL_SUPPORT
-#define HARMONY_STAGED(V)                                  \
-  HARMONY_STAGED_BASE(V)                                   \
-  V(harmony_intl_add_calendar_numbering_system,            \
-    "Add calendar and numberingSystem to DateTimeFormat")  \
-  V(harmony_intl_dateformat_day_period,                    \
-    "Add dayPeriod option to DateTimeFormat")              \
-  V(harmony_intl_dateformat_fractional_second_digits,      \
-    "Add fractionalSecondDigits option to DateTimeFormat") \
+#define HARMONY_STAGED(V)                                           \
+  HARMONY_STAGED_BASE(V)                                            \
+  V(harmony_intl_add_calendar_numbering_system,                     \
+    "Add calendar and numberingSystem to DateTimeFormat")           \
+  V(harmony_intl_dateformat_day_period,                             \
+    "Add dayPeriod option to DateTimeFormat")                       \
+  V(harmony_intl_dateformat_fractional_second_digits,               \
+    "Add fractionalSecondDigits option to DateTimeFormat")          \
+  V(harmony_intl_other_calendars, "DateTimeFormat other calendars") \
   V(harmony_intl_segmenter, "Intl.Segmenter")
 #else
 #define HARMONY_STAGED(V) HARMONY_STAGED_BASE(V)
@@ -763,10 +762,9 @@ DEFINE_BOOL(wasm_code_gc, true, "enable garbage collection of wasm code")
 DEFINE_BOOL(trace_wasm_code_gc, false, "trace garbage collection of wasm code")
 DEFINE_BOOL(stress_wasm_code_gc, false,
             "stress test garbage collection of wasm code")
-DEFINE_BOOL(wasm_far_jump_table, false,
+DEFINE_BOOL(wasm_far_jump_table, true,
             "use multiple separate code spaces that might require far jumps "
             "between them")
-DEFINE_IMPLICATION(future, wasm_far_jump_table)
 DEFINE_INT(wasm_max_initial_code_space_reservation, 0,
            "maximum size of the initial wasm code space reservation (in MB)")
 
@@ -1274,6 +1272,15 @@ DEFINE_BOOL(regexp_tier_up, true,
 DEFINE_INT(regexp_tier_up_ticks, 1,
            "set the number of executions for the regexp interpreter before "
            "tiering-up to the compiler")
+DEFINE_BOOL(regexp_peephole_optimization, true,
+            "enable peephole optimization for regexp bytecode")
+DEFINE_BOOL(trace_regexp_peephole_optimization, false,
+            "trace regexp bytecode peephole optimization")
+DEFINE_BOOL(trace_regexp_bytecodes, false, "trace regexp bytecode execution")
+DEFINE_BOOL(trace_regexp_assembler, false,
+            "trace regexp macro assembler calls.")
+DEFINE_BOOL(trace_regexp_parser, false, "trace regexp parsing")
+DEFINE_BOOL(trace_regexp_tier_up, false, "trace regexp tiering up execution")
 
 // Testing flags test/cctest/test-{flags,api,serialization}.cc
 DEFINE_BOOL(testing_bool_flag, true, "testing_bool_flag")
@@ -1408,11 +1415,6 @@ DEFINE_BOOL(trace_isolates, false, "trace isolate state changes")
 // Regexp
 DEFINE_BOOL(regexp_possessive_quantifier, false,
             "enable possessive quantifier syntax for testing")
-DEFINE_BOOL(trace_regexp_bytecodes, false, "trace regexp bytecode execution")
-DEFINE_BOOL(trace_regexp_assembler, false,
-            "trace regexp macro assembler calls.")
-DEFINE_BOOL(trace_regexp_parser, false, "trace regexp parsing")
-DEFINE_BOOL(trace_regexp_tier_up, false, "trace regexp tiering up execution")
 
 // Debugger
 DEFINE_BOOL(print_break_location, false, "print source location on debug break")

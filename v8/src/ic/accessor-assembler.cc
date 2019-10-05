@@ -82,7 +82,7 @@ TNode<MaybeObject> AccessorAssembler::TryMonomorphicCase(
 
   // Try to quickly handle the monomorphic case without knowing for sure
   // if we have a weak reference in feedback.
-  GotoIf(IsNotWeakReferenceTo(feedback, receiver_map), if_miss);
+  GotoIfNot(IsWeakReferenceTo(feedback, receiver_map), if_miss);
 
   TNode<MaybeObject> handler = UncheckedCast<MaybeObject>(
       Load(MachineType::AnyTagged(), vector,
@@ -117,7 +117,7 @@ void AccessorAssembler::HandlePolymorphicCase(
     TNode<MaybeObject> maybe_cached_map =
         LoadWeakFixedArrayElement(feedback, var_index.value());
     CSA_ASSERT(this, IsWeakOrCleared(maybe_cached_map));
-    GotoIf(IsNotWeakReferenceTo(maybe_cached_map, receiver_map), &loop_next);
+    GotoIfNot(IsWeakReferenceTo(maybe_cached_map, receiver_map), &loop_next);
 
     // Found, now call handler.
     TNode<MaybeObject> handler =
@@ -850,7 +850,7 @@ void AccessorAssembler::HandleLoadICProtoHandler(
   Label load_from_cached_holder(this), is_smi(this), done(this);
 
   GotoIf(TaggedIsSmi(maybe_holder_or_constant), &is_smi);
-  Branch(IsStrongReferenceTo(maybe_holder_or_constant, NullConstant()), &done,
+  Branch(TaggedEqual(maybe_holder_or_constant, NullConstant()), &done,
          &load_from_cached_holder);
 
   BIND(&is_smi);
@@ -893,7 +893,7 @@ void AccessorAssembler::EmitAccessCheck(TNode<Context> expected_native_context,
                                         Label* can_access, Label* miss) {
   CSA_ASSERT(this, IsNativeContext(expected_native_context));
 
-  TNode<Context> native_context = LoadNativeContext(context);
+  TNode<NativeContext> native_context = LoadNativeContext(context);
   GotoIf(TaggedEqual(expected_native_context, native_context), can_access);
   // If the receiver is not a JSGlobalProxy then we miss.
   GotoIfNot(IsJSGlobalProxy(CAST(receiver)), miss);
@@ -1192,13 +1192,13 @@ void AccessorAssembler::CheckFieldType(TNode<DescriptorArray> descriptors,
     DCHECK_NE(static_cast<uint32_t>(kNoneType), kClearedWeakHeapObjectLower32);
     DCHECK_NE(static_cast<uint32_t>(kAnyType), kClearedWeakHeapObjectLower32);
     // FieldType::None can't hold any value.
-    GotoIf(WordEqual(BitcastMaybeObjectToWord(field_type),
-                     IntPtrConstant(kNoneType)),
-           bailout);
+    GotoIf(
+        TaggedEqual(field_type, BitcastWordToTagged(IntPtrConstant(kNoneType))),
+        bailout);
     // FieldType::Any can hold any value.
-    GotoIf(WordEqual(BitcastMaybeObjectToWord(field_type),
-                     IntPtrConstant(kAnyType)),
-           &all_fine);
+    GotoIf(
+        TaggedEqual(field_type, BitcastWordToTagged(IntPtrConstant(kAnyType))),
+        &all_fine);
     // Cleared weak references count as FieldType::None, which can't hold any
     // value.
     TNode<Map> field_type_map =
@@ -1884,7 +1884,7 @@ Node* AccessorAssembler::ExtendPropertiesBackingStore(Node* object,
   BIND(&if_smi_hash);
   {
     TNode<Int32T> hash = SmiToInt32(CAST(properties));
-    TNode<Word32T> encoded_hash =
+    TNode<Int32T> encoded_hash =
         Word32Shl(hash, Int32Constant(PropertyArray::HashField::kShift));
     var_encoded_hash.Bind(encoded_hash);
     var_length.Bind(IntPtrOrSmiConstant(0, mode));
@@ -2241,7 +2241,8 @@ void AccessorAssembler::InvalidateValidityCellIfPrototype(Node* map,
   BIND(&cont);
 }
 
-void AccessorAssembler::GenericElementLoad(Node* receiver, Node* receiver_map,
+void AccessorAssembler::GenericElementLoad(Node* receiver,
+                                           TNode<Map> receiver_map,
                                            SloppyTNode<Int32T> instance_type,
                                            Node* index, Label* slow) {
   Comment("integer index");
@@ -2302,11 +2303,9 @@ void AccessorAssembler::GenericElementLoad(Node* receiver, Node* receiver_map,
   }
 }
 
-void AccessorAssembler::GenericPropertyLoad(Node* receiver, Node* receiver_map,
-                                            SloppyTNode<Int32T> instance_type,
-                                            const LoadICParameters* p,
-                                            Label* slow,
-                                            UseStubCache use_stub_cache) {
+void AccessorAssembler::GenericPropertyLoad(
+    Node* receiver, TNode<Map> receiver_map, SloppyTNode<Int32T> instance_type,
+    const LoadICParameters* p, Label* slow, UseStubCache use_stub_cache) {
   ExitPoint direct_exit(this);
 
   Comment("key is unique name");
@@ -2406,13 +2405,13 @@ void AccessorAssembler::GenericPropertyLoad(Node* receiver, Node* receiver_map,
 
   BIND(&lookup_prototype_chain);
   {
-    VARIABLE(var_holder_map, MachineRepresentation::kTagged);
+    TVARIABLE(Map, var_holder_map);
     VARIABLE(var_holder_instance_type, MachineRepresentation::kWord32);
     Label return_undefined(this), is_private_symbol(this);
     Variable* merged_variables[] = {&var_holder_map, &var_holder_instance_type};
     Label loop(this, arraysize(merged_variables), merged_variables);
 
-    var_holder_map.Bind(receiver_map);
+    var_holder_map = receiver_map;
     var_holder_instance_type.Bind(instance_type);
     GotoIf(IsPrivateSymbol(name), &is_private_symbol);
 
@@ -2427,7 +2426,7 @@ void AccessorAssembler::GenericPropertyLoad(Node* receiver, Node* receiver_map,
       GotoIf(TaggedEqual(proto, NullConstant()), &return_undefined);
       TNode<Map> proto_map = LoadMap(proto);
       TNode<Uint16T> proto_instance_type = LoadMapInstanceType(proto_map);
-      var_holder_map.Bind(proto_map);
+      var_holder_map = proto_map;
       var_holder_instance_type.Bind(proto_instance_type);
       Label next_proto(this), return_value(this, &var_value), goto_slow(this);
       TryGetOwnProperty(p->context(), receiver, proto, proto_map,
@@ -2511,7 +2510,7 @@ Node* AccessorAssembler::StubCacheSecondaryOffset(Node* name, Node* seed) {
 
   // Use the seed from the primary cache in the secondary cache.
   TNode<Int32T> name32 = TruncateIntPtrToInt32(BitcastTaggedToWord(name));
-  TNode<Word32T> hash = Int32Sub(TruncateIntPtrToInt32(seed), name32);
+  TNode<Int32T> hash = Int32Sub(TruncateIntPtrToInt32(seed), name32);
   hash = Int32Add(hash, Int32Constant(StubCache::kSecondaryMagic));
   int32_t mask = (StubCache::kSecondaryTableSize - 1)
                  << StubCache::kCacheIndexShift;
@@ -2849,7 +2848,7 @@ void AccessorAssembler::LoadGlobalIC_TryHandlerCase(
                                      : OnNonExistent::kReturnUndefined;
 
   TNode<Context> context = lazy_context();
-  TNode<Context> native_context = LoadNativeContext(context);
+  TNode<NativeContext> native_context = LoadNativeContext(context);
   TNode<JSGlobalProxy> receiver =
       CAST(LoadContextElement(native_context, Context::GLOBAL_PROXY_INDEX));
   TNode<Object> holder =
@@ -3180,11 +3179,6 @@ void AccessorAssembler::StoreGlobalIC(const StoreICParameters* pp) {
   BIND(&if_heapobject);
   {
     Label try_handler(this), miss(this, Label::kDeferred);
-    // We use pre-monomorphic state for global stores that run into
-    // interceptors because the property doesn't exist yet. Using
-    // pre-monomorphic state gives it a chance to find more information the
-    // second time.
-    GotoIf(TaggedEqual(maybe_weak_ref, PremonomorphicSymbolConstant()), &miss);
 
     CSA_ASSERT(this, IsWeakOrCleared(maybe_weak_ref));
     TNode<PropertyCell> property_cell =
@@ -3203,7 +3197,7 @@ void AccessorAssembler::StoreGlobalIC(const StoreICParameters* pp) {
       GotoIf(TaggedEqual(handler, UninitializedSymbolConstant()), &miss);
 
       DCHECK_NULL(pp->receiver());
-      TNode<Context> native_context = LoadNativeContext(pp->context());
+      TNode<NativeContext> native_context = LoadNativeContext(pp->context());
       StoreICParameters p(
           pp->context(),
           LoadContextElement(native_context, Context::GLOBAL_PROXY_INDEX),
@@ -3395,9 +3389,13 @@ void AccessorAssembler::StoreInArrayLiteralIC(const StoreICParameters* p) {
     {
       Comment("StoreInArrayLiteralIC_if_handler");
       // This is a stripped-down version of HandleStoreICHandlerCase.
+      Label if_transitioning_element_store(this), if_smi_handler(this);
+
+      // Check used to identify the Slow case.
+      // Currently only the Slow case uses a Smi handler.
+      GotoIf(TaggedIsSmi(var_handler.value()), &if_smi_handler);
 
       TNode<HeapObject> handler = CAST(var_handler.value());
-      Label if_transitioning_element_store(this);
       GotoIfNot(IsCode(handler), &if_transitioning_element_store);
       TailCallStub(StoreWithVectorDescriptor{}, CAST(handler), p->context(),
                    p->receiver(), p->name(), p->value(), p->slot(),
@@ -3415,6 +3413,22 @@ void AccessorAssembler::StoreInArrayLiteralIC(const StoreICParameters* p) {
         TailCallStub(StoreTransitionDescriptor{}, code, p->context(),
                      p->receiver(), p->name(), transition_map, p->value(),
                      p->slot(), p->vector());
+      }
+
+      BIND(&if_smi_handler);
+      {
+#ifdef DEBUG
+        // A check to ensure that no other Smi handler uses this path.
+        TNode<Int32T> handler_word = SmiToInt32(CAST(var_handler.value()));
+        TNode<Uint32T> handler_kind =
+            DecodeWord32<StoreHandler::KindBits>(handler_word);
+        CSA_ASSERT(this, Word32Equal(handler_kind,
+                                     Int32Constant(StoreHandler::kSlow)));
+#endif
+
+        Comment("StoreInArrayLiteralIC_Slow");
+        TailCallRuntime(Runtime::kStoreInArrayLiteralIC_Slow, p->context(),
+                        p->value(), p->receiver(), p->name());
       }
     }
 
@@ -3766,7 +3780,7 @@ void AccessorAssembler::GenerateCloneObjectIC_Slow() {
   // can be tail called from it. However, the feedback slot and vector are not
   // used.
 
-  TNode<Context> native_context = LoadNativeContext(context);
+  TNode<NativeContext> native_context = LoadNativeContext(context);
   TNode<JSFunction> object_fn =
       CAST(LoadContextElement(native_context, Context::OBJECT_FUNCTION_INDEX));
   TNode<Map> initial_map = CAST(
@@ -4012,6 +4026,55 @@ void AccessorAssembler::GenerateKeyedHasIC_PolymorphicName() {
 
   LoadICParameters p(context, receiver, name, slot, vector);
   KeyedLoadICPolymorphicName(&p, LoadAccessMode::kHas);
+}
+
+void AccessorAssembler::BranchIfPrototypesHaveNoElements(
+    TNode<Map> receiver_map, Label* definitely_no_elements,
+    Label* possibly_elements) {
+  TVARIABLE(Map, var_map, receiver_map);
+  Label loop_body(this, &var_map);
+  TNode<FixedArray> empty_fixed_array = EmptyFixedArrayConstant();
+  TNode<NumberDictionary> empty_slow_element_dictionary =
+      EmptySlowElementDictionaryConstant();
+  Goto(&loop_body);
+
+  BIND(&loop_body);
+  {
+    TNode<Map> map = var_map.value();
+    TNode<HeapObject> prototype = LoadMapPrototype(map);
+    GotoIf(IsNull(prototype), definitely_no_elements);
+    TNode<Map> prototype_map = LoadMap(prototype);
+    TNode<Uint16T> prototype_instance_type = LoadMapInstanceType(prototype_map);
+
+    // Pessimistically assume elements if a Proxy, Special API Object,
+    // or JSPrimitiveWrapper wrapper is found on the prototype chain. After this
+    // instance type check, it's not necessary to check for interceptors or
+    // access checks.
+    Label if_custom(this, Label::kDeferred), if_notcustom(this);
+    Branch(IsCustomElementsReceiverInstanceType(prototype_instance_type),
+           &if_custom, &if_notcustom);
+
+    BIND(&if_custom);
+    {
+      // For string JSPrimitiveWrapper wrappers we still support the checks as
+      // long as they wrap the empty string.
+      GotoIfNot(
+          InstanceTypeEqual(prototype_instance_type, JS_PRIMITIVE_WRAPPER_TYPE),
+          possibly_elements);
+      TNode<Object> prototype_value =
+          LoadJSPrimitiveWrapperValue(CAST(prototype));
+      Branch(IsEmptyString(prototype_value), &if_notcustom, possibly_elements);
+    }
+
+    BIND(&if_notcustom);
+    {
+      TNode<FixedArrayBase> prototype_elements = LoadElements(CAST(prototype));
+      var_map = prototype_map;
+      GotoIf(TaggedEqual(prototype_elements, empty_fixed_array), &loop_body);
+      Branch(TaggedEqual(prototype_elements, empty_slow_element_dictionary),
+             &loop_body, possibly_elements);
+    }
+  }
 }
 
 }  // namespace internal

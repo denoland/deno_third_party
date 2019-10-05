@@ -5,9 +5,9 @@
 // Flags: --allow-natives-syntax --expose-gc
 
 var PI = new Proxy(this, {
-    get() {
-        PI();
-    }
+  get() {
+      PI();
+  }
 });
 
 assertThrows(() => new gc(PI, {}), TypeError);

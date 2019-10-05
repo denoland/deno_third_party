@@ -652,6 +652,7 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
                   const Operand& operand);
   inline void Blr(const Register& xn);
   inline void Cmp(const Register& rn, const Operand& operand);
+  inline void CmpTagged(const Register& rn, const Operand& operand);
   inline void Subs(const Register& rd, const Register& rn,
                    const Operand& operand);
   void Csel(const Register& rd, const Register& rn, const Operand& operand,
@@ -843,6 +844,13 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void CheckPageFlag(const Register& object, int mask, Condition cc,
                      Label* condition_met);
 
+  // Compare a register with an operand, and branch to label depending on the
+  // condition. May corrupt the status flags.
+  inline void CompareAndBranch(const Register& lhs, const Operand& rhs,
+                               Condition cond, Label* label);
+  inline void CompareTaggedAndBranch(const Register& lhs, const Operand& rhs,
+                                     Condition cond, Label* label);
+
   // Test the bits of register defined by bit_pattern, and branch if ANY of
   // those bits are set. May corrupt the status flags.
   inline void TestAndBranchIfAnySet(const Register& reg,
@@ -1006,6 +1014,8 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   // Conditional macros.
   inline void Ccmp(const Register& rn, const Operand& operand, StatusFlags nzcv,
                    Condition cond);
+  inline void CcmpTagged(const Register& rn, const Operand& operand,
+                         StatusFlags nzcv, Condition cond);
 
   inline void Clz(const Register& rd, const Register& rn);
 
@@ -1640,11 +1650,6 @@ class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
   // higher address than 'dst1'. The offset is in bytes. The stack pointer must
   // be aligned to 16 bytes.
   void PeekPair(const CPURegister& dst1, const CPURegister& dst2, int offset);
-
-  // Compare a register with an operand, and branch to label depending on the
-  // condition. May corrupt the status flags.
-  inline void CompareAndBranch(const Register& lhs, const Operand& rhs,
-                               Condition cond, Label* label);
 
   // Insert one or more instructions into the instruction stream that encode
   // some caller-defined data. The instructions used will be executable with no

@@ -754,7 +754,7 @@ void PrintCode(Isolate* isolate, Handle<Code> code,
       Handle<SharedFunctionInfo> shared = info->shared_info();
       os << "source_position = " << shared->StartPosition() << "\n";
     }
-    code->Disassemble(debug_name.get(), os);
+    code->Disassemble(debug_name.get(), os, isolate);
     os << "--- End code ---\n";
   }
 #endif  // ENABLE_DISASSEMBLER
@@ -852,7 +852,9 @@ class PipelineRunScope {
   PipelineRunScope(PipelineData* data, const char* phase_name)
       : phase_scope_(data->pipeline_statistics(), phase_name),
         zone_scope_(data->zone_stats(), phase_name),
-        origin_scope_(data->node_origins(), phase_name) {}
+        origin_scope_(data->node_origins(), phase_name) {
+    DCHECK_NOT_NULL(phase_name);
+  }
 
   Zone* zone() { return zone_scope_.zone(); }
 
@@ -1028,8 +1030,14 @@ PipelineCompilationJob::Status PipelineCompilationJob::PrepareJobImpl(
     compilation_info()->MarkAsAllocationFoldingEnabled();
   }
 
+  // Determine whether to specialize the code for the function's context.
+  // We can't do this in the case of OSR, because we want to cache the
+  // generated code on the native context keyed on SharedFunctionInfo.
+  // TODO(mythria): Check if it is better to key the OSR cache on JSFunction and
+  // allow context specialization for OSR code.
   if (compilation_info()->closure()->raw_feedback_cell().map() ==
-      ReadOnlyRoots(isolate).one_closure_cell_map()) {
+          ReadOnlyRoots(isolate).one_closure_cell_map() &&
+      !compilation_info()->is_osr()) {
     compilation_info()->MarkAsFunctionContextSpecializing();
     data_.ChooseSpecializationContext();
   }
@@ -1244,7 +1252,7 @@ CompilationJob::Status WasmHeapStubCompilationJob::FinalizeJobImpl(
     if (FLAG_print_opt_code) {
       CodeTracer::Scope tracing_scope(isolate->GetCodeTracer());
       OFStream os(tracing_scope.file());
-      code->Disassemble(compilation_info()->GetDebugName().get(), os);
+      code->Disassemble(compilation_info()->GetDebugName().get(), os, isolate);
     }
 #endif
     return SUCCEEDED;
@@ -1727,8 +1735,8 @@ struct MemoryOptimizationPhase {
     MemoryOptimizer optimizer(
         data->jsgraph(), temp_zone, data->info()->GetPoisoningMitigationLevel(),
         data->info()->is_allocation_folding_enabled()
-            ? MemoryOptimizer::AllocationFolding::kDoAllocationFolding
-            : MemoryOptimizer::AllocationFolding::kDontAllocationFolding,
+            ? MemoryLowering::AllocationFolding::kDoAllocationFolding
+            : MemoryLowering::AllocationFolding::kDontAllocationFolding,
         data->debug_name(), &data->info()->tick_counter());
     optimizer.Optimize();
   }
@@ -1750,8 +1758,7 @@ struct LateOptimizationPhase {
     CommonOperatorReducer common_reducer(&graph_reducer, data->graph(),
                                          data->broker(), data->common(),
                                          data->machine(), temp_zone);
-    SelectLowering select_lowering(data->jsgraph()->graph(),
-                                   data->jsgraph()->common());
+    SelectLowering select_lowering(data->jsgraph(), temp_zone);
 #ifdef V8_COMPRESS_POINTERS
     DecompressionElimination decompression_elimination(
         &graph_reducer, data->graph(), data->machine(), data->common());
@@ -1779,6 +1786,23 @@ struct MachineOperatorOptimizationPhase {
 
     AddReducer(data, &graph_reducer, &machine_reducer);
     AddReducer(data, &graph_reducer, &value_numbering);
+    graph_reducer.ReduceGraph();
+  }
+};
+
+struct MidTierMachineLoweringPhase {
+  static const char* phase_name() { return "V8.TFMidTierMachineLoweringPhase"; }
+
+  void Run(PipelineData* data, Zone* temp_zone) {
+    GraphReducer graph_reducer(temp_zone, data->graph(),
+                               &data->info()->tick_counter(),
+                               data->jsgraph()->Dead());
+    SelectLowering select_lowering(data->jsgraph(), temp_zone);
+    MemoryLowering memory_lowering(data->jsgraph(), temp_zone,
+                                   data->info()->GetPoisoningMitigationLevel());
+
+    AddReducer(data, &graph_reducer, &memory_lowering);
+    AddReducer(data, &graph_reducer, &select_lowering);
     graph_reducer.ReduceGraph();
   }
 };
@@ -2147,7 +2171,7 @@ struct FinalizeCodePhase {
 
 
 struct PrintGraphPhase {
-  static const char* phase_name() { return nullptr; }
+  static const char* phase_name() { return "V8.TFPrintGraph"; }
 
   void Run(PipelineData* data, Zone* temp_zone, const char* phase) {
     OptimizedCompilationInfo* info = data->info();
@@ -2188,7 +2212,7 @@ struct PrintGraphPhase {
 
 
 struct VerifyGraphPhase {
-  static const char* phase_name() { return nullptr; }
+  static const char* phase_name() { return "V8.TFVerifyGraph"; }
 
   void Run(PipelineData* data, Zone* temp_zone, const bool untyped,
            bool values_only = false) {
@@ -2455,15 +2479,8 @@ bool PipelineImpl::OptimizeGraphForMidTier(Linkage* linkage) {
   Run<EffectControlLinearizationPhase>();
   RunPrintAndVerify(EffectControlLinearizationPhase::phase_name(), true);
 
-  // TODO(9684): Remove LateOptimizationPhase and move SelectLowering into the
-  // preceeding or subsequent phase.
-  Run<LateOptimizationPhase>();
-  RunPrintAndVerify(LateOptimizationPhase::phase_name(), true);
-
-  // TODO(9684): Consider directly lowering memory operations without memory
-  // optimizations.
-  Run<MemoryOptimizationPhase>();
-  RunPrintAndVerify(MemoryOptimizationPhase::phase_name(), true);
+  Run<MidTierMachineLoweringPhase>();
+  RunPrintAndVerify(MidTierMachineLoweringPhase::phase_name(), true);
 
   data->source_positions()->RemoveDecorator();
   if (data->info()->trace_turbo_json_enabled()) {
@@ -3110,6 +3127,7 @@ void PipelineImpl::AssembleCode(Linkage* linkage,
 
 MaybeHandle<Code> PipelineImpl::FinalizeCode(bool retire_broker) {
   PipelineData* data = this->data_;
+  data->BeginPhaseKind("V8.TFFinalizeCode");
   if (data->broker() && retire_broker) {
     data->broker()->Retire();
   }
@@ -3124,7 +3142,7 @@ MaybeHandle<Code> PipelineImpl::FinalizeCode(bool retire_broker) {
   if (data->profiler_data()) {
 #ifdef ENABLE_DISASSEMBLER
     std::ostringstream os;
-    code->Disassemble(nullptr, os);
+    code->Disassemble(nullptr, os, isolate());
     data->profiler_data()->SetCode(&os);
 #endif  // ENABLE_DISASSEMBLER
   }
@@ -3140,7 +3158,7 @@ MaybeHandle<Code> PipelineImpl::FinalizeCode(bool retire_broker) {
             << "\"data\":\"";
 #ifdef ENABLE_DISASSEMBLER
     std::stringstream disassembly_stream;
-    code->Disassemble(nullptr, disassembly_stream);
+    code->Disassemble(nullptr, disassembly_stream, isolate());
     std::string disassembly_string(disassembly_stream.str());
     for (const auto& c : disassembly_string) {
       json_of << AsEscapedUC16ForJSON(c);
@@ -3160,6 +3178,7 @@ MaybeHandle<Code> PipelineImpl::FinalizeCode(bool retire_broker) {
        << "Finished compiling method " << info()->GetDebugName().get()
        << " using TurboFan" << std::endl;
   }
+  data->EndPhaseKind();
   return code;
 }
 

@@ -187,8 +187,11 @@ class EffectControlLinearizer {
   Node* LowerMaybeGrowFastElements(Node* node, Node* frame_state);
   void LowerTransitionElementsKind(Node* node);
   Node* LowerLoadFieldByIndex(Node* node);
+  Node* LowerLoadMessage(Node* node);
   Node* LowerLoadTypedElement(Node* node);
   Node* LowerLoadDataViewElement(Node* node);
+  Node* LowerLoadStackArgument(Node* node);
+  void LowerStoreMessage(Node* node);
   void LowerStoreTypedElement(Node* node);
   void LowerStoreDataViewElement(Node* node);
   void LowerStoreSignedSmallElement(Node* node);
@@ -249,6 +252,7 @@ class EffectControlLinearizer {
   Node* SmiShiftBitsConstant();
   void TransitionElementsTo(Node* node, Node* array, ElementsKind from,
                             ElementsKind to);
+  void ConnectUnreachableToEnd(Node* effect, Node* control);
 
   Factory* factory() const { return isolate()->factory(); }
   Isolate* isolate() const { return jsgraph()->isolate(); }
@@ -310,19 +314,8 @@ struct PendingEffectPhi {
       : effect_phi(effect_phi), block(block) {}
 };
 
-void ConnectUnreachableToEnd(Node* effect, Node* control, JSGraph* jsgraph) {
-  Graph* graph = jsgraph->graph();
-  CommonOperatorBuilder* common = jsgraph->common();
-  if (effect->opcode() == IrOpcode::kDead) return;
-  if (effect->opcode() != IrOpcode::kUnreachable) {
-    effect = graph->NewNode(common->Unreachable(), effect, control);
-  }
-  Node* throw_node = graph->NewNode(common->Throw(), effect, control);
-  NodeProperties::MergeControlToEnd(graph, common, throw_node);
-}
-
 void UpdateEffectPhi(Node* node, BasicBlock* block,
-                     BlockEffectControlMap* block_effects, JSGraph* jsgraph) {
+                     BlockEffectControlMap* block_effects) {
   // Update all inputs to an effect phi with the effects from the given
   // block->effect map.
   DCHECK_EQ(IrOpcode::kEffectPhi, node->opcode());
@@ -609,7 +602,7 @@ void EffectControlLinearizer::Run() {
         // record the effect phi for later processing.
         pending_effect_phis.push_back(PendingEffectPhi(effect_phi, block));
       } else {
-        UpdateEffectPhi(effect_phi, block, &block_effects, jsgraph());
+        UpdateEffectPhi(effect_phi, block, &block_effects);
       }
     }
 
@@ -651,7 +644,7 @@ void EffectControlLinearizer::Run() {
           if (control->opcode() == IrOpcode::kLoop) {
             pending_effect_phis.push_back(PendingEffectPhi(effect, block));
           } else {
-            UpdateEffectPhi(effect, block, &block_effects, jsgraph());
+            UpdateEffectPhi(effect, block, &block_effects);
           }
         } else if (control->opcode() == IrOpcode::kIfException) {
           // The IfException is connected into the effect chain, so we need
@@ -736,7 +729,7 @@ void EffectControlLinearizer::Run() {
   // during the first pass (because they could have incoming back edges).
   for (const PendingEffectPhi& pending_effect_phi : pending_effect_phis) {
     UpdateEffectPhi(pending_effect_phi.effect_phi, pending_effect_phi.block,
-                    &block_effects, jsgraph());
+                    &block_effects);
   }
 }
 
@@ -830,7 +823,7 @@ void EffectControlLinearizer::ProcessNode(Node* node, Node** frame_state,
   // Break the effect chain on {Unreachable} and reconnect to the graph end.
   // Mark the following code for deletion by connecting to the {Dead} node.
   if (node->opcode() == IrOpcode::kUnreachable) {
-    ConnectUnreachableToEnd(*effect, *control, jsgraph());
+    ConnectUnreachableToEnd(*effect, *control);
     *effect = *control = jsgraph()->Dead();
   }
 }
@@ -1245,6 +1238,12 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
     case IrOpcode::kTransitionElementsKind:
       LowerTransitionElementsKind(node);
       break;
+    case IrOpcode::kLoadMessage:
+      result = LowerLoadMessage(node);
+      break;
+    case IrOpcode::kStoreMessage:
+      LowerStoreMessage(node);
+      break;
     case IrOpcode::kLoadFieldByIndex:
       result = LowerLoadFieldByIndex(node);
       break;
@@ -1253,6 +1252,9 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
       break;
     case IrOpcode::kLoadDataViewElement:
       result = LowerLoadDataViewElement(node);
+      break;
+    case IrOpcode::kLoadStackArgument:
+      result = LowerLoadStackArgument(node);
       break;
     case IrOpcode::kStoreTypedElement:
       LowerStoreTypedElement(node);
@@ -1325,6 +1327,13 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
   *control = gasm()->ExtractCurrentControl();
   NodeProperties::ReplaceUses(node, result, *effect, *control);
   return true;
+}
+
+void EffectControlLinearizer::ConnectUnreachableToEnd(Node* effect,
+                                                      Node* control) {
+  DCHECK_EQ(effect->opcode(), IrOpcode::kUnreachable);
+  Node* throw_node = graph()->NewNode(common()->Throw(), effect, control);
+  NodeProperties::MergeControlToEnd(graph(), common(), throw_node);
 }
 
 #define __ gasm()->
@@ -1603,7 +1612,7 @@ Node* EffectControlLinearizer::LowerTruncateTaggedToBit(Node* node) {
   __ Bind(&if_smi);
   {
     // If {value} is a Smi, then we only need to check that it's not zero.
-    __ Goto(&done, __ Word32Equal(__ IntPtrEqual(value, __ IntPtrConstant(0)),
+    __ Goto(&done, __ Word32Equal(__ TaggedEqual(value, __ SmiConstant(0)),
                                   __ Int32Constant(0)));
   }
 
@@ -2030,9 +2039,8 @@ Node* EffectControlLinearizer::LowerStringConcat(Node* node) {
       callable.descriptor().GetStackParameterCount(), CallDescriptor::kNoFlags,
       Operator::kNoDeopt | Operator::kNoWrite | Operator::kNoThrow);
 
-  Node* value =
-      __ Call(call_descriptor, jsgraph()->HeapConstant(callable.code()), lhs,
-              rhs, __ NoContextConstant());
+  Node* value = __ Call(call_descriptor, __ HeapConstant(callable.code()), lhs,
+                        rhs, __ NoContextConstant());
 
   return value;
 }
@@ -2114,8 +2122,7 @@ Node* EffectControlLinearizer::LowerCheckedInt32Div(Node* node,
 
       // Check if {lhs} is kMinInt and {rhs} is -1, in which case we'd have
       // to return -kMinInt, which is not representable as Word32.
-      Node* check_lhs_minint = graph()->NewNode(machine()->Word32Equal(), lhs,
-                                                __ Int32Constant(kMinInt));
+      Node* check_lhs_minint = __ Word32Equal(lhs, __ Int32Constant(kMinInt));
       __ Branch(check_lhs_minint, &if_lhs_minint, &if_lhs_notminint);
 
       __ Bind(&if_lhs_minint);
@@ -2762,7 +2769,7 @@ Node* EffectControlLinearizer::LowerChangeUint64ToBigInt(Node* node) {
   DCHECK(machine()->Is64());
 
   Node* value = node->InputAt(0);
-  Node* map = jsgraph()->HeapConstant(factory()->bigint_map());
+  Node* map = __ HeapConstant(factory()->bigint_map());
   // BigInts with value 0 must be of size 0 (canonical form).
   auto if_zerodigits = __ MakeLabel();
   auto if_onedigit = __ MakeLabel();
@@ -3522,8 +3529,12 @@ Node* EffectControlLinearizer::LowerArgumentsFrame(Node* node) {
   Node* parent_frame =
       __ Load(MachineType::Pointer(), frame,
               __ IntPtrConstant(StandardFrameConstants::kCallerFPOffset));
+  // Load parent frame type as an uncompressed value to avoid corruption
+  // in case it contains a frame type marker. Frame type marker is a pseudo-Smi
+  // containing a StackFrame::Type value shifted left by kSmiTagSize (see
+  // StackFrame::TypeToMarker() for details).
   Node* parent_frame_type = __ Load(
-      MachineType::TypeCompressedTagged(), parent_frame,
+      MachineType::AnyTagged(), parent_frame,
       __ IntPtrConstant(CommonFrameConstants::kContextOrFrameTypeOffset));
 
   __ GotoIf(__ IntPtrEqual(parent_frame_type,
@@ -3543,7 +3554,7 @@ Node* EffectControlLinearizer::LowerNewDoubleElements(Node* node) {
   auto done = __ MakeLabel(MachineRepresentation::kTaggedPointer);
   Node* zero_length = __ IntPtrEqual(length, __ IntPtrConstant(0));
   __ GotoIf(zero_length, &done,
-            jsgraph()->HeapConstant(factory()->empty_fixed_array()));
+            __ HeapConstant(factory()->empty_fixed_array()));
 
   // Compute the effective size of the backing store.
   Node* size = __ IntAdd(__ WordShl(length, __ IntPtrConstant(kDoubleSizeLog2)),
@@ -3591,7 +3602,7 @@ Node* EffectControlLinearizer::LowerNewSmiOrObjectElements(Node* node) {
   auto done = __ MakeLabel(MachineRepresentation::kTaggedPointer);
   Node* zero_length = __ IntPtrEqual(length, __ IntPtrConstant(0));
   __ GotoIf(zero_length, &done,
-            jsgraph()->HeapConstant(factory()->empty_fixed_array()));
+            __ HeapConstant(factory()->empty_fixed_array()));
 
   // Compute the effective size of the backing store.
   Node* size = __ IntAdd(__ WordShl(length, __ IntPtrConstant(kTaggedSizeLog2)),
@@ -3673,10 +3684,9 @@ Node* EffectControlLinearizer::LowerNewConsString(Node* node) {
   __ Branch(__ Word32Equal(encoding, __ Int32Constant(kTwoByteStringTag)),
             &if_twobyte, &if_onebyte);
   __ Bind(&if_onebyte);
-  __ Goto(&done,
-          jsgraph()->HeapConstant(factory()->cons_one_byte_string_map()));
+  __ Goto(&done, __ HeapConstant(factory()->cons_one_byte_string_map()));
   __ Bind(&if_twobyte);
-  __ Goto(&done, jsgraph()->HeapConstant(factory()->cons_string_map()));
+  __ Goto(&done, __ HeapConstant(factory()->cons_string_map()));
   __ Bind(&done);
   Node* result_map = done.PhiAt(0);
 
@@ -4289,9 +4299,8 @@ Node* EffectControlLinearizer::LowerBigIntAdd(Node* node, Node* frame_state) {
       graph()->zone(), callable.descriptor(),
       callable.descriptor().GetStackParameterCount(), CallDescriptor::kNoFlags,
       Operator::kFoldable | Operator::kNoThrow);
-  Node* value =
-      __ Call(call_descriptor, jsgraph()->HeapConstant(callable.code()), lhs,
-              rhs, __ NoContextConstant());
+  Node* value = __ Call(call_descriptor, __ HeapConstant(callable.code()), lhs,
+                        rhs, __ NoContextConstant());
 
   // Check for exception sentinel: Smi is returned to signal BigIntTooBig.
   __ DeoptimizeIf(DeoptimizeReason::kBigIntTooBig, FeedbackSource{},
@@ -4307,9 +4316,8 @@ Node* EffectControlLinearizer::LowerBigIntNegate(Node* node) {
       graph()->zone(), callable.descriptor(),
       callable.descriptor().GetStackParameterCount(), CallDescriptor::kNoFlags,
       Operator::kFoldable | Operator::kNoThrow);
-  Node* value =
-      __ Call(call_descriptor, jsgraph()->HeapConstant(callable.code()),
-              node->InputAt(0), __ NoContextConstant());
+  Node* value = __ Call(call_descriptor, __ HeapConstant(callable.code()),
+                        node->InputAt(0), __ NoContextConstant());
 
   return value;
 }
@@ -4748,6 +4756,20 @@ void EffectControlLinearizer::LowerTransitionElementsKind(Node* node) {
   __ Bind(&done);
 }
 
+Node* EffectControlLinearizer::LowerLoadMessage(Node* node) {
+  Node* offset = node->InputAt(0);
+  Node* object_pattern =
+      __ LoadField(AccessBuilder::ForExternalIntPtr(), offset);
+  return __ BitcastWordToTagged(object_pattern);
+}
+
+void EffectControlLinearizer::LowerStoreMessage(Node* node) {
+  Node* offset = node->InputAt(0);
+  Node* object = node->InputAt(1);
+  Node* object_pattern = __ BitcastTaggedToWord(object);
+  __ StoreField(AccessBuilder::ForExternalIntPtr(), offset, object_pattern);
+}
+
 Node* EffectControlLinearizer::LowerLoadFieldByIndex(Node* node) {
   Node* object = node->InputAt(0);
   Node* index = node->InputAt(1);
@@ -4849,9 +4871,8 @@ Node* EffectControlLinearizer::LowerLoadFieldByIndex(Node* node) {
       // to copy anything anyway.
       __ GotoIf(ObjectIsSmi(field), &done, field);
       Node* field_map = __ LoadField(AccessBuilder::ForMap(), field);
-      __ GotoIfNot(
-          __ TaggedEqual(field_map, jsgraph()->HeapNumberMapConstant()), &done,
-          field);
+      __ GotoIfNot(__ TaggedEqual(field_map, __ HeapNumberMapConstant()), &done,
+                   field);
 
       Node* value = __ LoadField(AccessBuilder::ForHeapNumberValue(), field);
       __ Goto(&done_double, value);
@@ -5051,6 +5072,16 @@ Node* EffectControlLinearizer::LowerLoadTypedElement(Node* node) {
   return __ LoadElement(AccessBuilder::ForTypedArrayElement(
                             array_type, true, LoadSensitivity::kCritical),
                         data_ptr, index);
+}
+
+Node* EffectControlLinearizer::LowerLoadStackArgument(Node* node) {
+  Node* base = node->InputAt(0);
+  Node* index = node->InputAt(1);
+
+  Node* argument =
+      __ LoadElement(AccessBuilder::ForStackArgument(), base, index);
+
+  return __ BitcastWordToTagged(argument);
 }
 
 void EffectControlLinearizer::LowerStoreTypedElement(Node* node) {
@@ -5438,7 +5469,7 @@ void EffectControlLinearizer::LowerRuntimeAbort(Node* node) {
   auto call_descriptor = Linkage::GetRuntimeCallDescriptor(
       graph()->zone(), id, 1, properties, CallDescriptor::kNoFlags);
   __ Call(call_descriptor, __ CEntryStubConstant(1),
-          jsgraph()->SmiConstant(static_cast<int>(reason)),
+          __ SmiConstant(static_cast<int>(reason)),
           __ ExternalConstant(ExternalReference::Create(id)),
           __ Int32Constant(1), __ NoContextConstant());
 }

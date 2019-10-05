@@ -295,7 +295,9 @@ void TurboAssembler::Mov(const Register& rd, const Operand& operand,
         } else if (RelocInfo::IsEmbeddedObjectMode(operand.ImmediateRMode())) {
           Handle<HeapObject> x(
               reinterpret_cast<Address*>(operand.ImmediateValue()));
-          IndirectLoadConstant(rd, x);
+          // TODO(v8:9706): Fix-it! This load will always uncompress the value
+          // even when we are loading a compressed embedded object.
+          IndirectLoadConstant(rd.X(), x);
           return;
         }
       }
@@ -1921,21 +1923,25 @@ void TurboAssembler::Call(ExternalReference target) {
 }
 
 void TurboAssembler::LoadEntryFromBuiltinIndex(Register builtin_index) {
-  STATIC_ASSERT(kSystemPointerSize == 8);
-  STATIC_ASSERT(kSmiTagSize == 1);
-  STATIC_ASSERT(kSmiTag == 0);
-
   // The builtin_index register contains the builtin index as a Smi.
   // Untagging is folded into the indexing operand below.
-#if defined(V8_COMPRESS_POINTERS) || defined(V8_31BIT_SMIS_ON_64BIT_ARCH)
-  STATIC_ASSERT(kSmiShiftSize == 0);
-  Lsl(builtin_index, builtin_index, kSystemPointerSizeLog2 - kSmiShift);
-#else
-  STATIC_ASSERT(kSmiShiftSize == 31);
-  Asr(builtin_index, builtin_index, kSmiShift - kSystemPointerSizeLog2);
-#endif
-  Add(builtin_index, builtin_index, IsolateData::builtin_entry_table_offset());
-  Ldr(builtin_index, MemOperand(kRootRegister, builtin_index));
+  if (SmiValuesAre32Bits()) {
+    Asr(builtin_index, builtin_index, kSmiShift - kSystemPointerSizeLog2);
+    Add(builtin_index, builtin_index,
+        IsolateData::builtin_entry_table_offset());
+    Ldr(builtin_index, MemOperand(kRootRegister, builtin_index));
+  } else {
+    DCHECK(SmiValuesAre31Bits());
+    if (COMPRESS_POINTERS_BOOL) {
+      Add(builtin_index, kRootRegister,
+          Operand(builtin_index.W(), SXTW, kSystemPointerSizeLog2 - kSmiShift));
+    } else {
+      Add(builtin_index, kRootRegister,
+          Operand(builtin_index, LSL, kSystemPointerSizeLog2 - kSmiShift));
+    }
+    Ldr(builtin_index,
+        MemOperand(builtin_index, IsolateData::builtin_entry_table_offset()));
+  }
 }
 
 void TurboAssembler::CallBuiltinByIndex(Register builtin_index) {
@@ -2216,10 +2222,11 @@ void MacroAssembler::CheckDebugHook(Register fun, Register new_target,
 
   {
     // Load receiver to pass it later to DebugOnFunctionCall hook.
-    Operand actual_op = actual.is_immediate() ? Operand(actual.immediate())
-                                              : Operand(actual.reg());
-    Mov(x4, actual_op);
-    Ldr(x4, MemOperand(sp, x4, LSL, kSystemPointerSizeLog2));
+    if (actual.is_reg()) {
+      Ldr(x4, MemOperand(sp, actual.reg(), LSL, kSystemPointerSizeLog2));
+    } else {
+      Ldr(x4, MemOperand(sp, actual.immediate() << kSystemPointerSizeLog2));
+    }
     FrameScope frame(this,
                      has_frame() ? StackFrame::NONE : StackFrame::INTERNAL);
 
@@ -2634,7 +2641,7 @@ void MacroAssembler::CompareRoot(const Register& obj, RootIndex index) {
   Register temp = temps.AcquireX();
   DCHECK(!AreAliased(obj, temp));
   LoadRoot(temp, index);
-  Cmp(obj, temp);
+  CmpTagged(obj, temp);
 }
 
 void MacroAssembler::JumpIfRoot(const Register& obj, RootIndex index,
@@ -2667,20 +2674,20 @@ void MacroAssembler::JumpIfIsInRange(const Register& value,
 
 void TurboAssembler::LoadTaggedPointerField(const Register& destination,
                                             const MemOperand& field_operand) {
-#ifdef V8_COMPRESS_POINTERS
-  DecompressTaggedPointer(destination, field_operand);
-#else
-  Ldr(destination, field_operand);
-#endif
+  if (COMPRESS_POINTERS_BOOL) {
+    DecompressTaggedPointer(destination, field_operand);
+  } else {
+    Ldr(destination, field_operand);
+  }
 }
 
 void TurboAssembler::LoadAnyTaggedField(const Register& destination,
                                         const MemOperand& field_operand) {
-#ifdef V8_COMPRESS_POINTERS
-  DecompressAnyTagged(destination, field_operand);
-#else
-  Ldr(destination, field_operand);
-#endif
+  if (COMPRESS_POINTERS_BOOL) {
+    DecompressAnyTagged(destination, field_operand);
+  } else {
+    Ldr(destination, field_operand);
+  }
 }
 
 void TurboAssembler::SmiUntagField(Register dst, const MemOperand& src) {
@@ -2689,13 +2696,11 @@ void TurboAssembler::SmiUntagField(Register dst, const MemOperand& src) {
 
 void TurboAssembler::StoreTaggedField(const Register& value,
                                       const MemOperand& dst_field_operand) {
-#ifdef V8_COMPRESS_POINTERS
-  RecordComment("[ StoreTagged");
-  Str(value.W(), dst_field_operand);
-  RecordComment("]");
-#else
-  Str(value, dst_field_operand);
-#endif
+  if (COMPRESS_POINTERS_BOOL) {
+    Str(value.W(), dst_field_operand);
+  } else {
+    Str(value, dst_field_operand);
+  }
 }
 
 void TurboAssembler::DecompressTaggedSigned(const Register& destination,
@@ -2731,49 +2736,14 @@ void TurboAssembler::DecompressAnyTagged(const Register& destination,
                                          const MemOperand& field_operand) {
   RecordComment("[ DecompressAnyTagged");
   Ldrsw(destination, field_operand);
-  if (kUseBranchlessPtrDecompressionInGeneratedCode) {
-    UseScratchRegisterScope temps(this);
-    // Branchlessly compute |masked_root|:
-    // masked_root = HAS_SMI_TAG(destination) ? 0 : kRootRegister;
-    STATIC_ASSERT((kSmiTagSize == 1) && (kSmiTag == 0));
-    Register masked_root = temps.AcquireX();
-    // Sign extend tag bit to entire register.
-    Sbfx(masked_root, destination, 0, kSmiTagSize);
-    And(masked_root, masked_root, kRootRegister);
-    // Now this add operation will either leave the value unchanged if it is a
-    // smi or add the isolate root if it is a heap object.
-    Add(destination, masked_root, destination);
-  } else {
-    Label done;
-    JumpIfSmi(destination, &done);
-    Add(destination, kRootRegister, destination);
-    bind(&done);
-  }
+  Add(destination, kRootRegister, destination);
   RecordComment("]");
 }
 
 void TurboAssembler::DecompressAnyTagged(const Register& destination,
                                          const Register& source) {
   RecordComment("[ DecompressAnyTagged");
-  if (kUseBranchlessPtrDecompressionInGeneratedCode) {
-    UseScratchRegisterScope temps(this);
-    // Branchlessly compute |masked_root|:
-    // masked_root = HAS_SMI_TAG(destination) ? 0 : kRootRegister;
-    STATIC_ASSERT((kSmiTagSize == 1) && (kSmiTag == 0));
-    Register masked_root = temps.AcquireX();
-    // Sign extend tag bit to entire register.
-    Sbfx(masked_root, source, 0, kSmiTagSize);
-    And(masked_root, masked_root, kRootRegister);
-    // Now this add operation will either leave the value unchanged if it is a
-    // smi or add the isolate root if it is a heap object.
-    Add(destination, masked_root, Operand(source, SXTW));
-  } else {
-    Label done;
-    Sxtw(destination, source);
-    JumpIfSmi(destination, &done);
-    Add(destination, kRootRegister, destination);
-    bind(&done);
-  }
+  Add(destination, kRootRegister, Operand(source, SXTW));
   RecordComment("]");
 }
 

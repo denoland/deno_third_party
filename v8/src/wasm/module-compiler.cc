@@ -1501,7 +1501,7 @@ void AsyncCompileJob::CreateNativeModule(
 
   // Create the module object and populate with compiled functions and
   // information needed at instantiation time.
-  // TODO(clemensh): For the same module (same bytes / same hash), we should
+  // TODO(clemensb): For the same module (same bytes / same hash), we should
   // only have one {WasmModuleObject}. Otherwise, we might only set
   // breakpoints on a (potentially empty) subset of the instances.
   // Create the module object.
@@ -2693,12 +2693,21 @@ Handle<Script> CreateWasmScript(Isolate* isolate,
   const int kBufferSize = 32;
   char buffer[kBufferSize];
 
+  Handle<String> url_prefix =
+      isolate->factory()->InternalizeString(StaticCharVector("wasm://wasm/"));
+
   int name_chars = SNPrintF(ArrayVector(buffer), "wasm-%08x", hash);
   DCHECK(name_chars >= 0 && name_chars < kBufferSize);
-  MaybeHandle<String> name_str = isolate->factory()->NewStringFromOneByte(
-      VectorOf(reinterpret_cast<uint8_t*>(buffer), name_chars),
-      AllocationType::kOld);
-  script->set_name(*name_str.ToHandleChecked());
+  Handle<String> name_str =
+      isolate->factory()
+          ->NewStringFromOneByte(
+              VectorOf(reinterpret_cast<uint8_t*>(buffer), name_chars),
+              AllocationType::kOld)
+          .ToHandleChecked();
+  script->set_name(*name_str);
+  MaybeHandle<String> url_str =
+      isolate->factory()->NewConsString(url_prefix, name_str);
+  script->set_source_url(*url_str.ToHandleChecked());
 
   if (source_map_url.size() != 0) {
     MaybeHandle<String> src_map_str = isolate->factory()->NewStringFromUtf8(

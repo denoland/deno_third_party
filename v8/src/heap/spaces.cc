@@ -23,6 +23,7 @@
 #include "src/heap/read-only-heap.h"
 #include "src/heap/remembered-set.h"
 #include "src/heap/slot-set.h"
+#include "src/heap/store-buffer.h"
 #include "src/heap/sweeper.h"
 #include "src/init/v8.h"
 #include "src/logging/counters.h"
@@ -865,12 +866,13 @@ void Page::MoveOldToNewRememberedSetForSweeping() {
 
 void Page::MergeOldToNewRememberedSets() {
   if (sweeping_slot_set_ == nullptr) return;
+  DCHECK(heap()->store_buffer()->Empty());
 
   RememberedSet<OLD_TO_NEW>::Iterate(
       this,
       [this](MaybeObjectSlot slot) {
         Address address = slot.address();
-        RememberedSetSweeping::Insert(this, address);
+        RememberedSetSweeping::Insert<AccessMode::NON_ATOMIC>(this, address);
         return KEEP_SLOT;
       },
       SlotSet::KEEP_EMPTY_BUCKETS);
@@ -1428,11 +1430,7 @@ void MemoryChunk::ReleaseAllAllocatedMemory() {
 static SlotSet* AllocateAndInitializeSlotSet(size_t size, Address page_start) {
   size_t pages = (size + Page::kPageSize - 1) / Page::kPageSize;
   DCHECK_LT(0, pages);
-  SlotSet* slot_set = new SlotSet[pages];
-  for (size_t i = 0; i < pages; i++) {
-    slot_set[i].SetPageStart(page_start + i * Page::kPageSize);
-  }
-  return slot_set;
+  return new SlotSet[pages];
 }
 
 template V8_EXPORT_PRIVATE SlotSet* MemoryChunk::AllocateSlotSet<OLD_TO_NEW>();
@@ -1556,11 +1554,7 @@ void MemoryChunk::InvalidateRecordedSlots(HeapObject object) {
     RegisterObjectWithInvalidatedSlots<OLD_TO_OLD>(object);
   }
 
-  heap()->MoveStoreBufferEntriesToRememberedSet();
-
-  if (slot_set_[OLD_TO_NEW] != nullptr) {
-    RegisterObjectWithInvalidatedSlots<OLD_TO_NEW>(object);
-  }
+  RegisterObjectWithInvalidatedSlots<OLD_TO_NEW>(object);
 }
 
 template bool MemoryChunk::RegisteredObjectWithInvalidatedSlots<OLD_TO_NEW>(
@@ -3960,6 +3954,7 @@ Address LargePage::GetAddressToShrink(Address object_address,
 }
 
 void LargePage::ClearOutOfLiveRangeSlots(Address free_start) {
+  DCHECK_NULL(this->sweeping_slot_set());
   RememberedSet<OLD_TO_NEW>::RemoveRange(this, free_start, area_end(),
                                          SlotSet::FREE_EMPTY_BUCKETS);
   RememberedSet<OLD_TO_OLD>::RemoveRange(this, free_start, area_end(),

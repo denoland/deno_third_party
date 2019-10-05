@@ -156,7 +156,8 @@
   V(JSCreateObject)              \
   V(JSCreatePromise)             \
   V(JSCreateStringIterator)      \
-  V(JSCreateTypedArray)
+  V(JSCreateTypedArray)          \
+  V(JSGetTemplateObject)
 
 #define JS_OBJECT_OP_LIST(V)      \
   JS_CREATE_OP_LIST(V)            \
@@ -425,11 +426,14 @@
   V(LoadFieldByIndex)                   \
   V(LoadField)                          \
   V(LoadElement)                        \
+  V(LoadMessage)                        \
   V(LoadTypedElement)                   \
   V(LoadFromObject)                     \
   V(LoadDataViewElement)                \
+  V(LoadStackArgument)                  \
   V(StoreField)                         \
   V(StoreElement)                       \
+  V(StoreMessage)                       \
   V(StoreTypedElement)                  \
   V(StoreToObject)                      \
   V(StoreDataViewElement)               \

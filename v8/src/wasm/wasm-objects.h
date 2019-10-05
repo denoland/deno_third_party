@@ -626,20 +626,22 @@ class WasmExceptionObject : public JSObject {
 // A Wasm exception that has been thrown out of Wasm code.
 class WasmExceptionPackage : public JSReceiver {
  public:
-  // TODO(mstarzinger): Ideally this interface would use {WasmExceptionPackage}
-  // instead of {JSReceiver} throughout. For now a type-check implies doing a
-  // property lookup however, which would result in casts being handlified.
-  static Handle<JSReceiver> New(Isolate* isolate,
-                                Handle<WasmExceptionTag> exception_tag,
-                                int encoded_size);
+  static Handle<WasmExceptionPackage> New(
+      Isolate* isolate, Handle<WasmExceptionTag> exception_tag,
+      int encoded_size);
 
   // The below getters return {undefined} in case the given exception package
   // does not carry the requested values (i.e. is of a different type).
-  static Handle<Object> GetExceptionTag(Isolate*, Handle<Object> exception);
-  static Handle<Object> GetExceptionValues(Isolate*, Handle<Object> exception);
+  static Handle<Object> GetExceptionTag(
+      Isolate* isolate, Handle<WasmExceptionPackage> exception_package);
+  static Handle<Object> GetExceptionValues(
+      Isolate* isolate, Handle<WasmExceptionPackage> exception_package);
 
   // Determines the size of the array holding all encoded exception values.
   static uint32_t GetEncodedSize(const wasm::WasmException* exception);
+
+  DECL_CAST(WasmExceptionPackage)
+  OBJECT_CONSTRUCTORS(WasmExceptionPackage, JSReceiver);
 };
 
 // A Wasm function that is wrapped and exported to JavaScript.
@@ -819,6 +821,7 @@ class WasmDebugInfo : public Struct {
   NEVER_READ_ONLY_SPACE
   DECL_ACCESSORS(wasm_instance, WasmInstanceObject)
   DECL_ACCESSORS(interpreter_handle, Object)  // Foreign or undefined
+  DECL_ACCESSORS(interpreter_reference_stack, Cell)
   DECL_OPTIONAL_ACCESSORS(locals_names, FixedArray)
   DECL_OPTIONAL_ACCESSORS(c_wasm_entries, FixedArray)
   DECL_OPTIONAL_ACCESSORS(c_wasm_entry_map, Managed<wasm::SignatureMap>)

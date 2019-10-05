@@ -2502,6 +2502,33 @@ class InspectorClient : public v8_inspector::V8InspectorClient {
     context_.Reset(isolate_, context);
   }
 
+  void runMessageLoopOnPause(int contextGroupId) override {
+    v8::Isolate::AllowJavascriptExecutionScope allow_script(isolate_);
+    v8::HandleScope handle_scope(isolate_);
+    Local<String> callback_name =
+        v8::String::NewFromUtf8(isolate_, "handleInspectorMessage",
+                                v8::NewStringType::kNormal)
+            .ToLocalChecked();
+    Local<Context> context = context_.Get(isolate_);
+    Local<Value> callback =
+        context->Global()->Get(context, callback_name).ToLocalChecked();
+    if (!callback->IsFunction()) return;
+
+    v8::TryCatch try_catch(isolate_);
+    is_paused = true;
+
+    while (is_paused) {
+      USE(Local<Function>::Cast(callback)->Call(context, Undefined(isolate_), 0,
+                                                {}));
+      if (try_catch.HasCaught()) {
+        Shell::ReportException(isolate_, &try_catch);
+        is_paused = false;
+      }
+    }
+  }
+
+  void quitMessageLoopOnPause() override { is_paused = false; }
+
  private:
   static v8_inspector::V8InspectorSession* GetSession(Local<Context> context) {
     InspectorClient* inspector_client = static_cast<InspectorClient*>(
@@ -2540,6 +2567,7 @@ class InspectorClient : public v8_inspector::V8InspectorClient {
   std::unique_ptr<v8_inspector::V8Inspector> inspector_;
   std::unique_ptr<v8_inspector::V8InspectorSession> session_;
   std::unique_ptr<v8_inspector::V8Inspector::Channel> channel_;
+  bool is_paused = false;
   Global<Context> context_;
   Isolate* isolate_;
 };
@@ -2973,9 +3001,6 @@ bool Shell::SetOptions(int argc, char* argv[]) {
       options.icu_locale = argv[i] + 13;
       argv[i] = nullptr;
 #ifdef V8_USE_EXTERNAL_STARTUP_DATA
-    } else if (strncmp(argv[i], "--natives_blob=", 15) == 0) {
-      options.natives_blob = argv[i] + 15;
-      argv[i] = nullptr;
     } else if (strncmp(argv[i], "--snapshot_blob=", 16) == 0) {
       options.snapshot_blob = argv[i] + 16;
       argv[i] = nullptr;
@@ -3564,9 +3589,8 @@ int Shell::Main(int argc, char* argv[]) {
   }
   v8::V8::InitializePlatform(g_platform.get());
   v8::V8::Initialize();
-  if (options.natives_blob || options.snapshot_blob) {
-    v8::V8::InitializeExternalStartupData(options.natives_blob,
-                                          options.snapshot_blob);
+  if (options.snapshot_blob) {
+    v8::V8::InitializeExternalStartupDataFromFile(options.snapshot_blob);
   } else {
     v8::V8::InitializeExternalStartupData(argv[0]);
   }

@@ -131,6 +131,7 @@ class Undetectable;
 class UniqueName;
 class WasmCapiFunctionData;
 class WasmExceptionObject;
+class WasmExceptionPackage;
 class WasmExceptionTag;
 class WasmExportedFunctionData;
 class WasmGlobalObject;
@@ -301,6 +302,7 @@ TNode<Float64T> Float64Add(TNode<Float64T> a, TNode<Float64T> b);
   V(ChangeInt32ToInt64, Int64T, Int32T)                        \
   V(ChangeUint32ToFloat64, Float64T, Word32T)                  \
   V(ChangeUint32ToUint64, Uint64T, Word32T)                    \
+  V(ChangeTaggedToCompressed, TaggedT, AnyTaggedT)             \
   V(BitcastInt32ToFloat32, Float32T, Word32T)                  \
   V(BitcastFloat32ToInt32, Uint32T, Float32T)                  \
   V(RoundFloat64ToInt32, Int32T, Float64T)                     \
@@ -1472,7 +1474,7 @@ class V8_EXPORT_PRIVATE CodeAssemblerScopedExceptionHandler {
 
 }  // namespace compiler
 
-#if defined(V8_HOST_ARCH_32_BIT) || defined(V8_COMPRESS_POINTERS)
+#if defined(V8_HOST_ARCH_32_BIT)
 #define BINT_IS_SMI
 using BInt = Smi;
 #elif defined(V8_HOST_ARCH_64_BIT)

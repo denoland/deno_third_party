@@ -1422,7 +1422,7 @@ Handle<Context> Factory::NewContext(RootIndex map_root_index, int size,
   Map map = Map::cast(isolate()->root(map_root_index));
   HeapObject result = AllocateRawWithImmortalMap(size, allocation, map);
   Handle<Context> context(Context::cast(result), isolate());
-  context->set_length(variadic_part_length);
+  context->initialize_length_and_extension_bit(variadic_part_length);
   DCHECK_EQ(context->SizeFromMap(map), size);
   if (size > Context::kTodoHeaderSize) {
     ObjectSlot start = context->RawField(Context::kTodoHeaderSize);
@@ -1445,6 +1445,7 @@ Handle<NativeContext> Factory::NewNativeContext() {
   context->set_math_random_index(Smi::zero());
   context->set_serialized_objects(*empty_fixed_array());
   context->set_microtask_queue(nullptr);
+  context->set_osr_code_cache(*empty_weak_fixed_array());
   return context;
 }
 
@@ -1844,7 +1845,7 @@ Handle<DescriptorArray> Factory::NewDescriptorArray(int number_of_descriptors,
   DCHECK_LT(0, number_of_all_descriptors);
   int size = DescriptorArray::SizeFor(number_of_all_descriptors);
   HeapObject obj = isolate()->heap()->AllocateRawWith<Heap::kRetryOrFail>(
-      size, AllocationType::kOld);
+      size, AllocationType::kYoung);
   obj.set_map_after_allocation(*descriptor_array_map(), SKIP_WRITE_BARRIER);
   DescriptorArray array = DescriptorArray::cast(obj);
   array.Initialize(*empty_enum_cache(), *undefined_value(),

@@ -525,10 +525,13 @@ size_t ReservationSize(size_t code_size_estimate, int num_declared_functions,
   //   a) needed size + overhead (this is the minimum needed)
   //   b) 2 * overhead (to not waste too much space by overhead)
   //   c) 1/4 of current total reservation size (to grow exponentially)
-  return base::bits::RoundUpToPowerOfTwo(
+  size_t reserve_size = base::bits::RoundUpToPowerOfTwo(
       std::max(std::max(RoundUp<kCodeAlignment>(code_size_estimate) + overhead,
                         2 * overhead),
                total_reserved / 4));
+
+  // Limit by the maximum supported code space size.
+  return std::min(kMaxWasmCodeSpaceSize, reserve_size);
 }
 
 }  // namespace
@@ -1214,6 +1217,8 @@ void NativeModule::AddCodeSpace(base::AddressRegion region) {
     Vector<byte> padding =
         code_allocator_.AllocateForCodeInRegion(this, size, region);
     CHECK_EQ(reinterpret_cast<Address>(padding.begin()), region.begin());
+    win64_unwindinfo::RegisterNonABICompliantCodeRange(
+        reinterpret_cast<void*>(region.begin()), region.size());
   }
 #endif  // V8_OS_WIN64
 
@@ -1223,7 +1228,7 @@ void NativeModule::AddCodeSpace(base::AddressRegion region) {
   const uint32_t num_wasm_functions = module_->num_declared_functions;
   const bool has_functions = num_wasm_functions > 0;
   const bool is_first_code_space = code_space_data_.empty();
-  // TODO(clemensh): Avoid additional jump table if the code space is close
+  // TODO(clemensb): Avoid additional jump table if the code space is close
   // enough to another existing code space.
   const bool needs_jump_table =
       has_functions && (kNeedsFarJumpsBetweenCodeSpaces || is_first_code_space);
@@ -1563,7 +1568,7 @@ std::shared_ptr<NativeModule> WasmCodeManager::NewNativeModule(
   size_t code_vmem_size =
       can_request_more ? ReservationSize(code_size_estimate,
                                          module->num_declared_functions, 0)
-                       : kMaxWasmCodeMemory;
+                       : kMaxWasmCodeSpaceSize;
 
   // The '--wasm-max-code-space-reservation' testing flag can be used to reduce
   // the maximum size of the initial code space reservation (in MB).
@@ -1600,13 +1605,6 @@ std::shared_ptr<NativeModule> WasmCodeManager::NewNativeModule(
   DCHECK_NOT_NULL(ret);
   TRACE_HEAP("New NativeModule %p: Mem: %" PRIuPTR ",+%zu\n", ret.get(), start,
              size);
-
-#if defined(V8_OS_WIN64)
-  if (CanRegisterUnwindInfoForNonABICompliantCodeRange()) {
-    win64_unwindinfo::RegisterNonABICompliantCodeRange(
-        reinterpret_cast<void*>(start), size);
-  }
-#endif  // V8_OS_WIN64
 
   base::MutexGuard lock(&native_modules_mutex_);
   lookup_map_.insert(std::make_pair(start, std::make_pair(end, ret.get())));

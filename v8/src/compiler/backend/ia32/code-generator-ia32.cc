@@ -1476,13 +1476,15 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       __ cvttss2si(i.OutputRegister(), i.InputOperand(0));
       break;
     case kSSEFloat32ToUint32:
-      __ Cvttss2ui(i.OutputRegister(), i.InputOperand(0), kScratchDoubleReg);
+      __ Cvttss2ui(i.OutputRegister(), i.InputOperand(0),
+                   i.TempSimd128Register(0));
       break;
     case kSSEFloat64ToInt32:
       __ cvttsd2si(i.OutputRegister(), i.InputOperand(0));
       break;
     case kSSEFloat64ToUint32:
-      __ Cvttsd2ui(i.OutputRegister(), i.InputOperand(0), kScratchDoubleReg);
+      __ Cvttsd2ui(i.OutputRegister(), i.InputOperand(0),
+                   i.TempSimd128Register(0));
       break;
     case kSSEInt32ToFloat32:
       __ cvtsi2ss(i.OutputDoubleRegister(), i.InputOperand(0));
@@ -1823,6 +1825,103 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       } else {
         __ mov(i.OutputRegister(), Operand(ebp, offset));
       }
+      break;
+    }
+    case kSSEF64x2Splat: {
+      DCHECK_EQ(i.OutputDoubleRegister(), i.InputDoubleRegister(0));
+      XMMRegister dst = i.OutputSimd128Register();
+      __ shufpd(dst, dst, 0x0);
+      break;
+    }
+    case kAVXF64x2Splat: {
+      CpuFeatureScope avx_scope(tasm(), AVX);
+      XMMRegister src = i.InputDoubleRegister(0);
+      __ vshufpd(i.OutputSimd128Register(), src, src, 0x0);
+      break;
+    }
+    case kSSEF64x2ExtractLane: {
+      DCHECK_EQ(i.OutputDoubleRegister(), i.InputDoubleRegister(0));
+      XMMRegister dst = i.OutputDoubleRegister();
+      int8_t lane = i.InputInt8(1);
+      if (lane != 0) {
+        DCHECK_LT(lane, 4);
+        __ shufpd(dst, dst, lane);
+      }
+      break;
+    }
+    case kAVXF64x2ExtractLane: {
+      CpuFeatureScope avx_scope(tasm(), AVX);
+      XMMRegister dst = i.OutputDoubleRegister();
+      XMMRegister src = i.InputSimd128Register(0);
+      int8_t lane = i.InputInt8(1);
+      if (lane == 0) {
+        if (dst != src) __ vmovapd(dst, src);
+      } else {
+        DCHECK_LT(lane, 4);
+        __ vshufpd(dst, src, src, lane);
+      }
+      break;
+    }
+    case kSSEF64x2ReplaceLane: {
+      DCHECK_EQ(i.OutputSimd128Register(), i.InputSimd128Register(0));
+      CpuFeatureScope sse_scope(tasm(), SSE4_1);
+      XMMRegister dst = i.OutputSimd128Register();
+      int8_t lane = i.InputInt8(1);
+      DoubleRegister rep = i.InputDoubleRegister(2);
+
+      // insertps takes a mask which contains (high to low):
+      // - 2 bit specifying source float element to copy
+      // - 2 bit specifying destination float element to write to
+      // - 4 bits specifying which elements of the destination to zero
+      DCHECK_LT(lane, 2);
+      if (lane == 0) {
+        __ insertps(dst, rep, 0b00000000);
+        __ insertps(dst, rep, 0b01010000);
+      } else {
+        __ insertps(dst, rep, 0b00100000);
+        __ insertps(dst, rep, 0b01110000);
+      }
+      break;
+    }
+    case kAVXF64x2ReplaceLane: {
+      CpuFeatureScope avx_scope(tasm(), AVX);
+      XMMRegister dst = i.OutputSimd128Register();
+      XMMRegister src = i.InputSimd128Register(0);
+      int8_t lane = i.InputInt8(1);
+      DoubleRegister rep = i.InputDoubleRegister(2);
+
+      DCHECK_LT(lane, 2);
+      if (lane == 0) {
+        __ vinsertps(dst, src, rep, 0b00000000);
+        __ vinsertps(dst, src, rep, 0b01010000);
+      } else {
+        __ vinsertps(dst, src, rep, 0b10100000);
+        __ vinsertps(dst, src, rep, 0b11110000);
+      }
+      break;
+    }
+    case kIA32F64x2Sqrt: {
+      __ Sqrtpd(i.OutputSimd128Register(), i.InputOperand(0));
+      break;
+    }
+    case kIA32F64x2Add: {
+      __ Addpd(i.OutputDoubleRegister(), i.InputDoubleRegister(0),
+               i.InputOperand(1));
+      break;
+    }
+    case kIA32F64x2Sub: {
+      __ Subpd(i.OutputDoubleRegister(), i.InputDoubleRegister(0),
+               i.InputOperand(1));
+      break;
+    }
+    case kIA32F64x2Mul: {
+      __ Mulpd(i.OutputDoubleRegister(), i.InputDoubleRegister(0),
+               i.InputOperand(1));
+      break;
+    }
+    case kIA32F64x2Div: {
+      __ Divpd(i.OutputDoubleRegister(), i.InputDoubleRegister(0),
+               i.InputOperand(1));
       break;
     }
     case kSSEF32x4Splat: {

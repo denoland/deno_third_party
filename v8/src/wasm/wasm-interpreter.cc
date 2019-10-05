@@ -1128,13 +1128,41 @@ class ThreadImpl {
   };
 
  public:
+  // The {ReferenceStackScope} sets up the reference stack in the interpreter.
+  // The handle to the reference stack has to be re-initialized everytime we
+  // call into the interpreter because there is no HandleScope that could
+  // contain that handle. A global handle is not an option because it can lead
+  // to a memory leak if a reference to the {WasmInstanceObject} is put onto the
+  // reference stack and thereby transitively keeps the interpreter alive.
+  class ReferenceStackScope {
+   public:
+    explicit ReferenceStackScope(ThreadImpl* impl) : impl_(impl) {
+      // The reference stack is already initialized, we don't have to do
+      // anything.
+      if (!impl_->reference_stack_cell_.is_null()) return;
+      impl_->reference_stack_cell_ = handle(
+          impl_->instance_object_->debug_info().interpreter_reference_stack(),
+          impl_->isolate_);
+      // We initialized the reference stack, so we also have to reset it later.
+      do_reset_stack_ = true;
+    }
+
+    ~ReferenceStackScope() {
+      if (do_reset_stack_) {
+        impl_->reference_stack_cell_ = Handle<Cell>();
+      }
+    }
+
+   private:
+    ThreadImpl* impl_;
+    bool do_reset_stack_ = false;
+  };
+
   ThreadImpl(Zone* zone, CodeMap* codemap,
-             Handle<WasmInstanceObject> instance_object,
-             Handle<Cell> reference_stack_cell)
+             Handle<WasmInstanceObject> instance_object)
       : codemap_(codemap),
         isolate_(instance_object->GetIsolate()),
         instance_object_(instance_object),
-        reference_stack_cell_(reference_stack_cell),
         frames_(zone),
         activations_(zone) {}
 
@@ -1394,6 +1422,7 @@ class ThreadImpl {
   };
 
   friend class InterpretedFrameImpl;
+  friend class ReferenceStackScope;
 
   CodeMap* codemap_;
   Isolate* isolate_;
@@ -2698,7 +2727,7 @@ class ThreadImpl {
         WasmExceptionTag::cast(instance_object_->exceptions_table().get(index)),
         isolate_);
     uint32_t encoded_size = WasmExceptionPackage::GetEncodedSize(exception);
-    Handle<Object> exception_object =
+    Handle<WasmExceptionPackage> exception_object =
         WasmExceptionPackage::New(isolate_, exception_tag, encoded_size);
     Handle<FixedArray> encoded_values = Handle<FixedArray>::cast(
         WasmExceptionPackage::GetExceptionValues(isolate_, exception_object));
@@ -2767,8 +2796,9 @@ class ThreadImpl {
   // Determines whether the given exception has a tag matching the expected tag
   // for the given index within the exception table of the current instance.
   bool MatchingExceptionTag(Handle<Object> exception_object, uint32_t index) {
-    Handle<Object> caught_tag =
-        WasmExceptionPackage::GetExceptionTag(isolate_, exception_object);
+    if (!exception_object->IsWasmExceptionPackage(isolate_)) return false;
+    Handle<Object> caught_tag = WasmExceptionPackage::GetExceptionTag(
+        isolate_, Handle<WasmExceptionPackage>::cast(exception_object));
     Handle<Object> expected_tag =
         handle(instance_object_->exceptions_table().get(index), isolate_);
     DCHECK(expected_tag->IsWasmExceptionTag());
@@ -2795,8 +2825,9 @@ class ThreadImpl {
   // the encoded values match the expected signature of the exception.
   void DoUnpackException(const WasmException* exception,
                          Handle<Object> exception_object) {
-    Handle<FixedArray> encoded_values = Handle<FixedArray>::cast(
-        WasmExceptionPackage::GetExceptionValues(isolate_, exception_object));
+    Handle<FixedArray> encoded_values =
+        Handle<FixedArray>::cast(WasmExceptionPackage::GetExceptionValues(
+            isolate_, Handle<WasmExceptionPackage>::cast(exception_object)));
     // Decode the exception values from the given exception package and push
     // them onto the operand stack. This encoding has to be in sync with other
     // backends so that exceptions can be passed between them.
@@ -3928,12 +3959,14 @@ class InterpretedFrameImpl {
   }
 
   WasmValue GetLocalValue(int index) const {
+    ThreadImpl::ReferenceStackScope stack_scope(thread_);
     DCHECK_LE(0, index);
     DCHECK_GT(GetLocalCount(), index);
     return thread_->GetStackValue(static_cast<int>(frame()->sp) + index);
   }
 
   WasmValue GetStackValue(int index) const {
+    ThreadImpl::ReferenceStackScope stack_scope(thread_);
     DCHECK_LE(0, index);
     // Index must be within the number of stack values of this frame.
     DCHECK_GT(GetStackHeight(), index);
@@ -3981,21 +4014,33 @@ const InterpretedFrameImpl* ToImpl(const InterpretedFrame* frame) {
 // translation unit anyway.
 //============================================================================
 WasmInterpreter::State WasmInterpreter::Thread::state() {
-  return ToImpl(this)->state();
+  ThreadImpl* impl = ToImpl(this);
+  ThreadImpl::ReferenceStackScope stack_scope(impl);
+  return impl->state();
 }
 void WasmInterpreter::Thread::InitFrame(const WasmFunction* function,
                                         WasmValue* args) {
-  ToImpl(this)->InitFrame(function, args);
+  ThreadImpl* impl = ToImpl(this);
+  ThreadImpl::ReferenceStackScope stack_scope(impl);
+  impl->InitFrame(function, args);
 }
 WasmInterpreter::State WasmInterpreter::Thread::Run(int num_steps) {
-  return ToImpl(this)->Run(num_steps);
+  ThreadImpl* impl = ToImpl(this);
+  ThreadImpl::ReferenceStackScope stack_scope(impl);
+  return impl->Run(num_steps);
 }
 void WasmInterpreter::Thread::Pause() { return ToImpl(this)->Pause(); }
-void WasmInterpreter::Thread::Reset() { return ToImpl(this)->Reset(); }
+void WasmInterpreter::Thread::Reset() {
+  ThreadImpl* impl = ToImpl(this);
+  ThreadImpl::ReferenceStackScope stack_scope(impl);
+  return impl->Reset();
+}
 WasmInterpreter::Thread::ExceptionHandlingResult
 WasmInterpreter::Thread::RaiseException(Isolate* isolate,
                                         Handle<Object> exception) {
-  return ToImpl(this)->RaiseException(isolate, exception);
+  ThreadImpl* impl = ToImpl(this);
+  ThreadImpl::ReferenceStackScope stack_scope(impl);
+  return impl->RaiseException(isolate, exception);
 }
 pc_t WasmInterpreter::Thread::GetBreakpointPc() {
   return ToImpl(this)->GetBreakpointPc();
@@ -4009,7 +4054,9 @@ WasmInterpreter::FramePtr WasmInterpreter::Thread::GetFrame(int index) {
   return FramePtr(ToFrame(new InterpretedFrameImpl(ToImpl(this), index)));
 }
 WasmValue WasmInterpreter::Thread::GetReturnValue(int index) {
-  return ToImpl(this)->GetReturnValue(index);
+  ThreadImpl* impl = ToImpl(this);
+  ThreadImpl::ReferenceStackScope stack_scope(impl);
+  return impl->GetReturnValue(index);
 }
 TrapReason WasmInterpreter::Thread::GetTrapReason() {
   return ToImpl(this)->GetTrapReason();
@@ -4036,13 +4083,19 @@ uint32_t WasmInterpreter::Thread::NumActivations() {
   return ToImpl(this)->NumActivations();
 }
 uint32_t WasmInterpreter::Thread::StartActivation() {
-  return ToImpl(this)->StartActivation();
+  ThreadImpl* impl = ToImpl(this);
+  ThreadImpl::ReferenceStackScope stack_scope(impl);
+  return impl->StartActivation();
 }
 void WasmInterpreter::Thread::FinishActivation(uint32_t id) {
-  ToImpl(this)->FinishActivation(id);
+  ThreadImpl* impl = ToImpl(this);
+  ThreadImpl::ReferenceStackScope stack_scope(impl);
+  impl->FinishActivation(id);
 }
 uint32_t WasmInterpreter::Thread::ActivationFrameBase(uint32_t id) {
-  return ToImpl(this)->ActivationFrameBase(id);
+  ThreadImpl* impl = ToImpl(this);
+  ThreadImpl::ReferenceStackScope stack_scope(impl);
+  return impl->ActivationFrameBase(id);
 }
 
 //============================================================================
@@ -4061,15 +4114,7 @@ class WasmInterpreterInternals {
                            Handle<WasmInstanceObject> instance_object)
       : module_bytes_(wire_bytes.start(), wire_bytes.end(), zone),
         codemap_(module, module_bytes_.data(), zone) {
-    Isolate* isolate = instance_object->GetIsolate();
-    Handle<Cell> reference_stack = isolate->global_handles()->Create(
-        *isolate->factory()->NewCell(isolate->factory()->empty_fixed_array()));
-    threads_.emplace_back(zone, &codemap_, instance_object, reference_stack);
-  }
-
-  ~WasmInterpreterInternals() {
-    DCHECK_EQ(1, threads_.size());
-    GlobalHandles::Destroy(threads_[0].reference_stack_cell().location());
+    threads_.emplace_back(zone, &codemap_, instance_object);
   }
 };
 

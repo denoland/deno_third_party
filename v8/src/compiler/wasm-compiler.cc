@@ -3030,6 +3030,14 @@ bool CanCover(Node* value, IrOpcode::Value opcode) {
   return true;
 }
 
+Node* WasmGraphBuilder::BuildTruncateIntPtrToInt32(Node* value) {
+  if (mcgraph()->machine()->Is64()) {
+    value =
+        graph()->NewNode(mcgraph()->machine()->TruncateInt64ToInt32(), value);
+  }
+  return value;
+}
+
 Node* WasmGraphBuilder::BuildChangeInt32ToIntPtr(Node* value) {
   if (mcgraph()->machine()->Is64()) {
     value = graph()->NewNode(mcgraph()->machine()->ChangeInt32ToInt64(), value);
@@ -3038,12 +3046,20 @@ Node* WasmGraphBuilder::BuildChangeInt32ToIntPtr(Node* value) {
 }
 
 Node* WasmGraphBuilder::BuildChangeInt32ToSmi(Node* value) {
+  if (COMPRESS_POINTERS_BOOL) {
+    return graph()->NewNode(mcgraph()->machine()->Word32Shl(), value,
+                            BuildSmiShiftBitsConstant32());
+  }
   value = BuildChangeInt32ToIntPtr(value);
   return graph()->NewNode(mcgraph()->machine()->WordShl(), value,
                           BuildSmiShiftBitsConstant());
 }
 
 Node* WasmGraphBuilder::BuildChangeUint31ToSmi(Node* value) {
+  if (COMPRESS_POINTERS_BOOL) {
+    return graph()->NewNode(mcgraph()->machine()->Word32Shl(), value,
+                            BuildSmiShiftBitsConstant32());
+  }
   return graph()->NewNode(mcgraph()->machine()->WordShl(),
                           Uint32ToUintptr(value), BuildSmiShiftBitsConstant());
 }
@@ -3052,14 +3068,30 @@ Node* WasmGraphBuilder::BuildSmiShiftBitsConstant() {
   return mcgraph()->IntPtrConstant(kSmiShiftSize + kSmiTagSize);
 }
 
+Node* WasmGraphBuilder::BuildSmiShiftBitsConstant32() {
+  return mcgraph()->Int32Constant(kSmiShiftSize + kSmiTagSize);
+}
+
 Node* WasmGraphBuilder::BuildChangeSmiToInt32(Node* value) {
-  value = graph()->NewNode(mcgraph()->machine()->WordSar(), value,
-                           BuildSmiShiftBitsConstant());
-  if (mcgraph()->machine()->Is64()) {
+  if (COMPRESS_POINTERS_BOOL) {
     value =
         graph()->NewNode(mcgraph()->machine()->TruncateInt64ToInt32(), value);
+    value = graph()->NewNode(mcgraph()->machine()->Word32Sar(), value,
+                             BuildSmiShiftBitsConstant32());
+  } else {
+    value = BuildChangeSmiToIntPtr(value);
+    value = BuildTruncateIntPtrToInt32(value);
   }
   return value;
+}
+
+Node* WasmGraphBuilder::BuildChangeSmiToIntPtr(Node* value) {
+  if (COMPRESS_POINTERS_BOOL) {
+    value = BuildChangeSmiToInt32(value);
+    return BuildChangeInt32ToIntPtr(value);
+  }
+  return graph()->NewNode(mcgraph()->machine()->WordSar(), value,
+                          BuildSmiShiftBitsConstant());
 }
 
 Node* WasmGraphBuilder::BuildConvertUint32ToSmiWithSaturation(Node* value,
@@ -3278,10 +3310,7 @@ Node* WasmGraphBuilder::CurrentMemoryPages() {
   Node* result =
       graph()->NewNode(mcgraph()->machine()->WordShr(), mem_size,
                        mcgraph()->Int32Constant(wasm::kWasmPageSizeLog2));
-  if (mcgraph()->machine()->Is64()) {
-    result =
-        graph()->NewNode(mcgraph()->machine()->TruncateInt64ToInt32(), result);
-  }
+  result = BuildTruncateIntPtrToInt32(result);
   return result;
 }
 
@@ -5597,7 +5626,7 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
     Node* function_index_smi = LOAD_RAW(
         function_data,
         WasmExportedFunctionData::kFunctionIndexOffset - kHeapObjectTag,
-        MachineType::TypeCompressedTagged());
+        MachineType::TypeCompressedTaggedSigned());
     Node* function_index = BuildChangeSmiToInt32(function_index_smi);
     return function_index;
   }
@@ -5606,8 +5635,8 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
     Node* jump_table_offset_smi = LOAD_RAW(
         function_data,
         WasmExportedFunctionData::kJumpTableOffsetOffset - kHeapObjectTag,
-        MachineType::TypeCompressedTagged());
-    Node* jump_table_offset = BuildChangeSmiToInt32(jump_table_offset_smi);
+        MachineType::TypeCompressedTaggedSigned());
+    Node* jump_table_offset = BuildChangeSmiToIntPtr(jump_table_offset_smi);
     return jump_table_offset;
   }
 
@@ -5887,15 +5916,35 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
     SetEffect(call);
     SetSourcePosition(call, 0);
 
-    // Convert the return value back.
-    Node* val = sig_->return_count() == 0
-                    ? mcgraph()->Int32Constant(0)
-                    : FromJS(call, native_context, sig_->GetReturn());
-
-    // Set the ThreadInWasm flag again.
-    BuildModifyThreadInWasmFlag(true);
-
-    Return(val);
+    // Convert the return value(s) back.
+    if (sig_->return_count() <= 1) {
+      Node* val = sig_->return_count() == 0
+                      ? mcgraph()->Int32Constant(0)
+                      : FromJS(call, native_context, sig_->GetReturn());
+      BuildModifyThreadInWasmFlag(true);
+      Return(val);
+    } else {
+      Node* iterable_to_fixed_array = BuildLoadBuiltinFromIsolateRoot(
+          Builtins::kIterableToFixedArrayForWasm);
+      IterableToFixedArrayForWasmDescriptor interface_descriptor;
+      Node* length = BuildChangeUint31ToSmi(
+          Uint32Constant(static_cast<uint32_t>(sig_->return_count())));
+      auto call_descriptor = Linkage::GetStubCallDescriptor(
+          mcgraph()->zone(), interface_descriptor,
+          interface_descriptor.GetStackParameterCount(),
+          CallDescriptor::kNoFlags, Operator::kNoProperties,
+          StubCallMode::kCallCodeObject);
+      Vector<Node*> wasm_values = Buffer(sig_->return_count());
+      Node* fixed_array = graph()->NewNode(
+          mcgraph()->common()->Call(call_descriptor), iterable_to_fixed_array,
+          call, length, native_context, Effect(), Control());
+      for (unsigned i = 0; i < sig_->return_count(); ++i) {
+        wasm_values[i] = FromJS(LOAD_FIXED_ARRAY_SLOT_ANY(fixed_array, i),
+                                native_context, sig_->GetReturn(i));
+      }
+      BuildModifyThreadInWasmFlag(true);
+      Return(wasm_values);
+    }
 
     if (ContainsInt64(sig_)) LowerInt64(kCalledFromWasm);
     return true;
@@ -6206,14 +6255,12 @@ class WasmWrapperGraphBuilder : public WasmGraphBuilder {
     pos = 0;
     offset = 0;
     for (wasm::ValueType type : sig_->returns()) {
-      StoreRepresentation store_rep(
-          wasm::ValueTypes::MachineRepresentationFor(type), kNoWriteBarrier);
       Node* value = sig_->return_count() == 1
                         ? call
                         : graph()->NewNode(mcgraph()->common()->Projection(pos),
                                            call, Control());
-      SetEffect(graph()->NewNode(mcgraph()->machine()->Store(store_rep),
-                                 arg_buffer, Int32Constant(offset), value,
+      SetEffect(graph()->NewNode(GetSafeStoreOperator(offset, type), arg_buffer,
+                                 Int32Constant(offset), value,
                                  Effect(), Control()));
       offset += wasm::ValueTypes::ElementSizeInBytes(type);
       pos++;

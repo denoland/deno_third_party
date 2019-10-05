@@ -12,6 +12,7 @@
 #include "src/debug/debug.h"
 #include "src/execution/isolate-inl.h"
 #include "src/execution/microtask-queue.h"
+#include "src/execution/protectors.h"
 #include "src/extensions/cputracemark-extension.h"
 #include "src/extensions/externalize-string-extension.h"
 #include "src/extensions/free-buffer-extension.h"
@@ -1300,8 +1301,8 @@ Handle<JSGlobalObject> Genesis::CreateNewGlobals(
   DCHECK(native_context()
              ->get(Context::GLOBAL_PROXY_INDEX)
              .IsUndefined(isolate()) ||
-         native_context()->global_proxy() == *global_proxy);
-  native_context()->set_global_proxy(*global_proxy);
+         native_context()->global_proxy_object() == *global_proxy);
+  native_context()->set_global_proxy_object(*global_proxy);
 
   return global_object;
 }
@@ -2642,7 +2643,7 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,
     {
       Handle<PropertyCell> cell =
           factory->NewPropertyCell(factory->empty_string());
-      cell->set_value(Smi::FromInt(Isolate::kProtectorValid));
+      cell->set_value(Smi::FromInt(Protectors::kProtectorValid));
       native_context()->set_regexp_species_protector(*cell);
     }
 
@@ -4314,7 +4315,7 @@ EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_add_calendar_numbering_system)
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_dateformat_day_period)
 EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(
     harmony_intl_dateformat_fractional_second_digits)
-EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_dateformat_quarter)
+EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE(harmony_intl_other_calendars)
 #endif  // V8_INTL_SUPPORT
 
 #undef EMPTY_INITIALIZE_GLOBAL_FOR_FEATURE
