@@ -216,11 +216,10 @@ V8_WARN_UNUSED_RESULT Maybe<bool> FastAssign(
   }
 
   Handle<DescriptorArray> descriptors(map->instance_descriptors(), isolate);
-  int length = map->NumberOfOwnDescriptors();
 
   bool stable = true;
 
-  for (int i = 0; i < length; i++) {
+  for (InternalIndex i : map->IterateOwnDescriptors()) {
     Handle<Name> next_key(descriptors->GetKey(i), isolate);
     Handle<Object> prop_value;
     // Directly decode from the descriptor array if |from| did not change shape.
@@ -1858,7 +1857,7 @@ V8_WARN_UNUSED_RESULT Maybe<bool> FastGetOwnValuesOrEntries(
 
   bool stable = object->map() == *map;
 
-  for (int index = 0; index < number_of_own_descriptors; index++) {
+  for (InternalIndex index : InternalIndex::Range(number_of_own_descriptors)) {
     Handle<Name> next_key(descriptors->GetKey(index), isolate);
     if (!next_key->IsString()) continue;
     Handle<Object> prop_value;
@@ -2120,15 +2119,15 @@ int JSObject::GetHeaderSize(InstanceType type,
       return JSWeakSet::kSize;
     case JS_PROMISE_TYPE:
       return JSPromise::kSize;
-    case JS_REGEXP_TYPE:
+    case JS_REG_EXP_TYPE:
       return JSRegExp::kSize;
-    case JS_REGEXP_STRING_ITERATOR_TYPE:
+    case JS_REG_EXP_STRING_ITERATOR_TYPE:
       return JSRegExpStringIterator::kSize;
     case JS_CONTEXT_EXTENSION_OBJECT_TYPE:
       return JSObject::kHeaderSize;
     case JS_MESSAGE_OBJECT_TYPE:
       return JSMessageObject::kSize;
-    case JS_ARGUMENTS_TYPE:
+    case JS_ARGUMENTS_OBJECT_TYPE:
       return JSObject::kHeaderSize;
     case JS_ERROR_TYPE:
       return JSObject::kHeaderSize;
@@ -2137,38 +2136,38 @@ int JSObject::GetHeaderSize(InstanceType type,
     case JS_MODULE_NAMESPACE_TYPE:
       return JSModuleNamespace::kHeaderSize;
 #ifdef V8_INTL_SUPPORT
-    case JS_INTL_V8_BREAK_ITERATOR_TYPE:
+    case JS_V8_BREAK_ITERATOR_TYPE:
       return JSV8BreakIterator::kSize;
-    case JS_INTL_COLLATOR_TYPE:
+    case JS_COLLATOR_TYPE:
       return JSCollator::kSize;
-    case JS_INTL_DATE_TIME_FORMAT_TYPE:
+    case JS_DATE_TIME_FORMAT_TYPE:
       return JSDateTimeFormat::kSize;
-    case JS_INTL_LIST_FORMAT_TYPE:
+    case JS_LIST_FORMAT_TYPE:
       return JSListFormat::kSize;
-    case JS_INTL_LOCALE_TYPE:
+    case JS_LOCALE_TYPE:
       return JSLocale::kSize;
-    case JS_INTL_NUMBER_FORMAT_TYPE:
+    case JS_NUMBER_FORMAT_TYPE:
       return JSNumberFormat::kSize;
-    case JS_INTL_PLURAL_RULES_TYPE:
+    case JS_PLURAL_RULES_TYPE:
       return JSPluralRules::kSize;
-    case JS_INTL_RELATIVE_TIME_FORMAT_TYPE:
+    case JS_RELATIVE_TIME_FORMAT_TYPE:
       return JSRelativeTimeFormat::kSize;
-    case JS_INTL_SEGMENT_ITERATOR_TYPE:
+    case JS_SEGMENT_ITERATOR_TYPE:
       return JSSegmentIterator::kSize;
-    case JS_INTL_SEGMENTER_TYPE:
+    case JS_SEGMENTER_TYPE:
       return JSSegmenter::kSize;
 #endif  // V8_INTL_SUPPORT
-    case WASM_GLOBAL_TYPE:
+    case WASM_GLOBAL_OBJECT_TYPE:
       return WasmGlobalObject::kSize;
-    case WASM_INSTANCE_TYPE:
+    case WASM_INSTANCE_OBJECT_TYPE:
       return WasmInstanceObject::kSize;
-    case WASM_MEMORY_TYPE:
+    case WASM_MEMORY_OBJECT_TYPE:
       return WasmMemoryObject::kSize;
-    case WASM_MODULE_TYPE:
+    case WASM_MODULE_OBJECT_TYPE:
       return WasmModuleObject::kSize;
-    case WASM_TABLE_TYPE:
+    case WASM_TABLE_OBJECT_TYPE:
       return WasmTableObject::kSize;
-    case WASM_EXCEPTION_TYPE:
+    case WASM_EXCEPTION_OBJECT_TYPE:
       return WasmExceptionObject::kSize;
     default:
       UNREACHABLE();
@@ -2376,7 +2375,7 @@ void JSObject::JSObjectShortPrint(StringStream* accumulator) {
       accumulator->Add("<JSWeakSet>");
       break;
     }
-    case JS_REGEXP_TYPE: {
+    case JS_REG_EXP_TYPE: {
       accumulator->Add("<JSRegExp");
       JSRegExp regexp = JSRegExp::cast(*this);
       if (regexp.source().IsString()) {
@@ -2505,7 +2504,7 @@ void JSObject::PrintInstanceMigration(FILE* file, Map original_map,
   PrintF(file, "[migrating]");
   DescriptorArray o = original_map.instance_descriptors();
   DescriptorArray n = new_map.instance_descriptors();
-  for (int i = 0; i < original_map.NumberOfOwnDescriptors(); i++) {
+  for (InternalIndex i : original_map.IterateOwnDescriptors()) {
     Representation o_r = o.GetDetails(i).representation();
     Representation n_r = n.GetDetails(i).representation();
     if (!o_r.Equals(n_r)) {
@@ -2702,7 +2701,7 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
   // number of properties.
   DCHECK(old_nof <= new_nof);
 
-  for (int i = 0; i < old_nof; i++) {
+  for (InternalIndex i : InternalIndex::Range(old_nof)) {
     PropertyDetails details = new_descriptors->GetDetails(i);
     if (details.location() != kField) continue;
     DCHECK_EQ(kData, details.kind());
@@ -2752,7 +2751,7 @@ void MigrateFastToFast(Isolate* isolate, Handle<JSObject> object,
     }
   }
 
-  for (int i = old_nof; i < new_nof; i++) {
+  for (InternalIndex i : InternalIndex::Range(old_nof, new_nof)) {
     PropertyDetails details = new_descriptors->GetDetails(i);
     if (details.location() != kField) continue;
     DCHECK_EQ(kData, details.kind());
@@ -2853,7 +2852,7 @@ void MigrateFastToSlow(Isolate* isolate, Handle<JSObject> object,
       NameDictionary::New(isolate, property_count);
 
   Handle<DescriptorArray> descs(map->instance_descriptors(isolate), isolate);
-  for (int i = 0; i < real_size; i++) {
+  for (InternalIndex i : InternalIndex::Range(real_size)) {
     PropertyDetails details = descs->GetDetails(i);
     Handle<Name> key(descs->GetKey(isolate, i), isolate);
     Handle<Object> value;
@@ -3052,7 +3051,7 @@ void JSObject::AllocateStorageForMap(Handle<JSObject> object, Handle<Map> map) {
     Handle<PropertyArray> array =
         isolate->factory()->NewPropertyArray(external);
 
-    for (int i = 0; i < map->NumberOfOwnDescriptors(); i++) {
+    for (InternalIndex i : map->IterateOwnDescriptors()) {
       PropertyDetails details = descriptors->GetDetails(i);
       Representation representation = details.representation();
       if (!representation.IsDouble()) continue;
@@ -3415,7 +3414,7 @@ void JSObject::MigrateSlowToFast(Handle<JSObject> object,
       }
       current_offset += details.field_width_in_words();
     }
-    descriptors->Set(i, &d);
+    descriptors->Set(InternalIndex(i), &d);
   }
   DCHECK(current_offset == number_of_fields);
 
@@ -3446,6 +3445,8 @@ void JSObject::MigrateSlowToFast(Handle<JSObject> object,
 }
 
 void JSObject::RequireSlowElements(NumberDictionary dictionary) {
+  DCHECK_NE(dictionary,
+            ReadOnlyRoots(GetIsolate()).empty_slow_element_dictionary());
   if (dictionary.requires_slow_elements()) return;
   dictionary.set_requires_slow_elements();
   if (map().is_prototype_map()) {
@@ -3608,8 +3609,7 @@ bool TestFastPropertiesIntegrityLevel(Map map, PropertyAttributes level) {
   DCHECK(!map.is_dictionary_map());
 
   DescriptorArray descriptors = map.instance_descriptors();
-  int number_of_own_descriptors = map.NumberOfOwnDescriptors();
-  for (int i = 0; i < number_of_own_descriptors; i++) {
+  for (InternalIndex i : map.IterateOwnDescriptors()) {
     if (descriptors.GetKey(i).IsPrivate()) continue;
     PropertyDetails details = descriptors.GetDetails(i);
     if (details.IsConfigurable()) return false;
@@ -3714,7 +3714,9 @@ Maybe<bool> JSObject::PreventExtensions(Handle<JSObject> object,
            object->HasSlowArgumentsElements());
 
     // Make sure that we never go back to fast case.
-    object->RequireSlowElements(*dictionary);
+    if (*dictionary != ReadOnlyRoots(isolate).empty_slow_element_dictionary()) {
+      object->RequireSlowElements(*dictionary);
+    }
   }
 
   // Do a map transition, other objects with this map may still
@@ -4141,10 +4143,9 @@ MaybeHandle<Object> JSObject::SetAccessor(Handle<JSObject> object,
 
 Object JSObject::SlowReverseLookup(Object value) {
   if (HasFastProperties()) {
-    int number_of_own_descriptors = map().NumberOfOwnDescriptors();
     DescriptorArray descs = map().instance_descriptors();
     bool value_is_number = value.IsNumber();
-    for (int i = 0; i < number_of_own_descriptors; i++) {
+    for (InternalIndex i : map().IterateOwnDescriptors()) {
       PropertyDetails details = descs.GetDetails(i);
       if (details.location() == kField) {
         DCHECK_EQ(kData, details.kind());
@@ -5192,16 +5193,16 @@ bool CanSubclassHaveInobjectProperties(InstanceType instance_type) {
     case JS_FUNCTION_TYPE:
     case JS_GENERATOR_OBJECT_TYPE:
 #ifdef V8_INTL_SUPPORT
-    case JS_INTL_COLLATOR_TYPE:
-    case JS_INTL_DATE_TIME_FORMAT_TYPE:
-    case JS_INTL_LIST_FORMAT_TYPE:
-    case JS_INTL_LOCALE_TYPE:
-    case JS_INTL_NUMBER_FORMAT_TYPE:
-    case JS_INTL_PLURAL_RULES_TYPE:
-    case JS_INTL_RELATIVE_TIME_FORMAT_TYPE:
-    case JS_INTL_SEGMENT_ITERATOR_TYPE:
-    case JS_INTL_SEGMENTER_TYPE:
-    case JS_INTL_V8_BREAK_ITERATOR_TYPE:
+    case JS_COLLATOR_TYPE:
+    case JS_DATE_TIME_FORMAT_TYPE:
+    case JS_LIST_FORMAT_TYPE:
+    case JS_LOCALE_TYPE:
+    case JS_NUMBER_FORMAT_TYPE:
+    case JS_PLURAL_RULES_TYPE:
+    case JS_RELATIVE_TIME_FORMAT_TYPE:
+    case JS_SEGMENT_ITERATOR_TYPE:
+    case JS_SEGMENTER_TYPE:
+    case JS_V8_BREAK_ITERATOR_TYPE:
 #endif
     case JS_ASYNC_FUNCTION_OBJECT_TYPE:
     case JS_ASYNC_GENERATOR_OBJECT_TYPE:
@@ -5210,9 +5211,9 @@ bool CanSubclassHaveInobjectProperties(InstanceType instance_type) {
     case JS_OBJECT_TYPE:
     case JS_ERROR_TYPE:
     case JS_FINALIZATION_GROUP_TYPE:
-    case JS_ARGUMENTS_TYPE:
+    case JS_ARGUMENTS_OBJECT_TYPE:
     case JS_PROMISE_TYPE:
-    case JS_REGEXP_TYPE:
+    case JS_REG_EXP_TYPE:
     case JS_SET_TYPE:
     case JS_SPECIAL_API_OBJECT_TYPE:
     case JS_TYPED_ARRAY_TYPE:
@@ -5220,11 +5221,11 @@ bool CanSubclassHaveInobjectProperties(InstanceType instance_type) {
     case JS_WEAK_MAP_TYPE:
     case JS_WEAK_REF_TYPE:
     case JS_WEAK_SET_TYPE:
-    case WASM_GLOBAL_TYPE:
-    case WASM_INSTANCE_TYPE:
-    case WASM_MEMORY_TYPE:
-    case WASM_MODULE_TYPE:
-    case WASM_TABLE_TYPE:
+    case WASM_GLOBAL_OBJECT_TYPE:
+    case WASM_INSTANCE_OBJECT_TYPE:
+    case WASM_MEMORY_OBJECT_TYPE:
+    case WASM_MODULE_OBJECT_TYPE:
+    case WASM_TABLE_OBJECT_TYPE:
       return true;
 
     case BIGINT_TYPE:

@@ -71,6 +71,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kArm64Sxth:
     case kArm64Sxth32:
     case kArm64Sxtw:
+    case kArm64Sbfx:
     case kArm64Sbfx32:
     case kArm64Ubfx:
     case kArm64Ubfx32:
@@ -305,6 +306,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kArm64S8x16TransposeLeft:
     case kArm64S8x16TransposeRight:
     case kArm64S8x16Concat:
+    case kArm64S8x16Swizzle:
     case kArm64S8x16Shuffle:
     case kArm64S32x2Reverse:
     case kArm64S16x4Reverse:
@@ -355,6 +357,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kArm64Strh:
     case kArm64StrW:
     case kArm64Str:
+    case kArm64StrCompressTagged:
     case kArm64DmbIsh:
     case kArm64DsbIsb:
       return kHasSideEffect;
@@ -445,6 +448,7 @@ int InstructionScheduler::GetInstructionLatency(const Instruction* instr) {
 
     case kArm64Clz:
     case kArm64Clz32:
+    case kArm64Sbfx:
     case kArm64Sbfx32:
     case kArm64Sxtb32:
     case kArm64Sxth32:

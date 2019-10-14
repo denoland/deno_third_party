@@ -372,8 +372,6 @@ const MachInst2 kCanElideChangeUint32ToUint64[] = {
      MachineType::Uint32()},
 };
 
-}  // namespace
-
 
 // -----------------------------------------------------------------------------
 // Logical instructions.
@@ -2658,6 +2656,22 @@ TEST_F(InstructionSelectorTest, ChangeInt32ToInt64AfterLoad) {
     EXPECT_EQ(kMode_MRR, s[0]->addressing_mode());
     EXPECT_EQ(2U, s[0]->InputCount());
     EXPECT_EQ(1U, s[0]->OutputCount());
+  }
+}
+
+TEST_F(InstructionSelectorTest, ChangeInt32ToInt64WithWord32Sar) {
+  // Test the mod 32 behaviour of Word32Sar by iterating up to 33.
+  TRACED_FORRANGE(int32_t, imm, 0, 33) {
+    StreamBuilder m(this, MachineType::Int64(), MachineType::Int32());
+    m.Return(m.ChangeInt32ToInt64(
+        m.Word32Sar(m.Parameter(0), m.Int32Constant(imm))));
+    Stream s = m.Build();
+    ASSERT_EQ(1U, s.size());
+    EXPECT_EQ(kArm64Sbfx, s[0]->arch_opcode());
+    EXPECT_EQ(3U, s[0]->InputCount());
+    EXPECT_EQ(1U, s[0]->OutputCount());
+    EXPECT_EQ(imm & 0x1f, s.ToInt32(s[0]->InputAt(1)));
+    EXPECT_EQ(32 - (imm & 0x1f), s.ToInt32(s[0]->InputAt(2)));
   }
 }
 
@@ -4955,6 +4969,7 @@ TEST_F(InstructionSelectorTest, PokePairPrepareArgumentsSimd128) {
                expected_poke_pair, expected_poke);
 }
 
+}  // namespace
 }  // namespace compiler
 }  // namespace internal
 }  // namespace v8

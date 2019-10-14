@@ -70,6 +70,7 @@ namespace compiler {
   V(Arm64Sxtb)                              \
   V(Arm64Sxth)                              \
   V(Arm64Sxtw)                              \
+  V(Arm64Sbfx)                              \
   V(Arm64Sbfx32)                            \
   V(Arm64Ubfx)                              \
   V(Arm64Ubfx32)                            \
@@ -164,6 +165,7 @@ namespace compiler {
   V(Arm64LdrDecompressTaggedPointer)        \
   V(Arm64LdrDecompressAnyTagged)            \
   V(Arm64Str)                               \
+  V(Arm64StrCompressTagged)                 \
   V(Arm64DecompressSigned)                  \
   V(Arm64DecompressPointer)                 \
   V(Arm64DecompressAny)                     \
@@ -337,6 +339,7 @@ namespace compiler {
   V(Arm64S8x16TransposeLeft)                \
   V(Arm64S8x16TransposeRight)               \
   V(Arm64S8x16Concat)                       \
+  V(Arm64S8x16Swizzle)                      \
   V(Arm64S8x16Shuffle)                      \
   V(Arm64S32x2Reverse)                      \
   V(Arm64S16x4Reverse)                      \

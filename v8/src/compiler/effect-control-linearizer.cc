@@ -1963,7 +1963,7 @@ Node* EffectControlLinearizer::LowerCheckReceiverOrNullOrUndefined(
       __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
 
   // Rule out all primitives except oddballs (true, false, undefined, null).
-  STATIC_ASSERT(LAST_PRIMITIVE_TYPE == ODDBALL_TYPE);
+  STATIC_ASSERT(LAST_PRIMITIVE_HEAP_OBJECT_TYPE == ODDBALL_TYPE);
   STATIC_ASSERT(LAST_TYPE == LAST_JS_RECEIVER_TYPE);
   Node* check0 = __ Uint32LessThanOrEqual(__ Uint32Constant(ODDBALL_TYPE),
                                           value_instance_type);
@@ -2972,10 +2972,11 @@ Node* EffectControlLinearizer::LowerObjectIsArrayBufferView(Node* node) {
   Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
   Node* value_instance_type =
       __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
-  STATIC_ASSERT(JS_TYPED_ARRAY_TYPE + 1 == JS_DATA_VIEW_TYPE);
   Node* vfalse = __ Uint32LessThan(
-      __ Int32Sub(value_instance_type, __ Int32Constant(JS_TYPED_ARRAY_TYPE)),
-      __ Int32Constant(2));
+      __ Int32Sub(value_instance_type,
+                  __ Int32Constant(FIRST_JS_ARRAY_BUFFER_VIEW_TYPE)),
+      __ Int32Constant(LAST_JS_ARRAY_BUFFER_VIEW_TYPE -
+                       FIRST_JS_ARRAY_BUFFER_VIEW_TYPE + 1));
   __ Goto(&done, vfalse);
 
   __ Bind(&if_smi);
@@ -3529,12 +3530,8 @@ Node* EffectControlLinearizer::LowerArgumentsFrame(Node* node) {
   Node* parent_frame =
       __ Load(MachineType::Pointer(), frame,
               __ IntPtrConstant(StandardFrameConstants::kCallerFPOffset));
-  // Load parent frame type as an uncompressed value to avoid corruption
-  // in case it contains a frame type marker. Frame type marker is a pseudo-Smi
-  // containing a StackFrame::Type value shifted left by kSmiTagSize (see
-  // StackFrame::TypeToMarker() for details).
   Node* parent_frame_type = __ Load(
-      MachineType::AnyTagged(), parent_frame,
+      MachineType::IntPtr(), parent_frame,
       __ IntPtrConstant(CommonFrameConstants::kContextOrFrameTypeOffset));
 
   __ GotoIf(__ IntPtrEqual(parent_frame_type,
@@ -5044,12 +5041,12 @@ Node* EffectControlLinearizer::BuildTypedArrayDataPointer(Node* base,
       // will be removed by the decompression elimination pass.
       base = __ ChangeTaggedToCompressed(base);
       base = __ BitcastTaggedToWord(base);
-      // Sign-extend Tagged_t to IntPtr according to current compression
+      // Zero-extend Tagged_t to UintPtr according to current compression
       // scheme so that the addition with |external_pointer| (which already
       // contains compensated offset value) will decompress the tagged value.
       // See JSTypedArray::ExternalPointerCompensationForOnHeapArray() for
       // details.
-      base = ChangeInt32ToIntPtr(base);
+      base = ChangeUint32ToUintPtr(base);
     }
     return __ UnsafePointerAdd(base, external);
   }

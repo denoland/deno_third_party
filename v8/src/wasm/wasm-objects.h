@@ -126,14 +126,11 @@ class WasmModuleObject : public JSObject {
   DECL_ACCESSORS(managed_native_module, Managed<wasm::NativeModule>)
   DECL_ACCESSORS(export_wrappers, FixedArray)
   DECL_ACCESSORS(script, Script)
-  DECL_ACCESSORS(weak_instance_list, WeakArrayList)
   DECL_OPTIONAL_ACCESSORS(asm_js_offset_table, ByteArray)
-  DECL_OPTIONAL_ACCESSORS(breakpoint_infos, FixedArray)
   inline wasm::NativeModule* native_module() const;
   inline const std::shared_ptr<wasm::NativeModule>& shared_native_module()
       const;
   inline const wasm::WasmModule* module() const;
-  inline void reset_breakpoint_infos();
 
   // Dispatched behavior.
   DECL_PRINTER(WasmModuleObject)
@@ -155,23 +152,28 @@ class WasmModuleObject : public JSObject {
       Handle<Script> script, Handle<FixedArray> export_wrappers,
       size_t code_size_estimate);
 
+  // TODO(mstarzinger): The below breakpoint handling methods taking a {Script}
+  // instead of a {WasmModuleObject} as first argument should be moved onto a
+  // separate {WasmScript} class, implementation move to wasm-debug.cc then.
+
   // Set a breakpoint on the given byte position inside the given module.
   // This will affect all live and future instances of the module.
   // The passed position might be modified to point to the next breakable
   // location inside the same function.
   // If it points outside a function, or behind the last breakable location,
   // this function returns false and does not set any breakpoint.
-  V8_EXPORT_PRIVATE static bool SetBreakPoint(Handle<WasmModuleObject>,
-                                              int* position,
+  V8_EXPORT_PRIVATE static bool SetBreakPoint(Handle<Script>, int* position,
                                               Handle<BreakPoint> break_point);
+
+  // Remove a previously set breakpoint at the given byte position inside the
+  // given module. If this breakpoint is not found this function returns false.
+  V8_EXPORT_PRIVATE static bool ClearBreakPoint(Handle<Script>, int position,
+                                                Handle<BreakPoint> break_point);
 
   // Check whether this module was generated from asm.js source.
   inline bool is_asm_js();
 
-  static void AddBreakpoint(Handle<WasmModuleObject>, int position,
-                            Handle<BreakPoint> break_point);
-
-  static void SetBreakpointsOnNewInstance(Handle<WasmModuleObject>,
+  static void SetBreakpointsOnNewInstance(Handle<Script>,
                                           Handle<WasmInstanceObject>);
 
   // Get the module name, if set. Returns an empty handle otherwise.
@@ -213,17 +215,24 @@ class WasmModuleObject : public JSObject {
       wasm::WireBytesRef ref);
 
   // Get a list of all possible breakpoints within a given range of this module.
-  V8_EXPORT_PRIVATE bool GetPossibleBreakpoints(
-      const debug::Location& start, const debug::Location& end,
-      std::vector<debug::BreakLocation>* locations);
+  V8_EXPORT_PRIVATE static bool GetPossibleBreakpoints(
+      wasm::NativeModule* native_module, const debug::Location& start,
+      const debug::Location& end, std::vector<debug::BreakLocation>* locations);
 
   // Return an empty handle if no breakpoint is hit at that location, or a
   // FixedArray with all hit breakpoint objects.
-  static MaybeHandle<FixedArray> CheckBreakPoints(Isolate*,
-                                                  Handle<WasmModuleObject>,
+  static MaybeHandle<FixedArray> CheckBreakPoints(Isolate*, Handle<Script>,
                                                   int position);
 
   OBJECT_CONSTRUCTORS(WasmModuleObject, JSObject);
+
+ private:
+  // Helper functions that update the breakpoint info list.
+  static void AddBreakpointToInfo(Handle<Script>, int position,
+                                  Handle<BreakPoint> break_point);
+
+  static bool RemoveBreakpointFromInfo(Handle<Script>, int position,
+                                       Handle<BreakPoint> break_point);
 };
 
 // Representation of a WebAssembly.Table JavaScript-level object.
@@ -784,7 +793,7 @@ class WasmExportedFunctionData : public Struct {
   DECL_PRINTER(WasmExportedFunctionData)
   DECL_VERIFIER(WasmExportedFunctionData)
 
-// Layout description.
+  // Layout description.
   DEFINE_FIELD_OFFSET_CONSTANTS(
       HeapObject::kHeaderSize,
       TORQUE_GENERATED_WASM_EXPORTED_FUNCTION_DATA_FIELDS)
@@ -811,7 +820,7 @@ class WasmJSFunctionData : public Struct {
 
   // Layout description.
   DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize,
-                                TORQUE_GENERATED_WASM_JSFUNCTION_DATA_FIELDS)
+                                TORQUE_GENERATED_WASM_JS_FUNCTION_DATA_FIELDS)
 
   OBJECT_CONSTRUCTORS(WasmJSFunctionData, Struct);
 };
@@ -832,7 +841,7 @@ class WasmDebugInfo : public Struct {
   DECL_PRINTER(WasmDebugInfo)
   DECL_VERIFIER(WasmDebugInfo)
 
-// Layout description.
+  // Layout description.
   DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize,
                                 TORQUE_GENERATED_WASM_DEBUG_INFO_FIELDS)
 
@@ -850,6 +859,11 @@ class WasmDebugInfo : public Struct {
   // interpreter and will always pause at the given offset.
   V8_EXPORT_PRIVATE static void SetBreakpoint(Handle<WasmDebugInfo>,
                                               int func_index, int offset);
+
+  // Clear a previously set breakpoint in the given function at the given byte
+  // offset within that function.
+  V8_EXPORT_PRIVATE static void ClearBreakpoint(Handle<WasmDebugInfo>,
+                                                int func_index, int offset);
 
   // Make a set of functions always execute in the interpreter without setting
   // breakpoints.

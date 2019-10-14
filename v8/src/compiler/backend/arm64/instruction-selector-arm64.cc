@@ -628,9 +628,24 @@ void InstructionSelector::VisitLoad(Node* node) {
 #else
       UNREACHABLE();
 #endif
+#ifdef V8_COMPRESS_POINTERS
+    case MachineRepresentation::kTaggedSigned:
+      opcode = kArm64LdrDecompressTaggedSigned;
+      immediate_mode = kLoadStoreImm32;
+      break;
+    case MachineRepresentation::kTaggedPointer:
+      opcode = kArm64LdrDecompressTaggedPointer;
+      immediate_mode = kLoadStoreImm32;
+      break;
+    case MachineRepresentation::kTagged:
+      opcode = kArm64LdrDecompressAnyTagged;
+      immediate_mode = kLoadStoreImm32;
+      break;
+#else
     case MachineRepresentation::kTaggedSigned:   // Fall through.
     case MachineRepresentation::kTaggedPointer:  // Fall through.
     case MachineRepresentation::kTagged:         // Fall through.
+#endif
     case MachineRepresentation::kWord64:
       opcode = kArm64Ldr;
       immediate_mode = kLoadStoreImm64;
@@ -724,7 +739,7 @@ void InstructionSelector::VisitStore(Node* node) {
       case MachineRepresentation::kCompressedPointer:  // Fall through.
       case MachineRepresentation::kCompressed:
 #ifdef V8_COMPRESS_POINTERS
-        opcode = kArm64StrW;
+        opcode = kArm64StrCompressTagged;
         immediate_mode = kLoadStoreImm32;
         break;
 #else
@@ -732,7 +747,11 @@ void InstructionSelector::VisitStore(Node* node) {
 #endif
       case MachineRepresentation::kTaggedSigned:   // Fall through.
       case MachineRepresentation::kTaggedPointer:  // Fall through.
-      case MachineRepresentation::kTagged:         // Fall through.
+      case MachineRepresentation::kTagged:
+        opcode = kArm64StrCompressTagged;
+        immediate_mode =
+            COMPRESS_POINTERS_BOOL ? kLoadStoreImm32 : kLoadStoreImm64;
+        break;
       case MachineRepresentation::kWord64:
         opcode = kArm64Str;
         immediate_mode = kLoadStoreImm64;
@@ -1247,7 +1266,8 @@ void InstructionSelector::VisitWord64Ror(Node* node) {
   V(Float32Max, kArm64Float32Max) \
   V(Float64Max, kArm64Float64Max) \
   V(Float32Min, kArm64Float32Min) \
-  V(Float64Min, kArm64Float64Min)
+  V(Float64Min, kArm64Float64Min) \
+  V(S8x16Swizzle, kArm64S8x16Swizzle)
 
 #define RR_VISITOR(Name, opcode)                      \
   void InstructionSelector::Visit##Name(Node* node) { \
@@ -1579,9 +1599,22 @@ void InstructionSelector::VisitChangeInt32ToInt64(Node* node) {
         return;
     }
     EmitLoad(this, value, opcode, immediate_mode, rep, node);
-  } else {
-    VisitRR(this, kArm64Sxtw, node);
+    return;
   }
+
+  if (value->opcode() == IrOpcode::kWord32Sar && CanCover(node, value)) {
+    Int32BinopMatcher m(value);
+    if (m.right().HasValue()) {
+      Arm64OperandGenerator g(this);
+      // Mask the shift amount, to keep the same semantics as Word32Sar.
+      int right = m.right().Value() & 0x1F;
+      Emit(kArm64Sbfx, g.DefineAsRegister(node), g.UseRegister(m.left().node()),
+           g.TempImmediate(right), g.TempImmediate(32 - right));
+      return;
+    }
+  }
+
+  VisitRR(this, kArm64Sxtw, node);
 }
 
 void InstructionSelector::VisitChangeUint32ToUint64(Node* node) {

@@ -210,11 +210,11 @@ let kExprReturnCall = 0x12;
 let kExprReturnCallIndirect = 0x13;
 let kExprDrop = 0x1a;
 let kExprSelect = 0x1b;
-let kExprGetLocal = 0x20;
-let kExprSetLocal = 0x21;
-let kExprTeeLocal = 0x22;
-let kExprGetGlobal = 0x23;
-let kExprSetGlobal = 0x24;
+let kExprLocalGet = 0x20;
+let kExprLocalSet = 0x21;
+let kExprLocalTee = 0x22;
+let kExprGlobalGet = 0x23;
+let kExprGlobalSet = 0x24;
 let kExprTableGet = 0x25;
 let kExprTableSet = 0x26;
 let kExprI32LoadMem = 0x28;
@@ -465,6 +465,9 @@ let kExprI64AtomicCompareExchange16U = 0x4d;
 let kExprI64AtomicCompareExchange32U = 0x4e;
 
 // Simd opcodes.
+let kExprS128LoadMem = 0x00;
+let kExprS128StoreMem = 0x01;
+let kExprI32x4Splat = 0x0c;
 let kExprF32x4Min = 0x9e;
 
 // Compilation hint constants.
@@ -1094,7 +1097,7 @@ class WasmModuleBuilder {
             }
           } else {
             // Emit a global-index initializer.
-            section.emit_u8(kExprGetGlobal);
+            section.emit_u8(kExprGlobalGet);
             section.emit_u32v(global.init_index);
           }
           section.emit_u8(kExprEnd);  // end of init expression
@@ -1159,7 +1162,7 @@ class WasmModuleBuilder {
               section.emit_u32v(init.table);
             }
             if (init.is_global) {
-              section.emit_u8(kExprGetGlobal);
+              section.emit_u8(kExprGlobalGet);
             } else {
               section.emit_u8(kExprI32Const);
             }
@@ -1294,7 +1297,7 @@ class WasmModuleBuilder {
             section.emit_u8(0);  // linear memory index 0 / flags
             if (seg.is_global) {
               // initializer is a global variable
-              section.emit_u8(kExprGetGlobal);
+              section.emit_u8(kExprGlobalGet);
               section.emit_u32v(seg.addr);
             } else {
               // initializer is a constant

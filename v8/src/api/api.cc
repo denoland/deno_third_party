@@ -907,11 +907,6 @@ void V8::SetFlagsFromString(const char* str, size_t length) {
   i::FlagList::EnforceFlagImplications();
 }
 
-void V8::SetFlagsFromString(const char* str, int length) {
-  CHECK_LE(0, length);
-  SetFlagsFromString(str, static_cast<size_t>(length));
-}
-
 void V8::SetFlagsFromCommandLine(int* argc, char** argv, bool remove_flags) {
   i::FlagList::SetFlagsFromCommandLine(argc, argv, remove_flags);
 }
@@ -3743,7 +3738,7 @@ std::shared_ptr<v8::BackingStore> v8::ArrayBuffer::GetBackingStore() {
   std::shared_ptr<i::BackingStore> backing_store = self->GetBackingStore();
   if (!backing_store) {
     backing_store =
-        i::BackingStore::NewEmptyBackingStore(i::SharedFlag::kNotShared);
+        i::BackingStore::EmptyBackingStore(i::SharedFlag::kNotShared);
   }
   i::GlobalBackingStoreRegistry::Register(backing_store);
   std::shared_ptr<i::BackingStoreBase> bs_base = backing_store;
@@ -3754,8 +3749,7 @@ std::shared_ptr<v8::BackingStore> v8::SharedArrayBuffer::GetBackingStore() {
   i::Handle<i::JSArrayBuffer> self = Utils::OpenHandle(this);
   std::shared_ptr<i::BackingStore> backing_store = self->GetBackingStore();
   if (!backing_store) {
-    backing_store =
-        i::BackingStore::NewEmptyBackingStore(i::SharedFlag::kShared);
+    backing_store = i::BackingStore::EmptyBackingStore(i::SharedFlag::kShared);
   }
   i::GlobalBackingStoreRegistry::Register(backing_store);
   std::shared_ptr<i::BackingStoreBase> bs_base = backing_store;
@@ -7094,21 +7088,7 @@ MemorySpan<const uint8_t> CompiledWasmModule::GetWireBytesRef() {
 
 WasmModuleObject::TransferrableModule
 WasmModuleObject::GetTransferrableModule() {
-  if (i::FLAG_wasm_shared_code) {
-    i::Handle<i::WasmModuleObject> obj =
-        i::Handle<i::WasmModuleObject>::cast(Utils::OpenHandle(this));
-    return TransferrableModule(obj->shared_native_module());
-  } else {
-    CompiledWasmModule compiled_module = GetCompiledModule();
-    OwnedBuffer serialized_module = compiled_module.Serialize();
-    MemorySpan<const uint8_t> wire_bytes_ref =
-        compiled_module.GetWireBytesRef();
-    size_t wire_size = wire_bytes_ref.size();
-    std::unique_ptr<uint8_t[]> wire_bytes_copy(new uint8_t[wire_size]);
-    memcpy(wire_bytes_copy.get(), wire_bytes_ref.data(), wire_size);
-    return TransferrableModule(std::move(serialized_module),
-                               {std::move(wire_bytes_copy), wire_size});
-  }
+  return GetCompiledModule();
 }
 
 CompiledWasmModule WasmModuleObject::GetCompiledModule() {
@@ -7120,17 +7100,17 @@ CompiledWasmModule WasmModuleObject::GetCompiledModule() {
 MaybeLocal<WasmModuleObject> WasmModuleObject::FromTransferrableModule(
     Isolate* isolate,
     const WasmModuleObject::TransferrableModule& transferrable_module) {
-  if (i::FLAG_wasm_shared_code) {
-    i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
-    i::Handle<i::WasmModuleObject> module_object =
-        i_isolate->wasm_engine()->ImportNativeModule(
-            i_isolate, transferrable_module.shared_module_);
-    return Local<WasmModuleObject>::Cast(
-        Utils::ToLocal(i::Handle<i::JSObject>::cast(module_object)));
-  } else {
-    return Deserialize(isolate, AsReference(transferrable_module.serialized_),
-                       AsReference(transferrable_module.wire_bytes_));
-  }
+  return FromCompiledModule(isolate, transferrable_module);
+}
+
+MaybeLocal<WasmModuleObject> WasmModuleObject::FromCompiledModule(
+    Isolate* isolate, const CompiledWasmModule& compiled_module) {
+  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+  i::Handle<i::WasmModuleObject> module_object =
+      i_isolate->wasm_engine()->ImportNativeModule(
+          i_isolate, Utils::Open(compiled_module));
+  return Local<WasmModuleObject>::Cast(
+      Utils::ToLocal(i::Handle<i::JSObject>::cast(module_object)));
 }
 
 MaybeLocal<WasmModuleObject> WasmModuleObject::Deserialize(
@@ -7446,8 +7426,8 @@ Local<ArrayBuffer> v8::ArrayBuffer::New(Isolate* isolate, void* data,
   std::shared_ptr<i::BackingStore> backing_store = LookupOrCreateBackingStore(
       i_isolate, data, byte_length, i::SharedFlag::kNotShared, mode);
 
-  i::Handle<i::JSArrayBuffer> obj = i_isolate->factory()->NewJSArrayBuffer();
-  obj->Attach(std::move(backing_store));
+  i::Handle<i::JSArrayBuffer> obj =
+      i_isolate->factory()->NewJSArrayBuffer(std::move(backing_store));
   if (mode == ArrayBufferCreationMode::kExternalized) {
     obj->set_is_external(true);
   }
@@ -7467,8 +7447,8 @@ Local<ArrayBuffer> v8::ArrayBuffer::New(
   Utils::ApiCheck(
       !i_backing_store->is_shared(), "v8_ArrayBuffer_New",
       "Cannot construct ArrayBuffer with a BackingStore of SharedArrayBuffer");
-  i::Handle<i::JSArrayBuffer> obj = i_isolate->factory()->NewJSArrayBuffer();
-  obj->Attach(std::move(i_backing_store));
+  i::Handle<i::JSArrayBuffer> obj =
+      i_isolate->factory()->NewJSArrayBuffer(std::move(i_backing_store));
   return Utils::ToLocal(obj);
 }
 
@@ -7614,9 +7594,8 @@ i::Handle<i::JSArrayBuffer> SetupSharedArrayBuffer(
       i_isolate, data, byte_length, i::SharedFlag::kShared, mode);
 
   i::Handle<i::JSArrayBuffer> obj =
-      i_isolate->factory()->NewJSSharedArrayBuffer();
+      i_isolate->factory()->NewJSSharedArrayBuffer(std::move(backing_store));
 
-  obj->Attach(backing_store);
   if (mode == ArrayBufferCreationMode::kExternalized) {
     obj->set_is_external(true);
   }
@@ -7736,8 +7715,7 @@ Local<SharedArrayBuffer> v8::SharedArrayBuffer::New(Isolate* isolate,
   }
 
   i::Handle<i::JSArrayBuffer> obj =
-      i_isolate->factory()->NewJSSharedArrayBuffer();
-  obj->Attach(std::move(backing_store));
+      i_isolate->factory()->NewJSSharedArrayBuffer(std::move(backing_store));
   return Utils::ToLocalShared(obj);
 }
 
@@ -7763,8 +7741,7 @@ Local<SharedArrayBuffer> v8::SharedArrayBuffer::New(
       i_backing_store->is_shared(), "v8_SharedArrayBuffer_New",
       "Cannot construct SharedArrayBuffer with BackingStore of ArrayBuffer");
   i::Handle<i::JSArrayBuffer> obj =
-      i_isolate->factory()->NewJSSharedArrayBuffer();
-  obj->Attach(std::move(i_backing_store));
+      i_isolate->factory()->NewJSSharedArrayBuffer(std::move(i_backing_store));
   return Utils::ToLocalShared(obj);
 }
 
@@ -9287,9 +9264,9 @@ bool debug::Script::GetPossibleBreakpoints(
   i::Handle<i::Script> script = Utils::OpenHandle(this);
   if (script->type() == i::Script::TYPE_WASM &&
       this->SourceMappingURL().IsEmpty()) {
-    i::WasmModuleObject module_object =
-        i::WasmModuleObject::cast(script->wasm_module_object());
-    return module_object.GetPossibleBreakpoints(start, end, locations);
+    i::wasm::NativeModule* native_module = script->wasm_native_module();
+    return i::WasmModuleObject::GetPossibleBreakpoints(native_module, start,
+                                                       end, locations);
   }
 
   i::Script::InitLineEnds(script);
@@ -9442,14 +9419,6 @@ int debug::WasmScript::NumImportedFunctions() const {
   const i::wasm::WasmModule* module = native_module->module();
   DCHECK_GE(i::kMaxInt, module->num_imported_functions);
   return static_cast<int>(module->num_imported_functions);
-}
-
-bool debug::WasmScript::HasDwarf() const {
-  i::Handle<i::Script> script = Utils::OpenHandle(this);
-  DCHECK_EQ(i::Script::TYPE_WASM, script->type());
-  i::wasm::NativeModule* native_module = script->wasm_native_module();
-  const i::wasm::WasmModule* module = native_module->module();
-  return module->has_dwarf;
 }
 
 MemorySpan<const uint8_t> debug::WasmScript::Bytecode() const {
@@ -10589,11 +10558,12 @@ void EmbedderHeapTracer::DecreaseAllocatedSize(size_t bytes) {
 }
 
 void EmbedderHeapTracer::RegisterEmbedderReference(
-    const TracedGlobal<v8::Value>& ref) {
+    const TracedReferenceBase<v8::Value>& ref) {
   if (ref.IsEmpty()) return;
 
   i::Heap* const heap = reinterpret_cast<i::Isolate*>(isolate_)->heap();
-  heap->RegisterExternallyReferencedObject(reinterpret_cast<i::Address*>(*ref));
+  heap->RegisterExternallyReferencedObject(
+      reinterpret_cast<i::Address*>(ref.val_));
 }
 
 void EmbedderHeapTracer::IterateTracedGlobalHandles(
@@ -10601,6 +10571,26 @@ void EmbedderHeapTracer::IterateTracedGlobalHandles(
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(isolate_);
   i::DisallowHeapAllocation no_allocation;
   isolate->global_handles()->IterateTracedNodes(visitor);
+}
+
+bool EmbedderHeapTracer::IsRootForNonTracingGC(
+    const v8::TracedReference<v8::Value>& handle) {
+  return true;
+}
+
+bool EmbedderHeapTracer::IsRootForNonTracingGC(
+    const v8::TracedGlobal<v8::Value>& handle) {
+  return true;
+}
+
+void EmbedderHeapTracer::ResetHandleInNonTracingGC(
+    const v8::TracedReference<v8::Value>& handle) {
+  UNREACHABLE();
+}
+
+void EmbedderHeapTracer::ResetHandleInNonTracingGC(
+    const v8::TracedGlobal<v8::Value>& handle) {
+  UNREACHABLE();
 }
 
 namespace internal {

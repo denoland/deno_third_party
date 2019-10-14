@@ -2264,9 +2264,22 @@ class ThreadImpl {
       EXTRACT_LANE_CASE(F32x4, f32x4)
       EXTRACT_LANE_CASE(I64x2, i64x2)
       EXTRACT_LANE_CASE(I32x4, i32x4)
-      EXTRACT_LANE_CASE(I16x8, i16x8)
-      EXTRACT_LANE_CASE(I8x16, i8x16)
 #undef EXTRACT_LANE_CASE
+#define EXTRACT_LANE_EXTEND_CASE(format, name, sign, type)              \
+  case kExpr##format##ExtractLane##sign: {                              \
+    SimdLaneImmediate<Decoder::kNoValidate> imm(decoder, code->at(pc)); \
+    *len += 1;                                                          \
+    WasmValue val = Pop();                                              \
+    Simd128 s = val.to_s128();                                          \
+    auto ss = s.to_##name();                                            \
+    Push(WasmValue(static_cast<type>(ss.val[LANE(imm.lane, ss)])));     \
+    return true;                                                        \
+  }
+      EXTRACT_LANE_EXTEND_CASE(I16x8, i16x8, S, int32_t)
+      EXTRACT_LANE_EXTEND_CASE(I16x8, i16x8, U, uint32_t)
+      EXTRACT_LANE_EXTEND_CASE(I8x16, i8x16, S, int32_t)
+      EXTRACT_LANE_EXTEND_CASE(I8x16, i8x16, U, uint32_t)
+#undef EXTRACT_LANE_EXTEND_CASE
 #define BINOP_CASE(op, name, stype, count, expr) \
   case kExpr##op: {                              \
     WasmValue v2 = Pop();                        \
@@ -2616,6 +2629,18 @@ class ThreadImpl {
         ADD_HORIZ_CASE(F32x4AddHoriz, f32x4, float4, 4)
         ADD_HORIZ_CASE(I16x8AddHoriz, i16x8, int8, 8)
 #undef ADD_HORIZ_CASE
+      case kExprS8x16Swizzle: {
+        int16 v2 = Pop().to_s128().to_i8x16();
+        int16 v1 = Pop().to_s128().to_i8x16();
+        int16 res;
+        for (size_t i = 0; i < kSimd128Size; ++i) {
+          int lane = v2.val[LANE(i, v1)];
+          res.val[LANE(i, v1)] =
+              lane < kSimd128Size && lane >= 0 ? v1.val[LANE(lane, v1)] : 0;
+        }
+        Push(WasmValue(Simd128(res)));
+        return true;
+      }
       case kExprS8x16Shuffle: {
         Simd8x16ShuffleImmediate<Decoder::kNoValidate> imm(decoder,
                                                            code->at(pc));
@@ -3125,14 +3150,14 @@ class ThreadImpl {
           len = 1 + imm.length;
           break;
         }
-        case kExprGetLocal: {
+        case kExprLocalGet: {
           LocalIndexImmediate<Decoder::kNoValidate> imm(&decoder, code->at(pc));
           HandleScope handle_scope(isolate_);  // Avoid leaking handles.
           Push(GetStackValue(frames_.back().sp + imm.index));
           len = 1 + imm.length;
           break;
         }
-        case kExprSetLocal: {
+        case kExprLocalSet: {
           LocalIndexImmediate<Decoder::kNoValidate> imm(&decoder, code->at(pc));
           HandleScope handle_scope(isolate_);  // Avoid leaking handles.
           WasmValue val = Pop();
@@ -3140,7 +3165,7 @@ class ThreadImpl {
           len = 1 + imm.length;
           break;
         }
-        case kExprTeeLocal: {
+        case kExprLocalTee: {
           LocalIndexImmediate<Decoder::kNoValidate> imm(&decoder, code->at(pc));
           HandleScope handle_scope(isolate_);  // Avoid leaking handles.
           WasmValue val = Pop();
@@ -3302,7 +3327,7 @@ class ThreadImpl {
           }
         } break;
 
-        case kExprGetGlobal: {
+        case kExprGlobalGet: {
           GlobalIndexImmediate<Decoder::kNoValidate> imm(&decoder,
                                                          code->at(pc));
           HandleScope handle_scope(isolate_);
@@ -3310,7 +3335,7 @@ class ThreadImpl {
           len = 1 + imm.length;
           break;
         }
-        case kExprSetGlobal: {
+        case kExprGlobalSet: {
           GlobalIndexImmediate<Decoder::kNoValidate> imm(&decoder,
                                                          code->at(pc));
           const WasmGlobal* global = &module()->globals[imm.index];

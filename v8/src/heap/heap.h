@@ -80,7 +80,6 @@ class ScavengeJob;
 class Scavenger;
 class ScavengerCollector;
 class Space;
-class StoreBuffer;
 class StressScavengeObserver;
 class TimedHistogram;
 class WeakObjectRetainer;
@@ -854,9 +853,9 @@ class Heap {
   static intptr_t store_buffer_mask_constant();
   static Address store_buffer_overflow_function_address();
 
-  void MoveStoreBufferEntriesToRememberedSet();
   void ClearRecordedSlot(HeapObject object, ObjectSlot slot);
   void ClearRecordedSlotRange(Address start, Address end);
+  static int InsertIntoRememberedSetFromCode(MemoryChunk* chunk, Address slot);
 
 #ifdef DEBUG
   void VerifyClearedSlot(HeapObject object, ObjectSlot slot);
@@ -1231,6 +1230,17 @@ class Heap {
   AlignWithFiller(HeapObject object, int object_size, int allocation_size,
                   AllocationAlignment alignment);
 
+  // Allocate an external backing store with the given allocation callback.
+  // If the callback fails (indicated by a nullptr result) then this function
+  // will re-try the allocation after performing GCs. This is useful for
+  // external backing stores that may be retained by (unreachable) V8 objects
+  // such as ArrayBuffers, ExternalStrings, etc.
+  //
+  // The function may also proactively trigger GCs even if the allocation
+  // callback does not fail to keep the memory usage low.
+  V8_EXPORT_PRIVATE void* AllocateExternalBackingStore(
+      const std::function<void*(size_t)>& allocate, size_t byte_length);
+
   // ===========================================================================
   // ArrayBuffer tracking. =====================================================
   // ===========================================================================
@@ -1360,8 +1370,6 @@ class Heap {
   inline int MaxNumberToStringCacheSize() const;
 
  private:
-  class SkipStoreBufferScope;
-
   using ExternalStringTableUpdaterCallback = String (*)(Heap* heap,
                                                         FullObjectSlot pointer);
 
@@ -1473,8 +1481,6 @@ class Heap {
 #define ROOT_ACCESSOR(type, name, CamelName) inline void set_##name(type value);
   ROOT_LIST(ROOT_ACCESSOR)
 #undef ROOT_ACCESSOR
-
-  StoreBuffer* store_buffer() { return store_buffer_.get(); }
 
   void set_current_gc_flags(int flags) { current_gc_flags_ = flags; }
 
@@ -1987,7 +1993,6 @@ class Heap {
   std::unique_ptr<ScavengerCollector> scavenger_collector_;
   std::unique_ptr<ArrayBufferCollector> array_buffer_collector_;
   std::unique_ptr<MemoryAllocator> memory_allocator_;
-  std::unique_ptr<StoreBuffer> store_buffer_;
   std::unique_ptr<IncrementalMarking> incremental_marking_;
   std::unique_ptr<ConcurrentMarking> concurrent_marking_;
   std::unique_ptr<GCIdleTimeHandler> gc_idle_time_handler_;
@@ -2109,7 +2114,6 @@ class Heap {
   friend class Scavenger;
   friend class ScavengerCollector;
   friend class Space;
-  friend class StoreBuffer;
   friend class Sweeper;
   friend class heap::TestMemoryAllocatorScope;
 

@@ -107,7 +107,7 @@ declare_args() {
   v8_enable_verify_csa = false
 
   # Enable pointer compression (sets -dV8_COMPRESS_POINTERS).
-  v8_enable_pointer_compression = false
+  v8_enable_pointer_compression = ""
   v8_enable_31bit_smis_on_64bit_arch = true
 
   # Sets -dOBJECT_PRINT.
@@ -200,6 +200,20 @@ declare_args() {
   # Use token threaded dispatch for the regular expression interpreter.
   # Use switch-based dispatch if this is false
   v8_enable_regexp_interpreter_threaded_dispatch = true
+}
+
+if (v8_enable_pointer_compression == "") {
+  # TODO(v8:v7703): temporarily enable pointer compression on arm64
+  v8_enable_pointer_compression = v8_current_cpu == "arm64"
+}
+
+# Toggle pointer compression for correctness fuzzing when building the
+# clang_x64_pointer_compression toolchain. We'll correctness-compare the
+# default build with the clang_x64_pointer_compression build.
+if (v8_multi_arch_build &&
+    rebase_path(get_label_info(":d8", "root_out_dir"), root_build_dir) ==
+    "clang_x64_pointer_compression") {
+  v8_enable_pointer_compression = !v8_enable_pointer_compression
 }
 
 # Derived defaults.
@@ -921,6 +935,8 @@ action("postmortem-metadata") {
     "src/objects/code.h",
     "src/objects/data-handler.h",
     "src/objects/data-handler-inl.h",
+    "src/objects/descriptor-array.h",
+    "src/objects/descriptor-array-inl.h",
     "src/objects/feedback-cell.h",
     "src/objects/feedback-cell-inl.h",
     "src/objects/fixed-array-inl.h",
@@ -951,6 +967,8 @@ action("postmortem-metadata") {
     "src/objects/name-inl.h",
     "src/objects/oddball-inl.h",
     "src/objects/oddball.h",
+    "src/objects/primitive-heap-object.h",
+    "src/objects/primitive-heap-object-inl.h",
     "src/objects/scope-info.h",
     "src/objects/script.h",
     "src/objects/script-inl.h",
@@ -963,6 +981,7 @@ action("postmortem-metadata") {
     "src/objects/string-inl.h",
     "src/objects/struct.h",
     "src/objects/struct-inl.h",
+    "$target_gen_dir/torque-generated/instance-types-tq.h",
   ]
 
   outputs = [
@@ -971,6 +990,10 @@ action("postmortem-metadata") {
 
   args = rebase_path(outputs, root_build_dir) +
          rebase_path(sources, root_build_dir)
+
+  deps = [
+    ":run_torque",
+  ]
 }
 
 torque_files = [
@@ -1078,6 +1101,7 @@ action("run_torque") {
 
   outputs = [
     "$target_gen_dir/torque-generated/builtin-definitions-tq.h",
+    "$target_gen_dir/torque-generated/interface-descriptors-tq.inc",
     "$target_gen_dir/torque-generated/field-offsets-tq.h",
     "$target_gen_dir/torque-generated/class-verifiers-tq.cc",
     "$target_gen_dir/torque-generated/class-verifiers-tq.h",
@@ -1225,6 +1249,7 @@ template("run_mksnapshot") {
       "./" + rebase_path(get_label_info(":mksnapshot($v8_snapshot_toolchain)",
                                         "root_out_dir") + "/mksnapshot",
                          root_build_dir),
+      "--turbo_instruction_scheduling",
 
       # In cross builds, the snapshot may be generated for both the host and
       # target toolchains.  The same host binary is used to generate both, so
@@ -2373,9 +2398,6 @@ v8_source_set("v8_base_without_compiler") {
     "src/heap/spaces-inl.h",
     "src/heap/spaces.cc",
     "src/heap/spaces.h",
-    "src/heap/store-buffer-inl.h",
-    "src/heap/store-buffer.cc",
-    "src/heap/store-buffer.h",
     "src/heap/stress-marking-observer.cc",
     "src/heap/stress-marking-observer.h",
     "src/heap/stress-scavenge-observer.cc",
@@ -2553,6 +2575,7 @@ v8_source_set("v8_base_without_compiler") {
     "src/objects/heap-object.h",
     "src/objects/instance-type-inl.h",
     "src/objects/instance-type.h",
+    "src/objects/internal-index.h",
     "src/objects/intl-objects.cc",
     "src/objects/intl-objects.h",
     "src/objects/js-array-buffer-inl.h",
@@ -2655,6 +2678,8 @@ v8_source_set("v8_base_without_compiler") {
     "src/objects/osr-optimized-code-cache-inl.h",
     "src/objects/osr-optimized-code-cache.cc",
     "src/objects/osr-optimized-code-cache.h",
+    "src/objects/primitive-heap-object-inl.h",
+    "src/objects/primitive-heap-object.h",
     "src/objects/promise-inl.h",
     "src/objects/promise.h",
     "src/objects/property-array-inl.h",
@@ -3429,6 +3454,7 @@ v8_source_set("torque_base") {
     "src/torque/global-context.h",
     "src/torque/implementation-visitor.cc",
     "src/torque/implementation-visitor.h",
+    "src/torque/instance-type-generator.cc",
     "src/torque/instructions.cc",
     "src/torque/instructions.h",
     "src/torque/server-data.cc",
@@ -4085,6 +4111,7 @@ group("v8_clusterfuzz") {
       ":d8(//build/toolchain/linux:clang_x64_v8_arm64)",
       ":d8(//build/toolchain/linux:clang_x86)",
       ":d8(//build/toolchain/linux:clang_x86_v8_arm)",
+      ":d8(tools/clusterfuzz/toolchain:clang_x64_pointer_compression)",
     ]
   }
 }

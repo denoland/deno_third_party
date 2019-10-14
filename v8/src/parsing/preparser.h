@@ -1073,7 +1073,7 @@ class PreParser : public ParserBase<PreParser> {
   V8_INLINE void DeclareLabel(ZonePtrList<const AstRawString>** labels,
                               ZonePtrList<const AstRawString>** own_labels,
                               const AstRawString* label) {
-    DCHECK(!parsing_module_);
+    DCHECK(!parsing_module_ || !label->IsOneByteEqualTo("await"));
   }
 
   // TODO(nikolaos): The preparser currently does not keep track of labels.
@@ -1227,14 +1227,15 @@ class PreParser : public ParserBase<PreParser> {
                         &was_added);
     return PreParserStatement::Default();
   }
-  V8_INLINE void DeclareClassVariable(const PreParserIdentifier& name,
+  V8_INLINE void DeclareClassVariable(ClassScope* scope,
+                                      const PreParserIdentifier& name,
                                       ClassInfo* class_info,
                                       int class_token_pos) {
-    if (!IsNull(name)) {
-      bool was_added;
-      DeclareVariableName(name.string_, VariableMode::kConst, scope(),
-                          &was_added);
-    }
+    DCHECK_IMPLIES(IsNull(name), class_info->is_anonymous);
+    // Declare a special class variable for anonymous classes with the dot
+    // if we need to save it for static private method access.
+    scope->DeclareClassVariable(ast_value_factory(), name.string_,
+                                class_token_pos);
   }
   V8_INLINE void DeclarePublicClassMethod(const PreParserIdentifier& class_name,
                                           const PreParserExpression& property,
@@ -1324,10 +1325,6 @@ class PreParser : public ParserBase<PreParser> {
   V8_INLINE bool IsEvalOrArguments(
       const PreParserIdentifier& identifier) const {
     return identifier.IsEvalOrArguments();
-  }
-
-  V8_INLINE bool IsAwait(const PreParserIdentifier& identifier) const {
-    return identifier.IsAwait();
   }
 
   // Returns true if the expression is of type "this.foo".

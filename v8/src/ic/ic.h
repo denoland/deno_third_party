@@ -101,8 +101,8 @@ class IC {
 
   void CopyICToMegamorphicCache(Handle<Name> name);
   bool IsTransitionOfMonomorphicTarget(Map source_map, Map target_map);
-  void PatchCache(Handle<Name> name, Handle<Object> handler);
-  void PatchCache(Handle<Name> name, const MaybeObjectHandle& handler);
+  void SetCache(Handle<Name> name, Handle<Object> handler);
+  void SetCache(Handle<Name> name, const MaybeObjectHandle& handler);
   FeedbackSlotKind kind() const { return kind_; }
   bool IsGlobalIC() const { return IsLoadGlobalIC() || IsStoreGlobalIC(); }
   bool IsLoadIC() const { return IsLoadICKind(kind_); }
@@ -186,11 +186,6 @@ class LoadIC : public IC {
                                                  Handle<Name> name);
 
  protected:
-  virtual Handle<Code> slow_stub() const {
-    return IsAnyHas() ? BUILTIN_CODE(isolate(), HasIC_Slow)
-                      : BUILTIN_CODE(isolate(), LoadIC_Slow);
-  }
-
   // Update the inline cache and the global stub cache based on the
   // lookup result.
   void UpdateCaches(LookupIterator* lookup);
@@ -209,11 +204,6 @@ class LoadGlobalIC : public LoadIC {
       : LoadIC(isolate, vector, slot, kind) {}
 
   V8_WARN_UNUSED_RESULT MaybeHandle<Object> Load(Handle<Name> name);
-
- protected:
-  Handle<Code> slow_stub() const override {
-    return BUILTIN_CODE(isolate(), LoadGlobalIC_Slow);
-  }
 };
 
 class KeyedLoadIC : public LoadIC {

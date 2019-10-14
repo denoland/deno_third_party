@@ -23,7 +23,7 @@ void GenerateClassDebugReader(const ClassType& type, std::ostream& h_contents,
                               std::ostream& cc_contents, std::ostream& visitor,
                               std::unordered_set<const ClassType*>* done) {
   // Make sure each class only gets generated once.
-  if (!type.IsExtern() || !done->insert(&type).second) return;
+  if (!done->insert(&type).second) return;
   const ClassType* super_type = type.GetSuperClass();
 
   // We must emit the classes in dependency order. If the super class hasn't
@@ -32,6 +32,10 @@ void GenerateClassDebugReader(const ClassType& type, std::ostream& h_contents,
     GenerateClassDebugReader(*super_type, h_contents, cc_contents, visitor,
                              done);
   }
+
+  // Classes with undefined layout don't grant any particular value here and may
+  // not correspond with actual C++ classes, so skip them.
+  if (type.HasUndefinedLayout()) return;
 
   const std::string name = type.name();
   const std::string super_name =
@@ -83,9 +87,10 @@ void GenerateClassDebugReader(const ClassType& type, std::ostream& h_contents,
     if (is_field_tagged) {
       field_value_type = "uintptr_t";
       field_value_type_compressed = "i::Tagged_t";
-      field_cc_type = "v8::internal::" + (field_class_type.has_value()
-                                              ? (*field_class_type)->name()
-                                              : "Object");
+      field_cc_type = "v8::internal::" +
+                      (field_class_type.has_value()
+                           ? (*field_class_type)->GetGeneratedTNodeTypeName()
+                           : "Object");
       field_cc_type_compressed =
           COMPRESS_POINTERS_BOOL ? "v8::internal::TaggedValue" : field_cc_type;
     } else {
@@ -119,7 +124,7 @@ void GenerateClassDebugReader(const ClassType& type, std::ostream& h_contents,
     std::string index_param;
     std::string index_offset;
     if (field.index) {
-      const Type* index_type = (*field.index)->name_and_type.type;
+      const Type* index_type = field.index->type;
       std::string index_type_name;
       std::string index_value;
       if (index_type == TypeOracle::GetSmiType()) {
@@ -141,7 +146,7 @@ void GenerateClassDebugReader(const ClassType& type, std::ostream& h_contents,
       }
       get_props_impl << "  Value<" << index_type_name
                      << "> indexed_field_count = Get"
-                     << CamelifyString((*field.index)->name_and_type.name)
+                     << CamelifyString(field.index->name)
                      << "Value(accessor);\n";
       indexed_field_info =
           ", " + index_value + ", GetArrayKind(indexed_field_count.validity)";
@@ -203,6 +208,11 @@ void ImplementationVisitor::GenerateClassDebugReaders(
     h_contents << "#include <vector>\n";
     h_contents
         << "\n#include \"tools/debug_helper/debug-helper-internal.h\"\n\n";
+
+    h_contents << "// Unset a windgi.h macro that causes conflicts.\n";
+    h_contents << "#ifdef GetBValue\n";
+    h_contents << "#undef GetBValue\n";
+    h_contents << "#endif\n\n";
 
     cc_contents << "#include \"torque-generated/" << file_name << ".h\"\n";
     cc_contents << "#include \"include/v8-internal.h\"\n\n";

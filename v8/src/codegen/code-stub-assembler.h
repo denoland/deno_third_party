@@ -97,6 +97,7 @@ enum class PrimitiveType { kBoolean, kNumber, kString, kSymbol };
   V(iterator_symbol, iterator_symbol, IteratorSymbol)                          \
   V(length_string, length_string, LengthString)                                \
   V(ManyClosuresCellMap, many_closures_cell_map, ManyClosuresCellMap)          \
+  V(match_symbol, match_symbol, MatchSymbol)                                   \
   V(megamorphic_symbol, megamorphic_symbol, MegamorphicSymbol)                 \
   V(MetaMap, meta_map, MetaMap)                                                \
   V(MinusZeroValue, minus_zero_value, MinusZero)                               \
@@ -976,9 +977,6 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   //
   // Works only with V8_ENABLE_FORCE_SLOW_PATH compile time flag. Nop otherwise.
   void GotoIfForceSlowPath(Label* if_true);
-
-  // Branches to {if_true} when Debug::ExecutionMode is DebugInfo::kSideEffect.
-  void GotoIfDebugExecutionModeChecksSideEffects(Label* if_true);
 
   // Load value from current parent frame by given offset in bytes.
   Node* LoadFromParentFrame(int offset,
@@ -2458,6 +2456,7 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   TNode<BoolT> IsJSPromise(SloppyTNode<HeapObject> object);
   TNode<BoolT> IsJSProxy(SloppyTNode<HeapObject> object);
   TNode<BoolT> IsJSStringIterator(SloppyTNode<HeapObject> object);
+  TNode<BoolT> IsJSRegExpStringIterator(SloppyTNode<HeapObject> object);
   TNode<BoolT> IsJSReceiverInstanceType(SloppyTNode<Int32T> instance_type);
   TNode<BoolT> IsJSReceiverMap(SloppyTNode<Map> map);
   TNode<BoolT> IsJSReceiver(SloppyTNode<HeapObject> object);

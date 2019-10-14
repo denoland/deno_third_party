@@ -1958,16 +1958,16 @@ Handle<JSObject> Factory::CopyJSObjectWithAllocationSite(
 
   // We can only clone regexps, normal objects, api objects, errors or arrays.
   // Copying anything else will break invariants.
-  CHECK(map->instance_type() == JS_REGEXP_TYPE ||
+  CHECK(map->instance_type() == JS_REG_EXP_TYPE ||
         map->instance_type() == JS_OBJECT_TYPE ||
         map->instance_type() == JS_ERROR_TYPE ||
         map->instance_type() == JS_ARRAY_TYPE ||
         map->instance_type() == JS_API_OBJECT_TYPE ||
-        map->instance_type() == WASM_GLOBAL_TYPE ||
-        map->instance_type() == WASM_INSTANCE_TYPE ||
-        map->instance_type() == WASM_MEMORY_TYPE ||
-        map->instance_type() == WASM_MODULE_TYPE ||
-        map->instance_type() == WASM_TABLE_TYPE ||
+        map->instance_type() == WASM_GLOBAL_OBJECT_TYPE ||
+        map->instance_type() == WASM_INSTANCE_OBJECT_TYPE ||
+        map->instance_type() == WASM_MEMORY_OBJECT_TYPE ||
+        map->instance_type() == WASM_MODULE_OBJECT_TYPE ||
+        map->instance_type() == WASM_TABLE_OBJECT_TYPE ||
         map->instance_type() == JS_SPECIAL_API_OBJECT_TYPE);
   DCHECK(site.is_null() || AllocationSite::CanTrack(map->instance_type()));
 
@@ -2405,7 +2405,7 @@ Handle<JSFunction> Factory::NewFunction(const NewFunctionArgs& args) {
       case JS_ARRAY_TYPE:
         elements_kind = PACKED_SMI_ELEMENTS;
         break;
-      case JS_ARGUMENTS_TYPE:
+      case JS_ARGUMENTS_OBJECT_TYPE:
         elements_kind = PACKED_ELEMENTS;
         break;
       default:
@@ -2770,7 +2770,7 @@ Handle<JSGlobalObject> Factory::NewJSGlobalObject(
   // The global object might be created from an object template with accessors.
   // Fill these accessors into the dictionary.
   Handle<DescriptorArray> descs(map->instance_descriptors(), isolate());
-  for (int i = 0; i < map->NumberOfOwnDescriptors(); i++) {
+  for (InternalIndex i : InternalIndex::Range(map->NumberOfOwnDescriptors())) {
     PropertyDetails details = descs->GetDetails(i);
     // Only accessors are expected.
     DCHECK_EQ(kAccessor, details.kind());
@@ -3005,7 +3005,7 @@ Handle<JSModuleNamespace> Factory::NewJSModuleNamespace() {
   Handle<JSModuleNamespace> module_namespace(
       Handle<JSModuleNamespace>::cast(NewJSObjectFromMap(map)));
   FieldIndex index = FieldIndex::ForDescriptor(
-      *map, JSModuleNamespace::kToStringTagFieldIndex);
+      *map, InternalIndex(JSModuleNamespace::kToStringTagFieldIndex));
   module_namespace->FastPropertyAtPut(index,
                                       ReadOnlyRoots(isolate()).Module_string());
   return module_namespace;
@@ -3088,41 +3088,42 @@ Handle<SyntheticModule> Factory::NewSyntheticModule(
   return module;
 }
 
-Handle<JSArrayBuffer> Factory::NewJSArrayBuffer(AllocationType allocation) {
+Handle<JSArrayBuffer> Factory::NewJSArrayBuffer(
+    std::shared_ptr<BackingStore> backing_store, AllocationType allocation) {
   Handle<Map> map(isolate()->native_context()->array_buffer_fun().initial_map(),
                   isolate());
   auto result =
       Handle<JSArrayBuffer>::cast(NewJSObjectFromMap(map, allocation));
-  result->SetupEmpty(SharedFlag::kNotShared);
+  result->Setup(SharedFlag::kNotShared, std::move(backing_store));
   return result;
 }
 
 MaybeHandle<JSArrayBuffer> Factory::NewJSArrayBufferAndBackingStore(
     size_t byte_length, InitializedFlag initialized,
     AllocationType allocation) {
-  // TODO(titzer): Don't bother allocating a 0-length backing store.
-  // This is currently required because the embedder API for
-  // TypedArray::HasBuffer() checks if the backing store is nullptr.
-  // That check should be changed.
+  std::unique_ptr<BackingStore> backing_store = nullptr;
 
-  std::unique_ptr<BackingStore> backing_store = BackingStore::Allocate(
-      isolate(), byte_length, SharedFlag::kNotShared, initialized);
-  if (!backing_store) return MaybeHandle<JSArrayBuffer>();
+  if (byte_length > 0) {
+    backing_store = BackingStore::Allocate(isolate(), byte_length,
+                                           SharedFlag::kNotShared, initialized);
+    if (!backing_store) return MaybeHandle<JSArrayBuffer>();
+  }
   Handle<Map> map(isolate()->native_context()->array_buffer_fun().initial_map(),
                   isolate());
   auto array_buffer =
       Handle<JSArrayBuffer>::cast(NewJSObjectFromMap(map, allocation));
-  array_buffer->Attach(std::move(backing_store));
+  array_buffer->Setup(SharedFlag::kNotShared, std::move(backing_store));
   return array_buffer;
 }
 
-Handle<JSArrayBuffer> Factory::NewJSSharedArrayBuffer() {
+Handle<JSArrayBuffer> Factory::NewJSSharedArrayBuffer(
+    std::shared_ptr<BackingStore> backing_store) {
   Handle<Map> map(
       isolate()->native_context()->shared_array_buffer_fun().initial_map(),
       isolate());
   auto result = Handle<JSArrayBuffer>::cast(
       NewJSObjectFromMap(map, AllocationType::kYoung));
-  result->SetupEmpty(SharedFlag::kShared);
+  result->Setup(SharedFlag::kShared, std::move(backing_store));
   return result;
 }
 

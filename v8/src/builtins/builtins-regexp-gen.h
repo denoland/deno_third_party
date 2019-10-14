@@ -25,8 +25,6 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
   TNode<Object> RegExpCreate(TNode<Context> context, TNode<Map> initial_map,
                              TNode<Object> regexp_string, TNode<String> flags);
 
-  TNode<BoolT> IsRegExp(TNode<Context> context, TNode<Object> maybe_receiver);
-
   TNode<Smi> SmiZero();
   TNode<IntPtrT> IntPtrZero();
 
@@ -184,6 +182,11 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
   TNode<Smi> AdvanceStringIndexFast(TNode<String> string, TNode<Smi> index,
                                     TNode<BoolT> is_unicode) {
     return CAST(AdvanceStringIndex(string, index, is_unicode, true));
+  }
+
+  TNode<Smi> AdvanceStringIndexSlow(TNode<String> string, TNode<Number> index,
+                                    TNode<BoolT> is_unicode) {
+    return CAST(AdvanceStringIndex(string, index, is_unicode, false));
   }
 
   TNode<Object> RegExpPrototypeMatchBody(TNode<Context> context,

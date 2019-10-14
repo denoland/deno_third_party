@@ -2773,17 +2773,20 @@ void Parser::ParseFunction(
   *suspend_count = function_state.suspend_count();
 }
 
-void Parser::DeclareClassVariable(const AstRawString* name,
+void Parser::DeclareClassVariable(ClassScope* scope, const AstRawString* name,
                                   ClassInfo* class_info, int class_token_pos) {
 #ifdef DEBUG
-  scope()->SetScopeName(name);
+  scope->SetScopeName(name);
 #endif
 
-  if (name != nullptr) {
-    VariableProxy* proxy =
-        DeclareBoundVariable(name, VariableMode::kConst, class_token_pos);
-    class_info->variable = proxy->var();
-  }
+  DCHECK_IMPLIES(name == nullptr, class_info->is_anonymous);
+  // Declare a special class variable for anonymous classes with the dot
+  // if we need to save it for static private method access.
+  Variable* class_variable =
+      scope->DeclareClassVariable(ast_value_factory(), name, class_token_pos);
+  Declaration* declaration = factory()->NewVariableDeclaration(class_token_pos);
+  scope->declarations()->Add(declaration);
+  declaration->set_var(class_variable);
 }
 
 // TODO(gsathya): Ideally, this should just bypass scope analysis and
@@ -2832,7 +2835,7 @@ void Parser::DeclarePublicClassField(ClassScope* scope,
         CreateSyntheticContextVariable(ClassFieldVariableName(
             ast_value_factory(), class_info->computed_field_count));
     property->set_computed_name_var(computed_name_var);
-    class_info->properties->Add(property, zone());
+    class_info->public_members->Add(property, zone());
   }
 }
 
@@ -2862,7 +2865,7 @@ void Parser::DeclarePrivateClassMember(ClassScope* scope,
   }
   private_name_var->set_initializer_position(pos);
   property->set_private_name_var(private_name_var);
-  class_info->properties->Add(property, zone());
+  class_info->private_members->Add(property, zone());
 }
 
 // This method declares a property of the given class.  It updates the
@@ -2883,7 +2886,7 @@ void Parser::DeclarePublicClassMethod(const AstRawString* class_name,
     return;
   }
 
-  class_info->properties->Add(property, zone());
+  class_info->public_members->Add(property, zone());
 }
 
 FunctionLiteral* Parser::CreateInitializerFunction(
@@ -2932,8 +2935,8 @@ Expression* Parser::RewriteClassLiteral(ClassScope* block_scope,
   }
 
   if (name != nullptr) {
-    DCHECK_NOT_NULL(class_info->variable);
-    class_info->variable->set_initializer_position(end_pos);
+    DCHECK_NOT_NULL(block_scope->class_variable());
+    block_scope->class_variable()->set_initializer_position(end_pos);
   }
 
   FunctionLiteral* static_fields_initializer = nullptr;
@@ -2954,11 +2957,12 @@ Expression* Parser::RewriteClassLiteral(ClassScope* block_scope,
   }
 
   ClassLiteral* class_literal = factory()->NewClassLiteral(
-      block_scope, class_info->variable, class_info->extends,
-      class_info->constructor, class_info->properties,
+      block_scope, class_info->extends, class_info->constructor,
+      class_info->public_members, class_info->private_members,
       static_fields_initializer, instance_members_initializer_function, pos,
       end_pos, class_info->has_name_static_property,
-      class_info->has_static_computed_names, class_info->is_anonymous);
+      class_info->has_static_computed_names, class_info->is_anonymous,
+      class_info->has_private_methods);
 
   AddFunctionForNameInference(class_info->constructor);
   return class_literal;

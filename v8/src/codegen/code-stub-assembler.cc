@@ -1236,19 +1236,6 @@ void CodeStubAssembler::GotoIfForceSlowPath(Label* if_true) {
 #endif
 }
 
-void CodeStubAssembler::GotoIfDebugExecutionModeChecksSideEffects(
-    Label* if_true) {
-  STATIC_ASSERT(sizeof(DebugInfo::ExecutionMode) >= sizeof(int32_t));
-
-  TNode<ExternalReference> execution_mode_address = ExternalConstant(
-      ExternalReference::debug_execution_mode_address(isolate()));
-  TNode<Int32T> execution_mode =
-      UncheckedCast<Int32T>(Load(MachineType::Int32(), execution_mode_address));
-
-  GotoIf(Word32Equal(execution_mode, Int32Constant(DebugInfo::kSideEffects)),
-         if_true);
-}
-
 TNode<HeapObject> CodeStubAssembler::AllocateRaw(TNode<IntPtrT> size_in_bytes,
                                                  AllocationFlags flags,
                                                  TNode<RawPtrT> top_address,
@@ -2228,12 +2215,12 @@ TNode<RawPtrT> CodeStubAssembler::LoadJSTypedArrayDataPtr(
   if (COMPRESS_POINTERS_BOOL) {
     TNode<Int32T> compressed_base =
         LoadObjectField<Int32T>(typed_array, JSTypedArray::kBasePointerOffset);
-    // Sign extend Int32T to IntPtrT according to current compression scheme
+    // Zero-extend TaggedT to WordT according to current compression scheme
     // so that the addition with |external_pointer| (which already contains
     // compensated offset value) below will decompress the tagged value.
     // See JSTypedArray::ExternalPointerCompensationForOnHeapArray() for
     // details.
-    base_pointer = ChangeInt32ToIntPtr(compressed_base);
+    base_pointer = Signed(ChangeUint32ToWord(compressed_base));
   } else {
     base_pointer =
         LoadObjectField<IntPtrT>(typed_array, JSTypedArray::kBasePointerOffset);
@@ -6313,6 +6300,11 @@ TNode<BoolT> CodeStubAssembler::IsJSStringIterator(
   return HasInstanceType(object, JS_STRING_ITERATOR_TYPE);
 }
 
+TNode<BoolT> CodeStubAssembler::IsJSRegExpStringIterator(
+    SloppyTNode<HeapObject> object) {
+  return HasInstanceType(object, JS_REG_EXP_STRING_ITERATOR_TYPE);
+}
+
 TNode<BoolT> CodeStubAssembler::IsMap(SloppyTNode<HeapObject> map) {
   return IsMetaMap(LoadMap(map));
 }
@@ -6541,7 +6533,7 @@ TNode<BoolT> CodeStubAssembler::IsBigInt(SloppyTNode<HeapObject> object) {
 TNode<BoolT> CodeStubAssembler::IsPrimitiveInstanceType(
     SloppyTNode<Int32T> instance_type) {
   return Int32LessThanOrEqual(instance_type,
-                              Int32Constant(LAST_PRIMITIVE_TYPE));
+                              Int32Constant(LAST_PRIMITIVE_HEAP_OBJECT_TYPE));
 }
 
 TNode<BoolT> CodeStubAssembler::IsPrivateSymbol(
@@ -6646,7 +6638,7 @@ TNode<BoolT> CodeStubAssembler::IsJSDataView(TNode<HeapObject> object) {
 }
 
 TNode<BoolT> CodeStubAssembler::IsJSRegExp(SloppyTNode<HeapObject> object) {
-  return HasInstanceType(object, JS_REGEXP_TYPE);
+  return HasInstanceType(object, JS_REG_EXP_TYPE);
 }
 
 TNode<BoolT> CodeStubAssembler::IsNumber(SloppyTNode<Object> object) {
@@ -12148,7 +12140,7 @@ TNode<Oddball> CodeStubAssembler::StrictEqual(
 
               BIND(&if_lhsisoddball);
               {
-                STATIC_ASSERT(LAST_PRIMITIVE_TYPE == ODDBALL_TYPE);
+                STATIC_ASSERT(LAST_PRIMITIVE_HEAP_OBJECT_TYPE == ODDBALL_TYPE);
                 GotoIf(IsBooleanMap(rhs_map), &if_not_equivalent_types);
                 GotoIf(Int32LessThan(rhs_instance_type,
                                      Int32Constant(ODDBALL_TYPE)),

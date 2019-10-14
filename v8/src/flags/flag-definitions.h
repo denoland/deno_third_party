@@ -204,11 +204,9 @@ DEFINE_IMPLICATION(harmony_import_meta, harmony_dynamic_import)
 
 // Features that are still work in progress (behind individual flags).
 #define HARMONY_INPROGRESS_BASE(V)                                        \
-  V(harmony_private_methods, "harmony private methods in class literals") \
   V(harmony_regexp_sequence, "RegExp Unicode sequence properties")        \
   V(harmony_weak_refs, "harmony weak references")                         \
   V(harmony_regexp_match_indices, "harmony regexp match indices")         \
-  V(harmony_nullish, "harmony nullish operator")                          \
   V(harmony_top_level_await, "harmony top level await")
 
 #ifdef V8_INTL_SUPPORT
@@ -219,7 +217,9 @@ DEFINE_IMPLICATION(harmony_import_meta, harmony_dynamic_import)
 
 // Features that are complete (but still behind --harmony/es-staging flag).
 #define HARMONY_STAGED_BASE(V)                                     \
-  V(harmony_optional_chaining, "harmony optional chaining syntax")
+  V(harmony_optional_chaining, "harmony optional chaining syntax") \
+  V(harmony_nullish, "harmony nullish operator")                   \
+  V(harmony_private_methods, "harmony private methods in class literals")
 
 #ifdef V8_INTL_SUPPORT
 #define HARMONY_STAGED(V)                                           \
@@ -487,9 +487,12 @@ DEFINE_BOOL(concurrent_inlining, false,
 DEFINE_IMPLICATION(future, concurrent_inlining)
 DEFINE_BOOL(trace_heap_broker_verbose, false,
             "trace the heap broker verbosely (all reports)")
+DEFINE_BOOL(trace_heap_broker_memory, false,
+            "trace the heap broker memory (refs analysis and zone numbers)")
 DEFINE_BOOL(trace_heap_broker, false,
             "trace the heap broker (reports on missing data only)")
 DEFINE_IMPLICATION(trace_heap_broker_verbose, trace_heap_broker)
+DEFINE_IMPLICATION(trace_heap_broker_memory, trace_heap_broker)
 
 // Flags for stress-testing the compiler.
 DEFINE_INT(stress_runs, 0, "number of stress runs")
@@ -501,7 +504,7 @@ DEFINE_BOOL(print_deopt_stress, false, "print number of possible deopt points")
 DEFINE_BOOL(opt, true, "use adaptive optimizations")
 DEFINE_BOOL(turbo_sp_frame_access, false,
             "use stack pointer-relative access to frame wherever possible")
-DEFINE_BOOL(turbo_control_flow_aware_allocation, false,
+DEFINE_BOOL(turbo_control_flow_aware_allocation, true,
             "consider control flow while allocating registers")
 
 DEFINE_STRING(turbo_filter, "*", "optimization filter for TurboFan compiler")
@@ -730,9 +733,6 @@ DEFINE_BOOL(wasm_math_intrinsics, true,
 DEFINE_BOOL(wasm_shared_engine, true,
             "shares one wasm engine between all isolates within a process")
 DEFINE_IMPLICATION(future, wasm_shared_engine)
-DEFINE_BOOL(wasm_shared_code, true,
-            "shares code underlying a wasm module when it is transferred")
-DEFINE_IMPLICATION(future, wasm_shared_code)
 DEFINE_BOOL(wasm_trap_handler, true,
             "use signal handlers to catch out of bounds memory access in wasm"
             " (currently Linux x86_64 only)")
@@ -1266,13 +1266,18 @@ DEFINE_UINT(serialization_chunk_size, 4096,
 DEFINE_BOOL(regexp_optimization, true, "generate optimized regexp code")
 DEFINE_BOOL(regexp_mode_modifiers, false, "enable inline flags in regexp.")
 DEFINE_BOOL(regexp_interpret_all, false, "interpret all regexp code")
+#ifdef V8_TARGET_BIG_ENDIAN
+#define REGEXP_PEEPHOLE_OPTIMIZATION_BOOL false
+#else
+#define REGEXP_PEEPHOLE_OPTIMIZATION_BOOL true
+#endif
 DEFINE_BOOL(regexp_tier_up, true,
             "enable regexp interpreter and tier up to the compiler after the "
             "number of executions set by the tier up ticks flag")
 DEFINE_INT(regexp_tier_up_ticks, 1,
            "set the number of executions for the regexp interpreter before "
            "tiering-up to the compiler")
-DEFINE_BOOL(regexp_peephole_optimization, true,
+DEFINE_BOOL(regexp_peephole_optimization, REGEXP_PEEPHOLE_OPTIMIZATION_BOOL,
             "enable peephole optimization for regexp bytecode")
 DEFINE_BOOL(trace_regexp_peephole_optimization, false,
             "trace regexp bytecode peephole optimization")
@@ -1516,6 +1521,11 @@ DEFINE_BOOL(interpreted_frames_native_stack, false,
             "Show interpreted frames on the native stack (useful for external "
             "profilers).")
 #endif
+
+// TODO(v8:9206, solanes): remove this when smi-corrupting reducer is fully on.
+DEFINE_BOOL_READONLY(turbo_decompression_elimination, true,
+                     "enable the decompression elimination system when "
+                     "pointer compression is enabled.")
 
 //
 // Disassembler only flags

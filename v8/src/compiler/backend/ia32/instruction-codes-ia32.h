@@ -127,6 +127,12 @@ namespace compiler {
   V(IA32F64x2Sub)                  \
   V(IA32F64x2Mul)                  \
   V(IA32F64x2Div)                  \
+  V(IA32F64x2Min)                  \
+  V(IA32F64x2Max)                  \
+  V(IA32F64x2Eq)                   \
+  V(IA32F64x2Ne)                   \
+  V(IA32F64x2Lt)                   \
+  V(IA32F64x2Le)                   \
   V(SSEF32x4Splat)                 \
   V(AVXF32x4Splat)                 \
   V(SSEF32x4ExtractLane)           \
@@ -326,6 +332,7 @@ namespace compiler {
   V(AVXS128Xor)                    \
   V(SSES128Select)                 \
   V(AVXS128Select)                 \
+  V(IA32S8x16Swizzle)              \
   V(IA32S8x16Shuffle)              \
   V(IA32S32x4Swizzle)              \
   V(IA32S32x4Shuffle)              \

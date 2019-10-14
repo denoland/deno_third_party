@@ -884,20 +884,21 @@ static void AdvanceBytecodeOffsetOrReturn(MacroAssembler* masm,
                 static_cast<int>(interpreter::Bytecode::kDebugBreakExtraWide));
   __ cmp(bytecode, Immediate(0x3));
   __ j(above, &process_bytecode, Label::kNear);
+  // The code to load the next bytecode is common to both wide and extra wide.
+  // We can hoist them up here. inc has to happen before test since it
+  // modifies the ZF flag.
+  __ inc(bytecode_offset);
   __ test(bytecode, Immediate(0x1));
+  __ movzx_b(bytecode, Operand(bytecode_array, bytecode_offset, times_1, 0));
   __ j(not_equal, &extra_wide, Label::kNear);
 
   // Load the next bytecode and update table to the wide scaled table.
-  __ inc(bytecode_offset);
-  __ movzx_b(bytecode, Operand(bytecode_array, bytecode_offset, times_1, 0));
   __ add(bytecode_size_table,
          Immediate(kIntSize * interpreter::Bytecodes::kBytecodeCount));
   __ jmp(&process_bytecode, Label::kNear);
 
   __ bind(&extra_wide);
-  // Load the next bytecode and update table to the extra wide scaled table.
-  __ inc(bytecode_offset);
-  __ movzx_b(bytecode, Operand(bytecode_array, bytecode_offset, times_1, 0));
+  // Update table to the extra wide scaled table.
   __ add(bytecode_size_table,
          Immediate(2 * kIntSize * interpreter::Bytecodes::kBytecodeCount));
 
@@ -1019,6 +1020,7 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
   __ push(Immediate(Smi::FromInt(BytecodeArray::kHeaderSize - kHeapObjectTag)));
 
   // Allocate the local and temporary register file on the stack.
+  Label stack_overflow;
   {
     // Load frame size from the BytecodeArray object.
     Register frame_size = ecx;
@@ -1026,22 +1028,19 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
                                     BytecodeArray::kFrameSizeOffset));
 
     // Do a stack check to ensure we don't go over the limit.
-    Label ok;
     __ mov(eax, esp);
     __ sub(eax, frame_size);
     __ CompareRealStackLimit(eax);
-    __ j(above_equal, &ok);
-    __ CallRuntime(Runtime::kThrowStackOverflow);
-    __ bind(&ok);
+    __ j(below, &stack_overflow);
 
     // If ok, push undefined as the initial value for all register file entries.
     Label loop_header;
     Label loop_check;
-    __ Move(eax, masm->isolate()->factory()->undefined_value());
+    __ LoadRoot(kInterpreterAccumulatorRegister, RootIndex::kUndefinedValue);
     __ jmp(&loop_check);
     __ bind(&loop_header);
     // TODO(rmcilroy): Consider doing more than one push per loop iteration.
-    __ push(eax);
+    __ push(kInterpreterAccumulatorRegister);
     // Continue loop if not done.
     __ bind(&loop_check);
     __ sub(frame_size, Immediate(kSystemPointerSize));
@@ -1051,12 +1050,12 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
   // If the bytecode array has a valid incoming new target or generator object
   // register, initialize it with incoming value which was passed in edx.
   Label no_incoming_new_target_or_generator_register;
-  __ mov(eax, FieldOperand(
+  __ mov(ecx, FieldOperand(
                   kInterpreterBytecodeArrayRegister,
                   BytecodeArray::kIncomingNewTargetOrGeneratorRegisterOffset));
-  __ test(eax, eax);
+  __ test(ecx, ecx);
   __ j(zero, &no_incoming_new_target_or_generator_register);
-  __ mov(Operand(ebp, eax, times_system_pointer_size, 0), edx);
+  __ mov(Operand(ebp, ecx, times_system_pointer_size, 0), edx);
   __ bind(&no_incoming_new_target_or_generator_register);
 
   // Load accumulator and bytecode offset into registers.
@@ -1118,6 +1117,9 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
 
   __ bind(&compile_lazy);
   GenerateTailCallToReturnedCode(masm, Runtime::kCompileLazy);
+
+  __ bind(&stack_overflow);
+  __ CallRuntime(Runtime::kThrowStackOverflow);
   __ int3();  // Should not return.
 }
 
@@ -2600,14 +2602,8 @@ void Builtins::Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm) {
 }
 
 void Builtins::Generate_InterpreterOnStackReplacement(MacroAssembler* masm) {
-  // Lookup the function in the JavaScript frame.
-  __ mov(eax, Operand(ebp, StandardFrameConstants::kCallerFPOffset));
-  __ mov(eax, Operand(eax, JavaScriptFrameConstants::kFunctionOffset));
-
   {
     FrameScope scope(masm, StackFrame::INTERNAL);
-    // Pass function as argument.
-    __ push(eax);
     __ CallRuntime(Runtime::kCompileForOnStackReplacement);
   }
 

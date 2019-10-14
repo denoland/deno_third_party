@@ -2192,6 +2192,15 @@ void Assembler::cmpps(XMMRegister dst, Operand src, uint8_t cmp) {
   EMIT(cmp);
 }
 
+void Assembler::cmppd(XMMRegister dst, Operand src, uint8_t cmp) {
+  EnsureSpace ensure_space(this);
+  EMIT(0x66);
+  EMIT(0x0F);
+  EMIT(0xC2);
+  emit_sse_operand(dst, src);
+  EMIT(cmp);
+}
+
 void Assembler::sqrtsd(XMMRegister dst, Operand src) {
   EnsureSpace ensure_space(this);
   EMIT(0xF2);
@@ -2764,6 +2773,12 @@ void Assembler::vcmpps(XMMRegister dst, XMMRegister src1, Operand src2,
   EMIT(cmp);
 }
 
+void Assembler::vcmppd(XMMRegister dst, XMMRegister src1, Operand src2,
+                       uint8_t cmp) {
+  vpd(0xC2, dst, src1, src2);
+  EMIT(cmp);
+}
+
 void Assembler::vshufps(XMMRegister dst, XMMRegister src1, Operand src2,
                         byte imm8) {
   DCHECK(is_uint8(imm8));
@@ -2792,6 +2807,12 @@ void Assembler::vpsrlw(XMMRegister dst, XMMRegister src, uint8_t imm8) {
 void Assembler::vpsrld(XMMRegister dst, XMMRegister src, uint8_t imm8) {
   XMMRegister iop = XMMRegister::from_code(2);
   vinstr(0x72, iop, dst, Operand(src), k66, k0F, kWIG);
+  EMIT(imm8);
+}
+
+void Assembler::vpsrlq(XMMRegister dst, XMMRegister src, uint8_t imm8) {
+  XMMRegister iop = XMMRegister::from_code(2);
+  vinstr(0x73, iop, dst, Operand(src), k66, k0F, kWIG);
   EMIT(imm8);
 }
 

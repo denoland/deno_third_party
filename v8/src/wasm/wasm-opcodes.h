@@ -48,11 +48,11 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, const WasmFeatures&);
   V(Drop, 0x1a, _)               \
   V(Select, 0x1b, _)             \
   V(SelectWithType, 0x1c, _)     \
-  V(GetLocal, 0x20, _)           \
-  V(SetLocal, 0x21, _)           \
-  V(TeeLocal, 0x22, _)           \
-  V(GetGlobal, 0x23, _)          \
-  V(SetGlobal, 0x24, _)          \
+  V(LocalGet, 0x20, _)           \
+  V(LocalSet, 0x21, _)           \
+  V(LocalTee, 0x22, _)           \
+  V(GlobalGet, 0x23, _)          \
+  V(GlobalSet, 0x24, _)          \
   V(TableGet, 0x25, _)           \
   V(TableSet, 0x26, _)           \
   V(I32Const, 0x41, _)           \
@@ -420,6 +420,7 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, const WasmFeatures&);
   V(I32x4UConvertF32x4, 0xfdac, s_s)     \
   V(F32x4SConvertI32x4, 0xfdaf, s_s)     \
   V(F32x4UConvertI32x4, 0xfdb0, s_s)     \
+  V(S8x16Swizzle, 0xfdc0, s_ss)          \
   V(I8x16SConvertI16x8, 0xfdc6, s_ss)    \
   V(I8x16UConvertI16x8, 0xfdc7, s_ss)    \
   V(I16x8SConvertI32x4, 0xfdc8, s_ss)    \
@@ -439,8 +440,10 @@ bool IsJSCompatibleSignature(const FunctionSig* sig, const WasmFeatures&);
   V(F32x4RecipSqrtApprox, 0xfde1, s_s)
 
 #define FOREACH_SIMD_1_OPERAND_1_PARAM_OPCODE(V) \
-  V(I8x16ExtractLane, 0xfd05, _)                 \
-  V(I16x8ExtractLane, 0xfd09, _)                 \
+  V(I8x16ExtractLaneS, 0xfd05, _)                \
+  V(I8x16ExtractLaneU, 0xfd06, _)                \
+  V(I16x8ExtractLaneS, 0xfd09, _)                \
+  V(I16x8ExtractLaneU, 0xfd0a, _)                \
   V(I32x4ExtractLane, 0xfd0d, _)                 \
   V(I64x2ExtractLane, 0xfd10, _)                 \
   V(F32x4ExtractLane, 0xfd13, _)                 \

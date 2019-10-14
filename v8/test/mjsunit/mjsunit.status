@@ -379,6 +379,7 @@
   'regress/regress-6838-2': [SKIP],
   'regress/regress-6838-3': [SKIP],
   'regress/regress-9022': [SKIP],
+  'regress/regress-9832': [SKIP],
   'regress/regress-crbug-934138': [SKIP],
   'regress/regress-crbug-976934': [SKIP],
 
@@ -804,7 +805,6 @@
   'icu-date-lord-howe': [SKIP],
   'regress/regress-6288': [SKIP],
   # OOM:
-  'regress/regress-748069': [FAIL],
   'regress/regress-752764': [FAIL],
   # Flaky OOM:
   'regress/regress-779407': [SKIP],
@@ -1129,5 +1129,12 @@
   # specifically expects to fail on top level await.
   'harmony/modules-import-15': [SKIP],
 }], # variant == top_level_await
+
+##############################################################################
+['variant == stress_js_bg_compile_wasm_code_gc', {
+  # Runs significantly slower with --stress-wasm-code-gc, problematic
+  # especially in combination with tsan or other slow configurations.
+  'wasm/many-modules': [SKIP],
+}],  # variant == stress_js_bg_compile_wasm_code_gc
 
 ]

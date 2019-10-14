@@ -1228,6 +1228,10 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kArm64Sxtw:
       __ Sxtw(i.OutputRegister(), i.InputRegister32(0));
       break;
+    case kArm64Sbfx:
+      __ Sbfx(i.OutputRegister(), i.InputRegister(0), i.InputInt6(1),
+              i.InputInt6(2));
+      break;
     case kArm64Sbfx32:
       __ Sbfx(i.OutputRegister32(), i.InputRegister32(0), i.InputInt5(1),
               i.InputInt5(2));
@@ -1615,6 +1619,9 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       break;
     case kArm64Str:
       __ Str(i.InputOrZeroRegister64(0), i.MemoryOperand(1));
+      break;
+    case kArm64StrCompressTagged:
+      __ StoreTaggedField(i.InputOrZeroRegister64(0), i.MemoryOperand(1));
       break;
     case kArm64DecompressSigned: {
       __ DecompressTaggedSigned(i.OutputRegister(), i.InputRegister(0));
@@ -2126,7 +2133,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       break;
     }
     case kArm64I16x8ExtractLane: {
-      __ Smov(i.OutputRegister32(), i.InputSimd128Register(0).V8H(),
+      __ Umov(i.OutputRegister32(), i.InputSimd128Register(0).V8H(),
               i.InputInt8(1));
       break;
     }
@@ -2240,7 +2247,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       break;
     }
     case kArm64I8x16ExtractLane: {
-      __ Smov(i.OutputRegister32(), i.InputSimd128Register(0).V16B(),
+      __ Umov(i.OutputRegister32(), i.InputSimd128Register(0).V16B(),
               i.InputInt8(1));
       break;
     }
@@ -2423,6 +2430,11 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kArm64S8x16Concat: {
       __ Ext(i.OutputSimd128Register().V16B(), i.InputSimd128Register(0).V16B(),
              i.InputSimd128Register(1).V16B(), i.InputInt4(2));
+      break;
+    }
+    case kArm64S8x16Swizzle: {
+      __ Tbl(i.OutputSimd128Register().V16B(), i.InputSimd128Register(0).V16B(),
+             i.InputSimd128Register(1).V16B());
       break;
     }
     case kArm64S8x16Shuffle: {

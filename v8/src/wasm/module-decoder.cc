@@ -460,7 +460,7 @@ class ModuleDecoderImpl : public Decoder {
         DecodeSourceMappingURLSection();
         break;
       case kDebugInfoSectionCode:
-        module_->has_dwarf = true;
+        module_->source_map_url.assign("wasm://dwarf");
         consume_bytes(static_cast<uint32_t>(end_ - start_), ".debug_info");
         break;
       case kCompilationHintsSectionCode:
@@ -1488,7 +1488,7 @@ class ModuleDecoderImpl : public Decoder {
     WasmInitExpr expr;
     uint32_t len = 0;
     switch (opcode) {
-      case kExprGetGlobal: {
+      case kExprGlobalGet: {
         GlobalIndexImmediate<Decoder::kValidate> imm(this, pc() - 1);
         if (module->globals.size() <= imm.index) {
           error("global index is out of bounds");

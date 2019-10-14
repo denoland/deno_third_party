@@ -108,6 +108,12 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kIA32F64x2Sub:
     case kIA32F64x2Mul:
     case kIA32F64x2Div:
+    case kIA32F64x2Min:
+    case kIA32F64x2Max:
+    case kIA32F64x2Eq:
+    case kIA32F64x2Ne:
+    case kIA32F64x2Lt:
+    case kIA32F64x2Le:
     case kSSEF32x4Splat:
     case kAVXF32x4Splat:
     case kSSEF32x4ExtractLane:
@@ -307,6 +313,7 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kAVXS128Xor:
     case kSSES128Select:
     case kAVXS128Select:
+    case kIA32S8x16Swizzle:
     case kIA32S8x16Shuffle:
     case kIA32S32x4Swizzle:
     case kIA32S32x4Shuffle:
