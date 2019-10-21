@@ -38,7 +38,6 @@ import collections
 import contextlib
 from datetime import datetime
 from datetime import timedelta
-from functools import partial
 import itertools
 import json
 import logging
@@ -91,6 +90,9 @@ gerrit_instances = [
     'short_url_protocol': 'https',
   },
   {
+    'url': 'dawn-review.googlesource.com',
+  },
+  {
     'url': 'pdfium-review.googlesource.com',
   },
   {
@@ -107,13 +109,14 @@ monorail_projects = {
     'shorturl': 'crbug.com',
     'short_url_protocol': 'https',
   },
+  'dawn': {},
   'google-breakpad': {},
   'gyp': {},
-  'skia': {},
   'pdfium': {
     'shorturl': 'crbug.com/pdfium',
     'short_url_protocol': 'https',
   },
+  'skia': {},
   'v8': {
     'shorturl': 'crbug.com/v8',
     'short_url_protocol': 'https',
@@ -290,8 +293,7 @@ class MyActivity(object):
 
   def monorail_get_auth_http(self):
     auth_config = auth.extract_auth_config_from_options(self.options)
-    authenticator = auth.get_authenticator_for_host(
-        'bugs.chromium.org', auth_config)
+    authenticator = auth.get_authenticator(auth_config)
     # Manually use a long timeout (10m); for some users who have a
     # long history on the issue tracker, whatever the default timeout
     # is is reached.
@@ -601,7 +603,7 @@ class MyActivity(object):
       project, issue_id = issue_uid.split(':')
       missing_issues_by_project[project].append(issue_id)
 
-    for project, issue_ids in missing_issues_by_project.iteritems():
+    for project, issue_ids in missing_issues_by_project.items():
       self.referenced_issues += self.monorail_get_issues(project, issue_ids)
 
   def print_issues(self):
@@ -674,7 +676,7 @@ class MyActivity(object):
         if not url:
           raise Exception('Dumped item %s does not specify url' % item)
         output[url] = dict(
-            (k, v) for k,v in item.iteritems() if k not in ignore_keys)
+            (k, v) for k,v in item.items() if k not in ignore_keys)
       return output
 
     class PythonObjectEncoder(json.JSONEncoder):

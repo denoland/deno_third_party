@@ -24,8 +24,6 @@ try:
 except ImportError:  # For Py3 compatibility
   import urllib.parse as urlparse
 
-import zipfile
-
 from download_from_google_storage import Gsutil
 import gclient_utils
 import subcommand
@@ -71,7 +69,7 @@ def exponential_backoff_retry(fn, excs=(Exception,), name=None, count=10,
   Returns: The return value of the successful fn.
   """
   printerr = printerr or logging.warning
-  for i in xrange(count):
+  for i in range(count):
     try:
       return fn()
     except excs as e:
@@ -270,7 +268,13 @@ class Mirror(object):
   def UrlToCacheDir(url):
     """Convert a git url to a normalized form for the cache dir path."""
     parsed = urlparse.urlparse(url)
-    norm_url = parsed.netloc + parsed.path
+    # Get rid of the port. This is only needed for Windows tests, since tests
+    # serve git from git://localhost:port/git, but Windows doesn't like ':' in
+    # paths.
+    netloc = parsed.netloc
+    if ':' in netloc:
+      netloc = netloc.split(':', 1)[0]
+    norm_url = netloc + parsed.path
     if norm_url.endswith('.git'):
       norm_url = norm_url[:-len('.git')]
 
@@ -572,7 +576,7 @@ class Mirror(object):
       if not ignore_lock:
         lockfile.unlock()
 
-  def update_bootstrap(self, prune=False):
+  def update_bootstrap(self, prune=False, gc_aggressive=False):
     # The folder is <git number>
     gen_number = subprocess.check_output(
         [self.git_exe, 'number', 'master'], cwd=self.mirror_path).strip()
@@ -592,7 +596,10 @@ class Mirror(object):
       return
 
     # Run Garbage Collect to compress packfile.
-    self.RunGit(['gc', '--prune=all'])
+    gc_args = ['gc', '--prune=all']
+    if gc_aggressive:
+      gc_args.append('--aggressive')
+    self.RunGit(gc_args)
 
     gsutil.call('-m', 'cp', '-r', src_name, dest_prefix)
 
@@ -699,18 +706,27 @@ def CMDupdate_bootstrap(parser, args):
     print('Sorry, update bootstrap will not work on Windows.', file=sys.stderr)
     return 1
 
+  parser.add_option('--skip-populate', action='store_true',
+                    help='Skips "populate" step if mirror already exists.')
+  parser.add_option('--gc-aggressive', action='store_true',
+                    help='Run aggressive repacking of the repo.')
   parser.add_option('--prune', action='store_true',
                     help='Prune all other cached bundles of the same repo.')
 
-  # First, we need to ensure the cache is populated.
   populate_args = args[:]
-  CMDpopulate(parser, populate_args)
+  options, args = parser.parse_args(args)
+  url = args[0]
+  mirror = Mirror(url)
+  if not options.skip_populate or not mirror.exists():
+    CMDpopulate(parser, populate_args)
+  else:
+    print('Skipped populate step.')
 
   # Get the repo directory.
   options, args = parser.parse_args(args)
   url = args[0]
   mirror = Mirror(url)
-  mirror.update_bootstrap(options.prune)
+  mirror.update_bootstrap(options.prune, options.gc_aggressive)
   return 0
 
 
@@ -729,6 +745,9 @@ def CMDpopulate(parser, args):
   parser.add_option('--ignore_locks', '--ignore-locks',
                     action='store_true',
                     help='Don\'t try to lock repository')
+  parser.add_option('--break-locks',
+                    action='store_true',
+                    help='Break any existing lock instead of just ignoring it')
   parser.add_option('--reset-fetch-config', action='store_true', default=False,
                     help='Reset the fetch config before populating the cache.')
 
@@ -738,6 +757,8 @@ def CMDpopulate(parser, args):
   url = args[0]
 
   mirror = Mirror(url, refs=options.ref)
+  if options.break_locks:
+    mirror.unlock()
   kwargs = {
       'verbose': options.verbose,
       'shallow': options.shallow,

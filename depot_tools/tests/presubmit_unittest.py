@@ -1375,6 +1375,13 @@ class ChangeUnittest(PresubmitTestsBase):
     self.assertEqual('WHIZ=bang\nbar\nFOO=baz', change.FullDescriptionText())
     self.assertEqual({'WHIZ': 'bang', 'FOO': 'baz'}, change.tags)
 
+  def testBugFromDescription_FixedAndBugGetDeduped(self):
+    change = presubmit.Change(
+        '', 'foo\n\nChange-Id: asdf\nBug: 1, 2\nFixed:2, 1 ',
+        self.fake_root_dir, [], 0, 0, '')
+    self.assertEqual(['1', '2'], change.BugsFromDescription())
+    self.assertEqual('1,2', change.BUG)
+
   def testBugsFromDescription_MixedTagsAndFooters(self):
     change = presubmit.Change(
         '', 'foo\nBUG=2,1\n\nChange-Id: asdf\nBug: 3, 6',
@@ -1384,10 +1391,17 @@ class ChangeUnittest(PresubmitTestsBase):
 
   def testBugsFromDescription_MultipleFooters(self):
     change = presubmit.Change(
-        '', 'foo\n\nChange-Id: asdf\nBug: 1\nBug:4,  6',
+        '', 'foo\n\nChange-Id: asdf\nBug: 1\nBug:4,  6\nFixed: 7',
         self.fake_root_dir, [], 0, 0, '')
-    self.assertEqual(['1', '4', '6'], change.BugsFromDescription())
-    self.assertEqual('1,4,6', change.BUG)
+    self.assertEqual(['1', '4', '6', '7'], change.BugsFromDescription())
+    self.assertEqual('1,4,6,7', change.BUG)
+
+  def testBugFromDescription_OnlyFixed(self):
+    change = presubmit.Change(
+        '', 'foo\n\nChange-Id: asdf\nFixed:1, 2',
+        self.fake_root_dir, [], 0, 0, '')
+    self.assertEqual(['1', '2'], change.BugsFromDescription())
+    self.assertEqual('1,2', change.BUG)
 
   def testReviewersFromDescription(self):
     change = presubmit.Change(
@@ -1568,6 +1582,11 @@ class CannedChecksUnittest(PresubmitTestsBase):
                          presubmit.OutputApi.PresubmitNotifyResult,
                          False)
 
+  def testCannedCheckChangeHasNoUnwantedTags(self):
+    self.DescriptionTest(presubmit_canned_checks.CheckChangeHasNoUnwantedTags,
+                         'Foo\n', 'Foo\nFIXED=1234',
+                         presubmit.OutputApi.PresubmitError, False)
+
   def testCheckChangeHasDescription(self):
     self.DescriptionTest(presubmit_canned_checks.CheckChangeHasDescription,
                          'Bleh', '',
@@ -1623,8 +1642,8 @@ class CannedChecksUnittest(PresubmitTestsBase):
                      presubmit.OutputApi.PresubmitPromptWarning)
 
   @mock.patch('git_cl.Changelist')
-  @mock.patch('auth.get_authenticator_for_host')
-  def testCannedCheckChangedLUCIConfigs(self, mockGAFH, mockChangelist):
+  @mock.patch('auth.get_authenticator')
+  def testCannedCheckChangedLUCIConfigs(self, mockGetAuth, mockChangelist):
     affected_file1 = mock.MagicMock(presubmit.GitAffectedFile)
     affected_file1.LocalPath.return_value = 'foo.cfg'
     affected_file1.NewContents.return_value = ['test', 'foo']
@@ -1632,7 +1651,7 @@ class CannedChecksUnittest(PresubmitTestsBase):
     affected_file2.LocalPath.return_value = 'bar.cfg'
     affected_file2.NewContents.return_value = ['test', 'bar']
 
-    mockGAFH().get_access_token().token = 123
+    mockGetAuth().get_access_token().token = 123
 
     host = 'https://host.com'
     branch = 'branch'
@@ -1903,7 +1922,7 @@ the current line as well!
         "#!/bin/python\n"
         "# Copyright (c) 2037 Nobody.\n"
         "# All Rights Reserved.\n"
-        "print 'foo'\n"
+        "print('foo')\n"
     )
     license_text = (
         r".*? Copyright \(c\) 2037 Nobody." "\n"
@@ -1916,7 +1935,7 @@ the current line as well!
         "#!/bin/python\n"
         "# Copyright (c) 2037 Nobody.\n"
         "# All Rights Reserved.\n"
-        "print 'foo'\n"
+        "print('foo')\n"
     )
     license_text = (
         r".*? Copyright \(c\) 0007 Nobody." "\n"
@@ -1930,7 +1949,7 @@ the current line as well!
         "#!/bin/python\n"
         "# Copyright (c) 2037 Nobody.\n"
         "# All Rights Reserved.\n"
-        "print 'foo'\n"
+        "print('foo')\n"
     )
     license_text = (
         r".*? Copyright \(c\) 0007 Nobody." "\n"
@@ -2211,7 +2230,7 @@ the current line as well!
 
     affected_file.LocalPath.return_value = modified_file
     change.AffectedFiles.return_value = [affected_file]
-    if not is_committing or (not tbr and issue) or ('OWNERS' in modified_file):
+    if not is_committing or issue or ('OWNERS' in modified_file):
       change.OriginalOwnersFiles.return_value = {}
       if issue and not response:
         response = {
@@ -2496,13 +2515,19 @@ the current line as well!
 
   def testCannedCheckOwners_TBROWNERSFile(self):
     self.AssertOwnersWorks(
-        tbr=True, uncovered_files=set(['foo']),
+        tbr=True,
+        uncovered_files=set(['foo/OWNERS']),
         modified_file='foo/OWNERS',
-        expected_output=re.compile(
-            'Missing LGTM from an OWNER for these files:\n'
-            '    foo\n'
-            '.*The CL affects an OWNERS file, so TBR will be ignored.',
-            re.MULTILINE))
+        expected_output='Missing LGTM from an OWNER for these files:\n'
+        '    foo/OWNERS\n'
+        'TBR for OWNERS files are ignored.\n')
+
+  def testCannedCheckOwners_TBRNonOWNERSFile(self):
+    self.AssertOwnersWorks(
+        tbr=True,
+        uncovered_files=set(['foo/xyz.cc']),
+        modified_file='foo/OWNERS',
+        expected_output='--tbr was specified, skipping OWNERS check\n')
 
   def testCannedCheckOwners_WithoutOwnerLGTM(self):
     self.AssertOwnersWorks(uncovered_files=set(['foo']),

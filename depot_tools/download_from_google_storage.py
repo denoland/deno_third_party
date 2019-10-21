@@ -38,7 +38,8 @@ GSUTIL_DEFAULT_PATH = os.path.join(
 PLATFORM_MAPPING = {
     'cygwin': 'win',
     'darwin': 'mac',
-    'linux2': 'linux',
+    'linux': 'linux',  # Python 3.3+.
+    'linux2': 'linux',  # Python < 3.3 uses "linux2" / "linux3".
     'win32': 'win',
     'aix6': 'aix',
     'aix7': 'aix',
@@ -174,7 +175,7 @@ def enumerate_input(input_filename, directory, recursive, ignore_errors, output,
     with open(input_filename, 'rb') as f:
       sha1_match = re.match(b'^([A-Za-z0-9]{40})$', f.read(1024).rstrip())
       if sha1_match:
-        yield (sha1_match.groups(1)[0], output)
+        yield (sha1_match.groups(1)[0].decode('utf-8'), output)
         return
     if not ignore_errors:
       raise InvalidFileError('No sha1 sum found in %s.' % input_filename)
@@ -213,7 +214,10 @@ def enumerate_input(input_filename, directory, recursive, ignore_errors, output,
         with open(full_path, 'rb') as f:
           sha1_match = re.match(b'^([A-Za-z0-9]{40})$', f.read(1024).rstrip())
         if sha1_match:
-          yield (sha1_match.groups(1)[0], full_path.replace('.sha1', ''))
+          yield (
+              sha1_match.groups(1)[0].decode('utf-8'),
+              full_path.replace('.sha1', '')
+          )
         else:
           if not ignore_errors:
             raise InvalidFileError('No sha1 sum found in %s.' % filename)
@@ -252,7 +256,7 @@ def _downloader_worker_thread(thread_num, q, force, base_url,
         if get_sha1(output_filename) == input_sha1_sum:
           continue
     # Check if file exists.
-    file_url = '%s/%s' % (base_url, input_sha1_sum.decode())
+    file_url = '%s/%s' % (base_url, input_sha1_sum)
     (code, _, err) = gsutil.check_call('ls', file_url)
     if code != 0:
       if code == 404:
@@ -336,7 +340,7 @@ def _downloader_worker_thread(thread_num, q, force, base_url,
       if code != 0:
         out_q.put('%d> %s' % (thread_num, err.decode()))
         ret_codes.put((code, err.decode()))
-      elif re.search(r'executable:\s*1', out):
+      elif re.search(r'executable:\s*1', out.decode()):
         st = os.stat(output_filename)
         os.chmod(output_filename, st.st_mode | stat.S_IEXEC)
 

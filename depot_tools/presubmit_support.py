@@ -90,11 +90,8 @@ class CommandData(object):
 # Before a SIGINT is seen, wait(p) will simply call p.wait() and
 # return the result. Once a SIGINT has been seen (in the main process
 # or a subprocess, including the one the current call is waiting for),
-# wait(p) will call p.terminate() and raise ProcessWasInterrupted.
+# wait(p) will call p.terminate().
 class SigintHandler(object):
-  class ProcessWasInterrupted(Exception):
-    pass
-
   sigint_returncodes = {-signal.SIGINT,  # Unix
                         -1073741510,     # Windows
                         }
@@ -102,7 +99,7 @@ class SigintHandler(object):
     self.__lock = threading.Lock()
     self.__processes = set()
     self.__got_sigint = False
-    signal.signal(signal.SIGINT, lambda signal_num, frame: self.interrupt())
+    self.__previous_signal = signal.signal(signal.SIGINT, self.interrupt)
 
   def __on_sigint(self):
     self.__got_sigint = True
@@ -112,9 +109,10 @@ class SigintHandler(object):
       except OSError:
         pass
 
-  def interrupt(self):
+  def interrupt(self, signal_num, frame):
     with self.__lock:
       self.__on_sigint()
+    self.__previous_signal(signal_num, frame)
 
   def got_sigint(self):
     with self.__lock:
@@ -131,8 +129,6 @@ class SigintHandler(object):
       self.__processes.discard(p)
       if code in self.sigint_returncodes:
         self.__on_sigint()
-      if self.__got_sigint:
-        raise self.ProcessWasInterrupted
     return stdout, stderr
 
 sigint_handler = SigintHandler()
@@ -390,7 +386,7 @@ class GerritAccessor(object):
 
     # Find revision info for the patchset we want.
     if patchset is not None:
-      for rev, rev_info in info['revisions'].iteritems():
+      for rev, rev_info in info['revisions'].items():
         if str(rev_info['_number']) == str(patchset):
           break
       else:
@@ -1053,8 +1049,8 @@ class Change(object):
     """Returns all bugs referenced in the commit description."""
     tags = [b.strip() for b in self.tags.get('BUG', '').split(',') if b.strip()]
     footers = []
-    unsplit_footers = git_footers.parse_footers(self._full_description).get(
-        'Bug', [])
+    parsed = git_footers.parse_footers(self._full_description)
+    unsplit_footers = parsed.get('Bug', []) + parsed.get('Fixed', [])
     for unsplit_footer in unsplit_footers:
       footers += [b.strip() for b in unsplit_footer.split(',')]
     return sorted(set(tags + footers))
@@ -1283,10 +1279,10 @@ class GetPostUploadExecuter(object):
 def _MergeMasters(masters1, masters2):
   """Merges two master maps. Merges also the tests of each builder."""
   result = {}
-  for (master, builders) in itertools.chain(masters1.iteritems(),
-                                            masters2.iteritems()):
+  for (master, builders) in itertools.chain(masters1.items(),
+                                            masters2.items()):
     new_builders = result.setdefault(master, {})
-    for (builder, tests) in builders.iteritems():
+    for (builder, tests) in builders.items():
       new_builders.setdefault(builder, set([])).update(tests)
   return result
 
@@ -1333,7 +1329,7 @@ def DoGetTryMasters(change,
         presubmit_script, filename, project, change))
 
   # Make sets to lists again for later JSON serialization.
-  for builders in results.itervalues():
+  for builders in results.values():
     for builder in builders:
       builders[builder] = list(builders[builder])
 
@@ -1663,7 +1659,7 @@ def canned_check_filter(method_names):
       setattr(presubmit_canned_checks, method_name, lambda *_a, **_kw: [])
     yield
   finally:
-    for name, method in filtered.iteritems():
+    for name, method in filtered.items():
       setattr(presubmit_canned_checks, name, method)
 
 
