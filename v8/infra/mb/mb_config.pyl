@@ -365,7 +365,7 @@
       'release_bot', 'simulate_arm64'],
     'release_simulate_arm64_pointer_compression': [
       'release_bot', 'simulate_arm64', 'dcheck_always_on',
-      'v8_enable_slow_dchecks', 'v8_disable_pointer_compression'],
+      'v8_enable_slow_dchecks', 'v8_enable_pointer_compression'],
     'release_simulate_arm64_msan': [
       'release_bot', 'simulate_arm64', 'msan'],
     'release_simulate_arm64_msan_minimal_symbols': [
@@ -792,10 +792,6 @@
       'gn_args': 'v8_enable_pointer_compression=true',
     },
 
-    'v8_disable_pointer_compression': {
-      'gn_args': 'v8_enable_pointer_compression=false',
-    },
-
     'v8_enable_test_features': {
       'gn_args': 'v8_enable_test_features=true',
     },
@@ -829,9 +825,9 @@
       'gn_args': 'v8_use_external_startup_data=false',
     },
 
-    'v8_snapshot_none': {
-      'gn_args': 'v8_use_snapshot=false',
-    },
+    # TODO(https://crbug.com/v8/8531): Remove this config and all bots, since
+    #                                  no-snapshot was deprecated and removed.
+    'v8_snapshot_none': {},
 
     'v8_verify_heap': {
       'gn_args': 'v8_enable_verify_heap=true',

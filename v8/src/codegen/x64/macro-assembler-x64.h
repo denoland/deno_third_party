@@ -152,10 +152,26 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   AVX_OP(Roundsd, roundsd)
   AVX_OP(Sqrtss, sqrtss)
   AVX_OP(Sqrtsd, sqrtsd)
+  AVX_OP(Sqrtpd, sqrtpd)
   AVX_OP(Ucomiss, ucomiss)
   AVX_OP(Ucomisd, ucomisd)
   AVX_OP(Pshufb, pshufb)
   AVX_OP(Paddusb, paddusb)
+  AVX_OP(Psignd, psignd)
+  AVX_OP(Pand, pand)
+  AVX_OP(Por, por)
+  AVX_OP(Pxor, pxor)
+  AVX_OP(Psubd, psubd)
+  AVX_OP(Pslld, pslld)
+  AVX_OP(Psrad, psrad)
+  AVX_OP(Psrld, psrld)
+  AVX_OP(Paddd, paddd)
+  AVX_OP(Pmulld, pmulld)
+  AVX_OP(Pminsd, pminsd)
+  AVX_OP(Pminud, pminud)
+  AVX_OP(Pmaxsd, pmaxsd)
+  AVX_OP(Pmaxud, pmaxud)
+  AVX_OP(Pcmpgtd, pcmpgtd)
 
 #undef AVX_OP
 
@@ -369,8 +385,14 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
 
   // Non-SSE2 instructions.
   void Pextrd(Register dst, XMMRegister src, int8_t imm8);
+  void Pextrw(Register dst, XMMRegister src, int8_t imm8);
+  void Pextrb(Register dst, XMMRegister src, int8_t imm8);
   void Pinsrd(XMMRegister dst, Register src, int8_t imm8);
   void Pinsrd(XMMRegister dst, Operand src, int8_t imm8);
+  void Pinsrw(XMMRegister dst, Register src, int8_t imm8);
+  void Pinsrw(XMMRegister dst, Operand src, int8_t imm8);
+  void Pinsrb(XMMRegister dst, Register src, int8_t imm8);
+  void Pinsrb(XMMRegister dst, Operand src, int8_t imm8);
 
   void Psllq(XMMRegister dst, byte imm8);
   void Psrlq(XMMRegister dst, byte imm8);

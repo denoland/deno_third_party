@@ -372,7 +372,6 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   // own buffer. Otherwise it takes ownership of the provided buffer.
   explicit Assembler(const AssemblerOptions&,
                      std::unique_ptr<AssemblerBuffer> = {});
-  virtual ~Assembler() {}
 
   // GetCode emits any pending (non-emitted) code and fills the descriptor desc.
   static constexpr int kNoHandlerTable = 0;
@@ -513,6 +512,7 @@ class V8_EXPORT_PRIVATE Assembler : public AssemblerBase {
   void movzx_w(Register dst, Operand src);
 
   void movq(XMMRegister dst, Operand src);
+
   // Conditional moves
   void cmov(Condition cc, Register dst, Register src) {
     cmov(cc, dst, Operand(src));
