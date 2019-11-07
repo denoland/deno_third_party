@@ -722,7 +722,7 @@ bool ScopeIterator::VisitContextLocals(const Visitor& visitor,
   for (int i = 0; i < scope_info->ContextLocalCount(); ++i) {
     Handle<String> name(scope_info->ContextLocalName(i), isolate_);
     if (ScopeInfo::VariableIsSynthetic(*name)) continue;
-    int context_index = Context::MIN_CONTEXT_SLOTS + i;
+    int context_index = scope_info->ContextHeaderLength() + i;
     Handle<Object> value(context->get(context_index), isolate_);
     // Reflect variables under TDZ as undefined in scope object.
     if (value->IsTheHole(isolate_)) continue;
@@ -771,6 +771,8 @@ bool ScopeIterator::VisitLocals(const Visitor& visitor, Mode mode) const {
         UNREACHABLE();
         break;
 
+      case VariableLocation::REPL_GLOBAL:
+        // REPL declared variables are ignored for now.
       case VariableLocation::UNALLOCATED:
         continue;
 
@@ -927,6 +929,10 @@ bool ScopeIterator::SetLocalVariableValue(Handle<String> variable_name,
           // Drop assignments to unallocated locals.
           DCHECK(var->is_this() ||
                  *variable_name == ReadOnlyRoots(isolate_).arguments_string());
+          return false;
+
+        case VariableLocation::REPL_GLOBAL:
+          // Assignments to REPL declared variables are ignored for now.
           return false;
 
         case VariableLocation::PARAMETER: {

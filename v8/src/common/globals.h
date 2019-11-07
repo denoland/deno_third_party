@@ -283,6 +283,8 @@ constexpr int kMaxRegularHeapObjectSize = (1 << (kPageSizeBits - 1));
 constexpr int kBitsPerByte = 8;
 constexpr int kBitsPerByteLog2 = 3;
 constexpr int kBitsPerSystemPointer = kSystemPointerSize * kBitsPerByte;
+constexpr int kBitsPerSystemPointerLog2 =
+    kSystemPointerSizeLog2 + kBitsPerByteLog2;
 constexpr int kBitsPerInt = kIntSize * kBitsPerByte;
 
 // IEEE 754 single precision floating point number bit layout.
@@ -598,7 +600,6 @@ class JSReceiver;
 class JSArray;
 class JSFunction;
 class JSObject;
-class LargeObjectSpace;
 class MacroAssembler;
 class Map;
 class MapSpace;
@@ -616,6 +617,7 @@ class NewSpace;
 class NewLargeObjectSpace;
 class NumberDictionary;
 class Object;
+class OldLargeObjectSpace;
 template <HeapObjectReferenceType kRefType, typename StorageType>
 class TaggedImpl;
 class StrongTaggedValue;
@@ -628,7 +630,6 @@ class FullObjectSlot;
 class FullMaybeObjectSlot;
 class FullHeapObjectSlot;
 class OldSpace;
-class ParameterCount;
 class ReadOnlySpace;
 class RelocInfo;
 class Scope;
@@ -757,6 +758,17 @@ enum MinimumCapacity {
 
 enum GarbageCollector { SCAVENGER, MARK_COMPACTOR, MINOR_MARK_COMPACTOR };
 
+enum class LocalSpaceKind {
+  kNone,
+  kOffThreadSpace,
+  kCompactionSpaceForScavenge,
+  kCompactionSpaceForMarkCompact,
+  kCompactionSpaceForMinorMarkCompact,
+
+  kFirstCompactionSpace = kCompactionSpaceForScavenge,
+  kLastCompactionSpace = kCompactionSpaceForMinorMarkCompact,
+};
+
 enum Executability { NOT_EXECUTABLE, EXECUTABLE };
 
 enum VisitMode {
@@ -773,6 +785,12 @@ enum class BytecodeFlushMode {
   kDoNotFlushBytecode,
   kFlushBytecode,
   kStressFlushBytecode,
+};
+
+// Indicates whether a script should be parsed and compiled in REPL mode.
+enum class REPLMode {
+  kYes,
+  kNo,
 };
 
 // Flag indicating whether code is built into the VM (one of the natives files).
@@ -1033,7 +1051,10 @@ constexpr uint64_t kHoleNanInt64 =
     (static_cast<uint64_t>(kHoleNanUpper32) << 32) | kHoleNanLower32;
 
 // ES6 section 20.1.2.6 Number.MAX_SAFE_INTEGER
-constexpr double kMaxSafeInteger = 9007199254740991.0;  // 2^53-1
+constexpr uint64_t kMaxSafeIntegerUint64 = 9007199254740991;  // 2^53-1
+constexpr double kMaxSafeInteger = static_cast<double>(kMaxSafeIntegerUint64);
+
+constexpr double kMaxUInt32Double = double{kMaxUInt32};
 
 // The order of this enum has to be kept in sync with the predicates below.
 enum class VariableMode : uint8_t {
@@ -1181,7 +1202,17 @@ enum VariableLocation : uint8_t {
   // A named slot in a module's export table.
   MODULE,
 
-  kLastVariableLocation = MODULE
+  // An indexed slot in a script context. index() is the variable
+  // index in the context object on the heap, starting at 0.
+  // Important: REPL_GLOBAL variables from different scripts with the
+  //            same name share a single script context slot. Every
+  //            script context will reserve a slot, but only one will be used.
+  // REPL_GLOBAL variables are stored in script contexts, but accessed like
+  // globals, i.e. they always require a lookup at runtime to find the right
+  // script context.
+  REPL_GLOBAL,
+
+  kLastVariableLocation = REPL_GLOBAL
 };
 
 // ES6 specifies declarative environment records with mutable and immutable

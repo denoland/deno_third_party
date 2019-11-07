@@ -106,6 +106,7 @@ inline bool NeedsBoundsCheck(CheckBounds check_bounds) {
 enum class StoreToObjectWriteBarrier { kNone, kMap, kFull };
 
 class AccessCheckNeeded;
+class BigIntBase;
 class BigIntWrapper;
 class ClassBoilerplate;
 class BooleanWrapper;
@@ -951,14 +952,6 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   }
 
   template <class... TArgs>
-  TNode<Object> CallRuntimeWithCEntry(Runtime::FunctionId function,
-                                      TNode<Code> centry,
-                                      SloppyTNode<Object> context,
-                                      TArgs... args) {
-    return CallRuntimeWithCEntryImpl(function, centry, context, {args...});
-  }
-
-  template <class... TArgs>
   void TailCallRuntime(Runtime::FunctionId function,
                        SloppyTNode<Object> context, TArgs... args) {
     int argc = static_cast<int>(sizeof...(args));
@@ -972,17 +965,6 @@ class V8_EXPORT_PRIVATE CodeAssembler {
                        SloppyTNode<Object> context, TArgs... args) {
     return TailCallRuntimeImpl(function, arity, context,
                                {implicit_cast<SloppyTNode<Object>>(args)...});
-  }
-
-  template <class... TArgs>
-  void TailCallRuntimeWithCEntry(Runtime::FunctionId function,
-                                 TNode<Code> centry, TNode<Object> context,
-                                 TArgs... args) {
-    int argc = sizeof...(args);
-    TNode<Int32T> arity = Int32Constant(argc);
-    return TailCallRuntimeWithCEntryImpl(
-        function, arity, centry, context,
-        {implicit_cast<SloppyTNode<Object>>(args)...});
   }
 
   //
@@ -1103,6 +1085,18 @@ class V8_EXPORT_PRIVATE CodeAssembler {
     return CallCFunction(function, return_type, {cargs...});
   }
 
+  // Call to a C function without a function discriptor on AIX.
+  template <class... CArgs>
+  Node* CallCFunctionWithoutFunctionDescriptor(Node* function,
+                                               MachineType return_type,
+                                               CArgs... cargs) {
+    static_assert(v8::internal::conjunction<
+                      std::is_convertible<CArgs, CFunctionArg>...>::value,
+                  "invalid argument types");
+    return CallCFunctionWithoutFunctionDescriptor(function, return_type,
+                                                  {cargs...});
+  }
+
   // Call to a C function, while saving/restoring caller registers.
   template <class... CArgs>
   Node* CallCFunctionWithCallerSavedRegisters(Node* function,
@@ -1151,6 +1145,10 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   Node* CallCFunction(Node* function, MachineType return_type,
                       std::initializer_list<CFunctionArg> args);
 
+  Node* CallCFunctionWithoutFunctionDescriptor(
+      Node* function, MachineType return_type,
+      std::initializer_list<CFunctionArg> args);
+
   Node* CallCFunctionWithCallerSavedRegisters(
       Node* function, MachineType return_type, SaveFPRegsMode mode,
       std::initializer_list<CFunctionArg> args);
@@ -1159,18 +1157,9 @@ class V8_EXPORT_PRIVATE CodeAssembler {
                                 TNode<Object> context,
                                 std::initializer_list<TNode<Object>> args);
 
-  TNode<Object> CallRuntimeWithCEntryImpl(
-      Runtime::FunctionId function, TNode<Code> centry, TNode<Object> context,
-      std::initializer_list<TNode<Object>> args);
-
   void TailCallRuntimeImpl(Runtime::FunctionId function, TNode<Int32T> arity,
                            TNode<Object> context,
                            std::initializer_list<TNode<Object>> args);
-
-  void TailCallRuntimeWithCEntryImpl(Runtime::FunctionId function,
-                                     TNode<Int32T> arity, TNode<Code> centry,
-                                     TNode<Object> context,
-                                     std::initializer_list<TNode<Object>> args);
 
   void TailCallStubImpl(const CallInterfaceDescriptor& descriptor,
                         TNode<Code> target, TNode<Object> context,

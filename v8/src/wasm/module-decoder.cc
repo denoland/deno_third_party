@@ -460,7 +460,10 @@ class ModuleDecoderImpl : public Decoder {
         DecodeSourceMappingURLSection();
         break;
       case kDebugInfoSectionCode:
-        module_->source_map_url.assign("wasm://dwarf");
+        // If there is an explicit source map, prefer it over DWARF info.
+        if (!has_seen_unordered_section(kSourceMappingURLSectionCode)) {
+          module_->source_map_url.assign("wasm://dwarf");
+        }
         consume_bytes(static_cast<uint32_t>(end_ - start_), ".debug_info");
         break;
       case kCompilationHintsSectionCode:
@@ -963,7 +966,9 @@ class ModuleDecoderImpl : public Decoder {
         // Function and local names will be decoded when needed.
         if (name_type == NameSectionKindCode::kModule) {
           WireBytesRef name = consume_string(&inner, false, "module name");
-          if (inner.ok() && validate_utf8(&inner, name)) module_->name = name;
+          if (inner.ok() && validate_utf8(&inner, name)) {
+            module_->name = name;
+          }
         } else {
           inner.consume_bytes(name_payload_len, "name subsection payload");
         }
@@ -1635,6 +1640,12 @@ class ModuleDecoderImpl : public Decoder {
                 "Invalid type. Set --experimental-wasm-anyref to use 'AnyRef'");
         }
         return kWasmAnyRef;
+      case kLocalExnRef:
+        if (!enabled_features_.eh) {
+          error(pc_ - 1,
+                "Invalid type. Set --experimental-wasm-eh to use 'ExnRef'");
+        }
+        return kWasmExnRef;
       default:
         break;
     }

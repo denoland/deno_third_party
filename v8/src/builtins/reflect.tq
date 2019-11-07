@@ -12,7 +12,7 @@ namespace reflect {
   ReflectIsExtensible(js-implicit context: Context)(object: JSAny): JSAny {
     const objectJSReceiver = Cast<JSReceiver>(object)
         otherwise ThrowTypeError(kCalledOnNonObject, 'Reflect.isExtensible');
-    return object::ObjectIsExtensible(objectJSReceiver);
+    return object::ObjectIsExtensibleImpl(objectJSReceiver);
   }
 
   // ES6 section 26.1.12 Reflect.preventExtensions
@@ -37,7 +37,7 @@ namespace reflect {
     const objectJSReceiver = Cast<JSReceiver>(object)
         otherwise ThrowTypeError(kCalledOnNonObject, 'Reflect.setPrototypeOf');
     typeswitch (proto) {
-      case (proto: JSReceiver | Null): {
+      case (proto: JSReceiver|Null): {
         return object::ObjectSetPrototypeOfDontThrow(objectJSReceiver, proto);
       }
       case (JSAny): {
@@ -75,5 +75,13 @@ namespace reflect {
     const objectJSReceiver = Cast<JSReceiver>(object)
         otherwise ThrowTypeError(kCalledOnNonObject, 'Reflect.deleteProperty');
     return DeleteProperty(objectJSReceiver, key, kSloppy);
+  }
+
+  // ES section #sec-reflect.has
+  transitioning javascript builtin
+  ReflectHas(js-implicit context: Context)(object: JSAny, key: JSAny): JSAny {
+    const objectJSReceiver = Cast<JSReceiver>(object)
+        otherwise ThrowTypeError(kCalledOnNonObject, 'Reflect.has');
+    return HasProperty(objectJSReceiver, key);
   }
 }  // namespace reflect

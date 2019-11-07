@@ -133,7 +133,7 @@ void VisitRRIR(InstructionSelector* selector, ArchOpcode opcode, Node* node) {
   int32_t imm = OpParameter<int32_t>(node->op());
   selector->Emit(opcode, g.DefineAsRegister(node),
                  g.UseRegister(node->InputAt(0)), g.UseImmediate(imm),
-                 g.UseRegister(node->InputAt(1)));
+                 g.UseUniqueRegister(node->InputAt(1)));
 }
 
 template <IrOpcode::Value kOpcode, int kImmMin, int kImmMax,
@@ -909,11 +909,31 @@ void InstructionSelector::VisitWord32Xor(Node* node) {
 
 void InstructionSelector::VisitStackPointerGreaterThan(
     Node* node, FlagsContinuation* cont) {
-  Node* const value = node->InputAt(0);
-  InstructionCode opcode = kArchStackPointerGreaterThan;
+  StackCheckKind kind = StackCheckKindOf(node->op());
+  InstructionCode opcode =
+      kArchStackPointerGreaterThan | MiscField::encode(static_cast<int>(kind));
 
   ArmOperandGenerator g(this);
-  EmitWithContinuation(opcode, g.UseRegister(value), cont);
+
+  // No outputs.
+  InstructionOperand* const outputs = nullptr;
+  const int output_count = 0;
+
+  // Applying an offset to this stack check requires a temp register. Offsets
+  // are only applied to the first stack check. If applying an offset, we must
+  // ensure the input and temp registers do not alias, thus kUniqueRegister.
+  InstructionOperand temps[] = {g.TempRegister()};
+  const int temp_count = (kind == StackCheckKind::kJSFunctionEntry) ? 1 : 0;
+  const auto register_mode = (kind == StackCheckKind::kJSFunctionEntry)
+                                 ? OperandGenerator::kUniqueRegister
+                                 : OperandGenerator::kRegister;
+
+  Node* const value = node->InputAt(0);
+  InstructionOperand inputs[] = {g.UseRegisterWithMode(value, register_mode)};
+  static constexpr int input_count = arraysize(inputs);
+
+  EmitWithContinuation(opcode, output_count, outputs, input_count, inputs,
+                       temp_count, temps, cont);
 }
 
 namespace {
@@ -2382,6 +2402,9 @@ void InstructionSelector::VisitWord32AtomicPairCompareExchange(Node* node) {
   V(I8x16)
 
 #define SIMD_UNOP_LIST(V)                               \
+  V(F64x2Abs, kArmF64x2Abs)                             \
+  V(F64x2Neg, kArmF64x2Neg)                             \
+  V(F64x2Sqrt, kArmF64x2Sqrt)                           \
   V(F32x4SConvertI32x4, kArmF32x4SConvertI32x4)         \
   V(F32x4UConvertI32x4, kArmF32x4UConvertI32x4)         \
   V(F32x4Abs, kArmF32x4Abs)                             \
@@ -2421,6 +2444,14 @@ void InstructionSelector::VisitWord32AtomicPairCompareExchange(Node* node) {
   V(I8x16ShrU)
 
 #define SIMD_BINOP_LIST(V)                      \
+  V(F64x2Add, kArmF64x2Add)                     \
+  V(F64x2Sub, kArmF64x2Sub)                     \
+  V(F64x2Mul, kArmF64x2Mul)                     \
+  V(F64x2Div, kArmF64x2Div)                     \
+  V(F64x2Eq, kArmF64x2Eq)                       \
+  V(F64x2Ne, kArmF64x2Ne)                       \
+  V(F64x2Lt, kArmF64x2Lt)                       \
+  V(F64x2Le, kArmF64x2Le)                       \
   V(F32x4Add, kArmF32x4Add)                     \
   V(F32x4AddHoriz, kArmF32x4AddHoriz)           \
   V(F32x4Sub, kArmF32x4Sub)                     \
@@ -2498,6 +2529,7 @@ void InstructionSelector::VisitS128Zero(Node* node) {
     VisitRR(this, kArm##Type##Splat, node);                  \
   }
 SIMD_TYPE_LIST(SIMD_VISIT_SPLAT)
+SIMD_VISIT_SPLAT(F64x2)
 #undef SIMD_VISIT_SPLAT
 
 #define SIMD_VISIT_EXTRACT_LANE(Type)                              \
@@ -2505,6 +2537,7 @@ SIMD_TYPE_LIST(SIMD_VISIT_SPLAT)
     VisitRRI(this, kArm##Type##ExtractLane, node);                 \
   }
 SIMD_TYPE_LIST(SIMD_VISIT_EXTRACT_LANE)
+SIMD_VISIT_EXTRACT_LANE(F64x2)
 #undef SIMD_VISIT_EXTRACT_LANE
 
 #define SIMD_VISIT_REPLACE_LANE(Type)                              \
@@ -2512,6 +2545,7 @@ SIMD_TYPE_LIST(SIMD_VISIT_EXTRACT_LANE)
     VisitRRIR(this, kArm##Type##ReplaceLane, node);                \
   }
 SIMD_TYPE_LIST(SIMD_VISIT_REPLACE_LANE)
+SIMD_VISIT_REPLACE_LANE(F64x2)
 #undef SIMD_VISIT_REPLACE_LANE
 #undef SIMD_TYPE_LIST
 
@@ -2707,6 +2741,14 @@ void InstructionSelector::VisitS8x16Shuffle(Node* node) {
        g.UseImmediate(Pack4Lanes(shuffle + 4)),
        g.UseImmediate(Pack4Lanes(shuffle + 8)),
        g.UseImmediate(Pack4Lanes(shuffle + 12)));
+}
+
+void InstructionSelector::VisitS8x16Swizzle(Node* node) {
+  ArmOperandGenerator g(this);
+  // We don't want input 0 (the table) to be the same as output, since we will
+  // modify output twice (low and high), and need to keep the table the same.
+  Emit(kArmS8x16Swizzle, g.DefineAsRegister(node),
+       g.UseUniqueRegister(node->InputAt(0)), g.UseRegister(node->InputAt(1)));
 }
 
 void InstructionSelector::VisitSignExtendWord8ToInt32(Node* node) {

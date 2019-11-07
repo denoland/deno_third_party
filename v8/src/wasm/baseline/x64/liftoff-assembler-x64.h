@@ -684,8 +684,7 @@ namespace liftoff {
 template <ValueType type>
 inline void EmitShiftOperation(LiftoffAssembler* assm, Register dst,
                                Register src, Register amount,
-                               void (Assembler::*emit_shift)(Register),
-                               LiftoffRegList pinned) {
+                               void (Assembler::*emit_shift)(Register)) {
   // If dst is rcx, compute into the scratch register first, then move to rcx.
   if (dst == rcx) {
     assm->Move(kScratchRegister, src, type);
@@ -699,9 +698,8 @@ inline void EmitShiftOperation(LiftoffAssembler* assm, Register dst,
   // register. If src is rcx, src is now the scratch register.
   bool use_scratch = false;
   if (amount != rcx) {
-    use_scratch = src == rcx ||
-                  assm->cache_state()->is_used(LiftoffRegister(rcx)) ||
-                  pinned.has(LiftoffRegister(rcx));
+    use_scratch =
+        src == rcx || assm->cache_state()->is_used(LiftoffRegister(rcx));
     if (use_scratch) assm->movq(kScratchRegister, rcx);
     if (src == rcx) src = kScratchRegister;
     assm->Move(rcx, amount, type);
@@ -716,62 +714,48 @@ inline void EmitShiftOperation(LiftoffAssembler* assm, Register dst,
 }
 }  // namespace liftoff
 
-void LiftoffAssembler::emit_i32_shl(Register dst, Register src, Register amount,
-                                    LiftoffRegList pinned) {
+void LiftoffAssembler::emit_i32_shl(Register dst, Register src,
+                                    Register amount) {
   liftoff::EmitShiftOperation<kWasmI32>(this, dst, src, amount,
-                                        &Assembler::shll_cl, pinned);
+                                        &Assembler::shll_cl);
 }
 
-void LiftoffAssembler::emit_i32_sar(Register dst, Register src, Register amount,
-                                    LiftoffRegList pinned) {
-  liftoff::EmitShiftOperation<kWasmI32>(this, dst, src, amount,
-                                        &Assembler::sarl_cl, pinned);
-}
-
-void LiftoffAssembler::emit_i32_shr(Register dst, Register src, Register amount,
-                                    LiftoffRegList pinned) {
-  liftoff::EmitShiftOperation<kWasmI32>(this, dst, src, amount,
-                                        &Assembler::shrl_cl, pinned);
-}
-
-void LiftoffAssembler::emit_i32_shr(Register dst, Register src, int amount) {
+void LiftoffAssembler::emit_i32_shl(Register dst, Register src,
+                                    int32_t amount) {
   if (dst != src) movl(dst, src);
-  DCHECK(is_uint5(amount));
-  shrl(dst, Immediate(amount));
+  shll(dst, Immediate(amount & 31));
 }
 
-bool LiftoffAssembler::emit_i32_clz(Register dst, Register src) {
-  Label nonzero_input;
-  Label continuation;
-  testl(src, src);
-  j(not_zero, &nonzero_input, Label::kNear);
-  movl(dst, Immediate(32));
-  jmp(&continuation, Label::kNear);
-
-  bind(&nonzero_input);
-  // Get most significant bit set (MSBS).
-  bsrl(dst, src);
-  // CLZ = 31 - MSBS = MSBS ^ 31.
-  xorl(dst, Immediate(31));
-
-  bind(&continuation);
-  return true;
+void LiftoffAssembler::emit_i32_sar(Register dst, Register src,
+                                    Register amount) {
+  liftoff::EmitShiftOperation<kWasmI32>(this, dst, src, amount,
+                                        &Assembler::sarl_cl);
 }
 
-bool LiftoffAssembler::emit_i32_ctz(Register dst, Register src) {
-  Label nonzero_input;
-  Label continuation;
-  testl(src, src);
-  j(not_zero, &nonzero_input, Label::kNear);
-  movl(dst, Immediate(32));
-  jmp(&continuation, Label::kNear);
+void LiftoffAssembler::emit_i32_sar(Register dst, Register src,
+                                    int32_t amount) {
+  if (dst != src) movl(dst, src);
+  sarl(dst, Immediate(amount & 31));
+}
 
-  bind(&nonzero_input);
-  // Get least significant bit set, which equals number of trailing zeros.
-  bsfl(dst, src);
+void LiftoffAssembler::emit_i32_shr(Register dst, Register src,
+                                    Register amount) {
+  liftoff::EmitShiftOperation<kWasmI32>(this, dst, src, amount,
+                                        &Assembler::shrl_cl);
+}
 
-  bind(&continuation);
-  return true;
+void LiftoffAssembler::emit_i32_shr(Register dst, Register src,
+                                    int32_t amount) {
+  if (dst != src) movl(dst, src);
+  shrl(dst, Immediate(amount & 31));
+}
+
+void LiftoffAssembler::emit_i32_clz(Register dst, Register src) {
+  Lzcntl(dst, src);
+}
+
+void LiftoffAssembler::emit_i32_ctz(Register dst, Register src) {
+  Tzcntl(dst, src);
 }
 
 bool LiftoffAssembler::emit_i32_popcnt(Register dst, Register src) {
@@ -887,28 +871,55 @@ void LiftoffAssembler::emit_i64_xor(LiftoffRegister dst, LiftoffRegister lhs,
 }
 
 void LiftoffAssembler::emit_i64_shl(LiftoffRegister dst, LiftoffRegister src,
-                                    Register amount, LiftoffRegList pinned) {
+                                    Register amount) {
   liftoff::EmitShiftOperation<kWasmI64>(this, dst.gp(), src.gp(), amount,
-                                        &Assembler::shlq_cl, pinned);
+                                        &Assembler::shlq_cl);
+}
+
+void LiftoffAssembler::emit_i64_shl(LiftoffRegister dst, LiftoffRegister src,
+                                    int32_t amount) {
+  if (dst.gp() != src.gp()) movq(dst.gp(), src.gp());
+  shlq(dst.gp(), Immediate(amount & 63));
 }
 
 void LiftoffAssembler::emit_i64_sar(LiftoffRegister dst, LiftoffRegister src,
-                                    Register amount, LiftoffRegList pinned) {
+                                    Register amount) {
   liftoff::EmitShiftOperation<kWasmI64>(this, dst.gp(), src.gp(), amount,
-                                        &Assembler::sarq_cl, pinned);
+                                        &Assembler::sarq_cl);
+}
+
+void LiftoffAssembler::emit_i64_sar(LiftoffRegister dst, LiftoffRegister src,
+                                    int32_t amount) {
+  if (dst.gp() != src.gp()) movq(dst.gp(), src.gp());
+  sarq(dst.gp(), Immediate(amount & 63));
 }
 
 void LiftoffAssembler::emit_i64_shr(LiftoffRegister dst, LiftoffRegister src,
-                                    Register amount, LiftoffRegList pinned) {
+                                    Register amount) {
   liftoff::EmitShiftOperation<kWasmI64>(this, dst.gp(), src.gp(), amount,
-                                        &Assembler::shrq_cl, pinned);
+                                        &Assembler::shrq_cl);
 }
 
 void LiftoffAssembler::emit_i64_shr(LiftoffRegister dst, LiftoffRegister src,
-                                    int amount) {
-  if (dst.gp() != src.gp()) movl(dst.gp(), src.gp());
-  DCHECK(is_uint6(amount));
-  shrq(dst.gp(), Immediate(amount));
+                                    int32_t amount) {
+  if (dst != src) movq(dst.gp(), src.gp());
+  shrq(dst.gp(), Immediate(amount & 63));
+}
+
+void LiftoffAssembler::emit_i64_clz(LiftoffRegister dst, LiftoffRegister src) {
+  Lzcntq(dst.gp(), src.gp());
+}
+
+void LiftoffAssembler::emit_i64_ctz(LiftoffRegister dst, LiftoffRegister src) {
+  Tzcntq(dst.gp(), src.gp());
+}
+
+bool LiftoffAssembler::emit_i64_popcnt(LiftoffRegister dst,
+                                       LiftoffRegister src) {
+  if (!CpuFeatures::IsSupported(POPCNT)) return false;
+  CpuFeatureScope scope(this, POPCNT);
+  popcntq(dst.gp(), src.gp());
+  return true;
 }
 
 void LiftoffAssembler::emit_i32_to_intptr(Register dst, Register src) {

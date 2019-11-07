@@ -127,6 +127,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kX64F64x2Splat:
     case kX64F64x2ExtractLane:
     case kX64F64x2ReplaceLane:
+    case kX64F64x2SConvertI64x2:
+    case kX64F64x2UConvertI64x2:
     case kX64F64x2Abs:
     case kX64F64x2Neg:
     case kX64F64x2Sqrt:
@@ -359,6 +361,10 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kX64Movsd:
     case kX64Movss:
     case kX64Movdqu:
+    case kX64S8x16LoadSplat:
+    case kX64S16x8LoadSplat:
+    case kX64I16x8Load8x8S:
+    case kX64I16x8Load8x8U:
       return instr->HasOutput() ? kIsLoadOperation : kHasSideEffect;
 
     case kX64Peek:

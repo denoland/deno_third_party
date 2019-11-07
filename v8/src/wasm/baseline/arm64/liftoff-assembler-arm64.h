@@ -406,9 +406,9 @@ void LiftoffAssembler::FillStackSlotsWithZero(uint32_t index, uint32_t count) {
   RecordUsedSpillSlot(last_stack_slot);
 
   int max_stp_offset = -liftoff::GetStackSlotOffset(index + count - 1);
-  if (count <= 20 && IsImmLSPair(max_stp_offset, kXRegSizeLog2)) {
-    // Special straight-line code for up to 20 slots. Generates one
-    // instruction per two slots (<= 10 instructions total).
+  if (count <= 12 && IsImmLSPair(max_stp_offset, kXRegSizeLog2)) {
+    // Special straight-line code for up to 12 slots. Generates one
+    // instruction per two slots (<= 6 instructions total).
     for (; count > 1; count -= 2) {
       STATIC_ASSERT(kStackSlotSize == kSystemPointerSize);
       stp(xzr, xzr, liftoff::GetStackSlot(index + count - 1));
@@ -416,19 +416,19 @@ void LiftoffAssembler::FillStackSlotsWithZero(uint32_t index, uint32_t count) {
     DCHECK(count == 0 || count == 1);
     if (count) str(xzr, liftoff::GetStackSlot(index));
   } else {
-    // General case for bigger counts (7 instructions).
-    // Use x0 for start address (inclusive), x1 for end address (exclusive).
-    Push(x1, x0);
-    Sub(x0, fp, Operand(liftoff::GetStackSlotOffset(last_stack_slot)));
-    Sub(x1, fp, Operand(liftoff::GetStackSlotOffset(index) - kStackSlotSize));
+    // General case for bigger counts (5-8 instructions).
+    UseScratchRegisterScope temps(this);
+    Register address_reg = temps.AcquireX();
+    // This {Sub} might use another temp register if the offset is too large.
+    Sub(address_reg, fp, liftoff::GetStackSlotOffset(last_stack_slot));
+    Register count_reg = temps.AcquireX();
+    Mov(count_reg, count);
 
     Label loop;
     bind(&loop);
-    str(xzr, MemOperand(x0, /* offset */ kSystemPointerSize, PostIndex));
-    cmp(x0, x1);
-    b(&loop, ne);
-
-    Pop(x0, x1);
+    sub(count_reg, count_reg, 1);
+    str(xzr, MemOperand(address_reg, kSystemPointerSize, PostIndex));
+    cbnz(count_reg, &loop);
   }
 }
 
@@ -482,28 +482,23 @@ void LiftoffAssembler::FillStackSlotsWithZero(uint32_t index, uint32_t count) {
     instruction(dst.D(), src.D());                                             \
     return true;                                                               \
   }
-#define I32_SHIFTOP(name, instruction)                                         \
-  void LiftoffAssembler::emit_##name(Register dst, Register src,               \
-                                     Register amount, LiftoffRegList pinned) { \
-    instruction(dst.W(), src.W(), amount.W());                                 \
-  }
-#define I32_SHIFTOP_I(name, instruction)                                       \
-  I32_SHIFTOP(name, instruction)                                               \
-  void LiftoffAssembler::emit_##name(Register dst, Register src, int amount) { \
-    DCHECK(is_uint5(amount));                                                  \
-    instruction(dst.W(), src.W(), amount);                                     \
+#define I32_SHIFTOP(name, instruction)                           \
+  void LiftoffAssembler::emit_##name(Register dst, Register src, \
+                                     Register amount) {          \
+    instruction(dst.W(), src.W(), amount.W());                   \
+  }                                                              \
+  void LiftoffAssembler::emit_##name(Register dst, Register src, \
+                                     int32_t amount) {           \
+    instruction(dst.W(), src.W(), amount & 31);                  \
   }
 #define I64_SHIFTOP(name, instruction)                                         \
   void LiftoffAssembler::emit_##name(LiftoffRegister dst, LiftoffRegister src, \
-                                     Register amount, LiftoffRegList pinned) { \
+                                     Register amount) {                        \
     instruction(dst.gp().X(), src.gp().X(), amount.X());                       \
-  }
-#define I64_SHIFTOP_I(name, instruction)                                       \
-  I64_SHIFTOP(name, instruction)                                               \
+  }                                                                            \
   void LiftoffAssembler::emit_##name(LiftoffRegister dst, LiftoffRegister src, \
-                                     int amount) {                             \
-    DCHECK(is_uint6(amount));                                                  \
-    instruction(dst.gp().X(), src.gp().X(), amount);                           \
+                                     int32_t amount) {                         \
+    instruction(dst.gp().X(), src.gp().X(), amount & 63);                      \
   }
 
 I32_BINOP_I(i32_add, Add)
@@ -514,7 +509,7 @@ I32_BINOP_I(i32_or, Orr)
 I32_BINOP_I(i32_xor, Eor)
 I32_SHIFTOP(i32_shl, Lsl)
 I32_SHIFTOP(i32_sar, Asr)
-I32_SHIFTOP_I(i32_shr, Lsr)
+I32_SHIFTOP(i32_shr, Lsr)
 I64_BINOP_I(i64_add, Add)
 I64_BINOP(i64_sub, Sub)
 I64_BINOP(i64_mul, Mul)
@@ -523,7 +518,7 @@ I64_BINOP_I(i64_or, Orr)
 I64_BINOP_I(i64_xor, Eor)
 I64_SHIFTOP(i64_shl, Lsl)
 I64_SHIFTOP(i64_sar, Asr)
-I64_SHIFTOP_I(i64_shr, Lsr)
+I64_SHIFTOP(i64_shr, Lsr)
 FP32_BINOP(f32_add, Fadd)
 FP32_BINOP(f32_sub, Fsub)
 FP32_BINOP(f32_mul, Fmul)
@@ -559,19 +554,15 @@ FP64_UNOP(f64_sqrt, Fsqrt)
 #undef FP64_UNOP
 #undef FP64_UNOP_RETURN_TRUE
 #undef I32_SHIFTOP
-#undef I32_SHIFTOP_I
 #undef I64_SHIFTOP
-#undef I64_SHIFTOP_I
 
-bool LiftoffAssembler::emit_i32_clz(Register dst, Register src) {
+void LiftoffAssembler::emit_i32_clz(Register dst, Register src) {
   Clz(dst.W(), src.W());
-  return true;
 }
 
-bool LiftoffAssembler::emit_i32_ctz(Register dst, Register src) {
+void LiftoffAssembler::emit_i32_ctz(Register dst, Register src) {
   Rbit(dst.W(), src.W());
   Clz(dst.W(), dst.W());
-  return true;
 }
 
 bool LiftoffAssembler::emit_i32_popcnt(Register dst, Register src) {
@@ -581,6 +572,26 @@ bool LiftoffAssembler::emit_i32_popcnt(Register dst, Register src) {
   Cnt(scratch, scratch);
   Addv(scratch.B(), scratch);
   Fmov(dst.W(), scratch.S());
+  return true;
+}
+
+void LiftoffAssembler::emit_i64_clz(LiftoffRegister dst, LiftoffRegister src) {
+  Clz(dst.gp().X(), src.gp().X());
+}
+
+void LiftoffAssembler::emit_i64_ctz(LiftoffRegister dst, LiftoffRegister src) {
+  Rbit(dst.gp().X(), src.gp().X());
+  Clz(dst.gp().X(), dst.gp().X());
+}
+
+bool LiftoffAssembler::emit_i64_popcnt(LiftoffRegister dst,
+                                       LiftoffRegister src) {
+  UseScratchRegisterScope temps(this);
+  VRegister scratch = temps.AcquireV(kFormat8B);
+  Fmov(scratch.D(), src.gp().X());
+  Cnt(scratch, scratch);
+  Addv(scratch.B(), scratch);
+  Fmov(dst.gp().X(), scratch.D());
   return true;
 }
 

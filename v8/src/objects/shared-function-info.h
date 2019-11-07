@@ -24,10 +24,6 @@
 
 namespace v8 {
 
-namespace tracing {
-class TracedValue;
-}
-
 namespace internal {
 
 class AsmWasmData;
@@ -368,6 +364,9 @@ class SharedFunctionInfo : public HeapObject {
   inline HeapObject script() const;
   inline void set_script(HeapObject script);
 
+  // True if the underlying script was parsed and compiled in REPL mode.
+  inline bool is_repl_mode() const;
+
   // The function is subject to debugging if a debug info is attached.
   inline bool HasDebugInfo() const;
   inline DebugInfo GetDebugInfo() const;
@@ -490,10 +489,10 @@ class SharedFunctionInfo : public HeapObject {
   // - internal break points
   // - coverage and type profile
   // - error stack trace
-  inline bool IsSubjectToDebugging();
+  inline bool IsSubjectToDebugging() const;
 
   // Whether this function is defined in user-provided JavaScript code.
-  inline bool IsUserJavaScript();
+  inline bool IsUserJavaScript() const;
 
   // True if one can flush compiled code from this function, in such a way that
   // it can later be re-compiled.
@@ -517,8 +516,19 @@ class SharedFunctionInfo : public HeapObject {
   // Hence it takes the mode as an argument.
   inline bool ShouldFlushBytecode(BytecodeFlushMode mode);
 
-  // Check whether or not this function is inlineable.
-  bool IsInlineable();
+  enum Inlineability {
+    kIsInlineable,
+    // Different reasons for not being inlineable:
+    kHasNoScript,
+    kNeedsBinaryCoverage,
+    kHasOptimizationDisabled,
+    kIsBuiltin,
+    kIsNotUserCode,
+    kHasNoBytecode,
+    kExceedsBytecodeLimit,
+    kMayContainBreakPoints,
+  };
+  Inlineability GetInlineability() const;
 
   // Source size of this function.
   int SourceSize();
@@ -565,22 +575,6 @@ class SharedFunctionInfo : public HeapObject {
 #ifdef OBJECT_PRINT
   void PrintSourceCode(std::ostream& os);
 #endif
-
-  // Returns the SharedFunctionInfo in a format tracing can support.
-  std::unique_ptr<v8::tracing::TracedValue> ToTracedValue(
-      FunctionLiteral* literal);
-
-  // The tracing scope for SharedFunctionInfo objects.
-  static const char* kTraceScope;
-
-  // Returns the unique TraceID for this SharedFunctionInfo (within the
-  // kTraceScope, works only for functions that have a Script and start/end
-  // position).
-  uint64_t TraceID(FunctionLiteral* literal = nullptr) const;
-
-  // Returns the unique trace ID reference for this SharedFunctionInfo
-  // (based on the |TraceID()| above).
-  std::unique_ptr<v8::tracing::TracedValue> TraceIDRef() const;
 
   // Iterate over all shared function infos in a given script.
   class ScriptIterator {

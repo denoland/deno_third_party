@@ -131,6 +131,11 @@ void ReadOnlyHeap::ClearSharedHeapForTest() {
 }
 
 // static
+bool ReadOnlyHeap::Contains(Address address) {
+  return MemoryChunk::FromAddress(address)->InReadOnlySpace();
+}
+
+// static
 bool ReadOnlyHeap::Contains(HeapObject object) {
   return MemoryChunk::FromHeapObject(object)->InReadOnlySpace();
 }
@@ -182,7 +187,7 @@ HeapObject ReadOnlyHeapObjectIterator::Next() {
     const int object_size = object.Size();
     current_addr_ += object_size;
 
-    if (object.IsFiller()) {
+    if (object.IsFreeSpaceOrFiller()) {
       continue;
     }
 

@@ -141,10 +141,9 @@ void Generate_JSBuiltinsConstructStubHelper(MacroAssembler* masm) {
     // eax: number of arguments (untagged)
     // edi: constructor function
     // edx: new target
-    ParameterCount actual(eax);
     // Reload context from the frame.
     __ mov(esi, Operand(ebp, ConstructFrameConstants::kContextOffset));
-    __ InvokeFunction(edi, edx, actual, CALL_FUNCTION);
+    __ InvokeFunction(edi, edx, eax, CALL_FUNCTION);
 
     // Restore context from the frame.
     __ mov(esi, Operand(ebp, ConstructFrameConstants::kContextOffset));
@@ -298,8 +297,7 @@ void Builtins::Generate_JSConstructStubGeneric(MacroAssembler* masm) {
 
     // Restore and and call the constructor function.
     __ mov(edi, Operand(ebp, ConstructFrameConstants::kConstructorOffset));
-    ParameterCount actual(eax);
-    __ InvokeFunction(edi, edx, actual, CALL_FUNCTION);
+    __ InvokeFunction(edi, edx, eax, CALL_FUNCTION);
 
     // ----------- S t a t e -------------
     //  --                eax: constructor result
@@ -1838,31 +1836,6 @@ void Builtins::Generate_ReflectConstruct(MacroAssembler* masm) {
           RelocInfo::CODE_TARGET);
 }
 
-void Builtins::Generate_InternalArrayConstructor(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- eax : argc
-  //  -- esp[0] : return address
-  //  -- esp[4] : last argument
-  // -----------------------------------
-
-  if (FLAG_debug_code) {
-    // Initial map for the builtin InternalArray function should be a map.
-    __ mov(ecx, FieldOperand(edi, JSFunction::kPrototypeOrInitialMapOffset));
-    // Will both indicate a nullptr and a Smi.
-    __ test(ecx, Immediate(kSmiTagMask));
-    __ Assert(not_zero,
-              AbortReason::kUnexpectedInitialMapForInternalArrayFunction);
-    __ CmpObjectType(ecx, MAP_TYPE, ecx);
-    __ Assert(equal,
-              AbortReason::kUnexpectedInitialMapForInternalArrayFunction);
-  }
-
-  // Run the native code for the InternalArray function called as a normal
-  // function.
-  __ Jump(BUILTIN_CODE(masm->isolate(), InternalArrayConstructorImpl),
-          RelocInfo::CODE_TARGET);
-}
-
 static void EnterArgumentsAdaptorFrame(MacroAssembler* masm) {
   __ push(ebp);
   __ mov(ebp, esp);
@@ -2031,7 +2004,7 @@ void Builtins::Generate_CallOrConstructForwardVarargs(MacroAssembler* masm,
          Immediate(StackFrame::TypeToMarker(StackFrame::ARGUMENTS_ADAPTOR)));
   __ j(equal, &arguments_adaptor, Label::kNear);
   {
-    __ mov(edx, Operand(ebp, JavaScriptFrameConstants::kFunctionOffset));
+    __ mov(edx, Operand(ebp, StandardFrameConstants::kFunctionOffset));
     __ mov(edx, FieldOperand(edx, JSFunction::kSharedFunctionInfoOffset));
     __ movzx_w(edx, FieldOperand(
                         edx, SharedFunctionInfo::kFormalParameterCountOffset));
@@ -2179,9 +2152,7 @@ void Builtins::Generate_CallFunction(MacroAssembler* masm,
 
   __ movzx_w(
       ecx, FieldOperand(edx, SharedFunctionInfo::kFormalParameterCountOffset));
-  ParameterCount actual(eax);
-  ParameterCount expected(ecx);
-  __ InvokeFunctionCode(edi, no_reg, expected, actual, JUMP_FUNCTION);
+  __ InvokeFunctionCode(edi, no_reg, ecx, eax, JUMP_FUNCTION);
   // The function is a "classConstructor", need to raise an exception.
   __ bind(&class_constructor);
   {
@@ -2354,7 +2325,7 @@ void Builtins::Generate_Call(MacroAssembler* masm, ConvertReceiverMode mode) {
   // Overwrite the original receiver with the (original) target.
   __ mov(Operand(esp, eax, times_system_pointer_size, kSystemPointerSize), edi);
   // Let the "call_as_function_delegate" take care of the rest.
-  __ LoadGlobalFunction(Context::CALL_AS_FUNCTION_DELEGATE_INDEX, edi);
+  __ LoadNativeContextSlot(edi, Context::CALL_AS_FUNCTION_DELEGATE_INDEX);
   __ Jump(masm->isolate()->builtins()->CallFunction(
               ConvertReceiverMode::kNotNullOrUndefined),
           RelocInfo::CODE_TARGET);
@@ -2474,7 +2445,7 @@ void Builtins::Generate_Construct(MacroAssembler* masm) {
     __ mov(Operand(esp, eax, times_system_pointer_size, kSystemPointerSize),
            edi);
     // Let the "call_as_constructor_delegate" take care of the rest.
-    __ LoadGlobalFunction(Context::CALL_AS_CONSTRUCTOR_DELEGATE_INDEX, edi);
+    __ LoadNativeContextSlot(edi, Context::CALL_AS_CONSTRUCTOR_DELEGATE_INDEX);
     __ Jump(masm->isolate()->builtins()->CallFunction(),
             RelocInfo::CODE_TARGET);
   }
@@ -2669,19 +2640,13 @@ void Builtins::Generate_WasmCompileLazy(MacroAssembler* masm) {
     __ Push(kWasmInstanceRegister);
     // Push the function index as second argument.
     __ Push(kWasmCompileLazyFuncIndexRegister);
-    // Load the correct CEntry builtin from the instance object.
-    __ mov(ecx, FieldOperand(kWasmInstanceRegister,
-                             WasmInstanceObject::kIsolateRootOffset));
-    auto centry_id =
-        Builtins::kCEntry_Return1_DontSaveFPRegs_ArgvOnStack_NoBuiltinExit;
-    __ mov(ecx, MemOperand(ecx, IsolateData::builtin_slot_offset(centry_id)));
     // Initialize the JavaScript context with 0. CEntry will use it to
     // set the current context on the isolate.
     __ Move(kContextRegister, Smi::zero());
     {
       // At this point, ebx has been spilled to the stack but is not yet
       // overwritten with another value. We can still use it as kRootRegister.
-      __ CallRuntimeWithCEntry(Runtime::kWasmCompileLazy, ecx);
+      __ CallRuntime(Runtime::kWasmCompileLazy, 2);
     }
     // The entrypoint address is the return value.
     __ mov(edi, kReturnRegister0);
@@ -2930,49 +2895,6 @@ void Builtins::Generate_DoubleToI(MacroAssembler* masm) {
   __ pop(scratch1);
   __ pop(ecx);
   __ ret(0);
-}
-
-void Builtins::Generate_InternalArrayConstructorImpl(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- eax : argc
-  //  -- edi : constructor
-  //  -- esp[0] : return address
-  //  -- esp[4] : last argument
-  // -----------------------------------
-
-  if (FLAG_debug_code) {
-    // The array construct code is only set for the global and natives
-    // builtin Array functions which always have maps.
-
-    // Initial map for the builtin Array function should be a map.
-    __ mov(ecx, FieldOperand(edi, JSFunction::kPrototypeOrInitialMapOffset));
-    // Will both indicate a nullptr and a Smi.
-    __ test(ecx, Immediate(kSmiTagMask));
-    __ Assert(not_zero, AbortReason::kUnexpectedInitialMapForArrayFunction);
-    __ CmpObjectType(ecx, MAP_TYPE, ecx);
-    __ Assert(equal, AbortReason::kUnexpectedInitialMapForArrayFunction);
-
-    // Figure out the right elements kind
-    __ mov(ecx, FieldOperand(edi, JSFunction::kPrototypeOrInitialMapOffset));
-
-    // Load the map's "bit field 2" into |result|. We only need the first byte,
-    // but the following masking takes care of that anyway.
-    __ mov(ecx, FieldOperand(ecx, Map::kBitField2Offset));
-    // Retrieve elements_kind from bit field 2.
-    __ DecodeField<Map::ElementsKindBits>(ecx);
-
-    // Initial elements kind should be packed elements.
-    __ cmp(ecx, Immediate(PACKED_ELEMENTS));
-    __ Assert(equal, AbortReason::kInvalidElementsKindForInternalPackedArray);
-
-    // No arguments should be passed.
-    __ test(eax, eax);
-    __ Assert(zero, AbortReason::kWrongNumberOfArgumentsForInternalPackedArray);
-  }
-
-  __ Jump(
-      BUILTIN_CODE(masm->isolate(), InternalArrayNoArgumentConstructor_Packed),
-      RelocInfo::CODE_TARGET);
 }
 
 namespace {

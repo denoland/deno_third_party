@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-namespace array_lastindexof {
-  macro LoadWithHoleCheck<Elements: type>(
+namespace array {
+  macro LoadWithHoleCheck<Elements : type extends FixedArrayBase>(
       elements: FixedArrayBase, index: Smi): JSAny
       labels IfHole;
 
@@ -25,7 +25,7 @@ namespace array_lastindexof {
     return AllocateHeapNumberWithValue(element);
   }
 
-  macro FastArrayLastIndexOf<Elements: type>(
+  macro FastArrayLastIndexOf<Elements : type extends FixedArrayBase>(
       context: Context, array: JSArray, from: Smi, searchElement: JSAny): Smi {
     const elements: FixedArrayBase = array.elements;
     let k: Smi = from;

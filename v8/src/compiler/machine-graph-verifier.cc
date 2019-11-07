@@ -406,7 +406,11 @@ class MachineRepresentationChecker {
                 inferrer_->GetRepresentation(node->InputAt(0))));
             break;
           case IrOpcode::kChangeTaggedToCompressed:
-            CHECK(IsAnyTagged(inferrer_->GetRepresentation(node->InputAt(0))));
+            if (FLAG_turbo_decompression_elimination) {
+              CheckValueInputIsTagged(node, 0);
+            } else {
+              CheckValueInputIsCompressedOrTagged(node, 0);
+            }
             break;
           case IrOpcode::kChangeTaggedPointerToCompressedPointer:
             CHECK(CanBeTaggedPointer(
@@ -617,7 +621,15 @@ class MachineRepresentationChecker {
               case MachineRepresentation::kTagged:
               case MachineRepresentation::kTaggedPointer:
               case MachineRepresentation::kTaggedSigned:
-                CheckValueInputIsTagged(node, 2);
+                if (COMPRESS_POINTERS_BOOL &&
+                    !FLAG_turbo_decompression_elimination &&
+                    node->opcode() == IrOpcode::kStore &&
+                    CanBeTaggedPointer(
+                        StoreRepresentationOf(node->op()).representation())) {
+                  CheckValueInputIsCompressedOrTagged(node, 2);
+                } else {
+                  CheckValueInputIsTagged(node, 2);
+                }
                 break;
               case MachineRepresentation::kCompressed:
               case MachineRepresentation::kCompressedPointer:
@@ -667,7 +679,11 @@ class MachineRepresentationChecker {
               case MachineRepresentation::kCompressedPointer:
               case MachineRepresentation::kCompressedSigned:
                 for (int i = 0; i < node->op()->ValueInputCount(); ++i) {
-                  CheckValueInputIsCompressed(node, i);
+                  if (FLAG_turbo_decompression_elimination) {
+                    CheckValueInputIsCompressed(node, i);
+                  } else {
+                    CheckValueInputIsCompressedOrTagged(node, i);
+                  }
                 }
                 break;
               case MachineRepresentation::kWord32:
@@ -795,6 +811,27 @@ class MachineRepresentationChecker {
     str << "TypeError: node #" << node->id() << ":" << *node->op()
         << " uses node #" << input->id() << ":" << *input->op()
         << " which doesn't have a tagged representation.";
+    PrintDebugHelp(str, node);
+    FATAL("%s", str.str().c_str());
+  }
+
+  void CheckValueInputIsCompressedOrTagged(Node const* node, int index) {
+    Node const* input = node->InputAt(index);
+    switch (inferrer_->GetRepresentation(input)) {
+      case MachineRepresentation::kCompressed:
+      case MachineRepresentation::kCompressedPointer:
+      case MachineRepresentation::kCompressedSigned:
+      case MachineRepresentation::kTagged:
+      case MachineRepresentation::kTaggedPointer:
+      case MachineRepresentation::kTaggedSigned:
+        return;
+      default:
+        break;
+    }
+    std::ostringstream str;
+    str << "TypeError: node #" << node->id() << ":" << *node->op()
+        << " uses node #" << input->id() << ":" << *input->op()
+        << " which doesn't have a compressed or tagged representation.";
     PrintDebugHelp(str, node);
     FATAL("%s", str.str().c_str());
   }

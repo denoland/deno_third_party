@@ -37,6 +37,7 @@
 #include "src/compiler/csa-load-elimination.h"
 #include "src/compiler/dead-code-elimination.h"
 #include "src/compiler/decompression-elimination.h"
+#include "src/compiler/decompression-optimizer.h"
 #include "src/compiler/effect-control-linearizer.h"
 #include "src/compiler/escape-analysis-reducer.h"
 #include "src/compiler/escape-analysis.h"
@@ -64,6 +65,7 @@
 #include "src/compiler/pipeline-statistics.h"
 #include "src/compiler/redundancy-elimination.h"
 #include "src/compiler/schedule.h"
+#include "src/compiler/scheduled-machine-lowering.h"
 #include "src/compiler/scheduler.h"
 #include "src/compiler/select-lowering.h"
 #include "src/compiler/serializer-for-background-compilation.h"
@@ -760,8 +762,8 @@ void PrintCode(Isolate* isolate, Handle<Code> code,
 #endif  // ENABLE_DISASSEMBLER
 }
 
-void TraceSchedule(OptimizedCompilationInfo* info, PipelineData* data,
-                   Schedule* schedule, const char* phase_name) {
+void TraceScheduleAndVerify(OptimizedCompilationInfo* info, PipelineData* data,
+                            Schedule* schedule, const char* phase_name) {
   if (info->trace_turbo_json_enabled()) {
     AllowHandleDereference allow_deref;
     TurboJsonFile json_of(info, std::ios_base::app);
@@ -781,8 +783,9 @@ void TraceSchedule(OptimizedCompilationInfo* info, PipelineData* data,
     OFStream os(tracing_scope.file());
     os << "-- Schedule --------------------------------------\n" << *schedule;
   }
-}
 
+  if (FLAG_turbo_verify) ScheduleVerifier::Run(schedule);
+}
 
 class SourcePositionWrapper final : public Reducer {
  public:
@@ -979,24 +982,13 @@ PipelineCompilationJob::PipelineCompilationJob(
             pipeline_statistics_.get()),
       pipeline_(&data_),
       linkage_(nullptr) {
-  TRACE_EVENT_WITH_FLOW1(
-      TRACE_DISABLED_BY_DEFAULT("v8.compile"), "v8.optimizingCompile.start",
-      this, TRACE_EVENT_FLAG_FLOW_OUT, "function", shared_info->TraceIDRef());
 }
 
 PipelineCompilationJob::~PipelineCompilationJob() {
-  TRACE_EVENT_WITH_FLOW1(TRACE_DISABLED_BY_DEFAULT("v8.compile"),
-                         "v8.optimizingCompile.end", this,
-                         TRACE_EVENT_FLAG_FLOW_IN, "compilationInfo",
-                         compilation_info()->ToTracedValue());
 }
 
 PipelineCompilationJob::Status PipelineCompilationJob::PrepareJobImpl(
     Isolate* isolate) {
-  TRACE_EVENT_WITH_FLOW1(
-      TRACE_DISABLED_BY_DEFAULT("v8.compile"), "v8.optimizingCompile.prepare",
-      this, TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT, "function",
-      compilation_info()->shared_info()->TraceIDRef());
   if (compilation_info()->bytecode_array()->length() >
       FLAG_max_optimized_bytecode_size) {
     return AbortOptimization(BailoutReason::kFunctionTooBig);
@@ -1073,11 +1065,6 @@ PipelineCompilationJob::Status PipelineCompilationJob::PrepareJobImpl(
 }
 
 PipelineCompilationJob::Status PipelineCompilationJob::ExecuteJobImpl() {
-  TRACE_EVENT_WITH_FLOW1(
-      TRACE_DISABLED_BY_DEFAULT("v8.compile"), "v8.optimizingCompile.execute",
-      this, TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT, "function",
-      compilation_info()->shared_info()->TraceIDRef());
-
   if (FLAG_concurrent_inlining) {
     if (!pipeline_.CreateGraph()) {
       return AbortOptimization(BailoutReason::kGraphBuildingFailed);
@@ -1098,10 +1085,6 @@ PipelineCompilationJob::Status PipelineCompilationJob::ExecuteJobImpl() {
 
 PipelineCompilationJob::Status PipelineCompilationJob::FinalizeJobImpl(
     Isolate* isolate) {
-  TRACE_EVENT_WITH_FLOW1(
-      TRACE_DISABLED_BY_DEFAULT("v8.compile"), "v8.optimizingCompile.finalize",
-      this, TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT, "function",
-      compilation_info()->shared_info()->TraceIDRef());
   MaybeHandle<Code> maybe_code = pipeline_.FinalizeCode();
   Handle<Code> code;
   if (!maybe_code.ToHandle(&code)) {
@@ -1628,9 +1611,8 @@ struct EffectControlLinearizationPhase {
       Schedule* schedule = Scheduler::ComputeSchedule(
           temp_zone, data->graph(), Scheduler::kTempSchedule,
           &data->info()->tick_counter());
-      if (FLAG_turbo_verify) ScheduleVerifier::Run(schedule);
-      TraceSchedule(data->info(), data, schedule,
-                    "effect linearization schedule");
+      TraceScheduleAndVerify(data->info(), data, schedule,
+                             "effect linearization schedule");
 
       MaskArrayIndexEnable mask_array_index =
           (data->info()->GetPoisoningMitigationLevel() !=
@@ -1644,7 +1626,7 @@ struct EffectControlLinearizationPhase {
       // - introduce effect phis and rewire effects to get SSA again.
       LinearizeEffectControl(data->jsgraph(), schedule, temp_zone,
                              data->source_positions(), data->node_origins(),
-                             mask_array_index);
+                             mask_array_index, MaintainSchedule::kDiscard);
     }
     {
       // The {EffectControlLinearizer} might leave {Dead} nodes behind, so we
@@ -1758,7 +1740,8 @@ struct LateOptimizationPhase {
     CommonOperatorReducer common_reducer(&graph_reducer, data->graph(),
                                          data->broker(), data->common(),
                                          data->machine(), temp_zone);
-    SelectLowering select_lowering(data->jsgraph(), temp_zone);
+    GraphAssembler graph_assembler(data->jsgraph(), temp_zone);
+    SelectLowering select_lowering(&graph_assembler, data->graph());
     // TODO(v8:7703, solanes): go back to using #if guards once
     // FLAG_turbo_decompression_elimination gets removed.
     DecompressionElimination decompression_elimination(
@@ -1793,20 +1776,62 @@ struct MachineOperatorOptimizationPhase {
   }
 };
 
-struct MidTierMachineLoweringPhase {
-  static const char* phase_name() { return "V8.TFMidTierMachineLoweringPhase"; }
+struct DecompressionOptimizationPhase {
+  static const char* phase_name() { return "V8.TFDecompressionOptimization"; }
 
   void Run(PipelineData* data, Zone* temp_zone) {
-    GraphReducer graph_reducer(temp_zone, data->graph(),
-                               &data->info()->tick_counter(),
-                               data->jsgraph()->Dead());
-    SelectLowering select_lowering(data->jsgraph(), temp_zone);
-    MemoryLowering memory_lowering(data->jsgraph(), temp_zone,
-                                   data->info()->GetPoisoningMitigationLevel());
+    if (COMPRESS_POINTERS_BOOL && !FLAG_turbo_decompression_elimination) {
+      DecompressionOptimizer decompression_optimizer(
+          temp_zone, data->graph(), data->common(), data->machine());
+      decompression_optimizer.Reduce();
+    }
+  }
+};
 
-    AddReducer(data, &graph_reducer, &memory_lowering);
-    AddReducer(data, &graph_reducer, &select_lowering);
-    graph_reducer.ReduceGraph();
+struct ScheduledEffectControlLinearizationPhase {
+  static const char* phase_name() {
+    return "V8.TFScheduledEffectControlLinearizationPhase";
+  }
+
+  void Run(PipelineData* data, Zone* temp_zone) {
+    MaskArrayIndexEnable mask_array_index =
+        (data->info()->GetPoisoningMitigationLevel() !=
+         PoisoningMitigationLevel::kDontPoison)
+            ? MaskArrayIndexEnable::kMaskArrayIndex
+            : MaskArrayIndexEnable::kDoNotMaskArrayIndex;
+    // Post-pass for wiring the control/effects
+    // - connect allocating representation changes into the control&effect
+    //   chains and lower them,
+    // - get rid of the region markers,
+    // - introduce effect phis and rewire effects to get SSA again.
+    LinearizeEffectControl(data->jsgraph(), data->schedule(), temp_zone,
+                           data->source_positions(), data->node_origins(),
+                           mask_array_index, MaintainSchedule::kMaintain);
+
+    // TODO(rmcilroy) Avoid having to rebuild rpo_order on schedule each time.
+    Scheduler::ComputeSpecialRPO(temp_zone, data->schedule());
+    if (FLAG_turbo_verify) Scheduler::GenerateDominatorTree(data->schedule());
+    TraceScheduleAndVerify(data->info(), data, data->schedule(),
+                           "effect linearization schedule");
+  }
+};
+
+struct ScheduledMachineLoweringPhase {
+  static const char* phase_name() {
+    return "V8.TFScheduledMachineLoweringPhase";
+  }
+
+  void Run(PipelineData* data, Zone* temp_zone) {
+    ScheduledMachineLowering machine_lowering(
+        data->jsgraph(), data->schedule(), temp_zone, data->source_positions(),
+        data->node_origins(), data->info()->GetPoisoningMitigationLevel());
+    machine_lowering.Run();
+
+    // TODO(rmcilroy) Avoid having to rebuild rpo_order on schedule each time.
+    Scheduler::ComputeSpecialRPO(temp_zone, data->schedule());
+    if (FLAG_turbo_verify) Scheduler::GenerateDominatorTree(data->schedule());
+    TraceScheduleAndVerify(data->info(), data, data->schedule(),
+                           "machine lowered schedule");
   }
 };
 
@@ -1900,7 +1925,6 @@ struct ComputeSchedulePhase {
         data->info()->is_splitting_enabled() ? Scheduler::kSplitNodes
                                              : Scheduler::kNoFlags,
         &data->info()->tick_counter());
-    if (FLAG_turbo_verify) ScheduleVerifier::Run(schedule);
     data->set_schedule(schedule);
   }
 };
@@ -2424,6 +2448,9 @@ bool PipelineImpl::OptimizeGraph(Linkage* linkage) {
   Run<MachineOperatorOptimizationPhase>();
   RunPrintAndVerify(MachineOperatorOptimizationPhase::phase_name(), true);
 
+  Run<DecompressionOptimizationPhase>();
+  RunPrintAndVerify(DecompressionOptimizationPhase::phase_name(), true);
+
   data->source_positions()->RemoveDecorator();
   if (data->info()->trace_turbo_json_enabled()) {
     data->node_origins()->RemoveDecorator();
@@ -2482,18 +2509,19 @@ bool PipelineImpl::OptimizeGraphForMidTier(Linkage* linkage) {
 
   data->BeginPhaseKind("V8.TFBlockBuilding");
 
-  Run<EffectControlLinearizationPhase>();
-  RunPrintAndVerify(EffectControlLinearizationPhase::phase_name(), true);
+  ComputeScheduledGraph();
 
-  Run<MidTierMachineLoweringPhase>();
-  RunPrintAndVerify(MidTierMachineLoweringPhase::phase_name(), true);
+  Run<ScheduledEffectControlLinearizationPhase>();
+  RunPrintAndVerify(ScheduledEffectControlLinearizationPhase::phase_name(),
+                    true);
+
+  Run<ScheduledMachineLoweringPhase>();
+  RunPrintAndVerify(ScheduledMachineLoweringPhase::phase_name(), true);
 
   data->source_positions()->RemoveDecorator();
   if (data->info()->trace_turbo_json_enabled()) {
     data->node_origins()->RemoveDecorator();
   }
-
-  ComputeScheduledGraph();
 
   return SelectInstructions(linkage);
 }
@@ -2554,6 +2582,10 @@ MaybeHandle<Code> Pipeline::GenerateCodeForCodeStub(
 
   pipeline.Run<CsaOptimizationPhase>();
   pipeline.RunPrintAndVerify(CsaOptimizationPhase::phase_name(), true);
+
+  pipeline.Run<DecompressionOptimizationPhase>();
+  pipeline.RunPrintAndVerify(DecompressionOptimizationPhase::phase_name(),
+                             true);
 
   pipeline.Run<VerifyGraphPhase>(true);
   pipeline.ComputeScheduledGraph();
@@ -2917,7 +2949,7 @@ void PipelineImpl::ComputeScheduledGraph() {
   RunPrintAndVerify(LateGraphTrimmingPhase::phase_name(), true);
 
   Run<ComputeSchedulePhase>();
-  TraceSchedule(data->info(), data, data->schedule(), "schedule");
+  TraceScheduleAndVerify(data->info(), data, data->schedule(), "schedule");
 }
 
 bool PipelineImpl::SelectInstructions(Linkage* linkage) {
@@ -2933,7 +2965,11 @@ bool PipelineImpl::SelectInstructions(Linkage* linkage) {
         info(), data->graph(), data->schedule(), data->isolate()));
   }
 
-  bool verify_stub_graph = data->verify_graph();
+  bool verify_stub_graph =
+      data->verify_graph() ||
+      (FLAG_turbo_verify_machine_graph != nullptr &&
+       (!strcmp(FLAG_turbo_verify_machine_graph, "*") ||
+        !strcmp(FLAG_turbo_verify_machine_graph, data->debug_name())));
   // Jump optimization runs instruction selection twice, but the instruction
   // selector mutates nodes like swapping the inputs of a load, which can
   // violate the machine graph verification rules. So we skip the second
@@ -2942,10 +2978,7 @@ bool PipelineImpl::SelectInstructions(Linkage* linkage) {
   if (jump_opt && jump_opt->is_optimizing()) {
     verify_stub_graph = false;
   }
-  if (verify_stub_graph ||
-      (FLAG_turbo_verify_machine_graph != nullptr &&
-       (!strcmp(FLAG_turbo_verify_machine_graph, "*") ||
-        !strcmp(FLAG_turbo_verify_machine_graph, data->debug_name())))) {
+  if (verify_stub_graph) {
     if (FLAG_trace_verify_csa) {
       AllowHandleDereference allow_deref;
       CodeTracer::Scope tracing_scope(data->GetCodeTracer());

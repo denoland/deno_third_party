@@ -285,21 +285,22 @@ void TurboAssembler::Mov(const Register& rd, const Operand& operand,
   Register dst = (rd.IsSP()) ? temps.AcquireSameSizeAs(rd) : rd;
 
   if (operand.NeedsRelocation(this)) {
-    if (FLAG_embedded_builtins) {
-      if (root_array_available_ && options().isolate_independent_code) {
-        if (operand.ImmediateRMode() == RelocInfo::EXTERNAL_REFERENCE) {
-          Address addr = static_cast<Address>(operand.ImmediateValue());
-          ExternalReference reference = bit_cast<ExternalReference>(addr);
-          IndirectLoadExternalReference(rd, reference);
-          return;
-        } else if (RelocInfo::IsEmbeddedObjectMode(operand.ImmediateRMode())) {
-          Handle<HeapObject> x(
-              reinterpret_cast<Address*>(operand.ImmediateValue()));
-          // TODO(v8:9706): Fix-it! This load will always uncompress the value
-          // even when we are loading a compressed embedded object.
-          IndirectLoadConstant(rd.X(), x);
-          return;
-        }
+    // TODO(jgruber,v8:8887): Also consider a root-relative load when generating
+    // non-isolate-independent code. In many cases it might be cheaper than
+    // embedding the relocatable value.
+    if (root_array_available_ && options().isolate_independent_code) {
+      if (operand.ImmediateRMode() == RelocInfo::EXTERNAL_REFERENCE) {
+        Address addr = static_cast<Address>(operand.ImmediateValue());
+        ExternalReference reference = bit_cast<ExternalReference>(addr);
+        IndirectLoadExternalReference(rd, reference);
+        return;
+      } else if (RelocInfo::IsEmbeddedObjectMode(operand.ImmediateRMode())) {
+        Handle<HeapObject> x(
+            reinterpret_cast<Address*>(operand.ImmediateValue()));
+        // TODO(v8:9706): Fix-it! This load will always uncompress the value
+        // even when we are loading a compressed embedded object.
+        IndirectLoadConstant(rd.X(), x);
+        return;
       }
     }
     Ldr(dst, operand);
@@ -1295,15 +1296,16 @@ void MacroAssembler::PushCalleeSavedRegisters() {
   stp(d10, d11, tos);
   stp(d8, d9, tos);
 
-  stp(x29, x30, tos);
-#if defined(V8_OS_WIN)
-  // kFramePointerOffsetInPushCalleeSavedRegisters is the offset from tos at
-  // the end of this function to the saved caller's fp/x29 pointer. It includes
-  // registers from x19 to x28, which is 10 pointers defined by below stp
-  // instructions.
-  STATIC_ASSERT(kFramePointerOffsetInPushCalleeSavedRegisters ==
-                10 * kSystemPointerSize);
-#endif  // defined(V8_OS_WIN)
+  STATIC_ASSERT(
+      EntryFrameConstants::kCalleeSavedRegisterBytesPushedBeforeFpLrPair ==
+      8 * kSystemPointerSize);
+
+  stp(x29, x30, tos);  // fp, lr
+
+  STATIC_ASSERT(
+      EntryFrameConstants::kCalleeSavedRegisterBytesPushedAfterFpLrPair ==
+      10 * kSystemPointerSize);
+
   stp(x27, x28, tos);
   stp(x25, x26, tos);
   stp(x23, x24, tos);
@@ -1534,8 +1536,7 @@ void MacroAssembler::AssertConstructor(Register object) {
     UseScratchRegisterScope temps(this);
     Register temp = temps.AcquireX();
 
-    LoadTaggedPointerField(temp,
-                           FieldMemOperand(object, HeapObject::kMapOffset));
+    LoadMap(temp, object);
     Ldrb(temp, FieldMemOperand(temp, Map::kBitFieldOffset));
     Tst(temp, Operand(Map::IsConstructorBit::kMask));
 
@@ -1574,7 +1575,7 @@ void MacroAssembler::AssertGeneratorObject(Register object) {
   // Load map
   UseScratchRegisterScope temps(this);
   Register temp = temps.AcquireX();
-  LoadTaggedPointerField(temp, FieldMemOperand(object, HeapObject::kMapOffset));
+  LoadMap(temp, object);
 
   Label do_check;
   // Load instance type and check if JSGeneratorObject
@@ -1600,8 +1601,7 @@ void MacroAssembler::AssertUndefinedOrAllocationSite(Register object) {
     Label done_checking;
     AssertNotSmi(object);
     JumpIfRoot(object, RootIndex::kUndefinedValue, &done_checking);
-    LoadTaggedPointerField(scratch,
-                           FieldMemOperand(object, HeapObject::kMapOffset));
+    LoadMap(scratch, object);
     CompareInstanceType(scratch, scratch, ALLOCATION_SITE_TYPE);
     Assert(eq, AbortReason::kExpectedUndefinedOrCell);
     Bind(&done_checking);
@@ -1906,6 +1906,7 @@ void TurboAssembler::Call(Handle<Code> code, RelocInfo::Mode rmode) {
     }
   }
 
+  DCHECK(code->IsExecutable());
   if (CanUseNearCallOrJump(rmode)) {
     EmbeddedObjectIndex index = AddEmbeddedObject(code);
     DCHECK(is_int32(index));
@@ -1951,7 +1952,6 @@ void TurboAssembler::CallBuiltinByIndex(Register builtin_index) {
 
 void TurboAssembler::CallBuiltin(int builtin_index) {
   DCHECK(Builtins::IsBuiltinId(builtin_index));
-  DCHECK(FLAG_embedded_builtins);
   RecordCommentForOffHeapTrampoline(builtin_index);
   CHECK_NE(builtin_index, Builtins::kNoBuiltinId);
   UseScratchRegisterScope temps(this);
@@ -2075,23 +2075,16 @@ void TurboAssembler::CallForDeoptimization(Address target, int deopt_id) {
   DCHECK_EQ(SizeOfCodeGeneratedSince(&start), Deoptimizer::kDeoptExitSize);
 }
 
-void TurboAssembler::PrepareForTailCall(const ParameterCount& callee_args_count,
-                                        Register caller_args_count_reg,
+void TurboAssembler::PrepareForTailCall(Register callee_args_count,
+                                        Register caller_args_count,
                                         Register scratch0, Register scratch1) {
-#if DEBUG
-  if (callee_args_count.is_reg()) {
-    DCHECK(!AreAliased(callee_args_count.reg(), caller_args_count_reg, scratch0,
-                       scratch1));
-  } else {
-    DCHECK(!AreAliased(caller_args_count_reg, scratch0, scratch1));
-  }
-#endif
+  DCHECK(!AreAliased(callee_args_count, caller_args_count, scratch0, scratch1));
 
   // Calculate the end of destination area where we will put the arguments
   // after we drop current frame. We add kSystemPointerSize to count the
   // receiver argument which is not included into formal parameters count.
   Register dst_reg = scratch0;
-  Add(dst_reg, fp, Operand(caller_args_count_reg, LSL, kSystemPointerSizeLog2));
+  Add(dst_reg, fp, Operand(caller_args_count, LSL, kSystemPointerSizeLog2));
   Add(dst_reg, dst_reg,
       StandardFrameConstants::kCallerSPOffset + kSystemPointerSize);
   // Round dst_reg up to a multiple of 16 bytes, so that we overwrite any
@@ -2099,15 +2092,10 @@ void TurboAssembler::PrepareForTailCall(const ParameterCount& callee_args_count,
   Add(dst_reg, dst_reg, 15);
   Bic(dst_reg, dst_reg, 15);
 
-  Register src_reg = caller_args_count_reg;
+  Register src_reg = caller_args_count;
   // Calculate the end of source area. +kSystemPointerSize is for the receiver.
-  if (callee_args_count.is_reg()) {
-    Add(src_reg, sp,
-        Operand(callee_args_count.reg(), LSL, kSystemPointerSizeLog2));
-    Add(src_reg, src_reg, kSystemPointerSize);
-  } else {
-    Add(src_reg, sp, (callee_args_count.immediate() + 1) * kSystemPointerSize);
-  }
+  Add(src_reg, sp, Operand(callee_args_count, LSL, kSystemPointerSizeLog2));
+  Add(src_reg, src_reg, kSystemPointerSize);
 
   // Round src_reg up to a multiple of 16 bytes, so we include any potential
   // padding in the copy.
@@ -2143,107 +2131,64 @@ void TurboAssembler::PrepareForTailCall(const ParameterCount& callee_args_count,
   Mov(sp, dst_reg);
 }
 
-void MacroAssembler::InvokePrologue(const ParameterCount& expected,
-                                    const ParameterCount& actual, Label* done,
-                                    InvokeFlag flag,
-                                    bool* definitely_mismatches) {
-  bool definitely_matches = false;
-  *definitely_mismatches = false;
+void MacroAssembler::InvokePrologue(Register expected_parameter_count,
+                                    Register actual_parameter_count,
+                                    Label* done, InvokeFlag flag) {
   Label regular_invoke;
 
-  // Check whether the expected and actual arguments count match. If not,
-  // setup registers according to contract with ArgumentsAdaptorTrampoline:
+  // Check whether the expected and actual arguments count match. The registers
+  // are set up according to contract with ArgumentsAdaptorTrampoline:
   //  x0: actual arguments count.
   //  x1: function (passed through to callee).
   //  x2: expected arguments count.
-
   // The code below is made a lot easier because the calling code already sets
-  // up actual and expected registers according to the contract if values are
-  // passed in registers.
-  DCHECK(actual.is_immediate() || actual.reg().is(x0));
-  DCHECK(expected.is_immediate() || expected.reg().is(x2));
+  // up actual and expected registers according to the contract.
+  DCHECK_EQ(actual_parameter_count, x0);
+  DCHECK_EQ(expected_parameter_count, x2);
 
-  if (expected.is_immediate()) {
-    DCHECK(actual.is_immediate());
-    Mov(x0, actual.immediate());
-    if (expected.immediate() == actual.immediate()) {
-      definitely_matches = true;
+  // If actual == expected perform a regular invocation.
+  Cmp(expected_parameter_count, actual_parameter_count);
+  B(eq, &regular_invoke);
 
-    } else {
-      if (expected.immediate() ==
-          SharedFunctionInfo::kDontAdaptArgumentsSentinel) {
-        // Don't worry about adapting arguments for builtins that
-        // don't want that done. Skip adaption code by making it look
-        // like we have a match between expected and actual number of
-        // arguments.
-        definitely_matches = true;
-      } else {
-        *definitely_mismatches = true;
-        // Set up x2 for the argument adaptor.
-        Mov(x2, expected.immediate());
-      }
-    }
-
-  } else {  // expected is a register.
-    Operand actual_op = actual.is_immediate() ? Operand(actual.immediate())
-                                              : Operand(actual.reg());
-    Mov(x0, actual_op);
-    // If actual == expected perform a regular invocation.
-    Cmp(expected.reg(), actual_op);
-    B(eq, &regular_invoke);
+  // The argument counts mismatch, generate a call to the argument adaptor.
+  Handle<Code> adaptor = BUILTIN_CODE(isolate(), ArgumentsAdaptorTrampoline);
+  if (flag == CALL_FUNCTION) {
+    Call(adaptor);
+    // If the arg counts don't match, no extra code is emitted by
+    // MAsm::InvokeFunctionCode and we can just fall through.
+    B(done);
+  } else {
+    Jump(adaptor, RelocInfo::CODE_TARGET);
   }
 
-  // If the argument counts may mismatch, generate a call to the argument
-  // adaptor.
-  if (!definitely_matches) {
-    Handle<Code> adaptor = BUILTIN_CODE(isolate(), ArgumentsAdaptorTrampoline);
-    if (flag == CALL_FUNCTION) {
-      Call(adaptor);
-      if (!*definitely_mismatches) {
-        // If the arg counts don't match, no extra code is emitted by
-        // MAsm::InvokeFunctionCode and we can just fall through.
-        B(done);
-      }
-    } else {
-      Jump(adaptor, RelocInfo::CODE_TARGET);
-    }
-  }
   Bind(&regular_invoke);
 }
 
 void MacroAssembler::CallDebugOnFunctionCall(Register fun, Register new_target,
-                                             const ParameterCount& expected,
-                                             const ParameterCount& actual) {
+                                             Register expected_parameter_count,
+                                             Register actual_parameter_count) {
   // Load receiver to pass it later to DebugOnFunctionCall hook.
-  if (actual.is_reg()) {
-    Ldr(x4, MemOperand(sp, actual.reg(), LSL, kSystemPointerSizeLog2));
-  } else {
-    Ldr(x4, MemOperand(sp, actual.immediate() << kSystemPointerSizeLog2));
-  }
+  Ldr(x4, MemOperand(sp, actual_parameter_count, LSL, kSystemPointerSizeLog2));
   FrameScope frame(this, has_frame() ? StackFrame::NONE : StackFrame::INTERNAL);
 
-  Register expected_reg = padreg;
-  Register actual_reg = padreg;
-  if (expected.is_reg()) expected_reg = expected.reg();
-  if (actual.is_reg()) actual_reg = actual.reg();
   if (!new_target.is_valid()) new_target = padreg;
 
   // Save values on stack.
-  SmiTag(expected_reg);
-  SmiTag(actual_reg);
-  Push(expected_reg, actual_reg, new_target, fun);
+  SmiTag(expected_parameter_count);
+  SmiTag(actual_parameter_count);
+  Push(expected_parameter_count, actual_parameter_count, new_target, fun);
   Push(fun, x4);
   CallRuntime(Runtime::kDebugOnFunctionCall);
 
   // Restore values from stack.
-  Pop(fun, new_target, actual_reg, expected_reg);
-  SmiUntag(actual_reg);
-  SmiUntag(expected_reg);
+  Pop(fun, new_target, actual_parameter_count, expected_parameter_count);
+  SmiUntag(actual_parameter_count);
+  SmiUntag(expected_parameter_count);
 }
 
 void MacroAssembler::InvokeFunctionCode(Register function, Register new_target,
-                                        const ParameterCount& expected,
-                                        const ParameterCount& actual,
+                                        Register expected_parameter_count,
+                                        Register actual_parameter_count,
                                         InvokeFlag flag) {
   // You can't call a function without a valid frame.
   DCHECK(flag == JUMP_FUNCTION || has_frame());
@@ -2265,31 +2210,29 @@ void MacroAssembler::InvokeFunctionCode(Register function, Register new_target,
   }
 
   Label done;
-  bool definitely_mismatches = false;
-  InvokePrologue(expected, actual, &done, flag, &definitely_mismatches);
+  InvokePrologue(expected_parameter_count, actual_parameter_count, &done, flag);
 
-  // If we are certain that actual != expected, then we know InvokePrologue will
-  // have handled the call through the argument adaptor mechanism.
+  // If actual != expected, InvokePrologue will have handled the call through
+  // the argument adaptor mechanism.
   // The called function expects the call kind in x5.
-  if (!definitely_mismatches) {
-    // We call indirectly through the code field in the function to
-    // allow recompilation to take effect without changing any of the
-    // call sites.
-    Register code = kJavaScriptCallCodeStartRegister;
-    LoadTaggedPointerField(code,
-                           FieldMemOperand(function, JSFunction::kCodeOffset));
-    if (flag == CALL_FUNCTION) {
-      CallCodeObject(code);
-    } else {
-      DCHECK(flag == JUMP_FUNCTION);
-      JumpCodeObject(code);
-    }
+  // We call indirectly through the code field in the function to
+  // allow recompilation to take effect without changing any of the
+  // call sites.
+  Register code = kJavaScriptCallCodeStartRegister;
+  LoadTaggedPointerField(code,
+                         FieldMemOperand(function, JSFunction::kCodeOffset));
+  if (flag == CALL_FUNCTION) {
+    CallCodeObject(code);
+  } else {
+    DCHECK(flag == JUMP_FUNCTION);
+    JumpCodeObject(code);
   }
   B(&done);
 
   // Deferred debug hook.
   bind(&debug_hook);
-  CallDebugOnFunctionCall(function, new_target, expected, actual);
+  CallDebugOnFunctionCall(function, new_target, expected_parameter_count,
+                          actual_parameter_count);
   B(&continue_after_hook);
 
   // Continue here if InvokePrologue does handle the invocation due to
@@ -2297,9 +2240,9 @@ void MacroAssembler::InvokeFunctionCode(Register function, Register new_target,
   Bind(&done);
 }
 
-void MacroAssembler::InvokeFunction(Register function, Register new_target,
-                                    const ParameterCount& actual,
-                                    InvokeFlag flag) {
+void MacroAssembler::InvokeFunctionWithNewTarget(
+    Register function, Register new_target, Register actual_parameter_count,
+    InvokeFlag flag) {
   // You can't call a function without a valid frame.
   DCHECK(flag == JUMP_FUNCTION || has_frame());
 
@@ -2307,7 +2250,7 @@ void MacroAssembler::InvokeFunction(Register function, Register new_target,
   // (See FullCodeGenerator::Generate().)
   DCHECK(function.is(x1));
 
-  Register expected_reg = x2;
+  Register expected_parameter_count = x2;
 
   LoadTaggedPointerField(cp,
                          FieldMemOperand(function, JSFunction::kContextOffset));
@@ -2315,19 +2258,19 @@ void MacroAssembler::InvokeFunction(Register function, Register new_target,
   // (SharedFunctionInfo::kDontAdaptArgumentsSentinel), so we need sign
   // extension to correctly handle it.
   LoadTaggedPointerField(
-      expected_reg,
+      expected_parameter_count,
       FieldMemOperand(function, JSFunction::kSharedFunctionInfoOffset));
-  Ldrh(expected_reg,
-       FieldMemOperand(expected_reg,
+  Ldrh(expected_parameter_count,
+       FieldMemOperand(expected_parameter_count,
                        SharedFunctionInfo::kFormalParameterCountOffset));
 
-  ParameterCount expected(expected_reg);
-  InvokeFunctionCode(function, new_target, expected, actual, flag);
+  InvokeFunctionCode(function, new_target, expected_parameter_count,
+                     actual_parameter_count, flag);
 }
 
 void MacroAssembler::InvokeFunction(Register function,
-                                    const ParameterCount& expected,
-                                    const ParameterCount& actual,
+                                    Register expected_parameter_count,
+                                    Register actual_parameter_count,
                                     InvokeFlag flag) {
   // You can't call a function without a valid frame.
   DCHECK(flag == JUMP_FUNCTION || has_frame());
@@ -2340,7 +2283,8 @@ void MacroAssembler::InvokeFunction(Register function,
   LoadTaggedPointerField(cp,
                          FieldMemOperand(function, JSFunction::kContextOffset));
 
-  InvokeFunctionCode(function, no_reg, expected, actual, flag);
+  InvokeFunctionCode(function, no_reg, expected_parameter_count,
+                     actual_parameter_count, flag);
 }
 
 void TurboAssembler::TryConvertDoubleToInt64(Register result,
@@ -2620,8 +2564,12 @@ void MacroAssembler::JumpIfObjectType(Register object, Register map,
 // Sets condition flags based on comparison, and returns type in type_reg.
 void MacroAssembler::CompareObjectType(Register object, Register map,
                                        Register type_reg, InstanceType type) {
-  LoadTaggedPointerField(map, FieldMemOperand(object, HeapObject::kMapOffset));
+  LoadMap(map, object);
   CompareInstanceType(map, type_reg, type);
+}
+
+void MacroAssembler::LoadMap(Register dst, Register object) {
+  LoadTaggedPointerField(dst, FieldMemOperand(object, HeapObject::kMapOffset));
 }
 
 // Sets condition flags based on comparison, and returns type in type_reg.
@@ -3034,6 +2982,8 @@ void TurboAssembler::Check(Condition cond, AbortReason reason) {
   Bind(&ok);
 }
 
+void TurboAssembler::Trap() { Brk(0); }
+
 void TurboAssembler::Abort(AbortReason reason) {
 #ifdef DEBUG
   RecordComment("Abort message: ");
@@ -3077,13 +3027,16 @@ void TurboAssembler::Abort(AbortReason reason) {
 }
 
 void MacroAssembler::LoadNativeContextSlot(int index, Register dst) {
-  LoadTaggedPointerField(dst, NativeContextMemOperand());
-  LoadTaggedPointerField(dst, ContextMemOperand(dst, index));
+  LoadMap(dst, cp);
+  LoadTaggedPointerField(
+      dst, FieldMemOperand(
+               dst, Map::kConstructorOrBackPointerOrNativeContextOffset));
+  LoadTaggedPointerField(dst, MemOperand(dst, Context::SlotOffset(index)));
 }
 
 // This is the main Printf implementation. All other Printf variants call
 // PrintfNoPreserve after setting up one or more PreserveRegisterScopes.
-void MacroAssembler::PrintfNoPreserve(const char* format,
+void TurboAssembler::PrintfNoPreserve(const char* format,
                                       const CPURegister& arg0,
                                       const CPURegister& arg1,
                                       const CPURegister& arg2,
@@ -3116,7 +3069,7 @@ void MacroAssembler::PrintfNoPreserve(const char* format,
   fp_tmp_list.Remove(kPCSVarargsFP);
   fp_tmp_list.Remove(arg0, arg1, arg2, arg3);
 
-  // Override the MacroAssembler's scratch register list. The lists will be
+  // Override the TurboAssembler's scratch register list. The lists will be
   // reset automatically at the end of the UseScratchRegisterScope.
   UseScratchRegisterScope temps(this);
   TmpList()->set_list(tmp_list.list());
@@ -3236,7 +3189,7 @@ void TurboAssembler::CallPrintf(int arg_count, const CPURegister* args) {
 #endif
 }
 
-void MacroAssembler::Printf(const char* format, CPURegister arg0,
+void TurboAssembler::Printf(const char* format, CPURegister arg0,
                             CPURegister arg1, CPURegister arg2,
                             CPURegister arg3) {
   // Printf is expected to preserve all registers, so make sure that none are
@@ -3332,14 +3285,6 @@ CPURegister UseScratchRegisterScope::AcquireNextAvailable(
   CPURegister result = available->PopLowestIndex();
   DCHECK(!AreAliased(result, xzr, sp));
   return result;
-}
-
-MemOperand ContextMemOperand(Register context, int index) {
-  return MemOperand(context, Context::SlotOffset(index));
-}
-
-MemOperand NativeContextMemOperand() {
-  return ContextMemOperand(cp, Context::NATIVE_CONTEXT_INDEX);
 }
 
 void TurboAssembler::ComputeCodeStartAddress(const Register& rd) {

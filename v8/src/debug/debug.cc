@@ -36,7 +36,6 @@
 #include "src/objects/js-generator-inl.h"
 #include "src/objects/js-promise-inl.h"
 #include "src/objects/slots.h"
-#include "src/snapshot/natives.h"
 #include "src/snapshot/snapshot.h"
 #include "src/wasm/wasm-objects-inl.h"
 
@@ -622,8 +621,7 @@ bool Debug::SetBreakPointForScript(Handle<Script> script,
   Handle<BreakPoint> break_point =
       isolate_->factory()->NewBreakPoint(*id, condition);
   if (script->type() == Script::TYPE_WASM) {
-    return WasmModuleObject::SetBreakPoint(script, source_position,
-                                           break_point);
+    return WasmScript::SetBreakPoint(script, source_position, break_point);
   }
 
   HandleScope scope(isolate_);
@@ -1136,10 +1134,6 @@ void Debug::DeoptimizeFunction(Handle<SharedFunctionInfo> shared) {
   // Deoptimize all code compiled from this shared function info including
   // inlining.
   isolate_->AbortConcurrentOptimization(BlockingBehavior::kBlock);
-
-  // TODO(mlippautz): Try to remove this call.
-  isolate_->heap()->PreciseCollectAllGarbage(
-      Heap::kNoGCFlags, GarbageCollectionReason::kDebugger);
 
   bool found_something = false;
   Code::OptimizedCodeIterator iterator(isolate_);

@@ -260,6 +260,7 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
     CASE_F32x4_OP(Le, "le")
     CASE_F32x4_OP(Gt, "gt")
     CASE_F32x4_OP(Ge, "ge")
+    CASE_CONVERT_OP(Convert, F64x2, I64x2, "i64", "convert")
     CASE_CONVERT_OP(Convert, F32x4, I32x4, "i32", "convert")
     CASE_CONVERT_OP(Convert, I32x4, F32x4, "f32", "convert")
     CASE_CONVERT_OP(Convert, I32x4, I16x8Low, "i32", "convert")
@@ -320,6 +321,11 @@ const char* WasmOpcodes::OpcodeName(WasmOpcode opcode) {
     CASE_F64x2_OP(Qfms, "qfms")
     CASE_F32x4_OP(Qfma, "qfma")
     CASE_F32x4_OP(Qfms, "qfms")
+
+    CASE_S8x16_OP(LoadSplat, "load_splat")
+    CASE_S16x8_OP(LoadSplat, "load_splat")
+    CASE_I16x8_OP(Load8x8S, "load8x8_s")
+    CASE_I16x8_OP(Load8x8U, "load8x8_u")
 
     // Atomic operations.
     CASE_OP(AtomicNotify, "atomic.notify")

@@ -67,7 +67,7 @@ TF_BUILTIN(FastNewClosure, ConstructorBuiltinsAssembler) {
 
   // Bump the closure counter encoded the {feedback_cell}s map.
   {
-    TNode<Map> const feedback_cell_map = LoadMap(feedback_cell);
+    const TNode<Map> feedback_cell_map = LoadMap(feedback_cell);
     Label no_closures(this), one_closure(this), cell_done(this);
 
     GotoIf(IsNoClosuresCellMap(feedback_cell_map), &no_closures);
@@ -91,7 +91,7 @@ TF_BUILTIN(FastNewClosure, ConstructorBuiltinsAssembler) {
   // SharedFunctionInfo::function_map_index().
   TNode<Uint32T> flags = LoadObjectField<Uint32T>(
       shared_function_info, SharedFunctionInfo::kFlagsOffset);
-  TNode<IntPtrT> const function_map_index = Signed(IntPtrAdd(
+  const TNode<IntPtrT> function_map_index = Signed(IntPtrAdd(
       DecodeWordFromWord32<SharedFunctionInfo::FunctionMapIndexBits>(flags),
       IntPtrConstant(Context::FIRST_FUNCTION_MAP_INDEX)));
   CSA_ASSERT(this, UintPtrLessThanOrEqual(
@@ -100,8 +100,8 @@ TF_BUILTIN(FastNewClosure, ConstructorBuiltinsAssembler) {
 
   // Get the function map in the current native context and set that
   // as the map of the allocated object.
-  TNode<NativeContext> const native_context = LoadNativeContext(context);
-  TNode<Map> const function_map =
+  const TNode<NativeContext> native_context = LoadNativeContext(context);
+  const TNode<Map> function_map =
       CAST(LoadContextElement(native_context, function_map_index));
 
   // Create a new closure from the given function info in new space
@@ -196,8 +196,8 @@ TNode<JSObject> ConstructorBuiltinsAssembler::EmitFastNewObject(
 
   // Fall back to runtime if the target differs from the new target's
   // initial map constructor.
-  TNode<Object> new_target_constructor =
-      LoadObjectField(initial_map, Map::kConstructorOrBackPointerOffset);
+  TNode<Object> new_target_constructor = LoadObjectField(
+      initial_map, Map::kConstructorOrBackPointerOrNativeContextOffset);
   GotoIf(TaggedNotEqual(target, new_target_constructor), call_runtime);
 
   TVARIABLE(HeapObject, properties);
@@ -230,19 +230,21 @@ TNode<Context> ConstructorBuiltinsAssembler::EmitFastNewFunctionContext(
   TNode<Context> function_context =
       UncheckedCast<Context>(AllocateInNewSpace(size));
 
-  RootIndex context_type;
+  TNode<NativeContext> native_context = LoadNativeContext(context);
+  Context::Field index;
   switch (scope_type) {
     case EVAL_SCOPE:
-      context_type = RootIndex::kEvalContextMap;
+      index = Context::EVAL_CONTEXT_MAP_INDEX;
       break;
     case FUNCTION_SCOPE:
-      context_type = RootIndex::kFunctionContextMap;
+      index = Context::FUNCTION_CONTEXT_MAP_INDEX;
       break;
     default:
       UNREACHABLE();
   }
+  TNode<Map> map = CAST(LoadContextElement(native_context, index));
   // Set up the header.
-  StoreMapNoWriteBarrier(function_context, context_type);
+  StoreMapNoWriteBarrier(function_context, map);
   TNode<IntPtrT> min_context_slots = IntPtrConstant(Context::MIN_CONTEXT_SLOTS);
   // TODO(ishell): for now, length also includes MIN_CONTEXT_SLOTS.
   TNode<IntPtrT> length = IntPtrAdd(slots_intptr, min_context_slots);
@@ -252,11 +254,6 @@ TNode<Context> ConstructorBuiltinsAssembler::EmitFastNewFunctionContext(
                                  scope_info);
   StoreObjectFieldNoWriteBarrier(function_context, Context::kPreviousOffset,
                                  context);
-  StoreObjectFieldNoWriteBarrier(function_context, Context::kExtensionOffset,
-                                 TheHoleConstant());
-  TNode<NativeContext> native_context = LoadNativeContext(context);
-  StoreObjectFieldNoWriteBarrier(function_context,
-                                 Context::kNativeContextOffset, native_context);
 
   // Initialize the varrest of the slots to undefined.
   TNode<Oddball> undefined = UndefinedConstant();

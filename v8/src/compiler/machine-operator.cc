@@ -29,10 +29,59 @@ size_t hash_value(StoreRepresentation rep) {
 
 
 std::ostream& operator<<(std::ostream& os, StoreRepresentation rep) {
-  return os << "(" << rep.representation() << " : " << rep.write_barrier_kind()
-            << ")";
+  return os << rep.representation() << ", " << rep.write_barrier_kind();
 }
 
+size_t hash_value(LoadKind kind) { return static_cast<size_t>(kind); }
+
+std::ostream& operator<<(std::ostream& os, LoadKind kind) {
+  switch (kind) {
+    case LoadKind::kNormal:
+      return os << "kNormal";
+    case LoadKind::kUnaligned:
+      return os << "kUnaligned";
+    case LoadKind::kProtected:
+      return os << "kProtected";
+  }
+  UNREACHABLE();
+}
+
+size_t hash_value(LoadTransformation rep) { return static_cast<size_t>(rep); }
+
+std::ostream& operator<<(std::ostream& os, LoadTransformation rep) {
+  switch (rep) {
+    case LoadTransformation::kS8x16LoadSplat:
+      return os << "kS8x16LoadSplat";
+    case LoadTransformation::kS16x8LoadSplat:
+      return os << "kS16x8LoadSplat";
+    case LoadTransformation::kI16x8Load8x8S:
+      return os << "kI16x8Load8x8S";
+    case LoadTransformation::kI16x8Load8x8U:
+      return os << "kI16x8Load8x8U";
+  }
+  UNREACHABLE();
+}
+
+size_t hash_value(LoadTransformParameters params) {
+  return base::hash_combine(params.kind, params.transformation);
+}
+
+std::ostream& operator<<(std::ostream& os, LoadTransformParameters params) {
+  return os << "(" << params.kind << " " << params.transformation << ")";
+}
+
+LoadTransformParameters const& LoadTransformParametersOf(Operator const* op) {
+  DCHECK_EQ(IrOpcode::kLoadTransform, op->opcode());
+  return OpParameter<LoadTransformParameters>(op);
+}
+
+bool operator==(LoadTransformParameters lhs, LoadTransformParameters rhs) {
+  return lhs.transformation == rhs.transformation && lhs.kind == rhs.kind;
+}
+
+bool operator!=(LoadTransformParameters lhs, LoadTransformParameters rhs) {
+  return !(lhs == rhs);
+}
 
 LoadRepresentation LoadRepresentationOf(Operator const* op) {
   DCHECK(IrOpcode::kLoad == op->opcode() ||
@@ -71,7 +120,7 @@ size_t hash_value(StackSlotRepresentation rep) {
 }
 
 std::ostream& operator<<(std::ostream& os, StackSlotRepresentation rep) {
-  return os << "(" << rep.size() << " : " << rep.alignment() << ")";
+  return os << rep.size() << ", " << rep.alignment();
 }
 
 StackSlotRepresentation const& StackSlotRepresentationOf(Operator const* op) {
@@ -245,6 +294,7 @@ MachineType AtomicOpType(Operator const* op) {
   V(Float64ExtractHighWord32, Operator::kNoProperties, 1, 0, 1)               \
   V(Float64InsertLowWord32, Operator::kNoProperties, 2, 0, 1)                 \
   V(Float64InsertHighWord32, Operator::kNoProperties, 2, 0, 1)                \
+  V(LoadStackCheckOffset, Operator::kNoProperties, 0, 0, 1)                   \
   V(LoadFramePointer, Operator::kNoProperties, 0, 0, 1)                       \
   V(LoadParentFramePointer, Operator::kNoProperties, 0, 0, 1)                 \
   V(Int32PairAdd, Operator::kNoProperties, 4, 0, 2)                           \
@@ -254,6 +304,8 @@ MachineType AtomicOpType(Operator const* op) {
   V(Word32PairShr, Operator::kNoProperties, 3, 0, 2)                          \
   V(Word32PairSar, Operator::kNoProperties, 3, 0, 2)                          \
   V(F64x2Splat, Operator::kNoProperties, 1, 0, 1)                             \
+  V(F64x2SConvertI64x2, Operator::kNoProperties, 1, 0, 1)                     \
+  V(F64x2UConvertI64x2, Operator::kNoProperties, 1, 0, 1)                     \
   V(F64x2Abs, Operator::kNoProperties, 1, 0, 1)                               \
   V(F64x2Neg, Operator::kNoProperties, 1, 0, 1)                               \
   V(F64x2Sqrt, Operator::kNoProperties, 1, 0, 1)                              \
@@ -291,6 +343,7 @@ MachineType AtomicOpType(Operator const* op) {
   V(F32x4Qfma, Operator::kNoProperties, 3, 0, 1)                              \
   V(F32x4Qfms, Operator::kNoProperties, 3, 0, 1)                              \
   V(I64x2Splat, Operator::kNoProperties, 1, 0, 1)                             \
+  V(I64x2SplatI32Pair, Operator::kNoProperties, 2, 0, 1)                      \
   V(I64x2Neg, Operator::kNoProperties, 1, 0, 1)                               \
   V(I64x2Shl, Operator::kNoProperties, 2, 0, 1)                               \
   V(I64x2ShrS, Operator::kNoProperties, 2, 0, 1)                              \
@@ -402,8 +455,7 @@ MachineType AtomicOpType(Operator const* op) {
   V(S1x8AllTrue, Operator::kNoProperties, 1, 0, 1)                            \
   V(S1x16AnyTrue, Operator::kNoProperties, 1, 0, 1)                           \
   V(S1x16AllTrue, Operator::kNoProperties, 1, 0, 1)                           \
-  V(S8x16Swizzle, Operator::kNoProperties, 2, 0, 1)                           \
-  V(StackPointerGreaterThan, Operator::kNoProperties, 1, 0, 1)
+  V(S8x16Swizzle, Operator::kNoProperties, 2, 0, 1)
 
 // The format is:
 // V(Name, properties, value_input_count, control_input_count, output_count)
@@ -469,6 +521,12 @@ MachineType AtomicOpType(Operator const* op) {
   V(kCompressedSigned)                 \
   V(kCompressedPointer)                \
   V(kCompressed)
+
+#define LOAD_TRANSFORM_LIST(V) \
+  V(S8x16LoadSplat)            \
+  V(S16x8LoadSplat)            \
+  V(I16x8Load8x8S)             \
+  V(I16x8Load8x8U)
 
 #define ATOMIC_U32_TYPE_LIST(V) \
   V(Uint8)                      \
@@ -584,6 +642,28 @@ struct MachineOperatorGlobalCache {
   ProtectedLoad##Type##Operator kProtectedLoad##Type;
   MACHINE_TYPE_LIST(LOAD)
 #undef LOAD
+
+#define LOAD_TRANSFORM_KIND(TYPE, KIND)                                     \
+  struct KIND##LoadTransform##TYPE##Operator final                          \
+      : public Operator1<LoadTransformParameters> {                         \
+    KIND##LoadTransform##TYPE##Operator()                                   \
+        : Operator1<LoadTransformParameters>(                               \
+              IrOpcode::kLoadTransform,                                     \
+              Operator::kNoDeopt | Operator::kNoThrow | Operator::kNoWrite, \
+              #KIND "LoadTransform", 2, 1, 1, 1, 1, 0,                      \
+              LoadTransformParameters{LoadKind::k##KIND,                    \
+                                      LoadTransformation::k##TYPE}) {}      \
+  };                                                                        \
+  KIND##LoadTransform##TYPE##Operator k##KIND##LoadTransform##TYPE;
+
+#define LOAD_TRANSFORM(TYPE)           \
+  LOAD_TRANSFORM_KIND(TYPE, Normal)    \
+  LOAD_TRANSFORM_KIND(TYPE, Unaligned) \
+  LOAD_TRANSFORM_KIND(TYPE, Protected)
+
+  LOAD_TRANSFORM_LIST(LOAD_TRANSFORM)
+#undef LOAD_TRANSFORM
+#undef LOAD_TRANSFORM_KIND
 
 #define STACKSLOT(Size, Alignment)                                     \
   struct StackSlotOfSize##Size##OfAlignment##Alignment##Operator final \
@@ -896,6 +976,26 @@ struct MachineOperatorGlobalCache {
                    "UnsafePointerAdd", 2, 1, 1, 1, 1, 0) {}
   };
   UnsafePointerAddOperator kUnsafePointerAdd;
+
+  struct StackPointerGreaterThanOperator : public Operator1<StackCheckKind> {
+    explicit StackPointerGreaterThanOperator(StackCheckKind kind)
+        : Operator1<StackCheckKind>(
+              IrOpcode::kStackPointerGreaterThan, Operator::kEliminatable,
+              "StackPointerGreaterThan", 1, 1, 0, 1, 1, 0, kind) {}
+  };
+#define STACK_POINTER_GREATER_THAN(Kind)                              \
+  struct StackPointerGreaterThan##Kind##Operator final                \
+      : public StackPointerGreaterThanOperator {                      \
+    StackPointerGreaterThan##Kind##Operator()                         \
+        : StackPointerGreaterThanOperator(StackCheckKind::k##Kind) {} \
+  };                                                                  \
+  StackPointerGreaterThan##Kind##Operator kStackPointerGreaterThan##Kind;
+
+  STACK_POINTER_GREATER_THAN(JSFunctionEntry)
+  STACK_POINTER_GREATER_THAN(JSIterationBody)
+  STACK_POINTER_GREATER_THAN(CodeStubAssembler)
+  STACK_POINTER_GREATER_THAN(Wasm)
+#undef STACK_POINTER_GREATER_THAN
 };
 
 struct CommentOperator : public Operator1<const char*> {
@@ -995,6 +1095,23 @@ const Operator* MachineOperatorBuilder::ProtectedLoad(LoadRepresentation rep) {
   UNREACHABLE();
 }
 
+const Operator* MachineOperatorBuilder::LoadTransform(
+    LoadKind kind, LoadTransformation transform) {
+#define LOAD_TRANSFORM_KIND(TYPE, KIND)                                        \
+  if (kind == LoadKind::k##KIND && transform == LoadTransformation::k##TYPE) { \
+    return &cache_.k##KIND##LoadTransform##TYPE;                               \
+  }
+#define LOAD_TRANSFORM(TYPE)           \
+  LOAD_TRANSFORM_KIND(TYPE, Normal)    \
+  LOAD_TRANSFORM_KIND(TYPE, Unaligned) \
+  LOAD_TRANSFORM_KIND(TYPE, Protected)
+
+  LOAD_TRANSFORM_LIST(LOAD_TRANSFORM)
+#undef LOAD_TRANSFORM
+#undef LOAD_TRANSFORM_KIND
+  UNREACHABLE();
+}
+
 const Operator* MachineOperatorBuilder::StackSlot(int size, int alignment) {
   DCHECK_LE(0, size);
   DCHECK(alignment == 0 || alignment == 4 || alignment == 8 || alignment == 16);
@@ -1060,6 +1177,21 @@ const Operator* MachineOperatorBuilder::ProtectedStore(
 
 const Operator* MachineOperatorBuilder::UnsafePointerAdd() {
   return &cache_.kUnsafePointerAdd;
+}
+
+const Operator* MachineOperatorBuilder::StackPointerGreaterThan(
+    StackCheckKind kind) {
+  switch (kind) {
+    case StackCheckKind::kJSFunctionEntry:
+      return &cache_.kStackPointerGreaterThanJSFunctionEntry;
+    case StackCheckKind::kJSIterationBody:
+      return &cache_.kStackPointerGreaterThanJSIterationBody;
+    case StackCheckKind::kCodeStubAssembler:
+      return &cache_.kStackPointerGreaterThanCodeStubAssembler;
+    case StackCheckKind::kWasm:
+      return &cache_.kStackPointerGreaterThanWasm;
+  }
+  UNREACHABLE();
 }
 
 const Operator* MachineOperatorBuilder::BitcastWordToTagged() {
@@ -1342,6 +1474,14 @@ const Operator* MachineOperatorBuilder::Word64PoisonOnSpeculation() {
 SIMD_LANE_OP_LIST(SIMD_LANE_OPS)
 #undef SIMD_LANE_OPS
 
+const Operator* MachineOperatorBuilder::I64x2ReplaceLaneI32Pair(
+    int32_t lane_index) {
+  DCHECK(0 <= lane_index && lane_index < 2);
+  return new (zone_)
+      Operator1<int32_t>(IrOpcode::kI64x2ReplaceLaneI32Pair, Operator::kPure,
+                         "Replace lane", 3, 0, 0, 1, 0, 0, lane_index);
+}
+
 const Operator* MachineOperatorBuilder::S8x16Shuffle(
     const uint8_t shuffle[16]) {
   uint8_t* array = zone_->NewArray<uint8_t>(16);
@@ -1354,6 +1494,11 @@ const Operator* MachineOperatorBuilder::S8x16Shuffle(
 const uint8_t* S8x16ShuffleOf(Operator const* op) {
   DCHECK_EQ(IrOpcode::kS8x16Shuffle, op->opcode());
   return OpParameter<uint8_t*>(op);
+}
+
+StackCheckKind StackCheckKindOf(Operator const* op) {
+  DCHECK_EQ(IrOpcode::kStackPointerGreaterThan, op->opcode());
+  return OpParameter<StackCheckKind>(op);
 }
 
 #undef PURE_BINARY_OP_LIST_32
@@ -1370,6 +1515,7 @@ const uint8_t* S8x16ShuffleOf(Operator const* op) {
 #undef ATOMIC64_REPRESENTATION_LIST
 #undef SIMD_LANE_OP_LIST
 #undef STACK_SLOT_CACHED_SIZES_ALIGNMENTS_LIST
+#undef LOAD_TRANSFORM_LIST
 
 }  // namespace compiler
 }  // namespace internal

@@ -113,8 +113,6 @@ RegExpMacroAssemblerPPC::RegExpMacroAssemblerPPC(Isolate* isolate, Zone* zone,
       internal_failure_label_() {
   DCHECK_EQ(0, registers_to_save % 2);
 
-  // Because RegExp code respects C ABI, so needs a FD
-  __ function_descriptor();
 
   __ b(&entry_label_);  // We'll write the entry code later.
   // If the code gets too big or corrupted, an internal exception will be
@@ -172,6 +170,19 @@ void RegExpMacroAssemblerPPC::AdvanceRegister(int reg, int by) {
 
 void RegExpMacroAssemblerPPC::Backtrack() {
   CheckPreemption();
+  if (has_backtrack_limit()) {
+    Label next;
+    __ LoadP(r3, MemOperand(frame_pointer(), kBacktrackCount), r0);
+    __ addi(r3, r3, Operand(1));
+    __ StoreP(r3, MemOperand(frame_pointer(), kBacktrackCount), r0);
+    __ cmpi(r3, Operand(backtrack_limit()));
+    __ bne(&next);
+
+    // Exceeded limits are treated as a failed match.
+    Fail();
+
+    __ bind(&next);
+  }
   // Pop Code offset from backtrack stack, add Code and jump to location.
   Pop(r3);
   __ add(r3, r3, code_pointer());
@@ -684,9 +695,16 @@ Handle<HeapObject> RegExpMacroAssemblerPPC::GetCode(Handle<String> source) {
     // Set frame pointer in space for it if this is not a direct call
     // from generated code.
     __ addi(frame_pointer(), sp, Operand(8 * kPointerSize));
+
+    STATIC_ASSERT(kSuccessfulCaptures == kInputString - kSystemPointerSize);
     __ li(r3, Operand::Zero());
     __ push(r3);  // Make room for success counter and initialize it to 0.
+    STATIC_ASSERT(kStringStartMinusOne ==
+                  kSuccessfulCaptures - kSystemPointerSize);
     __ push(r3);  // Make room for "string start - 1" constant.
+    STATIC_ASSERT(kBacktrackCount == kStringStartMinusOne - kSystemPointerSize);
+    __ push(r3);  // The backtrack counter.
+
     // Check if we have space on the stack for registers.
     Label stack_limit_hit;
     Label stack_ok;
@@ -1139,17 +1157,10 @@ void RegExpMacroAssemblerPPC::CallCheckStackGuardState(Register scratch) {
       ExternalReference::re_check_stack_guard_state(isolate());
   __ mov(ip, Operand(stack_guard_check));
 
-  if (FLAG_embedded_builtins) {
-    EmbeddedData d = EmbeddedData::FromBlob();
-    CHECK(Builtins::IsIsolateIndependent(Builtins::kDirectCEntry));
-    Address entry = d.InstructionStartOfBuiltin(Builtins::kDirectCEntry);
-    __ mov(r0, Operand(entry, RelocInfo::OFF_HEAP_TARGET));
-  } else {
-    // TODO(v8:8519): Remove this once embedded builtins are on unconditionally.
-    Handle<Code> code = BUILTIN_CODE(isolate(), DirectCEntry);
-    __ mov(r0, Operand(reinterpret_cast<intptr_t>(code.location()),
-                       RelocInfo::CODE_TARGET));
-  }
+  EmbeddedData d = EmbeddedData::FromBlob();
+  CHECK(Builtins::IsIsolateIndependent(Builtins::kDirectCEntry));
+  Address entry = d.InstructionStartOfBuiltin(Builtins::kDirectCEntry);
+  __ mov(r0, Operand(entry, RelocInfo::OFF_HEAP_TARGET));
   __ Call(r0);
 
   // Restore the stack pointer

@@ -146,8 +146,7 @@ void Generate_JSBuiltinsConstructStubHelper(MacroAssembler* masm) {
     // rax: number of arguments (untagged)
     // rdi: constructor function
     // rdx: new target
-    ParameterCount actual(rax);
-    __ InvokeFunction(rdi, rdx, actual, CALL_FUNCTION);
+    __ InvokeFunction(rdi, rdx, rax, CALL_FUNCTION);
 
     // Restore context from the frame.
     __ movq(rsi, Operand(rbp, ConstructFrameConstants::kContextOffset));
@@ -299,8 +298,7 @@ void Builtins::Generate_JSConstructStubGeneric(MacroAssembler* masm) {
     __ j(greater_equal, &loop, Label::kNear);
 
     // Call the function.
-    ParameterCount actual(rax);
-    __ InvokeFunction(rdi, rdx, actual, CALL_FUNCTION);
+    __ InvokeFunction(rdi, rdx, rax, CALL_FUNCTION);
 
     // ----------- S t a t e -------------
     //  -- rax                 constructor result
@@ -1842,32 +1840,6 @@ void Builtins::Generate_ReflectConstruct(MacroAssembler* masm) {
           RelocInfo::CODE_TARGET);
 }
 
-void Builtins::Generate_InternalArrayConstructor(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- rax    : argc
-  //  -- rsp[0] : return address
-  //  -- rsp[8] : last argument
-  // -----------------------------------
-
-  if (FLAG_debug_code) {
-    // Initial map for the builtin InternalArray functions should be maps.
-    __ LoadTaggedPointerField(
-        rbx, FieldOperand(rdi, JSFunction::kPrototypeOrInitialMapOffset));
-    // Will both indicate a nullptr and a Smi.
-    STATIC_ASSERT(kSmiTag == 0);
-    Condition not_smi = NegateCondition(masm->CheckSmi(rbx));
-    __ Check(not_smi,
-             AbortReason::kUnexpectedInitialMapForInternalArrayFunction);
-    __ CmpObjectType(rbx, MAP_TYPE, rcx);
-    __ Check(equal, AbortReason::kUnexpectedInitialMapForInternalArrayFunction);
-  }
-
-  // Run the native code for the InternalArray function called as a normal
-  // function.
-  __ Jump(BUILTIN_CODE(masm->isolate(), InternalArrayConstructorImpl),
-          RelocInfo::CODE_TARGET);
-}
-
 static void EnterArgumentsAdaptorFrame(MacroAssembler* masm) {
   __ pushq(rbp);
   __ movq(rbp, rsp);
@@ -2152,7 +2124,7 @@ void Builtins::Generate_CallOrConstructForwardVarargs(MacroAssembler* masm,
           Immediate(StackFrame::TypeToMarker(StackFrame::ARGUMENTS_ADAPTOR)));
   __ j(equal, &arguments_adaptor, Label::kNear);
   {
-    __ movq(r8, Operand(rbp, JavaScriptFrameConstants::kFunctionOffset));
+    __ movq(r8, Operand(rbp, StandardFrameConstants::kFunctionOffset));
     __ LoadTaggedPointerField(
         r8, FieldOperand(r8, JSFunction::kSharedFunctionInfoOffset));
     __ movzxwq(
@@ -2234,6 +2206,15 @@ void Builtins::Generate_CallFunction(MacroAssembler* masm,
            Immediate(SharedFunctionInfo::IsNativeBit::kMask |
                      SharedFunctionInfo::IsStrictBit::kMask));
   __ j(not_zero, &done_convert);
+
+  // Check if the window is marked as detached.
+  Label detached_window, after_detached_window;
+  __ LoadNativeContextSlot(Context::DETACHED_WINDOW_REASON_INDEX,
+                           kScratchRegister);
+  __ Cmp(kScratchRegister, Smi::zero());
+  __ j(not_zero, &detached_window);
+  __ bind(&after_detached_window);
+
   {
     // ----------- S t a t e -------------
     //  -- rax : the number of arguments (not including the receiver)
@@ -2301,10 +2282,8 @@ void Builtins::Generate_CallFunction(MacroAssembler* masm,
 
   __ movzxwq(
       rbx, FieldOperand(rdx, SharedFunctionInfo::kFormalParameterCountOffset));
-  ParameterCount actual(rax);
-  ParameterCount expected(rbx);
 
-  __ InvokeFunctionCode(rdi, no_reg, expected, actual, JUMP_FUNCTION);
+  __ InvokeFunctionCode(rdi, no_reg, rbx, rax, JUMP_FUNCTION);
 
   // The function is a "classConstructor", need to raise an exception.
   __ bind(&class_constructor);
@@ -2313,6 +2292,15 @@ void Builtins::Generate_CallFunction(MacroAssembler* masm,
     __ Push(rdi);
     __ CallRuntime(Runtime::kThrowConstructorNonCallableError);
   }
+
+  __ bind(&detached_window);
+  {
+    FrameScope frame(masm, StackFrame::INTERNAL);
+    __ PushCallerSaved(kDontSaveFPRegs, kScratchRegister);
+    __ CallRuntime(Runtime::kReportDetachedWindowAccess);
+    __ PopCallerSaved(kDontSaveFPRegs, kScratchRegister);
+  }
+  __ jmp(&after_detached_window);
 }
 
 namespace {
@@ -2666,17 +2654,10 @@ void Builtins::Generate_WasmCompileLazy(MacroAssembler* masm) {
     __ Push(kWasmInstanceRegister);
     // Push the function index as second argument.
     __ Push(r11);
-    // Load the correct CEntry builtin from the instance object.
-    __ movq(rcx, FieldOperand(kWasmInstanceRegister,
-                              WasmInstanceObject::kIsolateRootOffset));
-    auto centry_id =
-        Builtins::kCEntry_Return1_DontSaveFPRegs_ArgvOnStack_NoBuiltinExit;
-    __ LoadTaggedPointerField(
-        rcx, MemOperand(rcx, IsolateData::builtin_slot_offset(centry_id)));
     // Initialize the JavaScript context with 0. CEntry will use it to
     // set the current context on the isolate.
     __ Move(kContextRegister, Smi::zero());
-    __ CallRuntimeWithCEntry(Runtime::kWasmCompileLazy, rcx);
+    __ CallRuntime(Runtime::kWasmCompileLazy, 2);
     // The entrypoint address is the return value.
     __ movq(r11, kReturnRegister0);
 
@@ -2924,52 +2905,6 @@ void Builtins::Generate_DoubleToI(MacroAssembler* masm) {
   __ popq(scratch1);
   __ popq(rcx);
   __ ret(0);
-}
-
-void Builtins::Generate_InternalArrayConstructorImpl(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- rax    : argc
-  //  -- rdi    : constructor
-  //  -- rsp[0] : return address
-  //  -- rsp[8] : last argument
-  // -----------------------------------
-
-  if (FLAG_debug_code) {
-    // The array construct code is only set for the global and natives
-    // builtin Array functions which always have maps.
-
-    // Initial map for the builtin Array function should be a map.
-    __ LoadTaggedPointerField(
-        rcx, FieldOperand(rdi, JSFunction::kPrototypeOrInitialMapOffset));
-    // Will both indicate a nullptr and a Smi.
-    STATIC_ASSERT(kSmiTag == 0);
-    Condition not_smi = NegateCondition(masm->CheckSmi(rcx));
-    __ Check(not_smi, AbortReason::kUnexpectedInitialMapForArrayFunction);
-    __ CmpObjectType(rcx, MAP_TYPE, rcx);
-    __ Check(equal, AbortReason::kUnexpectedInitialMapForArrayFunction);
-
-    // Figure out the right elements kind
-    __ LoadTaggedPointerField(
-        rcx, FieldOperand(rdi, JSFunction::kPrototypeOrInitialMapOffset));
-
-    // Load the map's "bit field 2" into |result|. We only need the first byte,
-    // but the following masking takes care of that anyway.
-    __ movzxbq(rcx, FieldOperand(rcx, Map::kBitField2Offset));
-    // Retrieve elements_kind from bit field 2.
-    __ DecodeField<Map::ElementsKindBits>(rcx);
-
-    // Initial elements kind should be packed elements.
-    __ cmpl(rcx, Immediate(PACKED_ELEMENTS));
-    __ Assert(equal, AbortReason::kInvalidElementsKindForInternalPackedArray);
-
-    // No arguments should be passed.
-    __ testq(rax, rax);
-    __ Assert(zero, AbortReason::kWrongNumberOfArgumentsForInternalPackedArray);
-  }
-
-  __ Jump(
-      BUILTIN_CODE(masm->isolate(), InternalArrayNoArgumentConstructor_Packed),
-      RelocInfo::CODE_TARGET);
 }
 
 namespace {

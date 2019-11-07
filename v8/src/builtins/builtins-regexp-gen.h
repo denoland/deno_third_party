@@ -17,14 +17,6 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
   explicit RegExpBuiltinsAssembler(compiler::CodeAssemblerState* state)
       : CodeStubAssembler(state) {}
 
-  // Create and initialize a RegExp object.
-  TNode<Object> RegExpCreate(TNode<Context> context,
-                             TNode<Context> native_context,
-                             TNode<Object> regexp_string, TNode<String> flags);
-
-  TNode<Object> RegExpCreate(TNode<Context> context, TNode<Map> initial_map,
-                             TNode<Object> regexp_string, TNode<String> flags);
-
   TNode<Smi> SmiZero();
   TNode<IntPtrT> IntPtrZero();
 
@@ -75,18 +67,7 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
 
   TNode<RegExpMatchInfo> RegExpPrototypeExecBodyWithoutResult(
       TNode<Context> context, TNode<JSReceiver> maybe_regexp,
-      TNode<String> string, Label* if_didnotmatch, const bool is_fastpath);
-  TNode<RegExpMatchInfo> RegExpPrototypeExecBodyWithoutResultFast(
-      TNode<Context> context, TNode<JSRegExp> maybe_regexp,
-      TNode<String> string, Label* if_didnotmatch);
-
-  TNode<HeapObject> RegExpPrototypeExecBody(TNode<Context> context,
-                                            TNode<JSReceiver> maybe_regexp,
-                                            TNode<String> string,
-                                            const bool is_fastpath);
-
-  TNode<BoolT> IsReceiverInitialRegExpPrototype(SloppyTNode<Context> context,
-                                                SloppyTNode<Object> receiver);
+      TNode<String> string, const bool is_fastpath, Label* if_didnotmatch);
 
   // Fast path check logic.
   //
@@ -187,13 +168,13 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
 
   TNode<Object> RegExpPrototypeMatchBody(TNode<Context> context,
                                          TNode<Object> regexp,
-                                         TNode<String> const string,
+                                         const TNode<String> string,
                                          const bool is_fastpath);
 
   TNode<JSArray> RegExpPrototypeSplitBody(TNode<Context> context,
                                           TNode<JSRegExp> regexp,
-                                          TNode<String> const string,
-                                          TNode<Smi> const limit);
+                                          const TNode<String> string,
+                                          const TNode<Smi> limit);
 };
 
 class RegExpMatchAllAssembler : public RegExpBuiltinsAssembler {

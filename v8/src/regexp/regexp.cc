@@ -33,7 +33,8 @@ class RegExpImpl final : public AllStatic {
   // Prepares a JSRegExp object with Irregexp-specific data.
   static void IrregexpInitialize(Isolate* isolate, Handle<JSRegExp> re,
                                  Handle<String> pattern, JSRegExp::Flags flags,
-                                 int capture_register_count);
+                                 int capture_register_count,
+                                 uint32_t backtrack_limit);
 
   static void AtomCompile(Isolate* isolate, Handle<JSRegExp> re,
                           Handle<String> pattern, JSRegExp::Flags flags,
@@ -75,7 +76,8 @@ class RegExpImpl final : public AllStatic {
   // Returns true on success, false on failure.
   static bool Compile(Isolate* isolate, Zone* zone, RegExpCompileData* input,
                       JSRegExp::Flags flags, Handle<String> pattern,
-                      Handle<String> sample_subject, bool is_one_byte);
+                      Handle<String> sample_subject, bool is_one_byte,
+                      uint32_t backtrack_limit);
 
   // For acting on the JSRegExp data FixedArray.
   static int IrregexpMaxRegisterCount(FixedArray re);
@@ -131,17 +133,27 @@ static bool HasFewDifferentCharacters(Handle<String> pattern) {
 // static
 MaybeHandle<Object> RegExp::Compile(Isolate* isolate, Handle<JSRegExp> re,
                                     Handle<String> pattern,
-                                    JSRegExp::Flags flags) {
+                                    JSRegExp::Flags flags,
+                                    uint32_t backtrack_limit) {
   DCHECK(pattern->IsFlat());
 
+  // Caching is based only on the pattern and flags, but code also differs when
+  // a backtrack limit is set. A present backtrack limit is very much *not* the
+  // common case, so just skip the cache for these.
+  const bool is_compilation_cache_enabled =
+      (backtrack_limit == JSRegExp::kNoBacktrackLimit);
+
   Zone zone(isolate->allocator(), ZONE_NAME);
-  CompilationCache* compilation_cache = isolate->compilation_cache();
-  MaybeHandle<FixedArray> maybe_cached =
-      compilation_cache->LookupRegExp(pattern, flags);
-  Handle<FixedArray> cached;
-  if (maybe_cached.ToHandle(&cached)) {
-    re->set_data(*cached);
-    return re;
+  CompilationCache* compilation_cache = nullptr;
+  if (is_compilation_cache_enabled) {
+    compilation_cache = isolate->compilation_cache();
+    MaybeHandle<FixedArray> maybe_cached =
+        compilation_cache->LookupRegExp(pattern, flags);
+    Handle<FixedArray> cached;
+    if (maybe_cached.ToHandle(&cached)) {
+      re->set_data(*cached);
+      return re;
+    }
   }
 
   PostponeInterruptsScope postpone(isolate);
@@ -176,13 +188,15 @@ MaybeHandle<Object> RegExp::Compile(Isolate* isolate, Handle<JSRegExp> re,
   }
   if (!has_been_compiled) {
     RegExpImpl::IrregexpInitialize(isolate, re, pattern, flags,
-                                   parse_result.capture_count);
+                                   parse_result.capture_count, backtrack_limit);
   }
   DCHECK(re->data().IsFixedArray());
   // Compilation succeeded so the data is set on the regexp
   // and we can store it in the cache.
   Handle<FixedArray> data(FixedArray::cast(re->data()), isolate);
-  compilation_cache->PutRegExp(pattern, flags, data);
+  if (is_compilation_cache_enabled) {
+    compilation_cache->PutRegExp(pattern, flags, data);
+  }
 
   return re;
 }
@@ -391,7 +405,7 @@ bool RegExpImpl::CompileIrregexp(Isolate* isolate, Handle<JSRegExp> re,
                                         : RegExpCompilationTarget::kNative;
   const bool compilation_succeeded =
       Compile(isolate, &zone, &compile_data, flags, pattern, sample_subject,
-              is_one_byte);
+              is_one_byte, re->BacktrackLimit());
   if (!compilation_succeeded) {
     DCHECK(!compile_data.error.is_null());
     ThrowRegExpException(isolate, re, compile_data.error);
@@ -469,10 +483,11 @@ Code RegExpImpl::IrregexpNativeCode(FixedArray re, bool is_one_byte) {
 
 void RegExpImpl::IrregexpInitialize(Isolate* isolate, Handle<JSRegExp> re,
                                     Handle<String> pattern,
-                                    JSRegExp::Flags flags, int capture_count) {
+                                    JSRegExp::Flags flags, int capture_count,
+                                    uint32_t backtrack_limit) {
   // Initialize compiled code entries to null.
-  isolate->factory()->SetRegExpIrregexpData(re, JSRegExp::IRREGEXP, pattern,
-                                            flags, capture_count);
+  isolate->factory()->SetRegExpIrregexpData(
+      re, JSRegExp::IRREGEXP, pattern, flags, capture_count, backtrack_limit);
 }
 
 // static
@@ -719,12 +734,14 @@ bool RegExp::CompileForTesting(Isolate* isolate, Zone* zone,
                                Handle<String> sample_subject,
                                bool is_one_byte) {
   return RegExpImpl::Compile(isolate, zone, data, flags, pattern,
-                             sample_subject, is_one_byte);
+                             sample_subject, is_one_byte,
+                             JSRegExp::kNoBacktrackLimit);
 }
 
 bool RegExpImpl::Compile(Isolate* isolate, Zone* zone, RegExpCompileData* data,
                          JSRegExp::Flags flags, Handle<String> pattern,
-                         Handle<String> sample_subject, bool is_one_byte) {
+                         Handle<String> sample_subject, bool is_one_byte,
+                         uint32_t backtrack_limit) {
   if ((data->capture_count + 1) * 2 - 1 > RegExpMacroAssembler::kMaxRegister) {
     data->error =
         isolate->factory()->NewStringFromAsciiChecked("RegExp too big");
@@ -844,6 +861,7 @@ bool RegExpImpl::Compile(Isolate* isolate, Zone* zone, RegExpCompileData* data,
   }
 
   macro_assembler->set_slow_safe(TooMuchRegExpCode(isolate, pattern));
+  macro_assembler->set_backtrack_limit(backtrack_limit);
 
   // Inserted here, instead of in Assembler, because it depends on information
   // in the AST that isn't replicated in the Node structure.

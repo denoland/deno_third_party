@@ -328,6 +328,34 @@ void InstructionSelector::VisitAbortCSAAssert(Node* node) {
   Emit(kArchAbortCSAAssert, g.NoOutput(), g.UseFixed(node->InputAt(0), rdx));
 }
 
+void InstructionSelector::VisitLoadTransform(Node* node) {
+  LoadTransformParameters params = LoadTransformParametersOf(node->op());
+  ArchOpcode opcode = kArchNop;
+  switch (params.transformation) {
+    case LoadTransformation::kS8x16LoadSplat:
+      opcode = kX64S8x16LoadSplat;
+      break;
+    case LoadTransformation::kS16x8LoadSplat:
+      opcode = kX64S16x8LoadSplat;
+      break;
+    case LoadTransformation::kI16x8Load8x8S:
+      opcode = kX64I16x8Load8x8S;
+      break;
+    case LoadTransformation::kI16x8Load8x8U:
+      opcode = kX64I16x8Load8x8U;
+      break;
+    default:
+      UNREACHABLE();
+  }
+  // x64 supports unaligned loads
+  DCHECK_NE(params.kind, LoadKind::kUnaligned);
+  InstructionCode code = opcode;
+  if (params.kind == LoadKind::kProtected) {
+    code |= MiscField::encode(kMemoryAccessProtected);
+  }
+  VisitLoad(node, node, code);
+}
+
 void InstructionSelector::VisitLoad(Node* node, Node* value,
                                     InstructionCode opcode) {
   X64OperandGenerator g(this);
@@ -545,14 +573,18 @@ void InstructionSelector::VisitWord64Xor(Node* node) {
 
 void InstructionSelector::VisitStackPointerGreaterThan(
     Node* node, FlagsContinuation* cont) {
-  Node* const value = node->InputAt(0);
-  InstructionCode opcode = kArchStackPointerGreaterThan;
+  StackCheckKind kind = StackCheckKindOf(node->op());
+  InstructionCode opcode =
+      kArchStackPointerGreaterThan | MiscField::encode(static_cast<int>(kind));
 
-  DCHECK(cont->IsBranch());
-  const int effect_level =
-      GetEffectLevel(cont->true_block()->PredecessorAt(0)->control_input());
+  int effect_level = GetEffectLevel(node);
+  if (cont->IsBranch()) {
+    effect_level =
+        GetEffectLevel(cont->true_block()->PredecessorAt(0)->control_input());
+  }
 
   X64OperandGenerator g(this);
+  Node* const value = node->InputAt(0);
   if (g.CanBeMemoryOperand(kX64Cmp, node, value, effect_level)) {
     DCHECK_EQ(IrOpcode::kLoad, value->opcode());
 
@@ -2893,6 +2925,21 @@ void InstructionSelector::VisitF64x2Neg(Node* node) {
   InstructionOperand temps[] = {g.TempDoubleRegister()};
   Emit(kX64F64x2Neg, g.DefineSameAsFirst(node), g.UseRegister(node->InputAt(0)),
        arraysize(temps), temps);
+}
+
+void InstructionSelector::VisitF64x2SConvertI64x2(Node* node) {
+  X64OperandGenerator g(this);
+  InstructionOperand temps[] = {g.TempRegister(), g.TempRegister()};
+  Emit(kX64F64x2SConvertI64x2, g.DefineSameAsFirst(node),
+       g.UseRegister(node->InputAt(0)), arraysize(temps), temps);
+}
+
+void InstructionSelector::VisitF64x2UConvertI64x2(Node* node) {
+  X64OperandGenerator g(this);
+  InstructionOperand temps[] = {g.TempRegister(), g.TempSimd128Register()};
+  // Need dst to be unique to temp because Cvtqui2sd will zero temp.
+  Emit(kX64F64x2UConvertI64x2, g.DefineSameAsFirst(node),
+       g.UseUniqueRegister(node->InputAt(0)), arraysize(temps), temps);
 }
 
 void InstructionSelector::VisitF32x4UConvertI32x4(Node* node) {

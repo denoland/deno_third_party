@@ -84,11 +84,6 @@ TQ_OBJECT_CONSTRUCTORS_IMPL(UncompiledData)
 TQ_OBJECT_CONSTRUCTORS_IMPL(UncompiledDataWithoutPreparseData)
 TQ_OBJECT_CONSTRUCTORS_IMPL(UncompiledDataWithPreparseData)
 
-DEF_GETTER(HeapObject, IsUncompiledData, bool) {
-  return IsUncompiledDataWithoutPreparseData(isolate) ||
-         IsUncompiledDataWithPreparseData(isolate);
-}
-
 OBJECT_CONSTRUCTORS_IMPL(InterpreterData, Struct)
 
 CAST_ACCESSOR(InterpreterData)
@@ -669,6 +664,10 @@ void SharedFunctionInfo::set_script(HeapObject script) {
   }
 }
 
+bool SharedFunctionInfo::is_repl_mode() const {
+  return script().IsScript() && Script::cast(script()).is_repl_mode();
+}
+
 bool SharedFunctionInfo::HasDebugInfo() const {
   return script_or_debug_info().IsDebugInfo();
 }
@@ -706,14 +705,14 @@ String SharedFunctionInfo::inferred_name() {
   return GetReadOnlyRoots().empty_string();
 }
 
-bool SharedFunctionInfo::IsUserJavaScript() {
+bool SharedFunctionInfo::IsUserJavaScript() const {
   Object script_obj = script();
   if (script_obj.IsUndefined()) return false;
   Script script = Script::cast(script_obj);
   return script.IsUserJavaScript();
 }
 
-bool SharedFunctionInfo::IsSubjectToDebugging() {
+bool SharedFunctionInfo::IsSubjectToDebugging() const {
   return IsUserJavaScript() && !HasAsmWasmData();
 }
 

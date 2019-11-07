@@ -706,14 +706,12 @@ I32_BINOP_I(xor, Xor)
 
 #undef I32_BINOP_I
 
-bool LiftoffAssembler::emit_i32_clz(Register dst, Register src) {
+void LiftoffAssembler::emit_i32_clz(Register dst, Register src) {
   TurboAssembler::Clz(dst, src);
-  return true;
 }
 
-bool LiftoffAssembler::emit_i32_ctz(Register dst, Register src) {
+void LiftoffAssembler::emit_i32_ctz(Register dst, Register src) {
   TurboAssembler::Ctz(dst, src);
-  return true;
 }
 
 bool LiftoffAssembler::emit_i32_popcnt(Register dst, Register src) {
@@ -721,10 +719,10 @@ bool LiftoffAssembler::emit_i32_popcnt(Register dst, Register src) {
   return true;
 }
 
-#define I32_SHIFTOP(name, instruction)                                      \
-  void LiftoffAssembler::emit_i32_##name(                                   \
-      Register dst, Register src, Register amount, LiftoffRegList pinned) { \
-    instruction(dst, src, amount);                                          \
+#define I32_SHIFTOP(name, instruction)                               \
+  void LiftoffAssembler::emit_i32_##name(Register dst, Register src, \
+                                         Register amount) {          \
+    instruction(dst, src, amount);                                   \
   }
 #define I32_SHIFTOP_I(name, instruction)                             \
   I32_SHIFTOP(name, instruction##v)                                  \
@@ -734,8 +732,8 @@ bool LiftoffAssembler::emit_i32_popcnt(Register dst, Register src) {
     instruction(dst, src, amount);                                   \
   }
 
-I32_SHIFTOP(shl, sllv)
-I32_SHIFTOP(sar, srav)
+I32_SHIFTOP_I(shl, sll)
+I32_SHIFTOP_I(sar, sra)
 I32_SHIFTOP_I(shr, srl)
 
 #undef I32_SHIFTOP
@@ -805,12 +803,9 @@ inline void Emit64BitShiftOperation(
     LiftoffAssembler* assm, LiftoffRegister dst, LiftoffRegister src,
     Register amount,
     void (TurboAssembler::*emit_shift)(Register, Register, Register, Register,
-                                       Register, Register, Register),
-    LiftoffRegList pinned) {
+                                       Register, Register, Register)) {
   Label move, done;
-  pinned.set(dst);
-  pinned.set(src);
-  pinned.set(amount);
+  LiftoffRegList pinned = LiftoffRegList::ForRegs(dst, src, amount);
 
   // If some of destination registers are in use, get another, unused pair.
   // That way we prevent overwriting some input registers while shifting.
@@ -845,21 +840,21 @@ inline void Emit64BitShiftOperation(
 }  // namespace liftoff
 
 void LiftoffAssembler::emit_i64_shl(LiftoffRegister dst, LiftoffRegister src,
-                                    Register amount, LiftoffRegList pinned) {
+                                    Register amount) {
   liftoff::Emit64BitShiftOperation(this, dst, src, amount,
-                                   &TurboAssembler::ShlPair, pinned);
+                                   &TurboAssembler::ShlPair);
 }
 
 void LiftoffAssembler::emit_i64_sar(LiftoffRegister dst, LiftoffRegister src,
-                                    Register amount, LiftoffRegList pinned) {
+                                    Register amount) {
   liftoff::Emit64BitShiftOperation(this, dst, src, amount,
-                                   &TurboAssembler::SarPair, pinned);
+                                   &TurboAssembler::SarPair);
 }
 
 void LiftoffAssembler::emit_i64_shr(LiftoffRegister dst, LiftoffRegister src,
-                                    Register amount, LiftoffRegList pinned) {
+                                    Register amount) {
   liftoff::Emit64BitShiftOperation(this, dst, src, amount,
-                                   &TurboAssembler::ShrPair, pinned);
+                                   &TurboAssembler::ShrPair);
 }
 
 void LiftoffAssembler::emit_i64_shr(LiftoffRegister dst, LiftoffRegister src,
@@ -867,6 +862,53 @@ void LiftoffAssembler::emit_i64_shr(LiftoffRegister dst, LiftoffRegister src,
   DCHECK(is_uint6(amount));
   ShrPair(dst.high_gp(), dst.low_gp(), src.high_gp(), src.low_gp(), amount,
           kScratchReg);
+}
+
+void LiftoffAssembler::emit_i64_clz(LiftoffRegister dst, LiftoffRegister src) {
+  // return high == 0 ? 32 + CLZ32(low) : CLZ32(high);
+  Label done;
+  Label high_is_zero;
+  Branch(&high_is_zero, eq, src.high_gp(), Operand(zero_reg));
+
+  clz(dst.low_gp(), src.high_gp());
+  jmp(&done);
+
+  bind(&high_is_zero);
+  clz(dst.low_gp(), src.low_gp());
+  Addu(dst.low_gp(), dst.low_gp(), Operand(32));
+
+  bind(&done);
+  mov(dst.high_gp(), zero_reg);  // High word of result is always 0.
+}
+
+void LiftoffAssembler::emit_i64_ctz(LiftoffRegister dst, LiftoffRegister src) {
+  // return low == 0 ? 32 + CTZ32(high) : CTZ32(low);
+  Label done;
+  Label low_is_zero;
+  Branch(&low_is_zero, eq, src.low_gp(), Operand(zero_reg));
+
+  Ctz(dst.low_gp(), src.low_gp());
+  jmp(&done);
+
+  bind(&low_is_zero);
+  Ctz(dst.low_gp(), src.high_gp());
+  Addu(dst.low_gp(), dst.low_gp(), Operand(32));
+
+  bind(&done);
+  mov(dst.high_gp(), zero_reg);  // High word of result is always 0.
+}
+
+bool LiftoffAssembler::emit_i64_popcnt(LiftoffRegister dst,
+                                       LiftoffRegister src) {
+  // Produce partial popcnts in the two dst registers.
+  Register src1 = src.high_gp() == dst.low_gp() ? src.high_gp() : src.low_gp();
+  Register src2 = src.high_gp() == dst.low_gp() ? src.low_gp() : src.high_gp();
+  TurboAssembler::Popcnt(dst.low_gp(), src1);
+  TurboAssembler::Popcnt(dst.high_gp(), src2);
+  // Now add the two into the lower dst reg and clear the higher dst reg.
+  addu(dst.low_gp(), dst.low_gp(), dst.high_gp());
+  mov(dst.high_gp(), zero_reg);
+  return true;
 }
 
 void LiftoffAssembler::emit_i32_to_intptr(Register dst, Register src) {

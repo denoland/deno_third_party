@@ -51,9 +51,6 @@ using base::WriteUnalignedValue;
 
 #define FOREACH_INTERNAL_OPCODE(V) V(Breakpoint, 0xFF)
 
-#define WASM_CTYPES(V) \
-  V(I32, int32_t) V(I64, int64_t) V(F32, float) V(F64, double) V(S128, Simd128)
-
 #define FOREACH_SIMPLE_BINOP(V) \
   V(I32Add, uint32_t, +)        \
   V(I32Sub, uint32_t, -)        \
@@ -643,7 +640,7 @@ const char* OpcodeName(uint32_t val) {
   return WasmOpcodes::OpcodeName(static_cast<WasmOpcode>(val));
 }
 
-constexpr uint32_t kCatchInArity = 1;
+constexpr int32_t kCatchInArity = 1;
 
 }  // namespace
 
@@ -668,7 +665,7 @@ struct InterpreterCode {
 class SideTable : public ZoneObject {
  public:
   ControlTransferMap map_;
-  uint32_t max_stack_height_ = 0;
+  int32_t max_stack_height_ = 0;
 
   SideTable(Zone* zone, const WasmModule* module, InterpreterCode* code)
       : map_(zone) {
@@ -677,7 +674,7 @@ class SideTable : public ZoneObject {
 
     // Represents a control flow label.
     class CLabel : public ZoneObject {
-      explicit CLabel(Zone* zone, uint32_t target_stack_height, uint32_t arity)
+      explicit CLabel(Zone* zone, int32_t target_stack_height, uint32_t arity)
           : target_stack_height(target_stack_height),
             arity(arity),
             refs(zone) {}
@@ -685,15 +682,15 @@ class SideTable : public ZoneObject {
      public:
       struct Ref {
         const byte* from_pc;
-        const uint32_t stack_height;
+        const int32_t stack_height;
       };
       const byte* target = nullptr;
-      uint32_t target_stack_height;
+      int32_t target_stack_height;
       // Arity when branching to this label.
       const uint32_t arity;
       ZoneVector<Ref> refs;
 
-      static CLabel* New(Zone* zone, uint32_t stack_height, uint32_t arity) {
+      static CLabel* New(Zone* zone, int32_t stack_height, uint32_t arity) {
         return new (zone) CLabel(zone, stack_height, arity);
       }
 
@@ -704,7 +701,7 @@ class SideTable : public ZoneObject {
       }
 
       // Reference this label from the given location.
-      void Ref(const byte* from_pc, uint32_t stack_height) {
+      void Ref(const byte* from_pc, int32_t stack_height) {
         // Target being bound before a reference means this is a loop.
         DCHECK_IMPLIES(target, *target == kExprLoop);
         refs.push_back({from_pc, stack_height});
@@ -766,7 +763,7 @@ class SideTable : public ZoneObject {
     // control transfers are treated just like other branches in the resulting
     // map. This stack contains indices into the above control stack.
     ZoneVector<size_t> exception_stack(zone);
-    uint32_t stack_height = 0;
+    int32_t stack_height = 0;
     uint32_t func_arity =
         static_cast<uint32_t>(code->function->sig->return_count());
     CLabel* func_label =
@@ -782,7 +779,7 @@ class SideTable : public ZoneObject {
     for (BytecodeIterator i(code->orig_start, code->orig_end, &code->locals);
          i.has_next(); i.next()) {
       WasmOpcode opcode = i.current();
-      uint32_t exceptional_stack_height = 0;
+      int32_t exceptional_stack_height = 0;
       if (WasmOpcodes::IsPrefixOpcode(opcode)) opcode = i.prefixed_opcode();
       bool unreachable = control_stack.back().unreachable;
       if (unreachable) {
@@ -826,7 +823,7 @@ class SideTable : public ZoneObject {
           TRACE("control @%u: %s, arity %d->%d\n", i.pc_offset(),
                 is_loop ? "Loop" : "Block", imm.in_arity(), imm.out_arity());
           CLabel* label =
-              CLabel::New(&control_transfer_zone, stack_height,
+              CLabel::New(&control_transfer_zone, stack_height - imm.in_arity(),
                           is_loop ? imm.in_arity() : imm.out_arity());
           control_stack.emplace_back(i.pc(), label, imm.out_arity());
           copy_unreachable();
@@ -841,8 +838,9 @@ class SideTable : public ZoneObject {
           }
           TRACE("control @%u: If, arity %d->%d\n", i.pc_offset(),
                 imm.in_arity(), imm.out_arity());
-          CLabel* end_label = CLabel::New(&control_transfer_zone, stack_height,
-                                          imm.out_arity());
+          CLabel* end_label =
+              CLabel::New(&control_transfer_zone, stack_height - imm.in_arity(),
+                          imm.out_arity());
           CLabel* else_label =
               CLabel::New(&control_transfer_zone, stack_height, 0);
           control_stack.emplace_back(i.pc(), end_label, else_label,
@@ -861,9 +859,10 @@ class SideTable : public ZoneObject {
           DCHECK_NOT_NULL(c->else_label);
           c->else_label->Bind(i.pc() + 1);
           c->else_label->Finish(&map_, code->orig_start);
+          stack_height = c->else_label->target_stack_height;
           c->else_label = nullptr;
-          DCHECK_GE(stack_height, c->end_label->target_stack_height);
-          stack_height = c->end_label->target_stack_height;
+          DCHECK_IMPLIES(!unreachable,
+                         stack_height >= c->end_label->target_stack_height);
           break;
         }
         case kExprTry: {
@@ -897,7 +896,8 @@ class SideTable : public ZoneObject {
           c->else_label->Bind(i.pc() + 1);
           c->else_label->Finish(&map_, code->orig_start);
           c->else_label = nullptr;
-          DCHECK_GE(stack_height, c->end_label->target_stack_height);
+          DCHECK_IMPLIES(!unreachable,
+                         stack_height >= c->end_label->target_stack_height);
           stack_height = c->end_label->target_stack_height + kCatchInArity;
           break;
         }
@@ -908,7 +908,7 @@ class SideTable : public ZoneObject {
           DCHECK_EQ(0, imm.index.exception->sig->return_count());
           size_t params = imm.index.exception->sig->parameter_count();
           // Taken branches pop the exception and push the encoded values.
-          uint32_t height = stack_height - 1 + static_cast<uint32_t>(params);
+          int32_t height = stack_height - 1 + static_cast<int32_t>(params);
           TRACE("control @%u: BrOnExn[depth=%u]\n", i.pc_offset(), depth);
           Control* c = &control_stack[control_stack.size() - depth - 1];
           if (!unreachable) c->end_label->Ref(i.pc(), height);
@@ -924,7 +924,8 @@ class SideTable : public ZoneObject {
             c->end_label->Bind(i.pc() + 1);
           }
           c->Finish(&map_, code->orig_start);
-          DCHECK_GE(stack_height, c->end_label->target_stack_height);
+          DCHECK_IMPLIES(!unreachable,
+                         stack_height >= c->end_label->target_stack_height);
           stack_height = c->end_label->target_stack_height + c->exit_arity;
           control_stack.pop_back();
           break;
@@ -1294,37 +1295,6 @@ class ThreadImpl {
     return WasmInterpreter::Thread::HANDLED;
   }
 
-  uint32_t GetGlobalCount() {
-    return static_cast<uint32_t>(module()->globals.size());
-  }
-
-  WasmValue GetGlobalValue(uint32_t index) {
-    const WasmGlobal* global = &module()->globals[index];
-    switch (global->type) {
-#define CASE_TYPE(wasm, ctype)                                         \
-  case kWasm##wasm: {                                                  \
-    byte* ptr = GetGlobalPtr(global);                                  \
-    return WasmValue(                                                  \
-        ReadLittleEndianValue<ctype>(reinterpret_cast<Address>(ptr))); \
-    break;                                                             \
-  }
-      WASM_CTYPES(CASE_TYPE)
-#undef CASE_TYPE
-      case kWasmAnyRef:
-      case kWasmFuncRef:
-      case kWasmExnRef: {
-        HandleScope handle_scope(isolate_);  // Avoid leaking handles.
-        Handle<FixedArray> global_buffer;    // The buffer of the global.
-        uint32_t global_index = 0;           // The index into the buffer.
-        GetGlobalBufferAndIndex(global, &global_buffer, &global_index);
-        Handle<Object> value(global_buffer->get(global_index), isolate_);
-        return WasmValue(handle_scope.CloseAndEscape(value));
-      }
-      default:
-        UNREACHABLE();
-    }
-  }
-
  private:
   // Handle a thrown exception. Returns whether the exception was handled inside
   // the current activation. Unwinds the interpreted stack accordingly.
@@ -1486,11 +1456,11 @@ class ThreadImpl {
     for (auto p : code->locals.type_list) {
       WasmValue val;
       switch (p) {
-#define CASE_TYPE(wasm, ctype) \
-  case kWasm##wasm:            \
-    val = WasmValue(ctype{});  \
+#define CASE_TYPE(valuetype, ctype) \
+  case valuetype:                   \
+    val = WasmValue(ctype{});       \
     break;
-        WASM_CTYPES(CASE_TYPE)
+        FOREACH_WASMVALUE_CTYPES(CASE_TYPE)
 #undef CASE_TYPE
         case kWasmAnyRef:
         case kWasmFuncRef:
@@ -2203,34 +2173,6 @@ class ThreadImpl {
     return true;
   }
 
-  byte* GetGlobalPtr(const WasmGlobal* global) {
-    DCHECK(!ValueTypes::IsReferenceType(global->type));
-    if (global->mutability && global->imported) {
-      return reinterpret_cast<byte*>(
-          instance_object_->imported_mutable_globals()[global->index]);
-    } else {
-      return instance_object_->globals_start() + global->offset;
-    }
-  }
-
-  void GetGlobalBufferAndIndex(const WasmGlobal* global,
-                               Handle<FixedArray>* buffer, uint32_t* index) {
-    DCHECK(ValueTypes::IsReferenceType(global->type));
-    if (global->mutability && global->imported) {
-      *buffer =
-          handle(FixedArray::cast(
-                     instance_object_->imported_mutable_globals_buffers().get(
-                         global->index)),
-                 isolate_);
-      Address idx = instance_object_->imported_mutable_globals()[global->index];
-      DCHECK_LE(idx, std::numeric_limits<uint32_t>::max());
-      *index = static_cast<uint32_t>(idx);
-    } else {
-      *buffer = handle(instance_object_->tagged_globals_buffer(), isolate_);
-      *index = global->offset;
-    }
-  }
-
   bool ExecuteSimdOp(WasmOpcode opcode, Decoder* decoder, InterpreterCode* code,
                      pc_t pc, int* const len) {
     switch (opcode) {
@@ -2540,6 +2482,10 @@ class ThreadImpl {
     Push(WasmValue(Simd128(res)));                                            \
     return true;                                                              \
   }
+        CONVERT_CASE(F64x2SConvertI64x2, int2, i64x2, float2, 2, 0, int64_t,
+                     static_cast<double>(a))
+        CONVERT_CASE(F64x2UConvertI64x2, int2, i64x2, float2, 2, 0, uint64_t,
+                     static_cast<double>(a))
         CONVERT_CASE(F32x4SConvertI32x4, int4, i32x4, float4, 4, 0, int32_t,
                      static_cast<float>(a))
         CONVERT_CASE(F32x4UConvertI32x4, int4, i32x4, float4, 4, 0, uint32_t,
@@ -3331,31 +3277,35 @@ class ThreadImpl {
           GlobalIndexImmediate<Decoder::kNoValidate> imm(&decoder,
                                                          code->at(pc));
           HandleScope handle_scope(isolate_);
-          Push(GetGlobalValue(imm.index));
+          Push(WasmInstanceObject::GetGlobalValue(
+              instance_object_, module()->globals[imm.index]));
           len = 1 + imm.length;
           break;
         }
         case kExprGlobalSet: {
           GlobalIndexImmediate<Decoder::kNoValidate> imm(&decoder,
                                                          code->at(pc));
-          const WasmGlobal* global = &module()->globals[imm.index];
-          switch (global->type) {
-#define CASE_TYPE(wasm, ctype)                                    \
-  case kWasm##wasm: {                                             \
-    byte* ptr = GetGlobalPtr(global);                             \
-    WriteLittleEndianValue<ctype>(reinterpret_cast<Address>(ptr), \
-                                  Pop().to<ctype>());             \
-    break;                                                        \
+          auto& global = module()->globals[imm.index];
+          switch (global.type) {
+#define CASE_TYPE(valuetype, ctype)                                     \
+  case valuetype: {                                                     \
+    uint8_t* ptr =                                                      \
+        WasmInstanceObject::GetGlobalStorage(instance_object_, global); \
+    WriteLittleEndianValue<ctype>(reinterpret_cast<Address>(ptr),       \
+                                  Pop().to<ctype>());                   \
+    break;                                                              \
   }
-            WASM_CTYPES(CASE_TYPE)
+            FOREACH_WASMVALUE_CTYPES(CASE_TYPE)
 #undef CASE_TYPE
             case kWasmAnyRef:
             case kWasmFuncRef:
             case kWasmExnRef: {
               HandleScope handle_scope(isolate_);  // Avoid leaking handles.
               Handle<FixedArray> global_buffer;    // The buffer of the global.
-              uint32_t global_index = 0;           // The index into the buffer.
-              GetGlobalBufferAndIndex(global, &global_buffer, &global_index);
+              uint32_t global_index;               // The index into the buffer.
+              std::tie(global_buffer, global_index) =
+                  WasmInstanceObject::GetGlobalBufferAndIndex(instance_object_,
+                                                              global);
               global_buffer->set(global_index, *Pop().to_anyref());
               break;
             }
@@ -4086,12 +4036,6 @@ WasmValue WasmInterpreter::Thread::GetReturnValue(int index) {
 TrapReason WasmInterpreter::Thread::GetTrapReason() {
   return ToImpl(this)->GetTrapReason();
 }
-uint32_t WasmInterpreter::Thread::GetGlobalCount() {
-  return ToImpl(this)->GetGlobalCount();
-}
-WasmValue WasmInterpreter::Thread::GetGlobalValue(uint32_t index) {
-  return ToImpl(this)->GetGlobalValue(index);
-}
 bool WasmInterpreter::Thread::PossibleNondeterminism() {
   return ToImpl(this)->PossibleNondeterminism();
 }
@@ -4276,7 +4220,6 @@ void InterpretedFrameDeleter::operator()(InterpretedFrame* ptr) {
 #undef TRACE
 #undef LANE
 #undef FOREACH_INTERNAL_OPCODE
-#undef WASM_CTYPES
 #undef FOREACH_SIMPLE_BINOP
 #undef FOREACH_OTHER_BINOP
 #undef FOREACH_I32CONV_FLOATOP

@@ -2096,11 +2096,31 @@ void VisitAtomicBinop(InstructionSelector* selector, Node* node,
 
 void InstructionSelector::VisitStackPointerGreaterThan(
     Node* node, FlagsContinuation* cont) {
-  Node* const value = node->InputAt(0);
-  InstructionCode opcode = kArchStackPointerGreaterThan;
+  StackCheckKind kind = StackCheckKindOf(node->op());
+  InstructionCode opcode =
+      kArchStackPointerGreaterThan | MiscField::encode(static_cast<int>(kind));
 
   Mips64OperandGenerator g(this);
-  EmitWithContinuation(opcode, g.UseRegister(value), cont);
+
+  // No outputs.
+  InstructionOperand* const outputs = nullptr;
+  const int output_count = 0;
+
+  // Applying an offset to this stack check requires a temp register. Offsets
+  // are only applied to the first stack check. If applying an offset, we must
+  // ensure the input and temp registers do not alias, thus kUniqueRegister.
+  InstructionOperand temps[] = {g.TempRegister()};
+  const int temp_count = (kind == StackCheckKind::kJSFunctionEntry ? 1 : 0);
+  const auto register_mode = (kind == StackCheckKind::kJSFunctionEntry)
+                                 ? OperandGenerator::kUniqueRegister
+                                 : OperandGenerator::kRegister;
+
+  Node* const value = node->InputAt(0);
+  InstructionOperand inputs[] = {g.UseRegisterWithMode(value, register_mode)};
+  static constexpr int input_count = arraysize(inputs);
+
+  EmitWithContinuation(opcode, output_count, outputs, input_count, inputs,
+                       temp_count, temps, cont);
 }
 
 // Shared routine for word comparisons against zero.
@@ -2677,6 +2697,9 @@ void InstructionSelector::VisitInt64AbsWithOverflow(Node* node) {
   V(I8x16)
 
 #define SIMD_UNOP_LIST(V)                                  \
+  V(F64x2Abs, kMips64F64x2Abs)                             \
+  V(F64x2Neg, kMips64F64x2Neg)                             \
+  V(F64x2Sqrt, kMips64F64x2Sqrt)                           \
   V(F32x4SConvertI32x4, kMips64F32x4SConvertI32x4)         \
   V(F32x4UConvertI32x4, kMips64F32x4UConvertI32x4)         \
   V(F32x4Abs, kMips64F32x4Abs)                             \
@@ -2717,6 +2740,10 @@ void InstructionSelector::VisitInt64AbsWithOverflow(Node* node) {
   V(I8x16ShrU)
 
 #define SIMD_BINOP_LIST(V)                         \
+  V(F64x2Add, kMips64F64x2Add)                     \
+  V(F64x2Sub, kMips64F64x2Sub)                     \
+  V(F64x2Mul, kMips64F64x2Mul)                     \
+  V(F64x2Div, kMips64F64x2Div)                     \
   V(F32x4Add, kMips64F32x4Add)                     \
   V(F32x4AddHoriz, kMips64F32x4AddHoriz)           \
   V(F32x4Sub, kMips64F32x4Sub)                     \
@@ -2795,6 +2822,7 @@ void InstructionSelector::VisitS128Zero(Node* node) {
     VisitRR(this, kMips64##Type##Splat, node);               \
   }
 SIMD_TYPE_LIST(SIMD_VISIT_SPLAT)
+SIMD_VISIT_SPLAT(F64x2)
 #undef SIMD_VISIT_SPLAT
 
 #define SIMD_VISIT_EXTRACT_LANE(Type)                              \
@@ -2802,6 +2830,7 @@ SIMD_TYPE_LIST(SIMD_VISIT_SPLAT)
     VisitRRI(this, kMips64##Type##ExtractLane, node);              \
   }
 SIMD_TYPE_LIST(SIMD_VISIT_EXTRACT_LANE)
+SIMD_VISIT_EXTRACT_LANE(F64x2)
 #undef SIMD_VISIT_EXTRACT_LANE
 
 #define SIMD_VISIT_REPLACE_LANE(Type)                              \
@@ -2809,6 +2838,7 @@ SIMD_TYPE_LIST(SIMD_VISIT_EXTRACT_LANE)
     VisitRRIR(this, kMips64##Type##ReplaceLane, node);             \
   }
 SIMD_TYPE_LIST(SIMD_VISIT_REPLACE_LANE)
+SIMD_VISIT_REPLACE_LANE(F64x2)
 #undef SIMD_VISIT_REPLACE_LANE
 
 #define SIMD_VISIT_UNOP(Name, instruction)            \
@@ -2945,6 +2975,17 @@ void InstructionSelector::VisitS8x16Shuffle(Node* node) {
        g.UseImmediate(Pack4Lanes(shuffle + 4)),
        g.UseImmediate(Pack4Lanes(shuffle + 8)),
        g.UseImmediate(Pack4Lanes(shuffle + 12)));
+}
+
+void InstructionSelector::VisitS8x16Swizzle(Node* node) {
+  Mips64OperandGenerator g(this);
+  InstructionOperand temps[] = {g.TempSimd128Register()};
+  // We don't want input 0 or input 1 to be the same as output, since we will
+  // modify output before do the calculation.
+  Emit(kMips64S8x16Swizzle, g.DefineAsRegister(node),
+       g.UseUniqueRegister(node->InputAt(0)),
+       g.UseUniqueRegister(node->InputAt(1)),
+       arraysize(temps), temps);
 }
 
 void InstructionSelector::VisitSignExtendWord8ToInt32(Node* node) {

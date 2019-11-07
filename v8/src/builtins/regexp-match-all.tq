@@ -6,9 +6,6 @@
 
 namespace regexp {
 
-  extern transitioning macro RegExpBuiltinsAssembler::RegExpCreate(
-      implicit context: Context)(Context, Object, String): Object;
-
   extern transitioning macro
   RegExpMatchAllAssembler::CreateRegExpStringIterator(
       NativeContext, Object, String, bool, bool): JSAny;
@@ -133,10 +130,6 @@ namespace regexp {
     const newFlags: Smi = flags | kJSRegExpStringIteratorDone;
     iterator.flags = newFlags;
   }
-
-  extern macro RegExpBuiltinsAssembler::ConstructNewResultFromMatchInfo(
-      implicit context: Context)(JSReceiver, RegExpMatchInfo, String):
-      JSRegExpResult;
 
   // https://tc39.github.io/proposal-string-matchall/
   // %RegExpStringIteratorPrototype%.next ( )

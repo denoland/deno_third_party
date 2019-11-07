@@ -34,29 +34,6 @@ void Builtins::Generate_Adaptor(MacroAssembler* masm, Address address) {
           RelocInfo::CODE_TARGET);
 }
 
-void Builtins::Generate_InternalArrayConstructor(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- r3     : number of arguments
-  //  -- lr     : return address
-  //  -- sp[...]: constructor arguments
-  // -----------------------------------
-
-  if (FLAG_debug_code) {
-    // Initial map for the builtin InternalArray functions should be maps.
-    __ LoadP(r5, FieldMemOperand(r4, JSFunction::kPrototypeOrInitialMapOffset));
-    __ TestIfSmi(r5, r0);
-    __ Assert(ne, AbortReason::kUnexpectedInitialMapForInternalArrayFunction,
-              cr0);
-    __ CompareObjectType(r5, r6, r7, MAP_TYPE);
-    __ Assert(eq, AbortReason::kUnexpectedInitialMapForInternalArrayFunction);
-  }
-
-  // Run the native code for the InternalArray function called as a normal
-  // function.
-  __ Jump(BUILTIN_CODE(masm->isolate(), InternalArrayConstructorImpl),
-          RelocInfo::CODE_TARGET);
-}
-
 static void GenerateTailCallToReturnedCode(MacroAssembler* masm,
                                            Runtime::FunctionId function_id) {
   // ----------- S t a t e -------------
@@ -167,8 +144,7 @@ void Generate_JSBuiltinsConstructStubHelper(MacroAssembler* masm) {
     // r6: new target
     {
       ConstantPoolUnavailableScope constant_pool_unavailable(masm);
-      ParameterCount actual(r3);
-      __ InvokeFunction(r4, r6, actual, CALL_FUNCTION);
+      __ InvokeFunctionWithNewTarget(r4, r6, r3, CALL_FUNCTION);
     }
 
     // Restore context from the frame.
@@ -323,8 +299,7 @@ void Builtins::Generate_JSConstructStubGeneric(MacroAssembler* masm) {
     // Call the function.
     {
       ConstantPoolUnavailableScope constant_pool_unavailable(masm);
-      ParameterCount actual(r3);
-      __ InvokeFunction(r4, r6, actual, CALL_FUNCTION);
+      __ InvokeFunctionWithNewTarget(r4, r6, r3, CALL_FUNCTION);
     }
 
     // ----------- S t a t e -------------
@@ -1985,7 +1960,7 @@ void Builtins::Generate_CallOrConstructForwardVarargs(MacroAssembler* masm,
           Operand(StackFrame::TypeToMarker(StackFrame::ARGUMENTS_ADAPTOR)));
   __ beq(&arguments_adaptor);
   {
-    __ LoadP(r8, MemOperand(fp, JavaScriptFrameConstants::kFunctionOffset));
+    __ LoadP(r8, MemOperand(fp, StandardFrameConstants::kFunctionOffset));
     __ LoadP(r8, FieldMemOperand(r8, JSFunction::kSharedFunctionInfoOffset));
     __ LoadHalfWord(
         r8,
@@ -2125,9 +2100,7 @@ void Builtins::Generate_CallFunction(MacroAssembler* masm,
 
   __ LoadHalfWord(
       r5, FieldMemOperand(r5, SharedFunctionInfo::kFormalParameterCountOffset));
-  ParameterCount actual(r3);
-  ParameterCount expected(r5);
-  __ InvokeFunctionCode(r4, no_reg, expected, actual, JUMP_FUNCTION);
+  __ InvokeFunctionCode(r4, no_reg, r5, r3, JUMP_FUNCTION);
 
   // The function is a "classConstructor", need to raise an exception.
   __ bind(&class_constructor);
@@ -2609,16 +2582,10 @@ void Builtins::Generate_WasmCompileLazy(MacroAssembler* masm) {
     // Pass instance and function index as explicit arguments to the runtime
     // function.
     __ Push(kWasmInstanceRegister, kWasmCompileLazyFuncIndexRegister);
-    // Load the correct CEntry builtin from the instance object.
-    __ LoadP(r5, FieldMemOperand(kWasmInstanceRegister,
-                                 WasmInstanceObject::kIsolateRootOffset));
-    auto centry_id =
-        Builtins::kCEntry_Return1_DontSaveFPRegs_ArgvOnStack_NoBuiltinExit;
-    __ LoadP(r5, MemOperand(r5, IsolateData::builtin_slot_offset(centry_id)));
     // Initialize the JavaScript context with 0. CEntry will use it to
     // set the current context on the isolate.
     __ LoadSmiLiteral(cp, Smi::zero());
-    __ CallRuntimeWithCEntry(Runtime::kWasmCompileLazy, r5);
+    __ CallRuntime(Runtime::kWasmCompileLazy, 2);
     // The entrypoint address is the return value.
     __ mr(r11, kReturnRegister0);
 
@@ -2915,47 +2882,6 @@ void Builtins::Generate_DoubleToI(MacroAssembler* masm) {
   __ Pop(result_reg, scratch);
 
   __ Ret();
-}
-
-void Builtins::Generate_InternalArrayConstructorImpl(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- r3 : argc
-  //  -- r4 : constructor
-  //  -- sp[0] : return address
-  //  -- sp[4] : last argument
-  // -----------------------------------
-
-  if (FLAG_debug_code) {
-    // The array construct code is only set for the global and natives
-    // builtin Array functions which always have maps.
-
-    // Initial map for the builtin Array function should be a map.
-    __ LoadP(r6, FieldMemOperand(r4, JSFunction::kPrototypeOrInitialMapOffset));
-    // Will both indicate a nullptr and a Smi.
-    __ TestIfSmi(r6, r0);
-    __ Assert(ne, AbortReason::kUnexpectedInitialMapForArrayFunction, cr0);
-    __ CompareObjectType(r6, r6, r7, MAP_TYPE);
-    __ Assert(eq, AbortReason::kUnexpectedInitialMapForArrayFunction);
-
-    // Figure out the right elements kind
-    __ LoadP(r6, FieldMemOperand(r4, JSFunction::kPrototypeOrInitialMapOffset));
-    // Load the map's "bit field 2" into |result|.
-    __ lbz(r6, FieldMemOperand(r6, Map::kBitField2Offset));
-    // Retrieve elements_kind from bit field 2.
-    __ DecodeField<Map::ElementsKindBits>(r6);
-
-    // Initial elements kind should be packed elements.
-    __ cmpi(r6, Operand(PACKED_ELEMENTS));
-    __ Assert(eq, AbortReason::kInvalidElementsKindForInternalPackedArray);
-
-    // No arguments should be passed.
-    __ cmpi(r3, Operand(0));
-    __ Assert(eq, AbortReason::kWrongNumberOfArgumentsForInternalPackedArray);
-  }
-
-  __ Jump(
-      BUILTIN_CODE(masm->isolate(), InternalArrayNoArgumentConstructor_Packed),
-      RelocInfo::CODE_TARGET);
 }
 
 namespace {
@@ -3315,7 +3241,7 @@ void Builtins::Generate_DirectCEntry(MacroAssembler* masm) {
   __ mflr(r0);
   __ StoreP(r0, MemOperand(sp, kStackFrameExtraParamSlot * kPointerSize));
 
-  if (ABI_USES_FUNCTION_DESCRIPTORS && FLAG_embedded_builtins) {
+  if (ABI_USES_FUNCTION_DESCRIPTORS) {
     // AIX/PPC64BE Linux use a function descriptor;
     __ LoadP(ToRegister(ABI_TOC_REGISTER), MemOperand(temp2, kPointerSize));
     __ LoadP(temp2, MemOperand(temp2, 0));  // Instruction address

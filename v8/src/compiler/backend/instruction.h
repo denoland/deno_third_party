@@ -807,7 +807,6 @@ class V8_EXPORT_PRIVATE Instruction final {
                           size_t output_count, InstructionOperand* outputs,
                           size_t input_count, InstructionOperand* inputs,
                           size_t temp_count, InstructionOperand* temps) {
-    DCHECK_LE(0, opcode);
     DCHECK(output_count == 0 || outputs != nullptr);
     DCHECK(input_count == 0 || inputs != nullptr);
     DCHECK(temp_count == 0 || temps != nullptr);
@@ -1420,7 +1419,7 @@ class V8_EXPORT_PRIVATE InstructionBlock final
   const RpoNumber loop_end_;
   int32_t code_start_;   // start index of arch-specific code.
   int32_t code_end_ = -1;     // end index of arch-specific code.
-  const bool deferred_ = -1;  // Block contains deferred code.
+  const bool deferred_;       // Block contains deferred code.
   const bool handler_;   // Block is a handler entry point.
   bool switch_target_ = false;
   bool alignment_ = false;  // insert alignment before this block

@@ -280,7 +280,7 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
       // Just encode the stub index. This will be patched when the code
       // is added to the native module and copied into wasm code space.
       __ CallRecordWriteStub(object_, scratch1_, remembered_set_action,
-                             save_fp_mode, wasm::WasmCode::kWasmRecordWrite);
+                             save_fp_mode, wasm::WasmCode::kRecordWrite);
     } else {
       __ CallRecordWriteStub(object_, scratch1_, remembered_set_action,
                              save_fp_mode);
@@ -632,9 +632,7 @@ void CodeGenerator::AssemblePopArgumentsAdaptorFrame(Register args_reg,
   __ SmiUntag(caller_args_count_reg,
               Operand(rbp, ArgumentsAdaptorFrameConstants::kLengthOffset));
 
-  ParameterCount callee_args_count(args_reg);
-  __ PrepareForTailCall(callee_args_count, caller_args_count_reg, scratch2,
-                        scratch3);
+  __ PrepareForTailCall(args_reg, caller_args_count_reg, scratch2, scratch3);
   __ bind(&done);
 }
 
@@ -1022,14 +1020,29 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       }
       break;
     case kArchStackPointerGreaterThan: {
+      // Potentially apply an offset to the current stack pointer before the
+      // comparison to consider the size difference of an optimized frame versus
+      // the contained unoptimized frames.
+
+      Register lhs_register = rsp;
+      uint32_t offset;
+
+      if (ShouldApplyOffsetToStackCheck(instr, &offset)) {
+        lhs_register = kScratchRegister;
+        __ leaq(lhs_register, Operand(rsp, static_cast<int32_t>(offset) * -1));
+      }
+
       constexpr size_t kValueIndex = 0;
       if (HasAddressingMode(instr)) {
-        __ cmpq(rsp, i.MemoryOperand(kValueIndex));
+        __ cmpq(lhs_register, i.MemoryOperand(kValueIndex));
       } else {
-        __ cmpq(rsp, i.InputRegister(kValueIndex));
+        __ cmpq(lhs_register, i.InputRegister(kValueIndex));
       }
       break;
     }
+    case kArchStackCheckOffset:
+      __ Move(i.OutputRegister(), Smi::FromInt(GetStackCheckOffset()));
+      break;
     case kArchTruncateDoubleToI: {
       auto result = i.OutputRegister();
       auto input = i.InputDoubleRegister(0);
@@ -2286,6 +2299,40 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       }
       break;
     }
+    case kX64F64x2SConvertI64x2: {
+      XMMRegister dst = i.OutputSimd128Register();
+      Register tmp1 = i.TempRegister(0);
+      Register tmp2 = i.TempRegister(1);
+      DCHECK_EQ(dst, i.InputSimd128Register(0));
+
+      // Move low quardword into tmp1, high quadword into tmp2.
+      __ movq(tmp1, dst);
+      __ pextrq(tmp2, dst, 1);
+      // Convert tmp2, then copy from low to high quadword of dst.
+      __ cvtqsi2sd(dst, tmp2);
+      __ movlhps(dst, dst);
+      // Finally convert tmp1.
+      __ cvtqsi2sd(dst, tmp1);
+      break;
+    }
+    case kX64F64x2UConvertI64x2: {
+      XMMRegister dst = i.OutputSimd128Register();
+      Register tmp = i.TempRegister(0);
+      XMMRegister tmp_xmm = i.TempSimd128Register(1);
+      DCHECK_EQ(dst, i.InputSimd128Register(0));
+
+      // Extract high quardword.
+      __ pextrq(tmp, dst, 1);
+      // We cannot convert directly into dst, as the next call to Cvtqui2sd will
+      // zero it out, so be careful to make sure dst is unique to tmp_xmm.
+      __ Cvtqui2sd(tmp_xmm, tmp);
+      // Extract low quadword and convert.
+      __ movq(tmp, dst);
+      __ Cvtqui2sd(dst, tmp);
+      // Move converted high quadword to top of dst.
+      __ movlhps(dst, tmp_xmm);
+      break;
+    }
     case kX64F64x2ExtractLane: {
       CpuFeatureScope sse_scope(tasm(), SSE4_1);
       __ pextrq(kScratchRegister, i.InputSimd128Register(0), i.InputInt8(1));
@@ -2297,19 +2344,19 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       break;
     }
     case kX64F64x2Add: {
-      ASSEMBLE_SSE_BINOP(addpd);
+      ASSEMBLE_SSE_BINOP(Addpd);
       break;
     }
     case kX64F64x2Sub: {
-      ASSEMBLE_SSE_BINOP(subpd);
+      ASSEMBLE_SSE_BINOP(Subpd);
       break;
     }
     case kX64F64x2Mul: {
-      ASSEMBLE_SSE_BINOP(mulpd);
+      ASSEMBLE_SSE_BINOP(Mulpd);
       break;
     }
     case kX64F64x2Div: {
-      ASSEMBLE_SSE_BINOP(divpd);
+      ASSEMBLE_SSE_BINOP(Divpd);
       break;
     }
     case kX64F64x2Min: {
@@ -2401,34 +2448,32 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kX64F32x4Splat: {
       XMMRegister dst = i.OutputSimd128Register();
       if (instr->InputAt(0)->IsFPRegister()) {
-        __ movss(dst, i.InputDoubleRegister(0));
+        __ Movss(dst, i.InputDoubleRegister(0));
       } else {
-        __ movss(dst, i.InputOperand(0));
+        __ Movss(dst, i.InputOperand(0));
       }
-      __ shufps(dst, dst, 0x0);
+      __ Shufps(dst, dst, static_cast<byte>(0x0));
       break;
     }
     case kX64F32x4ExtractLane: {
-      CpuFeatureScope sse_scope(tasm(), SSE4_1);
-      __ extractps(kScratchRegister, i.InputSimd128Register(0), i.InputInt8(1));
-      __ movd(i.OutputDoubleRegister(), kScratchRegister);
+      __ Extractps(kScratchRegister, i.InputSimd128Register(0), i.InputInt8(1));
+      __ Movd(i.OutputDoubleRegister(), kScratchRegister);
       break;
     }
     case kX64F32x4ReplaceLane: {
-      CpuFeatureScope sse_scope(tasm(), SSE4_1);
       // The insertps instruction uses imm8[5:4] to indicate the lane
       // that needs to be replaced.
       byte select = i.InputInt8(1) << 4 & 0x30;
       if (instr->InputAt(2)->IsFPRegister()) {
-        __ insertps(i.OutputSimd128Register(), i.InputDoubleRegister(2),
+        __ Insertps(i.OutputSimd128Register(), i.InputDoubleRegister(2),
                     select);
       } else {
-        __ insertps(i.OutputSimd128Register(), i.InputOperand(2), select);
+        __ Insertps(i.OutputSimd128Register(), i.InputOperand(2), select);
       }
       break;
     }
     case kX64F32x4SConvertI32x4: {
-      __ cvtdq2ps(i.OutputSimd128Register(), i.InputSimd128Register(0));
+      __ Cvtdq2ps(i.OutputSimd128Register(), i.InputSimd128Register(0));
       break;
     }
     case kX64F32x4UConvertI32x4: {
@@ -2450,13 +2495,13 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       XMMRegister dst = i.OutputSimd128Register();
       XMMRegister src = i.InputSimd128Register(0);
       if (dst == src) {
-        __ pcmpeqd(kScratchDoubleReg, kScratchDoubleReg);
-        __ psrld(kScratchDoubleReg, 1);
-        __ andps(i.OutputSimd128Register(), kScratchDoubleReg);
+        __ Pcmpeqd(kScratchDoubleReg, kScratchDoubleReg);
+        __ Psrld(kScratchDoubleReg, static_cast<byte>(1));
+        __ Andps(i.OutputSimd128Register(), kScratchDoubleReg);
       } else {
-        __ pcmpeqd(dst, dst);
-        __ psrld(dst, 1);
-        __ andps(dst, i.InputSimd128Register(0));
+        __ Pcmpeqd(dst, dst);
+        __ Psrld(dst, static_cast<byte>(1));
+        __ Andps(dst, i.InputSimd128Register(0));
       }
       break;
     }
@@ -2464,52 +2509,52 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       XMMRegister dst = i.OutputSimd128Register();
       XMMRegister src = i.InputSimd128Register(0);
       if (dst == src) {
-        __ pcmpeqd(kScratchDoubleReg, kScratchDoubleReg);
-        __ pslld(kScratchDoubleReg, 31);
-        __ xorps(i.OutputSimd128Register(), kScratchDoubleReg);
+        __ Pcmpeqd(kScratchDoubleReg, kScratchDoubleReg);
+        __ Pslld(kScratchDoubleReg, static_cast<byte>(31));
+        __ Xorps(i.OutputSimd128Register(), kScratchDoubleReg);
       } else {
-        __ pcmpeqd(dst, dst);
-        __ pslld(dst, 31);
-        __ xorps(dst, i.InputSimd128Register(0));
+        __ Pcmpeqd(dst, dst);
+        __ Pslld(dst, static_cast<byte>(31));
+        __ Xorps(dst, i.InputSimd128Register(0));
       }
       break;
     }
     case kX64F32x4Sqrt: {
-      __ sqrtps(i.OutputSimd128Register(), i.InputSimd128Register(0));
+      __ Sqrtps(i.OutputSimd128Register(), i.InputSimd128Register(0));
       break;
     }
     case kX64F32x4RecipApprox: {
-      __ rcpps(i.OutputSimd128Register(), i.InputSimd128Register(0));
+      __ Rcpps(i.OutputSimd128Register(), i.InputSimd128Register(0));
       break;
     }
     case kX64F32x4RecipSqrtApprox: {
-      __ rsqrtps(i.OutputSimd128Register(), i.InputSimd128Register(0));
+      __ Rsqrtps(i.OutputSimd128Register(), i.InputSimd128Register(0));
       break;
     }
     case kX64F32x4Add: {
       DCHECK_EQ(i.OutputSimd128Register(), i.InputSimd128Register(0));
-      __ addps(i.OutputSimd128Register(), i.InputSimd128Register(1));
+      __ Addps(i.OutputSimd128Register(), i.InputSimd128Register(1));
       break;
     }
     case kX64F32x4AddHoriz: {
       DCHECK_EQ(i.OutputSimd128Register(), i.InputSimd128Register(0));
       CpuFeatureScope sse_scope(tasm(), SSE3);
-      __ haddps(i.OutputSimd128Register(), i.InputSimd128Register(1));
+      __ Haddps(i.OutputSimd128Register(), i.InputSimd128Register(1));
       break;
     }
     case kX64F32x4Sub: {
       DCHECK_EQ(i.OutputSimd128Register(), i.InputSimd128Register(0));
-      __ subps(i.OutputSimd128Register(), i.InputSimd128Register(1));
+      __ Subps(i.OutputSimd128Register(), i.InputSimd128Register(1));
       break;
     }
     case kX64F32x4Mul: {
       DCHECK_EQ(i.OutputSimd128Register(), i.InputSimd128Register(0));
-      __ mulps(i.OutputSimd128Register(), i.InputSimd128Register(1));
+      __ Mulps(i.OutputSimd128Register(), i.InputSimd128Register(1));
       break;
     }
     case kX64F32x4Div: {
       DCHECK_EQ(i.OutputSimd128Register(), i.InputSimd128Register(0));
-      __ divps(i.OutputSimd128Register(), i.InputSimd128Register(1));
+      __ Divps(i.OutputSimd128Register(), i.InputSimd128Register(1));
       break;
     }
     case kX64F32x4Min: {
@@ -3641,6 +3686,30 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
         __ Por(dst, kScratchDoubleReg);
       }
       __ movq(rsp, tmp);
+      break;
+    }
+    case kX64S8x16LoadSplat: {
+      EmitOOLTrapIfNeeded(zone(), this, opcode, instr, __ pc_offset());
+      __ pinsrb(i.OutputSimd128Register(), i.MemoryOperand(), 0);
+      __ pxor(kScratchDoubleReg, kScratchDoubleReg);
+      __ pshufb(i.OutputSimd128Register(), kScratchDoubleReg);
+      break;
+    }
+    case kX64S16x8LoadSplat: {
+      EmitOOLTrapIfNeeded(zone(), this, opcode, instr, __ pc_offset());
+      __ pinsrw(i.OutputSimd128Register(), i.MemoryOperand(), 0);
+      __ pshuflw(i.OutputSimd128Register(), i.OutputSimd128Register(), 0);
+      __ punpcklqdq(i.OutputSimd128Register(), i.OutputSimd128Register());
+      break;
+    }
+    case kX64I16x8Load8x8S: {
+      EmitOOLTrapIfNeeded(zone(), this, opcode, instr, __ pc_offset());
+      __ pmovsxbw(i.OutputSimd128Register(), i.MemoryOperand());
+      break;
+    }
+    case kX64I16x8Load8x8U: {
+      EmitOOLTrapIfNeeded(zone(), this, opcode, instr, __ pc_offset());
+      __ pmovzxbw(i.OutputSimd128Register(), i.MemoryOperand());
       break;
     }
     case kX64S32x4Swizzle: {

@@ -315,6 +315,18 @@ class Object : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
   V8_EXPORT_PRIVATE bool ToInt32(int32_t* value);
   inline bool ToUint32(uint32_t* value) const;
 
+  // Converts a HeapNumber or String to an int32. Negative numbers are
+  // not supported. This is used for calculating array indices but
+  // differs from an Array Index in the regard that this does not
+  // support the full array index range. This only supports positive
+  // numbers less than INT_MAX.
+  //
+  // if val < 0, returns -1
+  // if 0 <= val <= INT_MAX, returns val
+  // if INT_MAX < val <= JSArray::kMaxArrayIndex, returns -2
+  // if JSArray::kMaxArrayIndex < val, returns -1
+  static int32_t ToArrayIndexSlow(Address addr);
+
   inline Representation OptimalRepresentation(Isolate* isolate) const;
 
   inline ElementsKind OptimalElementsKind(Isolate* isolate) const;
@@ -456,8 +468,7 @@ class Object : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
       Isolate* isolate, Handle<Object> object, Handle<Object> callable);
 
   V8_EXPORT_PRIVATE V8_WARN_UNUSED_RESULT static MaybeHandle<Object>
-  GetProperty(LookupIterator* it,
-              OnNonExistent on_non_existent = OnNonExistent::kReturnUndefined);
+  GetProperty(LookupIterator* it, bool is_global_reference = false);
 
   // ES6 [[Set]] (when passed kDontThrow)
   // Invariants for this and related functions (unless stated otherwise):

@@ -37,7 +37,10 @@ constexpr size_t kAddressSpaceLimit = 0xC0000000;  // 3 GiB
 
 constexpr uint64_t kOneGiB = 1024 * 1024 * 1024;
 constexpr uint64_t kNegativeGuardSize = 2 * kOneGiB;
+
+#if V8_TARGET_ARCH_64_BIT
 constexpr uint64_t kFullGuardSize = 10 * kOneGiB;
+#endif
 
 std::atomic<uint64_t> reserved_address_space_{0};
 
@@ -55,6 +58,7 @@ enum class AllocationStatus {
   kOtherFailure  // Failed for an unknown reason
 };
 
+#if V8_TARGET_ARCH_64_BIT
 base::AddressRegion GetGuardedRegion(void* buffer_start, size_t byte_length) {
   // Guard regions always look like this:
   // |xxx(2GiB)xxx|.......(4GiB)..xxxxx|xxxxxx(4GiB)xxxxxx|
@@ -67,6 +71,29 @@ base::AddressRegion GetGuardedRegion(void* buffer_start, size_t byte_length) {
   DCHECK_EQ(0, start % AllocatePageSize());
   return base::AddressRegion(start - (2 * kOneGiB),
                              static_cast<size_t>(kFullGuardSize));
+}
+#endif
+
+base::AddressRegion GetRegion(bool has_guard_regions, void* buffer_start,
+                              size_t byte_length, size_t byte_capacity) {
+#if V8_TARGET_ARCH_64_BIT
+  if (has_guard_regions) return GetGuardedRegion(buffer_start, byte_length);
+#else
+  DCHECK(!has_guard_regions);
+#endif
+
+  return base::AddressRegion(reinterpret_cast<Address>(buffer_start),
+                             byte_capacity);
+}
+
+size_t GetReservationSize(bool has_guard_regions, size_t byte_capacity) {
+#if V8_TARGET_ARCH_64_BIT
+  if (has_guard_regions) return kFullGuardSize;
+#else
+  DCHECK(!has_guard_regions);
+#endif
+
+  return byte_capacity;
 }
 
 void RecordStatus(Isolate* isolate, AllocationStatus status) {
@@ -114,6 +141,11 @@ void BackingStore::Clear() {
   buffer_start_ = nullptr;
   byte_length_ = 0;
   has_guard_regions_ = false;
+  if (holds_shared_ptr_to_allocator_) {
+    type_specific_data_.v8_api_array_buffer_allocator_shared
+        .std::shared_ptr<v8::ArrayBuffer::Allocator>::~shared_ptr();
+    holds_shared_ptr_to_allocator_ = false;
+  }
   type_specific_data_.v8_api_array_buffer_allocator = nullptr;
 }
 
@@ -124,6 +156,7 @@ BackingStore::~BackingStore() {
 
   if (is_wasm_memory_) {
     DCHECK(free_on_destruct_);
+    DCHECK(!custom_deleter_);
     TRACE_BS("BSw:free  bs=%p mem=%p (length=%zu, capacity=%zu)\n", this,
              buffer_start_, byte_length(), byte_capacity_);
     if (is_shared_) {
@@ -134,25 +167,31 @@ BackingStore::~BackingStore() {
     }
 
     // Wasm memories are always allocated through the page allocator.
-    auto region =
-        has_guard_regions_
-            ? GetGuardedRegion(buffer_start_, byte_length_)
-            : base::AddressRegion(reinterpret_cast<Address>(buffer_start_),
-                                  byte_capacity_);
+    auto region = GetRegion(has_guard_regions_, buffer_start_, byte_length_,
+                            byte_capacity_);
+
     bool pages_were_freed =
         region.size() == 0 /* no need to free any pages */ ||
         FreePages(GetPlatformPageAllocator(),
                   reinterpret_cast<void*>(region.begin()), region.size());
     CHECK(pages_were_freed);
-    BackingStore::ReleaseReservation(has_guard_regions_ ? kFullGuardSize
-                                                        : byte_capacity_);
+    BackingStore::ReleaseReservation(
+        GetReservationSize(has_guard_regions_, byte_capacity_));
+    Clear();
+    return;
+  }
+  if (custom_deleter_) {
+    DCHECK(free_on_destruct_);
+    TRACE_BS("BS:custome deleter bs=%p mem=%p (length=%zu, capacity=%zu)\n",
+             this, buffer_start_, byte_length(), byte_capacity_);
+    type_specific_data_.deleter.callback(buffer_start_, byte_length_,
+                                         type_specific_data_.deleter.data);
     Clear();
     return;
   }
   if (free_on_destruct_) {
     // JSArrayBuffer backing store. Deallocate through the embedder's allocator.
-    auto allocator = reinterpret_cast<v8::ArrayBuffer::Allocator*>(
-        get_v8_api_array_buffer_allocator());
+    auto allocator = get_v8_api_array_buffer_allocator();
     TRACE_BS("BS:free   bs=%p mem=%p (length=%zu, capacity=%zu)\n", this,
              buffer_start_, byte_length(), byte_capacity_);
     allocator->Free(buffer_start_, byte_length_);
@@ -210,12 +249,25 @@ std::unique_ptr<BackingStore> BackingStore::Allocate(
                                  shared,        // shared
                                  false,         // is_wasm_memory
                                  true,          // free_on_destruct
-                                 false);        // has_guard_regions
+                                 false,         // has_guard_regions
+                                 false);        // custom_deleter
 
   TRACE_BS("BS:alloc  bs=%p mem=%p (length=%zu)\n", result,
            result->buffer_start(), byte_length);
-  result->type_specific_data_.v8_api_array_buffer_allocator = allocator;
+  result->SetAllocatorFromIsolate(isolate);
   return std::unique_ptr<BackingStore>(result);
+}
+
+void BackingStore::SetAllocatorFromIsolate(Isolate* isolate) {
+  if (auto allocator_shared = isolate->array_buffer_allocator_shared()) {
+    holds_shared_ptr_to_allocator_ = true;
+    new (&type_specific_data_.v8_api_array_buffer_allocator_shared)
+        std::shared_ptr<v8::ArrayBuffer::Allocator>(
+            std::move(allocator_shared));
+  } else {
+    type_specific_data_.v8_api_array_buffer_allocator =
+        isolate->array_buffer_allocator();
+  }
 }
 
 // Allocate a backing store for a Wasm memory. Always use the page allocator
@@ -252,8 +304,7 @@ std::unique_ptr<BackingStore> BackingStore::TryAllocateWasmMemory(
   size_t engine_max_pages = wasm::max_mem_pages();
   size_t byte_capacity =
       std::min(engine_max_pages, maximum_pages) * wasm::kWasmPageSize;
-  size_t reservation_size =
-      guards ? static_cast<size_t>(kFullGuardSize) : byte_capacity;
+  size_t reservation_size = GetReservationSize(guards, byte_capacity);
 
   //--------------------------------------------------------------------------
   // 1. Enforce maximum address space reservation per engine.
@@ -321,7 +372,8 @@ std::unique_ptr<BackingStore> BackingStore::TryAllocateWasmMemory(
                                  shared,         // shared
                                  true,           // is_wasm_memory
                                  true,           // free_on_destruct
-                                 guards);        // has_guard_regions
+                                 guards,         // has_guard_regions
+                                 false);         // custom_deleter
 
   TRACE_BS("BSw:alloc bs=%p mem=%p (length=%zu, capacity=%zu)\n", result,
            result->buffer_start(), byte_length, byte_capacity);
@@ -451,11 +503,33 @@ void BackingStore::UpdateSharedWasmMemoryObjects(Isolate* isolate) {
 std::unique_ptr<BackingStore> BackingStore::WrapAllocation(
     Isolate* isolate, void* allocation_base, size_t allocation_length,
     SharedFlag shared, bool free_on_destruct) {
-  auto result =
-      new BackingStore(allocation_base, allocation_length, allocation_length,
-                       shared, false, free_on_destruct, false);
-  result->type_specific_data_.v8_api_array_buffer_allocator =
-      isolate->array_buffer_allocator();
+  auto result = new BackingStore(allocation_base,    // start
+                                 allocation_length,  // length
+                                 allocation_length,  // capacity
+                                 shared,             // shared
+                                 false,              // is_wasm_memory
+                                 free_on_destruct,   // free_on_destruct
+                                 false,              // has_guard_regions
+                                 false);             // custom_deleter
+  result->SetAllocatorFromIsolate(isolate);
+  TRACE_BS("BS:wrap   bs=%p mem=%p (length=%zu)\n", result,
+           result->buffer_start(), result->byte_length());
+  return std::unique_ptr<BackingStore>(result);
+}
+
+std::unique_ptr<BackingStore> BackingStore::WrapAllocation(
+    void* allocation_base, size_t allocation_length,
+    v8::BackingStoreDeleterCallback deleter, void* deleter_data,
+    SharedFlag shared) {
+  auto result = new BackingStore(allocation_base,    // start
+                                 allocation_length,  // length
+                                 allocation_length,  // capacity
+                                 shared,             // shared
+                                 false,              // is_wasm_memory
+                                 true,               // free_on_destruct
+                                 false,              // has_guard_regions
+                                 true);              // custom_deleter
+  result->type_specific_data_.deleter = {deleter, deleter_data};
   TRACE_BS("BS:wrap   bs=%p mem=%p (length=%zu)\n", result,
            result->buffer_start(), result->byte_length());
   return std::unique_ptr<BackingStore>(result);
@@ -469,15 +543,18 @@ std::unique_ptr<BackingStore> BackingStore::EmptyBackingStore(
                                  shared,   // shared
                                  false,    // is_wasm_memory
                                  false,    // free_on_destruct
-                                 false);   // has_guard_regions
+                                 false,    // has_guard_regions
+                                 false);   // custom_deleter
 
   return std::unique_ptr<BackingStore>(result);
 }
 
-void* BackingStore::get_v8_api_array_buffer_allocator() {
+v8::ArrayBuffer::Allocator* BackingStore::get_v8_api_array_buffer_allocator() {
   CHECK(!is_wasm_memory_);
   auto array_buffer_allocator =
-      type_specific_data_.v8_api_array_buffer_allocator;
+      holds_shared_ptr_to_allocator_
+          ? type_specific_data_.v8_api_array_buffer_allocator_shared.get()
+          : type_specific_data_.v8_api_array_buffer_allocator;
   CHECK_NOT_NULL(array_buffer_allocator);
   return array_buffer_allocator;
 }
@@ -512,6 +589,9 @@ void GlobalBackingStoreRegistry::Register(
     // then we don't have to guarantee that there is single unique
     // BackingStore per buffer_start() because the destructor of
     // of the BackingStore will be a no-op in that case.
+
+    // All WASM memory has to be registered.
+    CHECK(!backing_store->is_wasm_memory());
     return;
   }
 

@@ -385,16 +385,6 @@ bool Heap::CreateInitialMaps() {
       roots_table()[entry.index] = map.ptr();
     }
 
-    {  // Create a separate external one byte string map for native sources.
-      Map map;
-      AllocationResult allocation =
-          AllocateMap(UNCACHED_EXTERNAL_ONE_BYTE_STRING_TYPE,
-                      ExternalOneByteString::kUncachedSize);
-      if (!allocation.To(&map)) return false;
-      map.SetConstructorFunctionIndex(Context::STRING_FUNCTION_INDEX);
-      set_native_source_string_map(map);
-    }
-
     ALLOCATE_VARSIZE_MAP(FIXED_DOUBLE_ARRAY_TYPE, fixed_double_array)
     roots.fixed_double_array_map().set_elements_kind(HOLEY_DOUBLE_ELEMENTS);
     ALLOCATE_VARSIZE_MAP(FEEDBACK_METADATA_TYPE, feedback_metadata)
@@ -455,16 +445,6 @@ bool Heap::CreateInitialMaps() {
 
     ALLOCATE_VARSIZE_MAP(FIXED_ARRAY_TYPE, array_list)
 
-    ALLOCATE_VARSIZE_MAP(FUNCTION_CONTEXT_TYPE, function_context)
-    ALLOCATE_VARSIZE_MAP(CATCH_CONTEXT_TYPE, catch_context)
-    ALLOCATE_VARSIZE_MAP(WITH_CONTEXT_TYPE, with_context)
-    ALLOCATE_VARSIZE_MAP(DEBUG_EVALUATE_CONTEXT_TYPE, debug_evaluate_context)
-    ALLOCATE_VARSIZE_MAP(AWAIT_CONTEXT_TYPE, await_context)
-    ALLOCATE_VARSIZE_MAP(BLOCK_CONTEXT_TYPE, block_context)
-    ALLOCATE_VARSIZE_MAP(MODULE_CONTEXT_TYPE, module_context)
-    ALLOCATE_VARSIZE_MAP(NATIVE_CONTEXT_TYPE, native_context)
-    ALLOCATE_VARSIZE_MAP(EVAL_CONTEXT_TYPE, eval_context)
-    ALLOCATE_VARSIZE_MAP(SCRIPT_CONTEXT_TYPE, script_context)
     ALLOCATE_VARSIZE_MAP(SCRIPT_CONTEXT_TABLE_TYPE, script_context_table)
 
     ALLOCATE_VARSIZE_MAP(OBJECT_BOILERPLATE_DESCRIPTION_TYPE,
@@ -726,7 +706,7 @@ void Heap::CreateInitialObjects() {
 #define SYMBOL_INIT(_, name, description)                                \
   Handle<Symbol> name = factory->NewSymbol(AllocationType::kReadOnly);   \
   Handle<String> name##d = factory->InternalizeUtf8String(#description); \
-  name->set_name(*name##d);                                              \
+  name->set_description(*name##d);                                       \
   roots_table()[RootIndex::k##name] = name->ptr();
     PUBLIC_SYMBOL_LIST_GENERATOR(SYMBOL_INIT, /* not used */)
 #undef SYMBOL_INIT
@@ -735,7 +715,7 @@ void Heap::CreateInitialObjects() {
   Handle<Symbol> name = factory->NewSymbol(AllocationType::kReadOnly);   \
   Handle<String> name##d = factory->InternalizeUtf8String(#description); \
   name->set_is_well_known_symbol(true);                                  \
-  name->set_name(*name##d);                                              \
+  name->set_description(*name##d);                                       \
   roots_table()[RootIndex::k##name] = name->ptr();
     WELL_KNOWN_SYMBOL_LIST_GENERATOR(SYMBOL_INIT, /* not used */)
 #undef SYMBOL_INIT
@@ -830,6 +810,10 @@ void Heap::CreateInitialObjects() {
   Handle<ScopeInfo> empty_function =
       ScopeInfo::CreateForEmptyFunction(isolate());
   set_empty_function_scope_info(*empty_function);
+
+  Handle<ScopeInfo> native_scope_info =
+      ScopeInfo::CreateForNativeContext(isolate());
+  set_native_scope_info(*native_scope_info);
 
   // Allocate the empty script.
   Handle<Script> script = factory->NewScript(factory->empty_string());

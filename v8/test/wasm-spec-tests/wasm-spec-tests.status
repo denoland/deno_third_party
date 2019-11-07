@@ -17,9 +17,15 @@
   'proposals/js-types/exports': [FAIL],
   'proposals/js-types/globals': [FAIL],
   'proposals/js-types/linking': [FAIL],
-  # TODO(v8:9673): Enable these spec tests once they exist, and the out-dated
-  # tests have been removed.
-  'proposals/JS-BigInt-integration/*': [SKIP],
+  # TODO(v8:9865): Throwing behavior changed for these tests.
+  'proposals/bulk-memory-operations/linking': [FAIL],
+  'proposals/bulk-memory-operations/bulk': [FAIL],
+  'proposals/bulk-memory-operations/elem': [FAIL],
+  'proposals/bulk-memory-operations/data': [FAIL],
+  # TODO(thibaudm): Spec tests do not check multi-return functions correctly.
+  'proposals/multi-value/call': [FAIL],
+  'proposals/multi-value/if': [FAIL],
+  'proposals/multi-value/func': [FAIL],
 }],  # ALWAYS
 
 ['arch == mipsel or arch == mips64el or arch == mips or arch == mips64', {
@@ -78,11 +84,6 @@
   # TODO(v8:7777): Re-enable once wasm is supported in jitless mode.
   '*': [SKIP],
 }], # lite_mode or variant == jitless
-
-##############################################################################
-['variant == jitless and not embedded_builtins', {
-  '*': [SKIP],
-}], # variant == jitless and not embedded_builtins
 
 
 ]

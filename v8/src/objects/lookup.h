@@ -69,8 +69,7 @@ class V8_EXPORT_PRIVATE LookupIterator final {
         isolate_(isolate),
         receiver_(receiver),
         initial_holder_(holder),
-        index_(index),
-        number_(static_cast<uint32_t>(DescriptorArray::kNotFound)) {
+        index_(index) {
     // kMaxUInt32 isn't a valid index.
     DCHECK_NE(kMaxUInt32, index_);
     Start<true>();
@@ -183,6 +182,8 @@ class V8_EXPORT_PRIVATE LookupIterator final {
   Handle<Object> GetDataValue() const;
   void WriteDataValue(Handle<Object> value, bool initializing_store);
   inline void UpdateProtector();
+  static inline void UpdateProtector(Isolate* isolate, Handle<Object> receiver,
+                                     Handle<Name> name);
 
   // Lookup a 'cached' private property for an accessor.
   // If not found returns false and leaves the LookupIterator unmodified.
@@ -195,7 +196,8 @@ class V8_EXPORT_PRIVATE LookupIterator final {
                  Handle<Map> transition_map, PropertyDetails details,
                  bool has_property);
 
-  void InternalUpdateProtector();
+  static void InternalUpdateProtector(Isolate* isolate, Handle<Object> receiver,
+                                      Handle<Name> name);
 
   enum class InterceptorState {
     kUninitialized,
@@ -242,7 +244,7 @@ class V8_EXPORT_PRIVATE LookupIterator final {
     return (configuration_ & kInterceptor) != 0;
   }
   inline InternalIndex descriptor_number() const;
-  inline int dictionary_entry() const;
+  inline InternalIndex dictionary_entry() const;
 
   static inline Configuration ComputeConfiguration(Isolate* isolate,
                                                    Configuration configuration,
@@ -270,7 +272,7 @@ class V8_EXPORT_PRIVATE LookupIterator final {
   Handle<JSReceiver> holder_;
   const Handle<JSReceiver> initial_holder_;
   const uint32_t index_;
-  uint32_t number_;
+  InternalIndex number_ = InternalIndex::NotFound();
 };
 
 }  // namespace internal

@@ -66,7 +66,6 @@
 #include "src/objects/slots-inl.h"
 #include "src/regexp/regexp.h"
 #include "src/snapshot/embedded/embedded-data.h"
-#include "src/snapshot/natives.h"
 #include "src/snapshot/serializer-common.h"
 #include "src/snapshot/snapshot.h"
 #include "src/strings/string-stream.h"
@@ -653,7 +652,9 @@ void Heap::ReportStatisticsAfterGC() {
 
 void Heap::AddHeapObjectAllocationTracker(
     HeapObjectAllocationTracker* tracker) {
-  if (allocation_trackers_.empty()) DisableInlineAllocation();
+  if (allocation_trackers_.empty() && FLAG_inline_new) {
+    DisableInlineAllocation();
+  }
   allocation_trackers_.push_back(tracker);
 }
 
@@ -662,7 +663,9 @@ void Heap::RemoveHeapObjectAllocationTracker(
   allocation_trackers_.erase(std::remove(allocation_trackers_.begin(),
                                          allocation_trackers_.end(), tracker),
                              allocation_trackers_.end());
-  if (allocation_trackers_.empty()) EnableInlineAllocation();
+  if (allocation_trackers_.empty() && FLAG_inline_new) {
+    EnableInlineAllocation();
+  }
 }
 
 void Heap::AddRetainingPathTarget(Handle<HeapObject> object,
@@ -1393,7 +1396,7 @@ void Heap::CollectAllAvailableGarbage(GarbageCollectionReason gc_reason) {
     PagedSpaceIterator spaces(this);
     for (PagedSpace* space = spaces.Next(); space != nullptr;
          space = spaces.Next()) {
-      PagedSpaceObjectIterator it(space);
+      PagedSpaceObjectIterator it(this, space);
       for (HeapObject obj = it.Next(); !obj.is_null(); obj = it.Next()) {
         objects_by_size[obj.Size()].push_back(obj);
       }
@@ -3986,14 +3989,8 @@ void Heap::Verify() {
 
 void Heap::VerifyReadOnlyHeap() {
   CHECK(!read_only_space_->writable());
-  // TODO(v8:7464): Always verify read-only space once PagedSpace::Verify
-  // supports verifying shared read-only space. Currently
-  // PagedSpaceObjectIterator is explicitly disabled for read-only space when
-  // sharing is enabled, because it relies on PagedSpace::heap_ being non-null.
-#ifndef V8_SHARED_RO_HEAP
   VerifyReadOnlyPointersVisitor read_only_visitor(this);
   read_only_space_->Verify(isolate(), &read_only_visitor);
-#endif
 }
 
 class SlotVerifyingVisitor : public ObjectVisitor {
@@ -4086,8 +4083,8 @@ class OldToNewSlotVerifyingVisitor : public SlotVerifyingVisitor {
         CHECK(it != ephemeron_remembered_set_->end());
         int slot_index =
             EphemeronHashTable::SlotToIndex(table.address(), key.address());
-        int entry = EphemeronHashTable::IndexToEntry(slot_index);
-        CHECK(it->second.find(entry) != it->second.end());
+        InternalIndex entry = EphemeronHashTable::IndexToEntry(slot_index);
+        CHECK(it->second.find(entry.as_int()) != it->second.end());
       }
     }
   }
@@ -4156,7 +4153,7 @@ void Heap::VerifyCountersAfterSweeping() {
   PagedSpaceIterator spaces(this);
   for (PagedSpace* space = spaces.Next(); space != nullptr;
        space = spaces.Next()) {
-    space->VerifyCountersAfterSweeping();
+    space->VerifyCountersAfterSweeping(this);
   }
 }
 
@@ -4262,10 +4259,10 @@ class FixStaleLeftTrimmedHandlesVisitor : public RootVisitor {
     if (!(*p).IsHeapObject()) return;
     HeapObject current = HeapObject::cast(*p);
     const MapWord map_word = current.map_word();
-    if (!map_word.IsForwardingAddress() && current.IsFiller()) {
+    if (!map_word.IsForwardingAddress() && current.IsFreeSpaceOrFiller()) {
 #ifdef DEBUG
       // We need to find a FixedArrayBase map after walking the fillers.
-      while (current.IsFiller()) {
+      while (current.IsFreeSpaceOrFiller()) {
         Address next = current.ptr();
         if (current.map() == ReadOnlyRoots(heap_).one_pointer_filler_map()) {
           next += kTaggedSize;
@@ -4315,23 +4312,11 @@ void Heap::IterateStrongRoots(RootVisitor* v, VisitMode mode) {
   isolate_->IterateDeferredHandles(v);
   v->Synchronize(VisitorSynchronization::kHandleScope);
 
-  // Iterate over the builtin code objects and code stubs in the
-  // heap. Note that it is not necessary to iterate over code objects
-  // on scavenge collections.
+  // Iterate over the builtin code objects in the heap. Note that it is not
+  // necessary to iterate over code objects on scavenge collections.
   if (!isMinorGC) {
     IterateBuiltins(v);
     v->Synchronize(VisitorSynchronization::kBuiltins);
-
-    // The dispatch table is set up directly from the builtins using
-    // IntitializeDispatchTable so there is no need to iterate to create it.
-    if (mode != VISIT_FOR_SERIALIZATION) {
-      // Currently we iterate the dispatch table to update pointers to possibly
-      // moved Code objects for bytecode handlers.
-      // TODO(v8:6666): Remove iteration once builtins are embedded (and thus
-      // immovable) in every build configuration.
-      isolate_->interpreter()->IterateDispatchTable(v);
-      v->Synchronize(VisitorSynchronization::kDispatchTable);
-    }
   }
 
   // Iterate over global handles.
@@ -4405,15 +4390,9 @@ void Heap::IterateBuiltins(RootVisitor* v) {
     v->VisitRootPointer(Root::kBuiltins, Builtins::name(i),
                         FullObjectSlot(builtin_address(i)));
   }
-#ifdef V8_EMBEDDED_BUILTINS
-  // The entry table does not need to be updated if all builtins are embedded.
+
+  // The entry table doesn't need to be updated since all builtins are embedded.
   STATIC_ASSERT(Builtins::AllBuiltinsAreIsolateIndependent());
-#else
-  // If builtins are not embedded, they may move and thus the entry table must
-  // be updated.
-  // TODO(v8:6666): Remove once builtins are embedded unconditionally.
-  Builtins::UpdateBuiltinEntryTable(isolate());
-#endif  // V8_EMBEDDED_BUILTINS
 }
 
 namespace {
@@ -5016,7 +4995,7 @@ void Heap::SetUp() {
         mark_compact_collector_->marking_worklist();
     concurrent_marking_.reset(new ConcurrentMarking(
         this, marking_worklist->shared(), marking_worklist->on_hold(),
-        mark_compact_collector_->weak_objects(), marking_worklist->embedder()));
+        marking_worklist->embedder(), mark_compact_collector_->weak_objects()));
   } else {
     concurrent_marking_.reset(
         new ConcurrentMarking(this, nullptr, nullptr, nullptr, nullptr));
@@ -5043,7 +5022,7 @@ void Heap::SetUpSpaces() {
   space_[OLD_SPACE] = old_space_ = new OldSpace(this);
   space_[CODE_SPACE] = code_space_ = new CodeSpace(this);
   space_[MAP_SPACE] = map_space_ = new MapSpace(this);
-  space_[LO_SPACE] = lo_space_ = new LargeObjectSpace(this);
+  space_[LO_SPACE] = lo_space_ = new OldLargeObjectSpace(this);
   space_[NEW_LO_SPACE] = new_lo_space_ =
       new NewLargeObjectSpace(this, new_space_->Capacity());
   space_[CODE_LO_SPACE] = code_lo_space_ = new CodeLargeObjectSpace(this);
@@ -5625,7 +5604,7 @@ class UnreachableObjectsFilter : public HeapObjectsFilter {
   }
 
   bool SkipObject(HeapObject object) override {
-    if (object.IsFiller()) return true;
+    if (object.IsFreeSpaceOrFiller()) return true;
     MemoryChunk* chunk = MemoryChunk::FromHeapObject(object);
     if (reachable_.count(chunk) == 0) return true;
     return reachable_[chunk]->count(object) == 0;
@@ -5737,7 +5716,7 @@ HeapObjectIterator::HeapObjectIterator(
     default:
       break;
   }
-  object_iterator_ = space_iterator_->Next()->GetObjectIterator();
+  object_iterator_ = space_iterator_->Next()->GetObjectIterator(heap_);
 }
 
 HeapObjectIterator::~HeapObjectIterator() {
@@ -5771,7 +5750,7 @@ HeapObject HeapObjectIterator::NextObject() {
   } else {
     // Go though the spaces looking for one that has objects.
     while (space_iterator_->HasNext()) {
-      object_iterator_ = space_iterator_->Next()->GetObjectIterator();
+      object_iterator_ = space_iterator_->Next()->GetObjectIterator(heap_);
       obj = object_iterator_.get()->Next();
       if (!obj.is_null()) {
         return obj;
@@ -6155,16 +6134,37 @@ Code Heap::GcSafeFindCodeForInnerPointer(Address inner_pointer) {
     return GcSafeCastToCode(large_page->GetObject(), inner_pointer);
   }
 
-  DCHECK(code_space()->Contains(inner_pointer));
+  if (V8_LIKELY(code_space()->Contains(inner_pointer))) {
+    // Iterate through the page until we reach the end or find an object
+    // starting after the inner pointer.
+    Page* page = Page::FromAddress(inner_pointer);
 
-  // Iterate through the page until we reach the end or find an object starting
-  // after the inner pointer.
-  Page* page = Page::FromAddress(inner_pointer);
+    Address start =
+        page->GetCodeObjectRegistry()->GetCodeObjectStartFromInnerAddress(
+            inner_pointer);
+    return GcSafeCastToCode(HeapObject::FromAddress(start), inner_pointer);
+  }
 
-  Address start =
-      page->GetCodeObjectRegistry()->GetCodeObjectStartFromInnerAddress(
-          inner_pointer);
-  return GcSafeCastToCode(HeapObject::FromAddress(start), inner_pointer);
+  // It can only fall through to here during debugging, where for instance "jco"
+  // was called on an address within a RO_SPACE builtin. It cannot reach here
+  // during stack iteration as RO_SPACE memory is not executable so cannot
+  // appear on the stack as an instruction address.
+  DCHECK(ReadOnlyHeap::Contains(
+      HeapObject::FromAddress(inner_pointer & ~kHeapObjectTagMask)));
+
+  // TODO(delphick): Possibly optimize this as it iterates over all pages in
+  // RO_SPACE instead of just the one containing the address.
+  ReadOnlyHeapObjectIterator iterator(isolate()->read_only_heap());
+  for (HeapObject object = iterator.Next(); !object.is_null();
+       object = iterator.Next()) {
+    if (!object.IsCode()) continue;
+    Code code = Code::cast(object);
+    if (inner_pointer >= code.address() &&
+        inner_pointer < code.address() + code.Size()) {
+      return code;
+    }
+  }
+  UNREACHABLE();
 }
 
 void Heap::WriteBarrierForCodeSlow(Code code) {
@@ -6184,10 +6184,10 @@ void Heap::GenerationalBarrierSlow(HeapObject object, Address slot,
 void Heap::RecordEphemeronKeyWrite(EphemeronHashTable table, Address slot) {
   DCHECK(ObjectInYoungGeneration(HeapObjectSlot(slot).ToHeapObject()));
   int slot_index = EphemeronHashTable::SlotToIndex(table.address(), slot);
-  int entry = EphemeronHashTable::IndexToEntry(slot_index);
+  InternalIndex entry = EphemeronHashTable::IndexToEntry(slot_index);
   auto it =
       ephemeron_remembered_set_.insert({table, std::unordered_set<int>()});
-  it.first->second.insert(entry);
+  it.first->second.insert(entry.as_int());
 }
 
 void Heap::EphemeronKeyWriteBarrierFromCode(Address raw_object,

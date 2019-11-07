@@ -211,7 +211,8 @@ void Map::SetEnumLength(int length) {
 
 FixedArrayBase Map::GetInitialElements() const {
   FixedArrayBase result;
-  if (has_fast_elements() || has_fast_string_wrapper_elements()) {
+  if (has_fast_elements() || has_fast_string_wrapper_elements() ||
+      has_any_nonextensible_elements()) {
     result = GetReadOnlyRoots().empty_fixed_array();
   } else if (has_fast_sloppy_arguments_elements()) {
     result = GetReadOnlyRoots().empty_sloppy_arguments_elements();
@@ -625,7 +626,7 @@ void Map::UpdateDescriptors(Isolate* isolate, DescriptorArray descriptors,
       CHECK_EQ(Map::GetVisitorId(*this), visitor_id());
     }
 #else
-    SLOW_DCHECK(layout_descriptor()->IsConsistentWithMap(*this));
+    SLOW_DCHECK(layout_descriptor().IsConsistentWithMap(*this));
     DCHECK(visitor_id() == Map::GetVisitorId(*this));
 #endif
   }
@@ -644,7 +645,7 @@ void Map::InitializeDescriptors(Isolate* isolate, DescriptorArray descriptors,
       CHECK(layout_descriptor().IsConsistentWithMap(*this));
     }
 #else
-    SLOW_DCHECK(layout_descriptor()->IsConsistentWithMap(*this));
+    SLOW_DCHECK(layout_descriptor().IsConsistentWithMap(*this));
 #endif
     set_visitor_id(Map::GetVisitorId(*this));
   }
@@ -729,8 +730,12 @@ Map Map::ElementsTransitionMap(Isolate* isolate) {
 
 ACCESSORS(Map, dependent_code, DependentCode, kDependentCodeOffset)
 ACCESSORS(Map, prototype_validity_cell, Object, kPrototypeValidityCellOffset)
-ACCESSORS(Map, constructor_or_backpointer, Object,
-          kConstructorOrBackPointerOffset)
+ACCESSORS_CHECKED2(Map, constructor_or_backpointer, Object,
+                   kConstructorOrBackPointerOrNativeContextOffset,
+                   !IsContextMap(), value.IsNull() || !IsContextMap())
+ACCESSORS_CHECKED(Map, native_context, NativeContext,
+                  kConstructorOrBackPointerOrNativeContextOffset,
+                  IsContextMap())
 
 bool Map::IsPrototypeValidityCellValid() const {
   Object validity_cell = prototype_validity_cell();

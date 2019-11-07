@@ -702,22 +702,26 @@ void RawMachineAssembler::TailCallN(CallDescriptor* call_descriptor,
 
 namespace {
 
+enum FunctionDescriptorMode { kHasFunctionDescriptor, kNoFunctionDescriptor };
+
 Node* CallCFunctionImpl(
     RawMachineAssembler* rasm, Node* function, MachineType return_type,
     std::initializer_list<RawMachineAssembler::CFunctionArg> args,
-    bool caller_saved_regs, SaveFPRegsMode mode) {
+    bool caller_saved_regs, SaveFPRegsMode mode,
+    FunctionDescriptorMode no_function_descriptor) {
   static constexpr std::size_t kNumCArgs = 10;
 
   MachineSignature::Builder builder(rasm->zone(), 1, args.size());
   builder.AddReturn(return_type);
   for (const auto& arg : args) builder.AddParam(arg.first);
 
-  auto call_descriptor = Linkage::GetSimplifiedCDescriptor(
-      rasm->zone(), builder.Build(),
-      caller_saved_regs ? CallDescriptor::kCallerSavedRegisters
-                        : CallDescriptor::kNoFlags);
-
-  if (caller_saved_regs) call_descriptor->set_save_fp_mode(mode);
+  bool caller_saved_fp_regs = caller_saved_regs && (mode == kSaveFPRegs);
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  if (caller_saved_regs) flags |= CallDescriptor::kCallerSavedRegisters;
+  if (caller_saved_fp_regs) flags |= CallDescriptor::kCallerSavedFPRegisters;
+  if (no_function_descriptor) flags |= CallDescriptor::kNoFunctionDescriptor;
+  auto call_descriptor =
+      Linkage::GetSimplifiedCDescriptor(rasm->zone(), builder.Build(), flags);
 
   base::SmallVector<Node*, kNumCArgs> nodes(args.size() + 1);
   nodes[0] = function;
@@ -736,13 +740,21 @@ Node* RawMachineAssembler::CallCFunction(
     Node* function, MachineType return_type,
     std::initializer_list<RawMachineAssembler::CFunctionArg> args) {
   return CallCFunctionImpl(this, function, return_type, args, false,
-                           kDontSaveFPRegs);
+                           kDontSaveFPRegs, kHasFunctionDescriptor);
+}
+
+Node* RawMachineAssembler::CallCFunctionWithoutFunctionDescriptor(
+    Node* function, MachineType return_type,
+    std::initializer_list<RawMachineAssembler::CFunctionArg> args) {
+  return CallCFunctionImpl(this, function, return_type, args, false,
+                           kDontSaveFPRegs, kNoFunctionDescriptor);
 }
 
 Node* RawMachineAssembler::CallCFunctionWithCallerSavedRegisters(
     Node* function, MachineType return_type, SaveFPRegsMode mode,
     std::initializer_list<RawMachineAssembler::CFunctionArg> args) {
-  return CallCFunctionImpl(this, function, return_type, args, true, mode);
+  return CallCFunctionImpl(this, function, return_type, args, true, mode,
+                           kHasFunctionDescriptor);
 }
 
 BasicBlock* RawMachineAssembler::Use(RawMachineLabel* label) {

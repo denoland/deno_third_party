@@ -175,6 +175,7 @@
   V(JSGetSuperConstructor)
 
 #define JS_CONTEXT_OP_LIST(V) \
+  V(JSHasContextExtension)    \
   V(JSLoadContext)            \
   V(JSStoreContext)           \
   V(JSCreateFunctionContext)  \
@@ -282,6 +283,7 @@
   V(CheckedFloat64ToInt64)            \
   V(CheckedTaggedSignedToInt32)       \
   V(CheckedTaggedToInt32)             \
+  V(CheckedTaggedToArrayIndex)        \
   V(CheckedTruncateTaggedToWord32)    \
   V(CheckedTaggedToFloat64)           \
   V(CheckedTaggedToInt64)             \
@@ -727,6 +729,7 @@
   V(TaggedPoisonOnSpeculation)              \
   V(Word32PoisonOnSpeculation)              \
   V(Word64PoisonOnSpeculation)              \
+  V(LoadStackCheckOffset)                   \
   V(LoadFramePointer)                       \
   V(LoadParentFramePointer)                 \
   V(UnalignedLoad)                          \
@@ -750,6 +753,8 @@
 
 #define MACHINE_SIMD_OP_LIST(V) \
   V(F64x2Splat)                 \
+  V(F64x2SConvertI64x2)         \
+  V(F64x2UConvertI64x2)         \
   V(F64x2ExtractLane)           \
   V(F64x2ReplaceLane)           \
   V(F64x2Abs)                   \
@@ -793,8 +798,10 @@
   V(F32x4Qfma)                  \
   V(F32x4Qfms)                  \
   V(I64x2Splat)                 \
+  V(I64x2SplatI32Pair)          \
   V(I64x2ExtractLane)           \
   V(I64x2ReplaceLane)           \
+  V(I64x2ReplaceLaneI32Pair)    \
   V(I64x2Neg)                   \
   V(I64x2Shl)                   \
   V(I64x2ShrS)                  \
@@ -925,7 +932,8 @@
   V(S1x8AnyTrue)                \
   V(S1x8AllTrue)                \
   V(S1x16AnyTrue)               \
-  V(S1x16AllTrue)
+  V(S1x16AllTrue)               \
+  V(LoadTransform)
 
 #define VALUE_OP_LIST(V)  \
   COMMON_OP_LIST(V)       \

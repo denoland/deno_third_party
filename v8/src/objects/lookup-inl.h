@@ -40,8 +40,7 @@ LookupIterator::LookupIterator(Isolate* isolate, Handle<Object> receiver,
       receiver_(receiver),
       initial_holder_(holder),
       // kMaxUInt32 isn't a valid index.
-      index_(kMaxUInt32),
-      number_(static_cast<uint32_t>(DescriptorArray::kNotFound)) {
+      index_(kMaxUInt32) {
 #ifdef DEBUG
   uint32_t index;  // Assert that the name is not an array index.
   DCHECK(!name->AsArrayIndex(&index));
@@ -124,27 +123,33 @@ bool LookupIterator::IsCacheableTransition() {
          transition_map()->GetBackPointer(isolate_).IsMap(isolate_);
 }
 
-void LookupIterator::UpdateProtector() {
-  if (IsElement()) return;
+// static
+void LookupIterator::UpdateProtector(Isolate* isolate, Handle<Object> receiver,
+                                     Handle<Name> name) {
   // This list must be kept in sync with
   // CodeStubAssembler::CheckForAssociatedProtector!
-  ReadOnlyRoots roots(isolate_);
-  if (*name_ == roots.is_concat_spreadable_symbol() ||
-      *name_ == roots.constructor_string() || *name_ == roots.next_string() ||
-      *name_ == roots.species_symbol() || *name_ == roots.iterator_symbol() ||
-      *name_ == roots.resolve_string() || *name_ == roots.then_string()) {
-    InternalUpdateProtector();
+  ReadOnlyRoots roots(isolate);
+  if (*name == roots.is_concat_spreadable_symbol() ||
+      *name == roots.constructor_string() || *name == roots.next_string() ||
+      *name == roots.species_symbol() || *name == roots.iterator_symbol() ||
+      *name == roots.resolve_string() || *name == roots.then_string()) {
+    InternalUpdateProtector(isolate, receiver, name);
   }
+}
+
+void LookupIterator::UpdateProtector() {
+  if (IsElement()) return;
+  UpdateProtector(isolate_, receiver_, name_);
 }
 
 InternalIndex LookupIterator::descriptor_number() const {
   DCHECK(!IsElement());
   DCHECK(has_property_);
   DCHECK(holder_->HasFastProperties(isolate_));
-  return InternalIndex(number_);
+  return number_;
 }
 
-int LookupIterator::dictionary_entry() const {
+InternalIndex LookupIterator::dictionary_entry() const {
   DCHECK(!IsElement());
   DCHECK(has_property_);
   DCHECK(!holder_->HasFastProperties(isolate_));

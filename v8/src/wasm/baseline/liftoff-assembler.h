@@ -408,17 +408,16 @@ class LiftoffAssembler : public TurboAssembler {
   inline void emit_i32_or(Register dst, Register lhs, int32_t imm);
   inline void emit_i32_xor(Register dst, Register lhs, Register rhs);
   inline void emit_i32_xor(Register dst, Register lhs, int32_t imm);
-  inline void emit_i32_shl(Register dst, Register src, Register amount,
-                           LiftoffRegList pinned = {});
-  inline void emit_i32_sar(Register dst, Register src, Register amount,
-                           LiftoffRegList pinned = {});
-  inline void emit_i32_shr(Register dst, Register src, Register amount,
-                           LiftoffRegList pinned = {});
-  inline void emit_i32_shr(Register dst, Register src, int amount);
+  inline void emit_i32_shl(Register dst, Register src, Register amount);
+  inline void emit_i32_shl(Register dst, Register src, int32_t amount);
+  inline void emit_i32_sar(Register dst, Register src, Register amount);
+  inline void emit_i32_sar(Register dst, Register src, int32_t amount);
+  inline void emit_i32_shr(Register dst, Register src, Register amount);
+  inline void emit_i32_shr(Register dst, Register src, int32_t amount);
 
   // i32 unops.
-  inline bool emit_i32_clz(Register dst, Register src);
-  inline bool emit_i32_ctz(Register dst, Register src);
+  inline void emit_i32_clz(Register dst, Register src);
+  inline void emit_i32_ctz(Register dst, Register src);
   inline bool emit_i32_popcnt(Register dst, Register src);
 
   // i64 binops.
@@ -452,13 +451,22 @@ class LiftoffAssembler : public TurboAssembler {
   inline void emit_i64_xor(LiftoffRegister dst, LiftoffRegister lhs,
                            int32_t imm);
   inline void emit_i64_shl(LiftoffRegister dst, LiftoffRegister src,
-                           Register amount, LiftoffRegList pinned = {});
+                           Register amount);
+  inline void emit_i64_shl(LiftoffRegister dst, LiftoffRegister src,
+                           int32_t amount);
   inline void emit_i64_sar(LiftoffRegister dst, LiftoffRegister src,
-                           Register amount, LiftoffRegList pinned = {});
+                           Register amount);
+  inline void emit_i64_sar(LiftoffRegister dst, LiftoffRegister src,
+                           int32_t amount);
   inline void emit_i64_shr(LiftoffRegister dst, LiftoffRegister src,
-                           Register amount, LiftoffRegList pinned = {});
+                           Register amount);
   inline void emit_i64_shr(LiftoffRegister dst, LiftoffRegister src,
-                           int amount);
+                           int32_t amount);
+
+  // i64 unops.
+  inline void emit_i64_clz(LiftoffRegister dst, LiftoffRegister src);
+  inline void emit_i64_ctz(LiftoffRegister dst, LiftoffRegister src);
+  inline bool emit_i64_popcnt(LiftoffRegister dst, LiftoffRegister src);
 
   inline void emit_i32_to_intptr(Register dst, Register src);
 

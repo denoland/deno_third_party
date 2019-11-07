@@ -39,30 +39,6 @@ void Builtins::Generate_Adaptor(MacroAssembler* masm, Address address) {
           RelocInfo::CODE_TARGET);
 }
 
-void Builtins::Generate_InternalArrayConstructor(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- x0     : number of arguments
-  //  -- lr     : return address
-  //  -- sp[...]: constructor arguments
-  // -----------------------------------
-  ASM_LOCATION("Builtins::Generate_InternalArrayConstructor");
-
-  if (FLAG_debug_code) {
-    // Initial map for the builtin InternalArray functions should be maps.
-    __ LoadTaggedPointerField(
-        x10, FieldMemOperand(x1, JSFunction::kPrototypeOrInitialMapOffset));
-    __ Tst(x10, kSmiTagMask);
-    __ Assert(ne, AbortReason::kUnexpectedInitialMapForInternalArrayFunction);
-    __ CompareObjectType(x10, x11, x12, MAP_TYPE);
-    __ Assert(eq, AbortReason::kUnexpectedInitialMapForInternalArrayFunction);
-  }
-
-  // Run the native code for the InternalArray function called as a normal
-  // function.
-  __ Jump(BUILTIN_CODE(masm->isolate(), InternalArrayConstructorImpl),
-          RelocInfo::CODE_TARGET);
-}
-
 static void GenerateTailCallToReturnedCode(MacroAssembler* masm,
                                            Runtime::FunctionId function_id) {
   // ----------- S t a t e -------------
@@ -207,8 +183,7 @@ void Generate_JSBuiltinsConstructStubHelper(MacroAssembler* masm) {
     // -----------------------------------
 
     // Call the function.
-    ParameterCount actual(argc);
-    __ InvokeFunction(x1, x3, actual, CALL_FUNCTION);
+    __ InvokeFunctionWithNewTarget(x1, x3, argc, CALL_FUNCTION);
 
     // Restore the context from the frame.
     __ Ldr(cp, MemOperand(fp, ConstructFrameConstants::kContextOffset));
@@ -369,8 +344,7 @@ void Builtins::Generate_JSConstructStubGeneric(MacroAssembler* masm) {
 
     // Call the function.
     __ Mov(x0, x12);
-    ParameterCount actual(x0);
-    __ InvokeFunction(x1, x3, actual, CALL_FUNCTION);
+    __ InvokeFunctionWithNewTarget(x1, x3, x0, CALL_FUNCTION);
 
     // ----------- S t a t e -------------
     //  -- sp[0*kSystemPointerSize]: implicit receiver
@@ -645,14 +619,12 @@ void Generate_JSEntryVariant(MacroAssembler* masm, StackFrame::Type type,
     // to point to bad_frame_pointer below. To fix unwind information for this
     // case, JSEntry registers the offset (from current fp to the caller's fp
     // saved by PushCalleeSavedRegisters on stack) to xdata_encoder which then
-    // emits the offset value as part of result unwind data accordingly. The
-    // current offset is kFramePointerOffset which includes bad_frame_pointer
-    // saved below plus kFramePointerOffsetInPushCalleeSavedRegisters.
-    const int kFramePointerOffset =
-        kFramePointerOffsetInPushCalleeSavedRegisters + kSystemPointerSize;
+    // emits the offset value as part of result unwind data accordingly.
     win64_unwindinfo::XdataEncoder* xdata_encoder = masm->GetXdataEncoder();
     if (xdata_encoder) {
-      xdata_encoder->onFramePointerAdjustment(kFramePointerOffset);
+      xdata_encoder->onFramePointerAdjustment(
+          EntryFrameConstants::kDirectCallerFPOffset,
+          EntryFrameConstants::kDirectCallerSPOffset);
     }
 #endif
 
@@ -673,6 +645,10 @@ void Generate_JSEntryVariant(MacroAssembler* masm, StackFrame::Type type,
   __ Mov(x11, ExternalReference::Create(IsolateAddressId::kCEntryFPAddress,
                                         masm->isolate()));
   __ Ldr(x10, MemOperand(x11));
+
+  // x13 (the bad frame pointer) is the first item pushed.
+  STATIC_ASSERT(EntryFrameConstants::kOffsetToCalleeSavedRegisters ==
+                1 * kSystemPointerSize);
 
   __ Push(x13, x12, xzr, x10);
   // Set up fp.
@@ -1197,7 +1173,6 @@ void Builtins::Generate_InterpreterEntryTrampoline(MacroAssembler* masm) {
   __ bind(&not_optimized);
 
   // Increment invocation count for the function.
-  // MaybeTailCallOptimizedCodeSlot preserves feedback_vector, so safe to reuse
   __ Ldr(w10, FieldMemOperand(feedback_vector,
                               FeedbackVector::kInvocationCountOffset));
   __ Add(w10, w10, Operand(1));
@@ -2312,8 +2287,7 @@ void Builtins::Generate_CallOrConstructForwardVarargs(MacroAssembler* masm,
     __ CmpTagged(x4, StackFrame::TypeToMarker(StackFrame::ARGUMENTS_ADAPTOR));
     __ B(eq, &arguments_adaptor);
     {
-      __ Ldr(scratch,
-             MemOperand(fp, JavaScriptFrameConstants::kFunctionOffset));
+      __ Ldr(scratch, MemOperand(fp, StandardFrameConstants::kFunctionOffset));
       __ LoadTaggedPointerField(
           scratch,
           FieldMemOperand(scratch, JSFunction::kSharedFunctionInfoOffset));
@@ -2387,6 +2361,14 @@ void Builtins::Generate_CallFunction(MacroAssembler* masm,
                            SharedFunctionInfo::IsNativeBit::kMask |
                                SharedFunctionInfo::IsStrictBit::kMask,
                            &done_convert);
+
+  // Check if the window is marked as detached.
+  Label detached_window, after_detached_window;
+  __ LoadNativeContextSlot(Context::DETACHED_WINDOW_REASON_INDEX, x3);
+  __ CmpTagged(x3, Immediate(Smi::zero()));
+  __ B(ne, &detached_window);
+  __ bind(&after_detached_window);
+
   {
     // ----------- S t a t e -------------
     //  -- x0 : the number of arguments (not including the receiver)
@@ -2448,9 +2430,7 @@ void Builtins::Generate_CallFunction(MacroAssembler* masm,
 
   __ Ldrh(x2,
           FieldMemOperand(x2, SharedFunctionInfo::kFormalParameterCountOffset));
-  ParameterCount actual(x0);
-  ParameterCount expected(x2);
-  __ InvokeFunctionCode(x1, no_reg, expected, actual, JUMP_FUNCTION);
+  __ InvokeFunctionCode(x1, no_reg, x2, x0, JUMP_FUNCTION);
 
   // The function is a "classConstructor", need to raise an exception.
   __ Bind(&class_constructor);
@@ -2459,6 +2439,15 @@ void Builtins::Generate_CallFunction(MacroAssembler* masm,
     __ PushArgument(x1);
     __ CallRuntime(Runtime::kThrowConstructorNonCallableError);
   }
+
+  __ bind(&detached_window);
+  {
+    FrameScope frame(masm, StackFrame::INTERNAL);
+    __ PushCallerSaved(kDontSaveFPRegs, x3);
+    __ CallRuntime(Runtime::kReportDetachedWindowAccess);
+    __ PopCallerSaved(kDontSaveFPRegs, x3);
+  }
+  __ jmp(&after_detached_window);
 }
 
 namespace {
@@ -3056,17 +3045,10 @@ void Builtins::Generate_WasmCompileLazy(MacroAssembler* masm) {
     // Pass instance and function index as explicit arguments to the runtime
     // function.
     __ Push(kWasmInstanceRegister, kWasmCompileLazyFuncIndexRegister);
-    // Load the correct CEntry builtin from the instance object.
-    __ Ldr(x2, FieldMemOperand(kWasmInstanceRegister,
-                               WasmInstanceObject::kIsolateRootOffset));
-    auto centry_id =
-        Builtins::kCEntry_Return1_DontSaveFPRegs_ArgvOnStack_NoBuiltinExit;
-    __ LoadTaggedPointerField(
-        x2, MemOperand(x2, IsolateData::builtin_slot_offset(centry_id)));
     // Initialize the JavaScript context with 0. CEntry will use it to
     // set the current context on the isolate.
     __ Mov(cp, Smi::zero());
-    __ CallRuntimeWithCEntry(Runtime::kWasmCompileLazy, x2);
+    __ CallRuntime(Runtime::kWasmCompileLazy, 2);
     // The entrypoint address is the return value.
     __ mov(x8, kReturnRegister0);
 
@@ -3347,55 +3329,6 @@ void Builtins::Generate_DoubleToI(MacroAssembler* masm) {
   __ Poke(result, kArgumentOffset);
   __ Pop(scratch1, result);
   __ Ret();
-}
-
-void Builtins::Generate_InternalArrayConstructorImpl(MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- x0 : argc
-  //  -- x1 : constructor
-  //  -- sp[0] : return address
-  //  -- sp[4] : last argument
-  // -----------------------------------
-
-  Register constructor = x1;
-
-  if (FLAG_debug_code) {
-    // The array construct code is only set for the global and natives
-    // builtin Array functions which always have maps.
-
-    Label unexpected_map, map_ok;
-    // Initial map for the builtin Array function should be a map.
-    __ LoadTaggedPointerField(
-        x10,
-        FieldMemOperand(constructor, JSFunction::kPrototypeOrInitialMapOffset));
-    // Will both indicate a nullptr and a Smi.
-    __ JumpIfSmi(x10, &unexpected_map);
-    __ JumpIfObjectType(x10, x10, x11, MAP_TYPE, &map_ok);
-    __ Bind(&unexpected_map);
-    __ Abort(AbortReason::kUnexpectedInitialMapForArrayFunction);
-    __ Bind(&map_ok);
-
-    Register kind = w3;
-    // Figure out the right elements kind
-    __ LoadTaggedPointerField(
-        x10,
-        FieldMemOperand(constructor, JSFunction::kPrototypeOrInitialMapOffset));
-
-    // Retrieve elements_kind from map.
-    __ LoadElementsKindFromMap(kind, x10);
-
-    // Initial elements kind should be packed elements.
-    __ Cmp(kind, PACKED_ELEMENTS);
-    __ Assert(eq, AbortReason::kInvalidElementsKindForInternalPackedArray);
-
-    // No arguments should be passed.
-    __ Cmp(x0, 0);
-    __ Assert(eq, AbortReason::kWrongNumberOfArgumentsForInternalPackedArray);
-  }
-
-  __ Jump(
-      BUILTIN_CODE(masm->isolate(), InternalArrayNoArgumentConstructor_Packed),
-      RelocInfo::CODE_TARGET);
 }
 
 namespace {
