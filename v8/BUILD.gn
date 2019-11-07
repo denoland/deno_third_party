@@ -1367,7 +1367,7 @@ if (!v8_use_external_startup_data) {
     ]
 
     if (emit_builtins_as_inline_asm) {
-      deps += [ ":asm_to_inline_asm_default" ]
+      deps = [ ":asm_to_inline_asm_default" ]
       sources += [ "$target_gen_dir/embedded.cc" ]
     } else {
       sources += [ "$target_gen_dir/embedded.S" ]
