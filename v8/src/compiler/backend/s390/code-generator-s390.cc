@@ -222,7 +222,7 @@ class OutOfLineRecordWrite final : public OutOfLineCode {
       __ CallEphemeronKeyBarrier(object_, scratch1_, save_fp_mode);
     } else if (stub_mode_ == StubCallMode::kCallWasmRuntimeStub) {
       __ CallRecordWriteStub(object_, scratch1_, remembered_set_action,
-                             save_fp_mode, wasm::WasmCode::kWasmRecordWrite);
+                             save_fp_mode, wasm::WasmCode::kRecordWrite);
     } else {
       __ CallRecordWriteStub(object_, scratch1_, remembered_set_action,
                              save_fp_mode);
@@ -1193,9 +1193,7 @@ void CodeGenerator::AssemblePopArgumentsAdaptorFrame(Register args_reg,
            MemOperand(fp, ArgumentsAdaptorFrameConstants::kLengthOffset));
   __ SmiUntag(caller_args_count_reg);
 
-  ParameterCount callee_args_count(args_reg);
-  __ PrepareForTailCall(callee_args_count, caller_args_count_reg, scratch2,
-                        scratch3);
+  __ PrepareForTailCall(args_reg, caller_args_count_reg, scratch2, scratch3);
   __ bind(&done);
 }
 
@@ -1597,11 +1595,27 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
       }
       break;
     case kArchStackPointerGreaterThan: {
+      // Potentially apply an offset to the current stack pointer before the
+      // comparison to consider the size difference of an optimized frame versus
+      // the contained unoptimized frames.
+
+      Register lhs_register = sp;
+      uint32_t offset;
+
+      if (ShouldApplyOffsetToStackCheck(instr, &offset)) {
+        lhs_register = i.TempRegister(0);
+        __ SubP(lhs_register, sp, Operand(offset));
+      }
+
       constexpr size_t kValueIndex = 0;
       DCHECK(instr->InputAt(kValueIndex)->IsRegister());
-      __ CmpLogicalP(sp, i.InputRegister(kValueIndex));
+      __ CmpLogicalP(lhs_register, i.InputRegister(kValueIndex));
       break;
     }
+    case kArchStackCheckOffset:
+      __ LoadSmiLiteral(i.OutputRegister(),
+                        Smi::FromInt(GetStackCheckOffset()));
+      break;
     case kArchTruncateDoubleToI:
       __ TruncateDoubleToI(isolate(), zone(), i.OutputRegister(),
                            i.InputDoubleRegister(0), DetermineStubCallMode());
@@ -2517,6 +2531,27 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kS390_LoadReverse64RR:
       __ lrvgr(i.OutputRegister(), i.InputRegister(0));
       break;
+    case kS390_LoadReverseSimd128RR:
+      __ vlgv(r0, i.InputSimd128Register(0), MemOperand(r0, 0), Condition(3));
+      __ vlgv(r1, i.InputSimd128Register(0), MemOperand(r0, 1), Condition(3));
+      __ lrvgr(r0, r0);
+      __ lrvgr(r1, r1);
+      __ vlvg(i.OutputSimd128Register(), r0, MemOperand(r0, 1), Condition(3));
+      __ vlvg(i.OutputSimd128Register(), r1, MemOperand(r0, 0), Condition(3));
+      break;
+    case kS390_LoadReverseSimd128: {
+      AddressingMode mode = kMode_None;
+      MemOperand operand = i.MemoryOperand(&mode);
+      if (CpuFeatures::IsSupported(VECTOR_ENHANCE_FACILITY_2)) {
+        __ vlbr(i.OutputSimd128Register(), operand, Condition(4));
+      } else {
+        __ lrvg(r0, operand);
+        __ lrvg(r1, MemOperand(operand.rx(), operand.rb(),
+                               operand.offset() + kBitsPerByte));
+        __ vlvgp(i.OutputSimd128Register(), r1, r0);
+      }
+      break;
+    }
     case kS390_LoadWord64:
       ASSEMBLE_LOAD_INTEGER(lg);
       EmitWordLoadPoisoningIfNeeded(this, instr, i);
@@ -2558,6 +2593,23 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kS390_StoreReverse64:
       ASSEMBLE_STORE_INTEGER(strvg);
       break;
+    case kS390_StoreReverseSimd128: {
+      size_t index = 0;
+      AddressingMode mode = kMode_None;
+      MemOperand operand = i.MemoryOperand(&mode, &index);
+      if (CpuFeatures::IsSupported(VECTOR_ENHANCE_FACILITY_2)) {
+        __ vstbr(i.InputSimd128Register(index), operand, Condition(4));
+      } else {
+        __ vlgv(r0, i.InputSimd128Register(index), MemOperand(r0, 1),
+                Condition(3));
+        __ vlgv(r1, i.InputSimd128Register(index), MemOperand(r0, 0),
+                Condition(3));
+        __ strvg(r0, operand);
+        __ strvg(r1, MemOperand(operand.rx(), operand.rb(),
+                                operand.offset() + kBitsPerByte));
+      }
+      break;
+    }
     case kS390_StoreFloat32:
       ASSEMBLE_STORE_FLOAT32();
       break;

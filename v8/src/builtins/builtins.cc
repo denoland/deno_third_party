@@ -105,10 +105,8 @@ void Builtins::TearDown() { initialized_ = false; }
 
 const char* Builtins::Lookup(Address pc) {
   // Off-heap pc's can be looked up through binary search.
-  if (FLAG_embedded_builtins) {
-    Code maybe_builtin = InstructionStream::TryLookupCode(isolate_, pc);
-    if (!maybe_builtin.is_null()) return name(maybe_builtin.builtin_index());
-  }
+  Code maybe_builtin = InstructionStream::TryLookupCode(isolate_, pc);
+  if (!maybe_builtin.is_null()) return name(maybe_builtin.builtin_index());
 
   // May be called during initialization (disassembler).
   if (initialized_) {
@@ -191,6 +189,13 @@ Callable Builtins::CallableFor(Isolate* isolate, Name name) {
 }
 
 // static
+bool Builtins::HasJSLinkage(int builtin_index) {
+  Name name = static_cast<Name>(builtin_index);
+  DCHECK_NE(BCH, Builtins::KindOf(name));
+  return CallInterfaceDescriptorFor(name) == JSTrampolineDescriptor{};
+}
+
+// static
 const char* Builtins::name(int index) {
   DCHECK(IsBuiltinId(index));
   return builtin_metadata[index].name;
@@ -250,13 +255,9 @@ bool Builtins::IsBuiltinHandle(Handle<HeapObject> maybe_code,
 
 // static
 bool Builtins::IsIsolateIndependentBuiltin(const Code code) {
-  if (FLAG_embedded_builtins) {
-    const int builtin_index = code.builtin_index();
-    return Builtins::IsBuiltinId(builtin_index) &&
-           Builtins::IsIsolateIndependent(builtin_index);
-  } else {
-    return false;
-  }
+  const int builtin_index = code.builtin_index();
+  return Builtins::IsBuiltinId(builtin_index) &&
+         Builtins::IsIsolateIndependent(builtin_index);
 }
 
 // static
@@ -276,7 +277,7 @@ bool Builtins::IsWasmRuntimeStub(int index) {
 }
 
 // static
-void Builtins::UpdateBuiltinEntryTable(Isolate* isolate) {
+void Builtins::InitializeBuiltinEntryTable(Isolate* isolate) {
   Heap* heap = isolate->heap();
   Address* builtin_entry_table = isolate->builtin_entry_table();
   for (int i = 0; i < builtin_count; i++) {
@@ -314,6 +315,7 @@ void Builtins::EmitCodeCreateEvents(Isolate* isolate) {
 }
 
 namespace {
+enum TrampolineType { kAbort, kJump };
 
 class OffHeapTrampolineGenerator {
  public:
@@ -322,12 +324,16 @@ class OffHeapTrampolineGenerator {
         masm_(isolate, CodeObjectRequired::kYes,
               ExternalAssemblerBuffer(buffer_, kBufferSize)) {}
 
-  CodeDesc Generate(Address off_heap_entry) {
+  CodeDesc Generate(Address off_heap_entry, TrampolineType type) {
     // Generate replacement code that simply tail-calls the off-heap code.
     DCHECK(!masm_.has_frame());
     {
       FrameScope scope(&masm_, StackFrame::NONE);
-      masm_.JumpToInstructionStream(off_heap_entry);
+      if (type == TrampolineType::kJump) {
+        masm_.JumpToInstructionStream(off_heap_entry);
+      } else {
+        masm_.Trap();
+      }
     }
 
     CodeDesc desc;
@@ -351,16 +357,22 @@ constexpr int OffHeapTrampolineGenerator::kBufferSize;
 
 // static
 Handle<Code> Builtins::GenerateOffHeapTrampolineFor(
-    Isolate* isolate, Address off_heap_entry, int32_t kind_specfic_flags) {
+    Isolate* isolate, Address off_heap_entry, int32_t kind_specfic_flags,
+    bool generate_jump_to_instruction_stream) {
   DCHECK_NOT_NULL(isolate->embedded_blob());
   DCHECK_NE(0, isolate->embedded_blob_size());
 
   OffHeapTrampolineGenerator generator(isolate);
-  CodeDesc desc = generator.Generate(off_heap_entry);
+
+  CodeDesc desc =
+      generator.Generate(off_heap_entry, generate_jump_to_instruction_stream
+                                             ? TrampolineType::kJump
+                                             : TrampolineType::kAbort);
 
   return Factory::CodeBuilder(isolate, desc, Code::BUILTIN)
-      .set_self_reference(generator.CodeObject())
       .set_read_only_data_container(kind_specfic_flags)
+      .set_self_reference(generator.CodeObject())
+      .set_is_executable(generate_jump_to_instruction_stream)
       .Build();
 }
 
@@ -370,7 +382,7 @@ Handle<ByteArray> Builtins::GenerateOffHeapTrampolineRelocInfo(
   OffHeapTrampolineGenerator generator(isolate);
   // Generate a jump to a dummy address as we're not actually interested in the
   // generated instruction stream.
-  CodeDesc desc = generator.Generate(kNullAddress);
+  CodeDesc desc = generator.Generate(kNullAddress, TrampolineType::kJump);
 
   Handle<ByteArray> reloc_info = isolate->factory()->NewByteArray(
       desc.reloc_size, AllocationType::kReadOnly);
@@ -417,6 +429,55 @@ bool Builtins::AllowDynamicFunction(Isolate* isolate, Handle<JSFunction> target,
   }
   if (*responsible_context == target->context()) return true;
   return isolate->MayAccess(responsible_context, target_global_proxy);
+}
+
+// static
+bool Builtins::CodeObjectIsExecutable(int builtin_index) {
+  // If the runtime/optimized code always knows when executing a given builtin
+  // that it is a builtin, then that builtin does not need an executable Code
+  // object. Such Code objects can go in read_only_space (and can even be
+  // smaller with no branch instruction), thus saving memory.
+
+  // Builtins with JS linkage will always have executable Code objects since
+  // they can be called directly from jitted code with no way of determining
+  // that they are builtins at generation time. E.g.
+  //   f = Array.of;
+  //   f(1, 2, 3);
+  if (Builtins::KindOf(builtin_index) == Builtins::TFJ) return true;
+
+  // There are some other non-TF builtins that also have JS linkage like
+  // InterpreterEntryTrampoline which are explicitly allow-listed below.
+  // TODO(delphick): Some of these builtins do not fit with the above, but
+  // currently cause problems if they're not executable. This list should be
+  // pared down as much as possible.
+  switch (builtin_index) {
+    case Builtins::kInterpreterEntryTrampoline:
+    case Builtins::kCompileLazy:
+    case Builtins::kCompileLazyDeoptimizedCode:
+    case Builtins::kCEntry_Return1_DontSaveFPRegs_ArgvOnStack_NoBuiltinExit:
+    case Builtins::kCEntry_Return1_DontSaveFPRegs_ArgvOnStack_BuiltinExit:
+    case Builtins::kCEntry_Return1_DontSaveFPRegs_ArgvInRegister_NoBuiltinExit:
+    case Builtins::kCEntry_Return1_SaveFPRegs_ArgvOnStack_NoBuiltinExit:
+    case Builtins::kCEntry_Return1_SaveFPRegs_ArgvOnStack_BuiltinExit:
+    case Builtins::kCEntry_Return2_DontSaveFPRegs_ArgvOnStack_NoBuiltinExit:
+    case Builtins::kCEntry_Return2_DontSaveFPRegs_ArgvOnStack_BuiltinExit:
+    case Builtins::kCEntry_Return2_DontSaveFPRegs_ArgvInRegister_NoBuiltinExit:
+    case Builtins::kCEntry_Return2_SaveFPRegs_ArgvOnStack_NoBuiltinExit:
+    case Builtins::kCEntry_Return2_SaveFPRegs_ArgvOnStack_BuiltinExit:
+    case Builtins::kCallFunction_ReceiverIsNullOrUndefined:
+    case Builtins::kCallFunction_ReceiverIsNotNullOrUndefined:
+    case Builtins::kCallFunction_ReceiverIsAny:
+    case Builtins::kCallBoundFunction:
+    case Builtins::kCall_ReceiverIsNullOrUndefined:
+    case Builtins::kCall_ReceiverIsNotNullOrUndefined:
+    case Builtins::kCall_ReceiverIsAny:
+    case Builtins::kArgumentsAdaptorTrampoline:
+    case Builtins::kHandleApiCall:
+    case Builtins::kInstantiateAsmJs:
+      return true;
+    default:
+      return false;
+  }
 }
 
 Builtins::Name ExampleBuiltinForTorqueFunctionPointerType(

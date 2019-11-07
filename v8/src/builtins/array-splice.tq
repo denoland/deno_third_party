@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-namespace array_splice {
+namespace array {
   // Given {elements}, we want to create a non-zero length array of type
   // FixedArrayType. Most of this behavior is outsourced to ExtractFixedArray(),
   // but the special case of wanting to have a FixedDoubleArray when given a
   // zero-length input FixedArray is handled here.
-  macro Extract<FixedArrayType: type>(
+  macro Extract<FixedArrayType : type extends FixedArrayBase>(
       elements: FixedArrayBase, first: Smi, count: Smi,
       capacity: Smi): FixedArrayType;
 
@@ -28,7 +28,7 @@ namespace array_splice {
         ExtractFixedArray(elements, first, count, capacity));
   }
 
-  macro DoMoveElements<FixedArrayType: type>(
+  macro DoMoveElements<FixedArrayType : type extends FixedArrayBase>(
       elements: FixedArrayType, dstIndex: Smi, srcIndex: Smi,
       count: Smi): void {
     TorqueMoveElements(
@@ -36,14 +36,14 @@ namespace array_splice {
         Convert<intptr>(count));
   }
 
-  macro StoreHoles<FixedArrayType: type>(
+  macro StoreHoles<FixedArrayType : type extends FixedArrayBase>(
       elements: FixedArrayType, holeStartIndex: Smi, holeEndIndex: Smi): void {
     for (let i: Smi = holeStartIndex; i < holeEndIndex; i++) {
       array::StoreArrayHole(elements, i);
     }
   }
 
-  macro DoCopyElements<FixedArrayType: type>(
+  macro DoCopyElements<FixedArrayType : type extends FixedArrayBase>(
       dstElements: FixedArrayType, dstIndex: Smi, srcElements: FixedArrayType,
       srcIndex: Smi, count: Smi): void {
     TorqueCopyElements(
@@ -51,8 +51,9 @@ namespace array_splice {
         Convert<intptr>(srcIndex), Convert<intptr>(count));
   }
 
-  macro FastSplice<FixedArrayType: type, ElementType: type>(implicit context:
-                                                                  Context)(
+  macro
+  FastSplice<FixedArrayType : type extends FixedArrayBase, ElementType: type>(
+      implicit context: Context)(
       args: Arguments, a: JSArray, length: Smi, newLength: Smi,
       actualStart: Smi, insertCount: Smi, actualDeleteCount: Smi): void {
     // Make sure elements are writable.

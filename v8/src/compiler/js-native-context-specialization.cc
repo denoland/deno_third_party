@@ -92,8 +92,6 @@ Reduction JSNativeContextSpecialization::Reduce(Node* node) {
       return ReduceJSPromiseResolve(node);
     case IrOpcode::kJSResolvePromise:
       return ReduceJSResolvePromise(node);
-    case IrOpcode::kJSLoadContext:
-      return ReduceJSLoadContext(node);
     case IrOpcode::kJSLoadGlobal:
       return ReduceJSLoadGlobal(node);
     case IrOpcode::kJSStoreGlobal:
@@ -742,20 +740,6 @@ Reduction JSNativeContextSpecialization::ReduceJSResolvePromise(Node* node) {
                        context, effect, control);
   ReplaceWithValue(node, value, effect, control);
   return Replace(value);
-}
-
-Reduction JSNativeContextSpecialization::ReduceJSLoadContext(Node* node) {
-  DCHECK_EQ(IrOpcode::kJSLoadContext, node->opcode());
-  ContextAccess const& access = ContextAccessOf(node->op());
-  // Specialize JSLoadContext(NATIVE_CONTEXT_INDEX) to the known native
-  // context (if any), so we can constant-fold those fields, which is
-  // safe, since the NATIVE_CONTEXT_INDEX slot is always immutable.
-  if (access.index() == Context::NATIVE_CONTEXT_INDEX) {
-    Node* value = jsgraph()->Constant(native_context());
-    ReplaceWithValue(node, value);
-    return Replace(value);
-  }
-  return NoChange();
 }
 
 namespace {
@@ -1455,7 +1439,8 @@ Reduction JSNativeContextSpecialization::ReduceJSGetIterator(Node* node) {
                              : feedback.AsCall().speculation_mode();
   const Operator* call_op =
       javascript()->Call(2, CallFrequency(), p.callFeedback(),
-                         ConvertReceiverMode::kNotNullOrUndefined, mode);
+                         ConvertReceiverMode::kNotNullOrUndefined, mode,
+                         CallFeedbackRelation::kRelated);
   Node* call_property = graph()->NewNode(call_op, load_property, receiver,
                                          context, frame_state, effect, control);
   effect = call_property;

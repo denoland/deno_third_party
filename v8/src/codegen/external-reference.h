@@ -74,9 +74,6 @@ class StatsCounter;
   V(stack_is_iterable_address, "IsolateData::stack_is_iterable_address")       \
   V(address_of_regexp_stack_limit_address,                                     \
     "RegExpStack::limit_address_address()")                                    \
-  V(address_of_regexp_stack_memory_address,                                    \
-    "RegExpStack::memory_address_address()")                                   \
-  V(address_of_regexp_stack_memory_size, "RegExpStack::memory_size_address()") \
   V(address_of_regexp_stack_memory_top_address,                                \
     "RegExpStack::memory_top_address_address()")                               \
   V(address_of_static_offsets_vector, "OffsetsVector::static_offsets_vector")  \
@@ -162,6 +159,7 @@ class StatsCounter;
   V(mutable_big_int_absolute_sub_and_canonicalize_function,                   \
     "MutableBigInt_AbsoluteSubAndCanonicalize")                               \
   V(new_deoptimizer_function, "Deoptimizer::New()")                           \
+  V(object_to_array_index_slow_function, "Object::ToArrayIndexSlow")          \
   V(orderedhashmap_gethash_raw, "orderedhashmap_gethash_raw")                 \
   V(printf_function, "printf")                                                \
   V(refill_math_random, "MathRandom::RefillCache")                            \
@@ -198,6 +196,8 @@ class StatsCounter;
   V(wasm_word32_popcnt, "wasm::word32_popcnt")                                \
   V(wasm_word32_rol, "wasm::word32_rol")                                      \
   V(wasm_word32_ror, "wasm::word32_ror")                                      \
+  V(wasm_word64_rol, "wasm::word64_rol")                                      \
+  V(wasm_word64_ror, "wasm::word64_ror")                                      \
   V(wasm_word64_ctz, "wasm::word64_ctz")                                      \
   V(wasm_word64_popcnt, "wasm::word64_popcnt")                                \
   V(wasm_memory_copy, "wasm::memory_copy")                                    \

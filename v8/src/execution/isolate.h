@@ -1315,11 +1315,8 @@ class Isolate final : private HiddenFactory {
     return &partial_snapshot_cache_;
   }
 
-  // Off-heap builtins cannot embed constants within the code object itself,
-  // and thus need to load them from the root list.
   bool IsGeneratingEmbeddedBuiltins() const {
-    return FLAG_embedded_builtins &&
-           builtins_constants_table_builder() != nullptr;
+    return builtins_constants_table_builder() != nullptr;
   }
 
   BuiltinsConstantsTableBuilder* builtins_constants_table_builder() const {
@@ -1345,6 +1342,15 @@ class Isolate final : private HiddenFactory {
   }
   v8::ArrayBuffer::Allocator* array_buffer_allocator() const {
     return array_buffer_allocator_;
+  }
+
+  void set_array_buffer_allocator_shared(
+      std::shared_ptr<v8::ArrayBuffer::Allocator> allocator) {
+    array_buffer_allocator_shared_ = std::move(allocator);
+  }
+  std::shared_ptr<v8::ArrayBuffer::Allocator> array_buffer_allocator_shared()
+      const {
+    return array_buffer_allocator_shared_;
   }
 
   FutexWaitListNode* futex_wait_list_node() { return &futex_wait_list_node_; }
@@ -1758,6 +1764,7 @@ class Isolate final : private HiddenFactory {
   uint32_t embedded_blob_size_ = 0;
 
   v8::ArrayBuffer::Allocator* array_buffer_allocator_ = nullptr;
+  std::shared_ptr<v8::ArrayBuffer::Allocator> array_buffer_allocator_shared_;
 
   FutexWaitListNode futex_wait_list_node_;
 

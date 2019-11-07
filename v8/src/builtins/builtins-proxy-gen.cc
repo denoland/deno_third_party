@@ -117,17 +117,15 @@ Node* ProxiesCodeStubAssembler::AllocateJSArrayForCodeStubArguments(
 
 Node* ProxiesCodeStubAssembler::CreateProxyRevokeFunctionContext(
     Node* proxy, Node* native_context) {
-  TNode<HeapObject> const context =
-      Allocate(FixedArray::SizeFor(kProxyContextLength));
-  StoreMapNoWriteBarrier(context, RootIndex::kFunctionContextMap);
-  InitializeFunctionContext(native_context, context, kProxyContextLength);
-  StoreContextElementNoWriteBarrier(CAST(context), kProxySlot, proxy);
+  const TNode<Context> context = AllocateSyntheticFunctionContext(
+      CAST(native_context), kProxyContextLength);
+  StoreContextElementNoWriteBarrier(context, kProxySlot, proxy);
   return context;
 }
 
 TNode<JSFunction> ProxiesCodeStubAssembler::AllocateProxyRevokeFunction(
     TNode<Context> context, TNode<JSProxy> proxy) {
-  TNode<NativeContext> const native_context = LoadNativeContext(context);
+  const TNode<NativeContext> native_context = LoadNativeContext(context);
 
   const TNode<Context> proxy_context =
       CAST(CreateProxyRevokeFunctionContext(proxy, native_context));

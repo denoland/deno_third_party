@@ -733,6 +733,7 @@ class RuntimeCallTimer final {
   V(ArrayBuffer_Cast)                                      \
   V(ArrayBuffer_Detach)                                    \
   V(ArrayBuffer_New)                                       \
+  V(ArrayBuffer_NewBackingStore)                           \
   V(Array_CloneElementAt)                                  \
   V(Array_New)                                             \
   V(BigInt64Array_New)                                     \
@@ -782,6 +783,7 @@ class RuntimeCallTimer final {
   V(Message_GetStartColumn)                                \
   V(Module_Evaluate)                                       \
   V(Module_InstantiateModule)                              \
+  V(Module_SetSyntheticModuleExport)                       \
   V(NumberObject_New)                                      \
   V(NumberObject_NumberValue)                              \
   V(Object_CallAsConstructor)                              \
@@ -838,6 +840,7 @@ class RuntimeCallTimer final {
   V(Proxy_New)                                             \
   V(RangeError_New)                                        \
   V(ReferenceError_New)                                    \
+  V(RegExp_Exec)                                           \
   V(RegExp_New)                                            \
   V(ScriptCompiler_Compile)                                \
   V(ScriptCompiler_CompileFunctionInContext)               \
@@ -850,6 +853,7 @@ class RuntimeCallTimer final {
   V(Set_Has)                                               \
   V(Set_New)                                               \
   V(SharedArrayBuffer_New)                                 \
+  V(SharedArrayBuffer_NewBackingStore)                     \
   V(String_Concat)                                         \
   V(String_NewExternalOneByte)                             \
   V(String_NewExternalTwoByte)                             \

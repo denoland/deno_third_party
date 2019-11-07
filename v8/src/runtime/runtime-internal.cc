@@ -82,6 +82,19 @@ RUNTIME_FUNCTION(Runtime_ThrowSymbolAsyncIteratorInvalid) {
       isolate, NewTypeError(MessageTemplate::kSymbolAsyncIteratorInvalid));
 }
 
+RUNTIME_FUNCTION(Runtime_ReportDetachedWindowAccess) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(0, args.length());
+  Handle<NativeContext> native_context(isolate->context().native_context(),
+                                       isolate);
+  // TODO(bartekn,chromium:1018156): Report this to Blink, for it to emit it
+  // via UKM. Use native_context->detached_window_reason().value()
+  // This will be addressed as the first step after this CL lands.
+
+  // The return value isn't needed, but RUNTIME_FUNCTION sets it up.
+  return ReadOnlyRoots(isolate).undefined_value();
+}
+
 #define THROW_ERROR(isolate, args, call)                               \
   HandleScope scope(isolate);                                          \
   DCHECK_LE(1, args.length());                                         \
@@ -278,6 +291,21 @@ RUNTIME_FUNCTION(Runtime_StackGuard) {
   // First check if this is a real stack overflow.
   StackLimitCheck check(isolate);
   if (check.JsHasOverflowed()) {
+    return isolate->StackOverflow();
+  }
+
+  return isolate->stack_guard()->HandleInterrupts();
+}
+
+RUNTIME_FUNCTION(Runtime_StackGuardWithGap) {
+  SealHandleScope shs(isolate);
+  DCHECK_EQ(args.length(), 1);
+  CONVERT_UINT32_ARG_CHECKED(gap, 0);
+  TRACE_EVENT0("v8.execute", "V8.StackGuard");
+
+  // First check if this is a real stack overflow.
+  StackLimitCheck check(isolate);
+  if (check.JsHasOverflowed(gap)) {
     return isolate->StackOverflow();
   }
 
@@ -573,5 +601,18 @@ RUNTIME_FUNCTION(Runtime_GetInitializerFunction) {
   Handle<Object> initializer = JSReceiver::GetDataProperty(constructor, key);
   return *initializer;
 }
+
+RUNTIME_FUNCTION(Runtime_DoubleToStringWithRadix) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(2, args.length());
+  CONVERT_DOUBLE_ARG_CHECKED(number, 0);
+  CONVERT_INT32_ARG_CHECKED(radix, 1);
+
+  char* const str = DoubleToRadixCString(number, radix);
+  Handle<String> result = isolate->factory()->NewStringFromAsciiChecked(str);
+  DeleteArray(str);
+  return *result;
+}
+
 }  // namespace internal
 }  // namespace v8

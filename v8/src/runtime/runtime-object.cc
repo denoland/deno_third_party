@@ -41,7 +41,7 @@ MaybeHandle<Object> Runtime::GetObjectProperty(Isolate* isolate,
 
   if (!it.IsFound() && key->IsSymbol() &&
       Symbol::cast(*key).is_private_name()) {
-    Handle<Object> name_string(Symbol::cast(*key).name(), isolate);
+    Handle<Object> name_string(Symbol::cast(*key).description(), isolate);
     DCHECK(name_string->IsString());
     THROW_NEW_ERROR(isolate,
                     NewTypeError(MessageTemplate::kInvalidPrivateMemberRead,
@@ -417,7 +417,7 @@ MaybeHandle<Object> Runtime::SetObjectProperty(
 
   if (!it.IsFound() && key->IsSymbol() &&
       Symbol::cast(*key).is_private_name()) {
-    Handle<Object> name_string(Symbol::cast(*key).name(), isolate);
+    Handle<Object> name_string(Symbol::cast(*key).description(), isolate);
     DCHECK(name_string->IsString());
     THROW_NEW_ERROR(isolate,
                     NewTypeError(MessageTemplate::kInvalidPrivateMemberWrite,
@@ -617,8 +617,8 @@ RUNTIME_FUNCTION(Runtime_GetProperty) {
         // Attempt dictionary lookup.
         GlobalDictionary dictionary =
             JSGlobalObject::cast(*receiver).global_dictionary();
-        int entry = dictionary.FindEntry(isolate, key);
-        if (entry != GlobalDictionary::kNotFound) {
+        InternalIndex entry = dictionary.FindEntry(isolate, key);
+        if (entry.is_found()) {
           PropertyCell cell = dictionary.CellAt(entry);
           if (cell.property_details().kind() == kData) {
             Object value = cell.value();
@@ -629,8 +629,8 @@ RUNTIME_FUNCTION(Runtime_GetProperty) {
       } else if (!receiver->HasFastProperties()) {
         // Attempt dictionary lookup.
         NameDictionary dictionary = receiver->property_dictionary();
-        int entry = dictionary.FindEntry(isolate, key);
-        if ((entry != NameDictionary::kNotFound) &&
+        InternalIndex entry = dictionary.FindEntry(isolate, key);
+        if ((entry.is_found()) &&
             (dictionary.DetailsAt(entry).kind() == kData)) {
           return dictionary.ValueAt(entry);
         }

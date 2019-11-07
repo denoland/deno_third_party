@@ -313,7 +313,9 @@ void AccessorAssembler::HandleLoadICSmiHandlerCase(
       Signed(DecodeWord<LoadHandler::KindBits>(handler_word));
 
   if (support_elements == kSupportElements) {
-    Label if_element(this), if_indexed_string(this), if_property(this);
+    Label if_element(this), if_indexed_string(this), if_property(this),
+        if_hole(this), unimplemented_elements_kind(this),
+        if_oob(this, Label::kDeferred);
     GotoIf(WordEqual(handler_kind, IntPtrConstant(LoadHandler::kElement)),
            &if_element);
 
@@ -335,8 +337,6 @@ void AccessorAssembler::HandleLoadICSmiHandlerCase(
         IsSetWord<LoadHandler::IsJsArrayBits>(handler_word);
     TNode<Uint32T> elements_kind =
         DecodeWord32FromWord<LoadHandler::ElementsKindBits>(handler_word);
-    Label if_hole(this), unimplemented_elements_kind(this),
-        if_oob(this, Label::kDeferred);
     EmitElementLoad(holder, elements_kind, intptr_index, is_jsarray_condition,
                     &if_hole, &rebox_double, &var_double_value,
                     &unimplemented_elements_kind, &if_oob, miss, exit_point,
@@ -397,10 +397,11 @@ void AccessorAssembler::HandleLoadICSmiHandlerCase(
 
         Comment("indexed string");
         TNode<String> string_holder = CAST(holder);
-        TNode<IntPtrT> intptr_index = TryToIntptr(p->name(), miss);
-        TNode<IntPtrT> length = LoadStringLengthAsWord(string_holder);
-        GotoIf(UintPtrGreaterThanOrEqual(intptr_index, length), &if_oob);
-        TNode<Int32T> code = StringCharCodeAt(string_holder, intptr_index);
+        TNode<UintPtrT> index = Unsigned(TryToIntptr(p->name(), miss));
+        TNode<UintPtrT> length =
+            Unsigned(LoadStringLengthAsWord(string_holder));
+        GotoIf(UintPtrGreaterThanOrEqual(index, length), &if_oob);
+        TNode<Int32T> code = StringCharCodeAt(string_holder, index);
         TNode<String> result = StringFromSingleCharCode(code);
         Return(result);
 
@@ -542,6 +543,14 @@ void AccessorAssembler::HandleLoadICSmiHandlerLoadNamedCase(
 
   BIND(&proxy);
   {
+    // TODO(mythria): LoadGlobals don't use this path. LoadGlobals need special
+    // handling with proxies which is currently not supported by builtins. So
+    // for such cases, we should install a slow path and never reach here. Fix
+    // it to not generate this for LoadGlobals.
+    CSA_ASSERT(this,
+               WordNotEqual(IntPtrConstant(static_cast<int>(on_nonexistent)),
+                            IntPtrConstant(static_cast<int>(
+                                OnNonExistent::kThrowReferenceError))));
     TVARIABLE(IntPtrT, var_index);
     TVARIABLE(Name, var_unique);
 
@@ -2219,13 +2228,13 @@ void AccessorAssembler::EmitElementLoad(
         {
           Comment("BIGINT64_ELEMENTS");
           exit_point->Return(LoadFixedTypedArrayElementAsTagged(
-              data_ptr, intptr_index, BIGINT64_ELEMENTS, INTPTR_PARAMETERS));
+              data_ptr, Unsigned(intptr_index), BIGINT64_ELEMENTS));
         }
         BIND(&biguint64_elements);
         {
           Comment("BIGUINT64_ELEMENTS");
           exit_point->Return(LoadFixedTypedArrayElementAsTagged(
-              data_ptr, intptr_index, BIGUINT64_ELEMENTS, INTPTR_PARAMETERS));
+              data_ptr, Unsigned(intptr_index), BIGUINT64_ELEMENTS));
         }
       }
     }
@@ -2631,10 +2640,10 @@ void AccessorAssembler::LoadIC_BytecodeHandler(const LazyLoadICParameters* p,
   Label stub_call(this, Label::kDeferred), miss(this, Label::kDeferred),
       no_feedback(this, Label::kDeferred);
 
+  GotoIf(IsUndefined(p->vector()), &no_feedback);
+
   TNode<Map> recv_map = LoadReceiverMap(p->receiver());
   GotoIf(IsDeprecatedMap(recv_map), &miss);
-
-  GotoIf(IsUndefined(p->vector()), &no_feedback);
 
   // Inlined fast path.
   {
@@ -2679,7 +2688,8 @@ void AccessorAssembler::LoadIC_BytecodeHandler(const LazyLoadICParameters* p,
     // Call into the stub that implements the non-inlined parts of LoadIC.
     exit_point->ReturnCallStub(
         Builtins::CallableFor(isolate(), Builtins::kLoadIC_NoFeedback),
-        p->context(), p->receiver(), p->name(), p->slot());
+        p->context(), p->receiver(), p->name(),
+        SmiConstant(FeedbackSlotKind::kLoadProperty));
   }
 
   BIND(&miss);
@@ -2759,11 +2769,14 @@ void AccessorAssembler::LoadIC_Noninlined(const LoadICParameters* p,
   }
 }
 
-void AccessorAssembler::LoadIC_NoFeedback(const LoadICParameters* p) {
+void AccessorAssembler::LoadIC_NoFeedback(const LoadICParameters* p,
+                                          TNode<Smi> ic_kind) {
   Label miss(this, Label::kDeferred);
   Node* receiver = p->receiver();
   GotoIf(TaggedIsSmi(receiver), &miss);
   TNode<Map> receiver_map = LoadMap(receiver);
+  GotoIf(IsDeprecatedMap(receiver_map), &miss);
+
   TNode<Uint16T> instance_type = LoadMapInstanceType(receiver_map);
 
   {
@@ -2785,8 +2798,8 @@ void AccessorAssembler::LoadIC_NoFeedback(const LoadICParameters* p) {
 
   BIND(&miss);
   {
-    TailCallRuntime(Runtime::kLoadIC_Miss, p->context(), p->receiver(),
-                    p->name(), p->slot(), p->vector());
+    TailCallRuntime(Runtime::kLoadNoFeedbackIC_Miss, p->context(),
+                    p->receiver(), p->name(), ic_kind);
   }
 }
 
@@ -2797,8 +2810,10 @@ void AccessorAssembler::LoadGlobalIC(TNode<HeapObject> maybe_feedback_vector,
                                      const LazyNode<Name>& lazy_name,
                                      TypeofMode typeof_mode,
                                      ExitPoint* exit_point) {
-  Label try_handler(this, Label::kDeferred), miss(this, Label::kDeferred);
-  GotoIf(IsUndefined(maybe_feedback_vector), &miss);
+  Label try_handler(this, Label::kDeferred), miss(this, Label::kDeferred),
+      no_feedback(this, Label::kDeferred);
+
+  GotoIf(IsUndefined(maybe_feedback_vector), &no_feedback);
   {
     TNode<FeedbackVector> vector = CAST(maybe_feedback_vector);
     TNode<UintPtrT> slot = lazy_slot();
@@ -2818,6 +2833,17 @@ void AccessorAssembler::LoadGlobalIC(TNode<HeapObject> maybe_feedback_vector,
     exit_point->ReturnCallRuntime(Runtime::kLoadGlobalIC_Miss, context, name,
                                   lazy_smi_slot(), maybe_feedback_vector,
                                   SmiConstant(typeof_mode));
+  }
+
+  BIND(&no_feedback);
+  {
+    int ic_kind =
+        static_cast<int>((typeof_mode == INSIDE_TYPEOF)
+                             ? FeedbackSlotKind::kLoadGlobalInsideTypeof
+                             : FeedbackSlotKind::kLoadGlobalNotInsideTypeof);
+    exit_point->ReturnCallStub(
+        Builtins::CallableFor(isolate(), Builtins::kLoadGlobalIC_NoFeedback),
+        lazy_context(), lazy_name(), SmiConstant(ic_kind));
   }
 }
 
@@ -2888,6 +2914,81 @@ void AccessorAssembler::LoadGlobalIC_TryHandlerCase(
 
   HandleLoadICHandlerCase(&p, handler, miss, exit_point, ICMode::kGlobalIC,
                           on_nonexistent);
+}
+
+void AccessorAssembler::ScriptContextTableLookup(
+    TNode<Name> name, TNode<NativeContext> native_context, Label* found_hole,
+    Label* not_found) {
+  TNode<ScriptContextTable> script_context_table = CAST(
+      LoadContextElement(native_context, Context::SCRIPT_CONTEXT_TABLE_INDEX));
+  TVARIABLE(IntPtrT, context_index, IntPtrConstant(-1));
+  Label loop(this, &context_index);
+  TNode<IntPtrT> num_script_contexts = SmiUntag(CAST(LoadFixedArrayElement(
+      script_context_table, ScriptContextTable::kUsedSlotIndex)));
+  Goto(&loop);
+
+  BIND(&loop);
+  {
+    context_index = IntPtrAdd(context_index.value(), IntPtrConstant(1));
+    GotoIf(IntPtrGreaterThanOrEqual(context_index.value(), num_script_contexts),
+           not_found);
+
+    TNode<Context> script_context = CAST(LoadFixedArrayElement(
+        script_context_table, context_index.value(),
+        ScriptContextTable::kFirstContextSlotIndex * kTaggedSize));
+    TNode<ScopeInfo> scope_info =
+        CAST(LoadContextElement(script_context, Context::SCOPE_INFO_INDEX));
+    TNode<IntPtrT> length = LoadAndUntagFixedArrayBaseLength(scope_info);
+    GotoIf(IntPtrLessThanOrEqual(length, IntPtrConstant(0)), &loop);
+
+    TVARIABLE(IntPtrT, scope_var_index,
+              IntPtrConstant(ScopeInfo::kVariablePartIndex - 1));
+    TNode<IntPtrT> num_scope_vars = SmiUntag(CAST(LoadFixedArrayElement(
+        scope_info, IntPtrConstant(ScopeInfo::Fields::kContextLocalCount))));
+    TNode<IntPtrT> end_index = IntPtrAdd(
+        num_scope_vars, IntPtrConstant(ScopeInfo::kVariablePartIndex));
+    Label loop_scope_info(this, &scope_var_index);
+    Goto(&loop_scope_info);
+
+    BIND(&loop_scope_info);
+    {
+      scope_var_index = IntPtrAdd(scope_var_index.value(), IntPtrConstant(1));
+      GotoIf(IntPtrGreaterThanOrEqual(scope_var_index.value(), end_index),
+             &loop);
+
+      TNode<Object> var_name =
+          LoadFixedArrayElement(scope_info, scope_var_index.value(), 0);
+      GotoIf(TaggedNotEqual(var_name, name), &loop_scope_info);
+
+      TNode<IntPtrT> var_index =
+          IntPtrAdd(IntPtrConstant(Context::MIN_CONTEXT_SLOTS),
+                    IntPtrSub(scope_var_index.value(),
+                              IntPtrConstant(ScopeInfo::kVariablePartIndex)));
+      TNode<Object> result = LoadContextElement(script_context, var_index);
+      GotoIf(IsTheHole(result), found_hole);
+      Return(result);
+    }
+  }
+}
+
+void AccessorAssembler::LoadGlobalIC_NoFeedback(TNode<Context> context,
+                                                TNode<Object> name,
+                                                TNode<Smi> smi_typeof_mode) {
+  TNode<NativeContext> native_context = LoadNativeContext(context);
+  Label regular_load(this), throw_reference_error(this, Label::kDeferred);
+
+  GotoIfNot(IsString(CAST(name)), &regular_load);
+  ScriptContextTableLookup(CAST(name), native_context, &throw_reference_error,
+                           &regular_load);
+
+  BIND(&throw_reference_error);
+  Return(CallRuntime(Runtime::kThrowReferenceError, context, name));
+
+  BIND(&regular_load);
+  TNode<JSGlobalObject> global_object =
+      CAST(LoadContextElement(native_context, Context::EXTENSION_INDEX));
+  TailCallStub(Builtins::CallableFor(isolate(), Builtins::kLoadIC_NoFeedback),
+               context, global_object, name, smi_typeof_mode);
 }
 
 void AccessorAssembler::KeyedLoadIC(const LoadICParameters* p,
@@ -3397,7 +3498,7 @@ void AccessorAssembler::KeyedStoreIC(const StoreICParameters* p) {
 }
 
 void AccessorAssembler::StoreInArrayLiteralIC(const StoreICParameters* p) {
-  Label miss(this, Label::kDeferred);
+  Label miss(this, Label::kDeferred), no_feedback(this, Label::kDeferred);
   {
     TVARIABLE(MaybeObject, var_handler);
 
@@ -3408,7 +3509,7 @@ void AccessorAssembler::StoreInArrayLiteralIC(const StoreICParameters* p) {
     TNode<Map> array_map = LoadReceiverMap(p->receiver());
     GotoIf(IsDeprecatedMap(array_map), &miss);
 
-    GotoIf(IsUndefined(p->vector()), &miss);
+    GotoIf(IsUndefined(p->vector()), &no_feedback);
 
     TNode<MaybeObject> feedback =
         TryMonomorphicCase(p->slot(), CAST(p->vector()), array_map, &if_handler,
@@ -3483,6 +3584,13 @@ void AccessorAssembler::StoreInArrayLiteralIC(const StoreICParameters* p) {
       TailCallRuntime(Runtime::kStoreInArrayLiteralIC_Slow, p->context(),
                       p->value(), p->receiver(), p->name());
     }
+  }
+
+  BIND(&no_feedback);
+  {
+    Comment("StoreInArrayLiteralIC_NoFeedback");
+    TailCallBuiltin(Builtins::kSetPropertyInLiteral, p->context(),
+                    p->receiver(), p->name(), p->value());
   }
 
   BIND(&miss);
@@ -3569,15 +3677,18 @@ void AccessorAssembler::GenerateLoadIC_Noninlined() {
 }
 
 void AccessorAssembler::GenerateLoadIC_NoFeedback() {
-  using Descriptor = LoadDescriptor;
+  using Descriptor = LoadNoFeedbackDescriptor;
 
   Node* receiver = Parameter(Descriptor::kReceiver);
   TNode<Object> name = CAST(Parameter(Descriptor::kName));
-  TNode<Smi> slot = CAST(Parameter(Descriptor::kSlot));
   TNode<Context> context = CAST(Parameter(Descriptor::kContext));
+  TNode<Smi> ic_kind = CAST(Parameter(Descriptor::kICKind));
 
-  LoadICParameters p(context, receiver, name, slot, UndefinedConstant());
-  LoadIC_NoFeedback(&p);
+  LoadICParameters p(
+      context, receiver, name,
+      SmiConstant(static_cast<int>(FeedbackSlot::Invalid().ToInt())),
+      UndefinedConstant());
+  LoadIC_NoFeedback(&p, ic_kind);
 }
 
 void AccessorAssembler::GenerateLoadICTrampoline() {
@@ -3603,6 +3714,16 @@ void AccessorAssembler::GenerateLoadICTrampoline_Megamorphic() {
 
   TailCallBuiltin(Builtins::kLoadIC_Megamorphic, context, receiver, name, slot,
                   vector);
+}
+
+void AccessorAssembler::GenerateLoadGlobalIC_NoFeedback() {
+  using Descriptor = LoadGlobalNoFeedbackDescriptor;
+
+  TNode<Object> name = CAST(Parameter(Descriptor::kName));
+  TNode<Context> context = CAST(Parameter(Descriptor::kContext));
+  TNode<Smi> ic_kind = CAST(Parameter(Descriptor::kICKind));
+
+  LoadGlobalIC_NoFeedback(context, name, ic_kind);
 }
 
 void AccessorAssembler::GenerateLoadGlobalIC(TypeofMode typeof_mode) {

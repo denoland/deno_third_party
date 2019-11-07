@@ -303,7 +303,8 @@ MaybeHandle<WasmModuleObject> WasmEngine::SyncCompile(
   if (!native_module) return {};
 
   Handle<Script> script =
-      CreateWasmScript(isolate, bytes, native_module->module()->source_map_url);
+      CreateWasmScript(isolate, bytes, native_module->module()->source_map_url,
+                       native_module->module()->name);
 
   // Create the module object.
   // TODO(clemensb): For the same module (same bytes / same hash), we should
@@ -442,7 +443,8 @@ Handle<WasmModuleObject> WasmEngine::ImportNativeModule(
   NativeModule* native_module = shared_native_module.get();
   ModuleWireBytes wire_bytes(native_module->wire_bytes());
   Handle<Script> script = CreateWasmScript(
-      isolate, wire_bytes, native_module->module()->source_map_url);
+      isolate, wire_bytes, native_module->module()->source_map_url,
+      native_module->module()->name);
   Handle<FixedArray> export_wrappers;
   CompileJsToWasmWrappers(isolate, native_module->module(), &export_wrappers);
   Handle<WasmModuleObject> module_object = WasmModuleObject::New(
@@ -959,20 +961,17 @@ DEFINE_LAZY_LEAKY_OBJECT_GETTER(std::shared_ptr<WasmEngine>,
 
 // static
 void WasmEngine::InitializeOncePerProcess() {
-  if (!FLAG_wasm_shared_engine) return;
   *GetSharedWasmEngine() = std::make_shared<WasmEngine>();
 }
 
 // static
 void WasmEngine::GlobalTearDown() {
-  if (!FLAG_wasm_shared_engine) return;
   GetSharedWasmEngine()->reset();
 }
 
 // static
 std::shared_ptr<WasmEngine> WasmEngine::GetWasmEngine() {
-  if (FLAG_wasm_shared_engine) return *GetSharedWasmEngine();
-  return std::make_shared<WasmEngine>();
+  return *GetSharedWasmEngine();
 }
 
 // {max_mem_pages} is declared in wasm-limits.h.

@@ -21,16 +21,16 @@ namespace {
 
 bool CanAllocate(const Node* node) {
   switch (node->opcode()) {
+    case IrOpcode::kAbortCSAAssert:
     case IrOpcode::kBitcastTaggedToWord:
     case IrOpcode::kBitcastWordToTagged:
-    case IrOpcode::kChangeCompressedToTagged:
-    case IrOpcode::kChangeCompressedSignedToTaggedSigned:
     case IrOpcode::kChangeCompressedPointerToTaggedPointer:
-    case IrOpcode::kChangeTaggedToCompressed:
-    case IrOpcode::kChangeTaggedSignedToCompressedSigned:
+    case IrOpcode::kChangeCompressedSignedToTaggedSigned:
+    case IrOpcode::kChangeCompressedToTagged:
     case IrOpcode::kChangeTaggedPointerToCompressedPointer:
+    case IrOpcode::kChangeTaggedSignedToCompressedSigned:
+    case IrOpcode::kChangeTaggedToCompressed:
     case IrOpcode::kComment:
-    case IrOpcode::kAbortCSAAssert:
     case IrOpcode::kDebugBreak:
     case IrOpcode::kDeoptimizeIf:
     case IrOpcode::kDeoptimizeUnless:
@@ -44,6 +44,8 @@ bool CanAllocate(const Node* node) {
     case IrOpcode::kProtectedLoad:
     case IrOpcode::kProtectedStore:
     case IrOpcode::kRetain:
+    case IrOpcode::kStackPointerGreaterThan:
+    case IrOpcode::kStaticAssert:
     // TODO(tebbi): Store nodes might do a bump-pointer allocation.
     //              We should introduce a special bump-pointer store node to
     //              differentiate that.
@@ -54,9 +56,8 @@ bool CanAllocate(const Node* node) {
     case IrOpcode::kTaggedPoisonOnSpeculation:
     case IrOpcode::kUnalignedLoad:
     case IrOpcode::kUnalignedStore:
-    case IrOpcode::kUnsafePointerAdd:
     case IrOpcode::kUnreachable:
-    case IrOpcode::kStaticAssert:
+    case IrOpcode::kUnsafePointerAdd:
     case IrOpcode::kWord32AtomicAdd:
     case IrOpcode::kWord32AtomicAnd:
     case IrOpcode::kWord32AtomicCompareExchange:
@@ -184,8 +185,10 @@ MemoryOptimizer::MemoryOptimizer(
     JSGraph* jsgraph, Zone* zone, PoisoningMitigationLevel poisoning_level,
     MemoryLowering::AllocationFolding allocation_folding,
     const char* function_debug_name, TickCounter* tick_counter)
-    : memory_lowering_(jsgraph, zone, poisoning_level, allocation_folding,
-                       WriteBarrierAssertFailed, function_debug_name),
+    : graph_assembler_(jsgraph, zone),
+      memory_lowering_(jsgraph, zone, &graph_assembler_, poisoning_level,
+                       allocation_folding, WriteBarrierAssertFailed,
+                       function_debug_name),
       jsgraph_(jsgraph),
       empty_state_(AllocationState::Empty(zone)),
       pending_(zone),
@@ -310,8 +313,17 @@ void MemoryOptimizer::VisitAllocateRaw(Node* node,
     }
   }
 
-  memory_lowering()->ReduceAllocateRaw(
+  Reduction reduction = memory_lowering()->ReduceAllocateRaw(
       node, allocation_type, allocation.allow_large_objects(), &state);
+  CHECK(reduction.Changed() && reduction.replacement() != node);
+
+  // Replace all uses of node and kill the node to make sure we don't leave
+  // dangling dead uses.
+  NodeProperties::ReplaceUses(node, reduction.replacement(),
+                              graph_assembler_.current_effect(),
+                              graph_assembler_.current_control());
+  node->Kill();
+
   EnqueueUses(state->effect(), state);
 }
 

@@ -210,6 +210,7 @@ namespace internal {
   F(AllowDynamicFunction, 1, 1)                      \
   I(CreateAsyncFromSyncIterator, 1, 1)               \
   F(CreateListFromArrayLike, 1, 1)                   \
+  F(DoubleToStringWithRadix, 2, 1)                   \
   F(FatalProcessOutOfMemoryInAllocateRaw, 0, 1)      \
   F(FatalProcessOutOfMemoryInvalidArrayLength, 0, 1) \
   F(GetAndResetRuntimeCallStats, -1 /* <= 2 */, 1)   \
@@ -221,11 +222,13 @@ namespace internal {
   F(NewTypeError, 2, 1)                              \
   F(OrdinaryHasInstance, 2, 1)                       \
   F(PromoteScheduledException, 0, 1)                 \
+  F(ReportDetachedWindowAccess, 0, 1)                \
   F(ReportMessage, 1, 1)                             \
   F(ReThrow, 1, 1)                                   \
   F(RunMicrotaskCallback, 2, 1)                      \
   F(PerformMicrotaskCheckpoint, 0, 1)                \
   F(StackGuard, 0, 1)                                \
+  F(StackGuardWithGap, 1, 1)                         \
   F(Throw, 1, 1)                                     \
   F(ThrowApplyNonFunction, 1, 1)                     \
   F(ThrowCalledNonCallable, 1, 1)                    \
@@ -377,30 +380,31 @@ namespace internal {
   F(StringReplaceNonGlobalRegExpWithFunction, 3, 1) \
   F(StringSplit, 3, 1)
 
-#define FOR_EACH_INTRINSIC_SCOPES(F, I)   \
-  F(DeclareEvalFunction, 2, 1)            \
-  F(DeclareEvalVar, 1, 1)                 \
-  F(DeclareGlobals, 3, 1)                 \
-  F(DeleteLookupSlot, 1, 1)               \
-  F(LoadLookupSlot, 1, 1)                 \
-  F(LoadLookupSlotInsideTypeof, 1, 1)     \
-  F(NewArgumentsElements, 3, 1)           \
-                                          \
-  F(NewClosure, 2, 1)                     \
-  F(NewClosure_Tenured, 2, 1)             \
-  F(NewFunctionContext, 1, 1)             \
-  F(NewRestParameter, 1, 1)               \
-  F(NewScriptContext, 1, 1)               \
-  F(NewSloppyArguments, 3, 1)             \
-  F(NewSloppyArguments_Generic, 1, 1)     \
-  F(NewStrictArguments, 1, 1)             \
-  F(PushBlockContext, 1, 1)               \
-  F(PushCatchContext, 2, 1)               \
-  F(PushModuleContext, 2, 1)              \
-  F(PushWithContext, 2, 1)                \
-  F(StoreLookupSlot_Sloppy, 2, 1)         \
-  F(StoreLookupSlot_SloppyHoisting, 2, 1) \
-  F(StoreLookupSlot_Strict, 2, 1)         \
+#define FOR_EACH_INTRINSIC_SCOPES(F, I)     \
+  F(DeclareEvalFunction, 2, 1)              \
+  F(DeclareEvalVar, 1, 1)                   \
+  F(DeclareGlobals, 3, 1)                   \
+  F(DeleteLookupSlot, 1, 1)                 \
+  F(LoadLookupSlot, 1, 1)                   \
+  F(LoadLookupSlotInsideTypeof, 1, 1)       \
+  F(NewArgumentsElements, 3, 1)             \
+                                            \
+  F(NewClosure, 2, 1)                       \
+  F(NewClosure_Tenured, 2, 1)               \
+  F(NewFunctionContext, 1, 1)               \
+  F(NewRestParameter, 1, 1)                 \
+  F(NewScriptContext, 1, 1)                 \
+  F(NewSloppyArguments, 3, 1)               \
+  F(NewSloppyArguments_Generic, 1, 1)       \
+  F(NewStrictArguments, 1, 1)               \
+  F(PushBlockContext, 1, 1)                 \
+  F(PushCatchContext, 2, 1)                 \
+  F(PushModuleContext, 2, 1)                \
+  F(PushWithContext, 2, 1)                  \
+  F(StoreGlobalNoHoleCheckForReplLet, 2, 1) \
+  F(StoreLookupSlot_Sloppy, 2, 1)           \
+  F(StoreLookupSlot_SloppyHoisting, 2, 1)   \
+  F(StoreLookupSlot_Strict, 2, 1)           \
   F(ThrowConstAssignError, 0, 1)
 
 #define FOR_EACH_INTRINSIC_STRINGS(F, I)  \
@@ -503,10 +507,12 @@ namespace internal {
   F(NotifyContextDisposed, 0, 1)              \
   F(OptimizeFunctionOnNextCall, -1, 1)        \
   F(OptimizeOsr, -1, 1)                       \
+  F(NewRegExpWithBacktrackLimit, 3, 1)        \
   F(PrepareFunctionForOptimization, -1, 1)    \
   F(PrintWithNameForAssert, 2, 1)             \
   F(RedirectToWasmInterpreter, 2, 1)          \
   F(RunningInSimulator, 0, 1)                 \
+  F(RuntimeEvaluateREPL, 1, 1)                \
   F(SerializeWasmModule, 1, 1)                \
   F(SetAllocationTimeout, -1 /* 2 || 3 */, 1) \
   F(SetForceSlowPath, 1, 1)                   \
@@ -576,6 +582,7 @@ namespace internal {
   F(LoadGlobalIC_Miss, 4, 1)                 \
   F(LoadGlobalIC_Slow, 3, 1)                 \
   F(LoadIC_Miss, 4, 1)                       \
+  F(LoadNoFeedbackIC_Miss, 4, 1)             \
   F(LoadPropertyWithInterceptor, 5, 1)       \
   F(StoreCallbackProperty, 5, 1)             \
   F(StoreGlobalIC_Miss, 4, 1)                \

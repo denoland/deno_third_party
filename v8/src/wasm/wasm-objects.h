@@ -28,6 +28,7 @@ class SignatureMap;
 class WasmCode;
 struct WasmException;
 struct WasmFeatures;
+struct WasmGlobal;
 class WasmInterpreter;
 struct WasmModule;
 class WasmValue;
@@ -152,29 +153,8 @@ class WasmModuleObject : public JSObject {
       Handle<Script> script, Handle<FixedArray> export_wrappers,
       size_t code_size_estimate);
 
-  // TODO(mstarzinger): The below breakpoint handling methods taking a {Script}
-  // instead of a {WasmModuleObject} as first argument should be moved onto a
-  // separate {WasmScript} class, implementation move to wasm-debug.cc then.
-
-  // Set a breakpoint on the given byte position inside the given module.
-  // This will affect all live and future instances of the module.
-  // The passed position might be modified to point to the next breakable
-  // location inside the same function.
-  // If it points outside a function, or behind the last breakable location,
-  // this function returns false and does not set any breakpoint.
-  V8_EXPORT_PRIVATE static bool SetBreakPoint(Handle<Script>, int* position,
-                                              Handle<BreakPoint> break_point);
-
-  // Remove a previously set breakpoint at the given byte position inside the
-  // given module. If this breakpoint is not found this function returns false.
-  V8_EXPORT_PRIVATE static bool ClearBreakPoint(Handle<Script>, int position,
-                                                Handle<BreakPoint> break_point);
-
   // Check whether this module was generated from asm.js source.
   inline bool is_asm_js();
-
-  static void SetBreakpointsOnNewInstance(Handle<Script>,
-                                          Handle<WasmInstanceObject>);
 
   // Get the module name, if set. Returns an empty handle otherwise.
   static MaybeHandle<String> GetModuleNameOrNull(Isolate*,
@@ -214,25 +194,7 @@ class WasmModuleObject : public JSObject {
       Isolate* isolate, Vector<const uint8_t> wire_byte,
       wasm::WireBytesRef ref);
 
-  // Get a list of all possible breakpoints within a given range of this module.
-  V8_EXPORT_PRIVATE static bool GetPossibleBreakpoints(
-      wasm::NativeModule* native_module, const debug::Location& start,
-      const debug::Location& end, std::vector<debug::BreakLocation>* locations);
-
-  // Return an empty handle if no breakpoint is hit at that location, or a
-  // FixedArray with all hit breakpoint objects.
-  static MaybeHandle<FixedArray> CheckBreakPoints(Isolate*, Handle<Script>,
-                                                  int position);
-
   OBJECT_CONSTRUCTORS(WasmModuleObject, JSObject);
-
- private:
-  // Helper functions that update the breakpoint info list.
-  static void AddBreakpointToInfo(Handle<Script>, int position,
-                                  Handle<BreakPoint> break_point);
-
-  static bool RemoveBreakpointFromInfo(Handle<Script>, int position,
-                                       Handle<BreakPoint> break_point);
 };
 
 // Representation of a WebAssembly.Table JavaScript-level object.
@@ -597,6 +559,20 @@ class WasmInstanceObject : public JSObject {
                                             int table_index, int entry_index,
                                             Handle<WasmJSFunction> js_function);
 
+  // Get a raw pointer to the location where the given global is stored.
+  // {global} must not be a reference type.
+  static uint8_t* GetGlobalStorage(Handle<WasmInstanceObject>,
+                                   const wasm::WasmGlobal&);
+
+  // Get the FixedArray and the index in that FixedArray for the given global,
+  // which must be a reference type.
+  static std::pair<Handle<FixedArray>, uint32_t> GetGlobalBufferAndIndex(
+      Handle<WasmInstanceObject>, const wasm::WasmGlobal&);
+
+  // Get the value of a global in the given instance.
+  static wasm::WasmValue GetGlobalValue(Handle<WasmInstanceObject>,
+                                        const wasm::WasmGlobal&);
+
   OBJECT_CONSTRUCTORS(WasmInstanceObject, JSObject);
 
  private:
@@ -895,16 +871,8 @@ class WasmDebugInfo : public Struct {
   // Returns the number of calls / function frames executed in the interpreter.
   V8_EXPORT_PRIVATE uint64_t NumInterpretedCalls();
 
-  // Get scope details for a specific interpreted frame.
-  // Both of these methods return a JSArrays (for the global scope and local
-  // scope respectively) of size {ScopeIterator::kScopeDetailsSize} and layout
-  // as described in debug-scopes.h.
-  //   - The global scope contains information about globals and the memory.
-  //   - The local scope contains information about parameters, locals, and
-  //     stack values.
-  static Handle<JSObject> GetGlobalScopeObject(Handle<WasmDebugInfo>,
-                                               Address frame_pointer,
-                                               int frame_index);
+  // Get local scope details for a specific interpreted frame. It contains
+  // information about parameters, locals, and stack values.
   static Handle<JSObject> GetLocalScopeObject(Handle<WasmDebugInfo>,
                                               Address frame_pointer,
                                               int frame_index);
@@ -913,6 +881,44 @@ class WasmDebugInfo : public Struct {
                                                       wasm::FunctionSig*);
 
   OBJECT_CONSTRUCTORS(WasmDebugInfo, Struct);
+};
+
+class WasmScript : public AllStatic {
+ public:
+  // Set a breakpoint on the given byte position inside the given module.
+  // This will affect all live and future instances of the module.
+  // The passed position might be modified to point to the next breakable
+  // location inside the same function.
+  // If it points outside a function, or behind the last breakable location,
+  // this function returns false and does not set any breakpoint.
+  V8_EXPORT_PRIVATE static bool SetBreakPoint(Handle<Script>, int* position,
+                                              Handle<BreakPoint> break_point);
+
+  // Remove a previously set breakpoint at the given byte position inside the
+  // given module. If this breakpoint is not found this function returns false.
+  V8_EXPORT_PRIVATE static bool ClearBreakPoint(Handle<Script>, int position,
+                                                Handle<BreakPoint> break_point);
+
+  static void SetBreakpointsOnNewInstance(Handle<Script>,
+                                          Handle<WasmInstanceObject>);
+
+  // Get a list of all possible breakpoints within a given range of this module.
+  V8_EXPORT_PRIVATE static bool GetPossibleBreakpoints(
+      wasm::NativeModule* native_module, const debug::Location& start,
+      const debug::Location& end, std::vector<debug::BreakLocation>* locations);
+
+  // Return an empty handle if no breakpoint is hit at that location, or a
+  // FixedArray with all hit breakpoint objects.
+  static MaybeHandle<FixedArray> CheckBreakPoints(Isolate*, Handle<Script>,
+                                                  int position);
+
+ private:
+  // Helper functions that update the breakpoint info list.
+  static void AddBreakpointToInfo(Handle<Script>, int position,
+                                  Handle<BreakPoint> break_point);
+
+  static bool RemoveBreakpointFromInfo(Handle<Script>, int position,
+                                       Handle<BreakPoint> break_point);
 };
 
 // Tags provide an object identity for each exception defined in a wasm module

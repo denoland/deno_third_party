@@ -25,8 +25,9 @@ class AggregateType;
 struct Identifier;
 class Macro;
 class Method;
-class GenericStructType;
+class GenericType;
 class StructType;
+class Type;
 class ClassType;
 class Value;
 class Namespace;
@@ -80,12 +81,27 @@ class TypeBase {
     return static_cast<const x*>(declarable);               \
   }
 
+using TypeVector = std::vector<const Type*>;
+
+template <typename T>
+struct SpecializationKey {
+  T* generic;
+  TypeVector specialized_types;
+};
+
+using MaybeSpecializationKey = base::Optional<SpecializationKey<GenericType>>;
+
 class V8_EXPORT_PRIVATE Type : public TypeBase {
  public:
   virtual bool IsSubtypeOf(const Type* supertype) const;
 
+  // Default rendering for error messages etc.
   std::string ToString() const;
-  virtual std::string MangledName() const = 0;
+
+  // This name is not unique, but short and somewhat descriptive.
+  // Used for naming generated code.
+  virtual std::string SimpleName() const;
+
   bool IsVoid() const { return IsAbstractName(VOID_TYPE_STRING); }
   bool IsNever() const { return IsAbstractName(NEVER_TYPE_STRING); }
   bool IsBool() const { return IsAbstractName(BOOL_TYPE_STRING); }
@@ -106,16 +122,26 @@ class V8_EXPORT_PRIVATE Type : public TypeBase {
   virtual std::vector<std::string> GetRuntimeTypes() const { return {}; }
   static const Type* CommonSupertype(const Type* a, const Type* b);
   void AddAlias(std::string alias) const { aliases_.insert(std::move(alias)); }
+  size_t id() const { return id_; }
+  const MaybeSpecializationKey& GetSpecializedFrom() const {
+    return specialized_from_;
+  }
 
  protected:
-  Type(TypeBase::Kind kind, const Type* parent)
-      : TypeBase(kind), parent_(parent) {}
+  Type(TypeBase::Kind kind, const Type* parent,
+       MaybeSpecializationKey specialized_from = base::nullopt);
+  Type(const Type& other) V8_NOEXCEPT;
+  Type& operator=(const Type& other) = delete;
   const Type* parent() const { return parent_; }
   void set_parent(const Type* t) { parent_ = t; }
   int Depth() const;
   virtual std::string ToExplicitString() const = 0;
   virtual std::string GetGeneratedTypeNameImpl() const = 0;
   virtual std::string GetGeneratedTNodeTypeNameImpl() const = 0;
+  virtual std::string SimpleNameImpl() const = 0;
+
+  static std::string ComputeName(const std::string& basename,
+                                 MaybeSpecializationKey specialized_from);
 
  private:
   bool IsAbstractName(const std::string& name) const;
@@ -123,9 +149,9 @@ class V8_EXPORT_PRIVATE Type : public TypeBase {
   // If {parent_} is not nullptr, then this type is a subtype of {parent_}.
   const Type* parent_;
   mutable std::set<std::string> aliases_;
+  size_t id_;
+  MaybeSpecializationKey specialized_from_;
 };
-
-using TypeVector = std::vector<const Type*>;
 
 inline size_t hash_value(const TypeVector& types) {
   size_t hash = 0;
@@ -141,12 +167,6 @@ struct NameAndType {
 };
 
 std::ostream& operator<<(std::ostream& os, const NameAndType& name_and_type);
-
-template <typename T>
-struct SpecializationKey {
-  T* generic;
-  TypeVector specialized_types;
-};
 
 struct Field {
   // TODO(danno): This likely should be refactored, the handling of the types
@@ -169,7 +189,6 @@ std::ostream& operator<<(std::ostream& os, const Field& name_and_type);
 class TopType final : public Type {
  public:
   DECLARE_TYPE_BOILERPLATE(TopType)
-  std::string MangledName() const override { return "top"; }
   std::string GetGeneratedTypeNameImpl() const override { UNREACHABLE(); }
   std::string GetGeneratedTNodeTypeNameImpl() const override {
     return source_type_->GetGeneratedTNodeTypeName();
@@ -189,6 +208,8 @@ class TopType final : public Type {
       : Type(Kind::kTopType, nullptr),
         reason_(std::move(reason)),
         source_type_(source_type) {}
+  std::string SimpleNameImpl() const override { return "TopType"; }
+
   std::string reason_;
   const Type* source_type_;
 };
@@ -198,11 +219,6 @@ class AbstractType final : public Type {
   DECLARE_TYPE_BOILERPLATE(AbstractType)
   const std::string& name() const { return name_; }
   std::string ToExplicitString() const override { return name(); }
-  std::string MangledName() const override {
-    std::string str(name());
-    std::replace(str.begin(), str.end(), ' ', '_');
-    return "AT" + str;
-  }
   std::string GetGeneratedTypeNameImpl() const override {
     return IsConstexpr() ? generated_type_ : "TNode<" + generated_type_ + ">";
   }
@@ -231,8 +247,9 @@ class AbstractType final : public Type {
   friend class TypeOracle;
   AbstractType(const Type* parent, bool transient, const std::string& name,
                const std::string& generated_type,
-               const Type* non_constexpr_version)
-      : Type(Kind::kAbstractType, parent),
+               const Type* non_constexpr_version,
+               MaybeSpecializationKey specialized_from)
+      : Type(Kind::kAbstractType, parent, specialized_from),
         transient_(transient),
         name_(name),
         generated_type_(generated_type),
@@ -241,6 +258,12 @@ class AbstractType final : public Type {
     DCHECK_EQ(!IsConstexprName(name), non_constexpr_version == nullptr);
     DCHECK_IMPLIES(IsConstexprName(name),
                    !non_constexpr_version->IsConstexpr());
+  }
+
+  std::string SimpleNameImpl() const override {
+    if (IsConstexpr())
+      return "constexpr_" + NonConstexprVersion()->SimpleName();
+    return name();
   }
 
   void SetConstexprVersion(const AbstractType* type) const {
@@ -262,7 +285,6 @@ class V8_EXPORT_PRIVATE BuiltinPointerType final : public Type {
  public:
   DECLARE_TYPE_BOILERPLATE(BuiltinPointerType)
   std::string ToExplicitString() const override;
-  std::string MangledName() const override;
   std::string GetGeneratedTypeNameImpl() const override {
     return parent()->GetGeneratedTypeName();
   }
@@ -296,6 +318,7 @@ class V8_EXPORT_PRIVATE BuiltinPointerType final : public Type {
         parameter_types_(parameter_types),
         return_type_(return_type),
         function_pointer_type_id_(function_pointer_type_id) {}
+  std::string SimpleNameImpl() const override;
 
   const TypeVector parameter_types_;
   const Type* const return_type_;
@@ -312,8 +335,6 @@ struct TypeLess {
 class V8_EXPORT_PRIVATE UnionType final : public Type {
  public:
   DECLARE_TYPE_BOILERPLATE(UnionType)
-  std::string ToExplicitString() const override;
-  std::string MangledName() const override;
   std::string GetGeneratedTypeNameImpl() const override {
     return "TNode<" + GetGeneratedTNodeTypeName() + ">";
   }
@@ -376,6 +397,7 @@ class V8_EXPORT_PRIVATE UnionType final : public Type {
       types_.insert(t);
     }
   }
+  std::string ToExplicitString() const override;
 
   void Subtract(const Type* t);
 
@@ -396,6 +418,7 @@ class V8_EXPORT_PRIVATE UnionType final : public Type {
  private:
   explicit UnionType(const Type* t) : Type(Kind::kUnionType, t), types_({t}) {}
   void RecomputeParent();
+  std::string SimpleNameImpl() const override;
 
   std::set<const Type*, TypeLess> types_;
 };
@@ -405,7 +428,6 @@ const Type* SubtractType(const Type* a, const Type* b);
 class AggregateType : public Type {
  public:
   DECLARE_TYPE_BOILERPLATE(AggregateType)
-  std::string MangledName() const override { return name_; }
   std::string GetGeneratedTypeNameImpl() const override { UNREACHABLE(); }
   std::string GetGeneratedTNodeTypeNameImpl() const override { UNREACHABLE(); }
 
@@ -422,10 +444,6 @@ class AggregateType : public Type {
   const Field& LookupField(const std::string& name) const;
   const std::string& name() const { return name_; }
   Namespace* nspace() const { return namespace_; }
-
-  std::string GetGeneratedMethodName(const std::string& name) const {
-    return "_method_" + name_ + "_" + name;
-  }
 
   virtual const Field& RegisterField(Field field) {
     fields_.push_back(field);
@@ -444,8 +462,9 @@ class AggregateType : public Type {
 
  protected:
   AggregateType(Kind kind, const Type* parent, Namespace* nspace,
-                const std::string& name)
-      : Type(kind, parent),
+                const std::string& name,
+                MaybeSpecializationKey specialized_from = base::nullopt)
+      : Type(kind, parent, specialized_from),
         is_finalized_(false),
         namespace_(nspace),
         name_(name) {}
@@ -453,6 +472,7 @@ class AggregateType : public Type {
   void CheckForDuplicateFields() const;
   // Use this lookup if you do not want to trigger finalization on this type.
   const Field& LookupFieldInternal(const std::string& name) const;
+  std::string SimpleNameImpl() const override { return name_; }
 
  protected:
   mutable bool is_finalized_;
@@ -468,37 +488,24 @@ class StructType final : public AggregateType {
  public:
   DECLARE_TYPE_BOILERPLATE(StructType)
 
-  using MaybeSpecializationKey =
-      base::Optional<SpecializationKey<GenericStructType>>;
-
-  std::string ToExplicitString() const override;
   std::string GetGeneratedTypeNameImpl() const override;
-  std::string MangledName() const override;
-  const MaybeSpecializationKey& GetSpecializedFrom() const {
-    return specialized_from_;
-  }
 
-  static base::Optional<const Type*> MatchUnaryGeneric(
-      const Type* type, GenericStructType* generic);
-  static base::Optional<const Type*> MatchUnaryGeneric(
-      const StructType* type, GenericStructType* generic);
+  static base::Optional<const Type*> MatchUnaryGeneric(const Type* type,
+                                                       GenericType* generic);
+  static base::Optional<const Type*> MatchUnaryGeneric(const StructType* type,
+                                                       GenericType* generic);
 
  private:
   friend class TypeOracle;
   StructType(Namespace* nspace, const StructDeclaration* decl,
-             MaybeSpecializationKey specialized_from = base::nullopt)
-      : AggregateType(Kind::kStructType, nullptr, nspace,
-                      ComputeName(decl->name->value, specialized_from)),
-        decl_(decl),
-        specialized_from_(specialized_from) {}
+             MaybeSpecializationKey specialized_from = base::nullopt);
 
   void Finalize() const override;
-
-  static std::string ComputeName(const std::string& basename,
-                                 MaybeSpecializationKey specialized_from);
+  std::string ToExplicitString() const override;
+  std::string SimpleNameImpl() const override;
 
   const StructDeclaration* decl_;
-  MaybeSpecializationKey specialized_from_;
+  std::string generated_type_name_;
 };
 
 class TypeAlias;

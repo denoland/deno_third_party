@@ -319,7 +319,7 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
     }
   }
 
-  void InsertIntoRememberedSetAndGotoSlow(Node* isolate, TNode<IntPtrT> object,
+  void InsertIntoRememberedSetAndGotoSlow(TNode<IntPtrT> object,
                                           TNode<IntPtrT> slot, Node* mode,
                                           Label* next) {
     TNode<IntPtrT> page = PageFromAddress(object);
@@ -330,18 +330,18 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
         function, page, slot, mode, next);
   }
 
-  void InsertIntoRememberedSetAndGoto(Node* isolate, TNode<IntPtrT> object,
+  void InsertIntoRememberedSetAndGoto(TNode<IntPtrT> object,
                                       TNode<IntPtrT> slot, Node* mode,
                                       Label* next) {
     Label slow_path(this);
     TNode<IntPtrT> page = PageFromAddress(object);
 
     // Load address of SlotSet
-    TNode<IntPtrT> slot_set_array = LoadSlotSetArray(page, &slow_path);
+    TNode<IntPtrT> slot_set = LoadSlotSet(page, &slow_path);
     TNode<IntPtrT> slot_offset = IntPtrSub(slot, page);
 
     // Load bucket
-    TNode<IntPtrT> bucket = LoadBucket(slot_set_array, slot_offset, &slow_path);
+    TNode<IntPtrT> bucket = LoadBucket(slot_set, slot_offset, &slow_path);
 
     // Update cell
     SetBitInCell(bucket, slot_offset);
@@ -349,26 +349,24 @@ class RecordWriteCodeStubAssembler : public CodeStubAssembler {
     Goto(next);
 
     BIND(&slow_path);
-    InsertIntoRememberedSetAndGotoSlow(isolate, object, slot, mode, next);
+    InsertIntoRememberedSetAndGotoSlow(object, slot, mode, next);
   }
 
-  TNode<IntPtrT> LoadSlotSetArray(TNode<IntPtrT> page, Label* slow_path) {
-    TNode<IntPtrT> slot_set_array = UncheckedCast<IntPtrT>(
+  TNode<IntPtrT> LoadSlotSet(TNode<IntPtrT> page, Label* slow_path) {
+    TNode<IntPtrT> slot_set = UncheckedCast<IntPtrT>(
         Load(MachineType::Pointer(), page,
              IntPtrConstant(MemoryChunk::kOldToNewSlotSetOffset)));
-    GotoIf(WordEqual(slot_set_array, IntPtrConstant(0)), slow_path);
+    GotoIf(WordEqual(slot_set, IntPtrConstant(0)), slow_path);
 
-    return slot_set_array;
+    return slot_set;
   }
 
-  TNode<IntPtrT> LoadBucket(TNode<IntPtrT> slot_set_array,
-                            TNode<WordT> slot_offset, Label* slow_path) {
-    // Assume here that SlotSet only contains of buckets
-    DCHECK_EQ(SlotSet::kSize, SlotSet::kBuckets * sizeof(SlotSet::Bucket));
+  TNode<IntPtrT> LoadBucket(TNode<IntPtrT> slot_set, TNode<WordT> slot_offset,
+                            Label* slow_path) {
     TNode<WordT> bucket_index =
         WordShr(slot_offset, SlotSet::kBitsPerBucketLog2 + kTaggedSizeLog2);
     TNode<IntPtrT> bucket = UncheckedCast<IntPtrT>(
-        Load(MachineType::Pointer(), slot_set_array,
+        Load(MachineType::Pointer(), slot_set,
              WordShl(bucket_index, kSystemPointerSizeLog2)));
     GotoIf(WordEqual(bucket, IntPtrConstant(0)), slow_path);
     return bucket;
@@ -442,24 +440,18 @@ TF_BUILTIN(RecordWrite, RecordWriteCodeStubAssembler) {
 
     BIND(&store_buffer_exit);
     {
-      TNode<ExternalReference> isolate_constant =
-          ExternalConstant(ExternalReference::isolate_address(isolate()));
       Node* fp_mode = Parameter(Descriptor::kFPMode);
       TNode<IntPtrT> object =
           BitcastTaggedToWord(Parameter(Descriptor::kObject));
-      InsertIntoRememberedSetAndGoto(isolate_constant, object, slot, fp_mode,
-                                     &exit);
+      InsertIntoRememberedSetAndGoto(object, slot, fp_mode, &exit);
     }
 
     BIND(&store_buffer_incremental_wb);
     {
-      TNode<ExternalReference> isolate_constant =
-          ExternalConstant(ExternalReference::isolate_address(isolate()));
       Node* fp_mode = Parameter(Descriptor::kFPMode);
       TNode<IntPtrT> object =
           BitcastTaggedToWord(Parameter(Descriptor::kObject));
-      InsertIntoRememberedSetAndGoto(isolate_constant, object, slot, fp_mode,
-                                     &incremental_wb);
+      InsertIntoRememberedSetAndGoto(object, slot, fp_mode, &incremental_wb);
     }
   }
 
@@ -585,7 +577,7 @@ TF_BUILTIN(DeleteProperty, DeletePropertyBaseAssembler) {
 
   TVARIABLE(IntPtrT, var_index);
   TVARIABLE(Name, var_unique);
-  Label if_index(this), if_unique_name(this), if_notunique(this),
+  Label if_index(this, &var_index), if_unique_name(this), if_notunique(this),
       if_notfound(this), slow(this), if_proxy(this);
 
   GotoIf(TaggedIsSmi(receiver), &slow);

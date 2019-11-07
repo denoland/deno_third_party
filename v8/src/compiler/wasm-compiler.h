@@ -44,6 +44,7 @@ using TFNode = compiler::Node;
 using TFGraph = compiler::MachineGraph;
 class WasmCode;
 struct WasmFeatures;
+enum class LoadTransformationKind : uint8_t;
 }  // namespace wasm
 
 namespace compiler {
@@ -294,6 +295,10 @@ class WasmGraphBuilder {
   Node* LoadMem(wasm::ValueType type, MachineType memtype, Node* index,
                 uint32_t offset, uint32_t alignment,
                 wasm::WasmCodePosition position);
+  Node* LoadTransform(MachineType memtype,
+                      wasm::LoadTransformationKind transform, Node* index,
+                      uint32_t offset, uint32_t alignment,
+                      wasm::WasmCodePosition position);
   Node* StoreMem(MachineRepresentation mem_rep, Node* index, uint32_t offset,
                  uint32_t alignment, Node* val, wasm::WasmCodePosition position,
                  wasm::ValueType type);
@@ -403,8 +408,6 @@ class WasmGraphBuilder {
   Node* TableFill(uint32_t table_index, Node* start, Node* value, Node* count);
 
   bool has_simd() const { return has_simd_; }
-
-  const wasm::WasmModule* module() { return env_ ? env_->module : nullptr; }
 
   wasm::UseTrapHandler use_trap_handler() const {
     return env_ ? env_->use_trap_handler : wasm::kNoTrapHandler;

@@ -66,6 +66,24 @@ class ExpressionScope {
     return result;
   }
 
+  void MergeVariableList(
+      ScopedList<std::pair<VariableProxy*, int>>* variable_list) {
+    if (!CanBeExpression()) return;
+    // Merged variables come from a CanBeDeclaration expression scope, and
+    // weren't added as unresolved references to the variable scope yet. Add
+    // them to the variable scope on the boundary where it becomes clear they
+    // aren't declarations. We explicitly delay declaring the variables up to
+    // that point to avoid trying to add them to the unresolved list multiple
+    // times, e.g., for (((a))).
+    if (!CanBeDeclaration()) {
+      for (auto& proxy_initializer_pair : *variable_list) {
+        VariableProxy* proxy = proxy_initializer_pair.first;
+        this->parser()->scope()->AddUnresolved(proxy);
+      }
+    }
+    variable_list->MergeInto(AsExpressionParsingScope()->variable_list());
+  }
+
   Variable* Declare(const AstRawString* name, int pos = kNoSourcePosition) {
     if (type_ == kParameterDeclaration) {
       return AsParameterDeclarationParsingScope()->Declare(name, pos);
@@ -122,16 +140,6 @@ class ExpressionScope {
     do {
       if (scope->IsArrowHeadParsingScope()) {
         scope->AsArrowHeadParsingScope()->RecordThisUse();
-      }
-      scope = scope->parent();
-    } while (scope != nullptr);
-  }
-
-  void RecordCallsSuper() {
-    ExpressionScope* scope = this;
-    do {
-      if (scope->IsArrowHeadParsingScope()) {
-        scope->AsArrowHeadParsingScope()->RecordCallsSuper();
       }
       scope = scope->parent();
     } while (scope != nullptr);
@@ -724,21 +732,19 @@ class ArrowHeadParsingScope : public ExpressionParsingScope<Types> {
     // references.
     this->parser()->next_arrow_function_info_.ClearStrictParameterError();
     ExpressionParsingScope<Types>::ValidateExpression();
-    for (auto& proxy_initializer_pair : *this->variable_list()) {
-      VariableProxy* proxy = proxy_initializer_pair.first;
-      this->parser()->scope()->AddUnresolved(proxy);
-    }
+    this->parent()->MergeVariableList(this->variable_list());
   }
 
   DeclarationScope* ValidateAndCreateScope() {
     DCHECK(!this->is_verified());
+    DeclarationScope* result = this->parser()->NewFunctionScope(kind());
     if (declaration_error_location.IsValid()) {
       ExpressionScope<Types>::Report(declaration_error_location,
                                      declaration_error_message);
+      return result;
     }
     this->ValidatePattern();
 
-    DeclarationScope* result = this->parser()->NewFunctionScope(kind());
     if (!has_simple_parameter_list_) result->SetHasNonSimpleParameters();
     VariableKind kind = PARAMETER_VARIABLE;
     VariableMode mode =
@@ -764,12 +770,7 @@ class ArrowHeadParsingScope : public ExpressionParsingScope<Types> {
     }
 #endif  // DEBUG
 
-    if (uses_this_) {
-      result->set_has_this_reference();
-    }
-    if (uses_this_ || calls_super_) {
-      result->GetReceiverScope()->receiver()->ForceContextAllocation();
-    }
+    if (uses_this_) result->UsesThis();
     return result;
   }
 
@@ -782,7 +783,6 @@ class ArrowHeadParsingScope : public ExpressionParsingScope<Types> {
 
   void RecordNonSimpleParameter() { has_simple_parameter_list_ = false; }
   void RecordThisUse() { uses_this_ = true; }
-  void RecordCallsSuper() { calls_super_ = true; }
 
  private:
   FunctionKind kind() const {
@@ -795,7 +795,6 @@ class ArrowHeadParsingScope : public ExpressionParsingScope<Types> {
   MessageTemplate declaration_error_message = MessageTemplate::kNone;
   bool has_simple_parameter_list_ = true;
   bool uses_this_ = false;
-  bool calls_super_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(ArrowHeadParsingScope);
 };
