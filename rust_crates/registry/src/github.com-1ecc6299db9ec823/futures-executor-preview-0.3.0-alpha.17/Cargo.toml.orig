@@ -1,0 +1,26 @@
+[package]
+name = "futures-executor-preview"
+edition = "2018"
+version = "0.3.0-alpha.17"
+authors = ["Alex Crichton <alex@alexcrichton.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rust-lang-nursery/futures-rs"
+homepage = "https://rust-lang-nursery.github.io/futures-rs"
+documentation = "https://rust-lang-nursery.github.io/futures-api-docs/0.3.0-alpha.17/futures_executor"
+description = """
+Executors for asynchronous tasks based on the futures-rs library.
+"""
+
+[lib]
+name = "futures_executor"
+
+[features]
+std = ["num_cpus", "futures-core-preview/std", "futures-util-preview/std", "futures-channel-preview/std"]
+default = ["std"]
+
+[dependencies]
+futures-core-preview = { path = "../futures-core", version = "=0.3.0-alpha.17", default-features = false}
+futures-util-preview = { path = "../futures-util", version = "=0.3.0-alpha.17", default-features = false}
+futures-channel-preview = { path = "../futures-channel", version = "=0.3.0-alpha.17", default-features = false}
+num_cpus = { version = "1.8.0", optional = true }
+
