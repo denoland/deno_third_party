@@ -1,0 +1,64 @@
+# Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
+sudo: false
+dist: xenial
+language: c++
+git:
+  depth: 1
+env:
+  global:
+  - RUST_VERSION=1.36.0
+  - RUSTUP_HOME=$HOME/.rustup/
+  - RUST_BACKTRACE=full
+  - CARGO_TARGET_DIR=$HOME/target
+  - PATH=$HOME/.cargo/bin:$HOME/ninja:$HOME/gn/out:$PATH
+cache:
+  directories:
+  - "$RUSTUP_HOME"
+  - $HOME/ninja
+  - $HOME/gn
+
+install:
+- |-
+  # Install Rust.
+  if [ ! $(rustc --version | grep $RUST_VERSION) ]; then
+    curl -sSf https://sh.rustup.rs | sh -s -- -y \
+      --default-toolchain $RUST_VERSION
+    rustup default $RUST_VERSION
+    rustup component add clippy
+  fi
+  rustc --version
+  cargo --version
+- |-
+  # Remove unnnecessary cargo and rustup directories.
+  # This keeps the Travis CI cache small and fast.
+  rm -rf "$RUSTUP_HOME"downloads
+  rm -rf "$RUSTUP_HOME"tmp
+  rm -rf "$RUSTUP_HOME"toolchains/*/etc
+  rm -rf "$RUSTUP_HOME"toolchains/*/share
+- export NINJA=$HOME/ninja/ninja && export GN=$HOME/gn/out/gn
+- |-
+  # Build Ninja
+  if [ ! -d ninja ]; then
+    git clone https://github.com/ninja-build/ninja.git --depth=1 $HOME/ninja
+    cd $HOME/ninja
+    python ./bootstrap.py
+  fi
+- |-
+  # Build GN
+  if [ ! -d gn ]; then
+    git clone https://gn.googlesource.com/gn $HOME/gn
+    cd $HOME/gn
+    python build/gen.py
+    $NINJA -C out gn
+  fi
+
+before_script:
+# Start sccache, then throw away the S3 access key.
+- |-
+  sccache --start-server
+  unset AWS_SECRET_ACCESS_KEY
+- set -e
+
+script:
+- cd $TRAVIS_BUILD_DIR
+- cargo test --all -vv

@@ -1,0 +1,40 @@
+group("default") {
+  deps = [
+    ":count_bytes",
+    ":foo",
+    ":hello",
+  ]
+}
+
+action("count_bytes") {
+  script = "src/count_bytes.py"
+  sources = [
+    "src/input.txt",
+  ]
+  outputs = [
+    "$target_gen_dir/output.txt",
+  ]
+  args = [ "--output" ] + rebase_path(outputs, root_build_dir) + [ "--input" ] +
+         rebase_path(sources, root_build_dir)
+}
+
+executable("foo") {
+  sources = [
+    "src/foo.cc",
+  ]
+  deps = [
+    ":hello",
+  ]
+}
+
+static_library("hello") {
+  sources = [
+    "src/hello.cc",
+    "src/hello.h",
+  ]
+  if (is_debug) {
+    defines = [ "IS_DEBUG=1" ]
+  } else {
+    defines = [ "IS_RELEASE=1" ]
+  }
+}
