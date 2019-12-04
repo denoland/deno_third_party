@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env vpython3
 # Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -132,7 +132,7 @@ class _BaseTestCase(unittest.TestCase):
 
 class OwnersFinderTests(_BaseTestCase):
   def test_constructor(self):
-    self.assertNotEquals(self.defaultFinder(), None)
+    self.assertNotEqual(self.defaultFinder(), None)
 
   def test_skip_files_owned_by_reviewers(self):
     files = [
@@ -152,11 +152,9 @@ class OwnersFinderTests(_BaseTestCase):
 
   def test_reset(self):
     finder = self.defaultFinder()
-    i = 0
-    while i < 2:
-      i += 1
+    for _ in range(2):
       self.assertEqual(finder.owners_queue,
-                       [brett, john, darin, peter, ken, ben, tom])
+                       [brett, darin, john, peter, ken, ben, tom])
       self.assertEqual(finder.unreviewed_files, {
           'base/vlog.h',
           'chrome/browser/defaults.h',
@@ -204,7 +202,7 @@ class OwnersFinderTests(_BaseTestCase):
 
     finder = self.defaultFinder()
     finder.select_owner(brett)
-    self.assertEqual(finder.owners_queue, [john, darin, peter, ken, tom])
+    self.assertEqual(finder.owners_queue, [darin, john, peter, ken, tom])
     self.assertEqual(finder.selected_owners, {brett})
     self.assertEqual(finder.deselected_owners, {ben})
     self.assertEqual(finder.reviewed_by,

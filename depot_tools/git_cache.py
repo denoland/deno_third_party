@@ -24,8 +24,6 @@ try:
 except ImportError:  # For Py3 compatibility
   import urllib.parse as urlparse
 
-import zipfile
-
 from download_from_google_storage import Gsutil
 import gclient_utils
 import subcommand
@@ -71,7 +69,7 @@ def exponential_backoff_retry(fn, excs=(Exception,), name=None, count=10,
   Returns: The return value of the successful fn.
   """
   printerr = printerr or logging.warning
-  for i in xrange(count):
+  for i in range(count):
     try:
       return fn()
     except excs as e:
@@ -270,7 +268,13 @@ class Mirror(object):
   def UrlToCacheDir(url):
     """Convert a git url to a normalized form for the cache dir path."""
     parsed = urlparse.urlparse(url)
-    norm_url = parsed.netloc + parsed.path
+    # Get rid of the port. This is only needed for Windows tests, since tests
+    # serve git from git://localhost:port/git, but Windows doesn't like ':' in
+    # paths.
+    netloc = parsed.netloc
+    if ':' in netloc:
+      netloc = netloc.split(':', 1)[0]
+    norm_url = netloc + parsed.path
     if norm_url.endswith('.git'):
       norm_url = norm_url[:-len('.git')]
 
@@ -350,6 +354,14 @@ class Mirror(object):
   def config(self, cwd=None, reset_fetch_config=False):
     if cwd is None:
       cwd = self.mirror_path
+
+    # Print diagnostics and ignore errors.
+    try:
+      self.print('git exe: %s' % (self.git_exe,))
+      self.RunGit(['version'], cwd=cwd)
+      self.RunGit(['config', 'protocol.version'], cwd=cwd)
+    except subprocess.CalledProcessError as e:
+      pass
 
     if reset_fetch_config:
       try:
@@ -524,15 +536,18 @@ class Mirror(object):
             'but failed. Continuing with non-optimized repository.'
             % len(pack_files))
 
-  def _fetch(self, rundir, verbose, depth, reset_fetch_config):
+  def _fetch(self, rundir, verbose, depth, no_fetch_tags, reset_fetch_config):
     self.config(rundir, reset_fetch_config)
     v = []
     d = []
+    t = []
     if verbose:
       v = ['-v', '--progress']
     if depth:
       d = ['--depth', str(depth)]
-    fetch_cmd = ['fetch'] + v + d + ['origin']
+    if no_fetch_tags:
+      t = ['--no-tags']
+    fetch_cmd = ['fetch'] + v + d + t + ['origin']
     fetch_specs = subprocess.check_output(
         [self.git_exe, 'config', '--get-all', 'remote.origin.fetch'],
         cwd=rundir).strip().splitlines()
@@ -540,15 +555,47 @@ class Mirror(object):
       spec = spec.decode()
       try:
         self.print('Fetching %s' % spec)
+        env = os.environ.copy()
+        env.update({
+            'GIT_TRACE_PACKET': '1',
+            'GIT_TR2_EVENT': '1',
+            'GIT_TRACE2_EVENT': '1',
+            'GIT_TRACE_CURL': '1',
+            'GIT_TRACE_CURL_NO_DATA': '1'
+        })
+        # Only print first 30000 packets. We can use nonlocal keyword once we
+        # switch to python 3.
+        packet_count = [0]
+
+        def FilterPacket(log_line):
+          if 'packet:' in log_line:
+            packet_count[0] += 1
+            if packet_count[0] == 30000:
+              self.print('Truncating remaining packets')
+            if packet_count[0] >= 30000:
+              return
+          self.print(log_line)
+
         with self.print_duration_of('fetch %s' % spec):
-          self.RunGit(fetch_cmd + [spec], cwd=rundir, retry=True)
+          self.RunGit(
+              fetch_cmd + [spec],
+              cwd=rundir,
+              retry=True,
+              env=env,
+              filter_fn=FilterPacket)
       except subprocess.CalledProcessError:
         if spec == '+refs/heads/*:refs/heads/*':
           raise ClobberNeeded()  # Corrupted cache.
         logging.warn('Fetch of %s failed' % spec)
 
-  def populate(self, depth=None, shallow=False, bootstrap=False,
-               verbose=False, ignore_lock=False, lock_timeout=0,
+  def populate(self,
+               depth=None,
+               no_fetch_tags=False,
+               shallow=False,
+               bootstrap=False,
+               verbose=False,
+               ignore_lock=False,
+               lock_timeout=0,
                reset_fetch_config=False):
     assert self.GetCachePath()
     if shallow and not depth:
@@ -561,18 +608,20 @@ class Mirror(object):
 
     try:
       self._ensure_bootstrapped(depth, bootstrap)
-      self._fetch(self.mirror_path, verbose, depth, reset_fetch_config)
+      self._fetch(self.mirror_path, verbose, depth, no_fetch_tags,
+                  reset_fetch_config)
     except ClobberNeeded:
       # This is a major failure, we need to clean and force a bootstrap.
       gclient_utils.rmtree(self.mirror_path)
       self.print(GIT_CACHE_CORRUPT_MESSAGE)
       self._ensure_bootstrapped(depth, bootstrap, force=True)
-      self._fetch(self.mirror_path, verbose, depth, reset_fetch_config)
+      self._fetch(self.mirror_path, verbose, depth, no_fetch_tags,
+                  reset_fetch_config)
     finally:
       if not ignore_lock:
         lockfile.unlock()
 
-  def update_bootstrap(self, prune=False):
+  def update_bootstrap(self, prune=False, gc_aggressive=False):
     # The folder is <git number>
     gen_number = subprocess.check_output(
         [self.git_exe, 'number', 'master'], cwd=self.mirror_path).strip()
@@ -592,7 +641,10 @@ class Mirror(object):
       return
 
     # Run Garbage Collect to compress packfile.
-    self.RunGit(['gc', '--prune=all'])
+    gc_args = ['gc', '--prune=all']
+    if gc_aggressive:
+      gc_args.append('--aggressive')
+    self.RunGit(gc_args)
 
     gsutil.call('-m', 'cp', '-r', src_name, dest_prefix)
 
@@ -699,18 +751,27 @@ def CMDupdate_bootstrap(parser, args):
     print('Sorry, update bootstrap will not work on Windows.', file=sys.stderr)
     return 1
 
+  parser.add_option('--skip-populate', action='store_true',
+                    help='Skips "populate" step if mirror already exists.')
+  parser.add_option('--gc-aggressive', action='store_true',
+                    help='Run aggressive repacking of the repo.')
   parser.add_option('--prune', action='store_true',
                     help='Prune all other cached bundles of the same repo.')
 
-  # First, we need to ensure the cache is populated.
   populate_args = args[:]
-  CMDpopulate(parser, populate_args)
+  options, args = parser.parse_args(args)
+  url = args[0]
+  mirror = Mirror(url)
+  if not options.skip_populate or not mirror.exists():
+    CMDpopulate(parser, populate_args)
+  else:
+    print('Skipped populate step.')
 
   # Get the repo directory.
   options, args = parser.parse_args(args)
   url = args[0]
   mirror = Mirror(url)
-  mirror.update_bootstrap(options.prune)
+  mirror.update_bootstrap(options.prune, options.gc_aggressive)
   return 0
 
 
@@ -719,6 +780,11 @@ def CMDpopulate(parser, args):
   """Ensure that the cache has all up-to-date objects for the given repo."""
   parser.add_option('--depth', type='int',
                     help='Only cache DEPTH commits of history')
+  parser.add_option(
+      '--no-fetch-tags',
+      action='store_true',
+      help=('Don\'t fetch tags from the server. This can speed up '
+            'fetch considerably when there are many tags.'))
   parser.add_option('--shallow', '-s', action='store_true',
                     help='Only cache 10000 commits of history')
   parser.add_option('--ref', action='append',
@@ -729,6 +795,9 @@ def CMDpopulate(parser, args):
   parser.add_option('--ignore_locks', '--ignore-locks',
                     action='store_true',
                     help='Don\'t try to lock repository')
+  parser.add_option('--break-locks',
+                    action='store_true',
+                    help='Break any existing lock instead of just ignoring it')
   parser.add_option('--reset-fetch-config', action='store_true', default=False,
                     help='Reset the fetch config before populating the cache.')
 
@@ -738,7 +807,10 @@ def CMDpopulate(parser, args):
   url = args[0]
 
   mirror = Mirror(url, refs=options.ref)
+  if options.break_locks:
+    mirror.unlock()
   kwargs = {
+      'no_fetch_tags': options.no_fetch_tags,
       'verbose': options.verbose,
       'shallow': options.shallow,
       'bootstrap': not options.no_bootstrap,
@@ -758,6 +830,11 @@ def CMDfetch(parser, args):
   parser.add_option('--no_bootstrap', '--no-bootstrap',
                     action='store_true',
                     help='Don\'t (re)bootstrap from Google Storage')
+  parser.add_option(
+      '--no-fetch-tags',
+      action='store_true',
+      help=('Don\'t fetch tags from the server. This can speed up '
+            'fetch considerably when there are many tags.'))
   options, args = parser.parse_args(args)
 
   # Figure out which remotes to fetch.  This mimics the behavior of regular
@@ -789,7 +866,9 @@ def CMDfetch(parser, args):
   if git_dir.startswith(cachepath):
     mirror = Mirror.FromPath(git_dir)
     mirror.populate(
-        bootstrap=not options.no_bootstrap, lock_timeout=options.timeout)
+        bootstrap=not options.no_bootstrap,
+        no_fetch_tags=options.no_fetch_tags,
+        lock_timeout=options.timeout)
     return 0
   for remote in remotes:
     remote_url = subprocess.check_output(
@@ -799,7 +878,9 @@ def CMDfetch(parser, args):
       mirror.print = lambda *args: None
       print('Updating git cache...')
       mirror.populate(
-          bootstrap=not options.no_bootstrap, lock_timeout=options.timeout)
+          bootstrap=not options.no_bootstrap,
+          no_fetch_tags=options.no_fetch_tags,
+          lock_timeout=options.timeout)
     subprocess.check_call([Mirror.git_exe, 'fetch', remote])
   return 0
 

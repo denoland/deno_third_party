@@ -21,24 +21,13 @@ Example:
 # check those details to determine if there was activity in the given period.
 # This means that query time scales mostly with (today() - begin).
 
-# [VPYTHON:BEGIN]
-# wheel: <
-#   name: "infra/python/wheels/python-dateutil-py2_py3"
-#   version: "version:2.7.3"
-# >
-# wheel: <
-#   name: "infra/python/wheels/six-py2_py3"
-#   version: "version:1.10.0"
-# >
-# [VPYTHON:END]
-
 from __future__ import print_function
 
 import collections
 import contextlib
 from datetime import datetime
 from datetime import timedelta
-from functools import partial
+import httplib2
 import itertools
 import json
 import logging
@@ -55,7 +44,6 @@ import auth
 import fix_encoding
 import gerrit_util
 
-from third_party import httplib2
 
 try:
   import dateutil  # pylint: disable=import-error
@@ -91,6 +79,9 @@ gerrit_instances = [
     'short_url_protocol': 'https',
   },
   {
+    'url': 'dawn-review.googlesource.com',
+  },
+  {
     'url': 'pdfium-review.googlesource.com',
   },
   {
@@ -107,13 +98,14 @@ monorail_projects = {
     'shorturl': 'crbug.com',
     'short_url_protocol': 'https',
   },
+  'dawn': {},
   'google-breakpad': {},
   'gyp': {},
-  'skia': {},
   'pdfium': {
     'shorturl': 'crbug.com/pdfium',
     'short_url_protocol': 'https',
   },
+  'skia': {},
   'v8': {
     'shorturl': 'crbug.com/v8',
     'short_url_protocol': 'https',
@@ -289,13 +281,10 @@ class MyActivity(object):
     return ret
 
   def monorail_get_auth_http(self):
-    auth_config = auth.extract_auth_config_from_options(self.options)
-    authenticator = auth.get_authenticator_for_host(
-        'bugs.chromium.org', auth_config)
     # Manually use a long timeout (10m); for some users who have a
     # long history on the issue tracker, whatever the default timeout
     # is is reached.
-    return authenticator.authorize(httplib2.Http(timeout=600))
+    return auth.Authenticator().authorize(httplib2.Http(timeout=600))
 
   def filter_modified_monorail_issue(self, issue):
     """Precisely checks if an issue has been modified in the time range.
@@ -601,7 +590,7 @@ class MyActivity(object):
       project, issue_id = issue_uid.split(':')
       missing_issues_by_project[project].append(issue_id)
 
-    for project, issue_ids in missing_issues_by_project.iteritems():
+    for project, issue_ids in missing_issues_by_project.items():
       self.referenced_issues += self.monorail_get_issues(project, issue_ids)
 
   def print_issues(self):
@@ -674,7 +663,7 @@ class MyActivity(object):
         if not url:
           raise Exception('Dumped item %s does not specify url' % item)
         output[url] = dict(
-            (k, v) for k,v in item.iteritems() if k not in ignore_keys)
+            (k, v) for k,v in item.items() if k not in ignore_keys)
       return output
 
     class PythonObjectEncoder(json.JSONEncoder):
@@ -807,7 +796,6 @@ def main():
       '-j', '--json', action='store_true',
       help='Output json data (overrides other format options)')
   parser.add_option_group(output_format_group)
-  auth.add_auth_options(parser)
 
   parser.add_option(
       '-v', '--verbose',
@@ -923,8 +911,8 @@ def main():
       my_activity.get_issues()
     if not options.no_referenced_issues:
       my_activity.get_referenced_issues()
-  except auth.AuthenticationError as e:
-    logging.error('auth.AuthenticationError: %s', e)
+  except auth.LoginRequiredError as e:
+    logging.error('auth.LoginRequiredError: %s', e)
 
   my_activity.show_progress('\n')
 
