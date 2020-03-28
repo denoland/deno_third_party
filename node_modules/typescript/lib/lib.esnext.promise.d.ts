@@ -18,15 +18,26 @@ and limitations under the License.
 /// <reference no-default-lib="true"/>
 
 
+interface AggregateError extends Error {
+    errors: any[]
+}
+
+interface AggregateErrorConstructor {
+    new(errors: Iterable<any>, message?: string): AggregateError;
+    (errors: Iterable<any>, message?: string): AggregateError;
+    readonly prototype: AggregateError;
+}
+
+declare var AggregateError: AggregateErrorConstructor;
+
 /**
  * Represents the completion of an asynchronous operation
  */
-interface Promise<T> {
+interface PromiseConstructor {
     /**
-     * Attaches a callback that is invoked when the Promise is settled (fulfilled or rejected). The
-     * resolved value cannot be modified from the callback.
-     * @param onfinally The callback to execute when the Promise is settled (fulfilled or rejected).
-     * @returns A Promise for the completion of the callback.
+     * The any function returns a promise that is fulfilled by the first given promise to be fulfilled, or rejected with an AggregateError containing an array of rejection reasons if all of the given promises are rejected. It resolves all elements of the passed iterable to promises as it runs this algorithm.
+     * @param values An array or iterable of Promises.
+     * @returns A new Promise.
      */
-    finally(onfinally?: (() => void) | undefined | null): Promise<T>
+    any<T>(values: (T | PromiseLike<T>)[] | Iterable<T | PromiseLike<T>>): Promise<T>
 }
