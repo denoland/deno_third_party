@@ -9,6 +9,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const ts = __importStar(require("typescript"));
 const experimental_utils_1 = require("@typescript-eslint/experimental-utils");
+const tsutils = __importStar(require("tsutils"));
 const util = __importStar(require("../util"));
 const FUNCTION_CONSTRUCTOR = 'Function';
 const EVAL_LIKE_METHODS = new Set([
@@ -55,20 +56,15 @@ exports.default = util.createRule({
             return null;
         }
         function isFunctionType(node) {
-            var _a, _b, _c;
             const tsNode = parserServices.esTreeNodeToTSNodeMap.get(node);
             const type = checker.getTypeAtLocation(tsNode);
             const symbol = type.getSymbol();
-            if (((_a = symbol) === null || _a === void 0 ? void 0 : _a.flags) === ts.SymbolFlags.Function ||
-                ((_b = symbol) === null || _b === void 0 ? void 0 : _b.flags) === ts.SymbolFlags.Method) {
+            if (symbol &&
+                tsutils.isSymbolFlagSet(symbol, ts.SymbolFlags.Function | ts.SymbolFlags.Method)) {
                 return true;
             }
             const signatures = checker.getSignaturesOfType(type, ts.SignatureKind.Call);
-            if (signatures.length) {
-                const [{ declaration }] = signatures;
-                return ((_c = declaration) === null || _c === void 0 ? void 0 : _c.kind) === ts.SyntaxKind.FunctionType;
-            }
-            return false;
+            return signatures.length > 0;
         }
         function isFunction(node) {
             switch (node.type) {
