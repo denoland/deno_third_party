@@ -1,8 +1,0 @@
-# Use Unix line endings in all text files.
-* text=auto eol=lf
-
-# Tell git which symlinks point to files, and which ones point to directories.
-# This is revelevant for Windows only, and requires git >= 2.19.2 to work.
-**/node_modules/.bin/* symlink=file
-/package.json symlink=file
-/yarn.lock symlink=file
