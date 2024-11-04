@@ -1,11 +1,11 @@
-#!/usr/bin/env -S deno run --allow-write --allow-read --allow-net
-// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
+#!/usr/bin/env -S deno run --allow-write --allow-read --allow-net --allow-env
+// Copyright 2018-2024 the Deno authors. All rights reserved. MIT license.
 import {
   basename,
   extname,
   join,
-} from "https://deno.land/std@0.179.0/path/mod.ts";
-import decompress from "npm:decompress";
+} from "jsr:@std/path@^1.0.8";
+import decompress from "npm:decompress@4.2.1";
 
 const ORG = "denoland";
 const REPO = "deno_lint";
