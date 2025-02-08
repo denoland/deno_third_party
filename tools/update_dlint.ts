@@ -1,5 +1,5 @@
 #!/usr/bin/env -S deno run --allow-write --allow-read --allow-net --allow-env
-// Copyright 2018-2024 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2025 the Deno authors. All rights reserved. MIT license.
 import {
   basename,
   extname,

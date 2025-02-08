@@ -1,5 +1,6 @@
 /.cipd/
 *.pyc
+.DS_Store
 
 /depot_tools/.cipd_**
 /depot_tools/.versions/
