@@ -91,4 +91,5 @@ for (const platform of platforms) {
       break;
     }
   }
+  await Deno.chmod(outPath, 0o755);
 }
