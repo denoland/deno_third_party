@@ -10,3 +10,4 @@
 /v8/buildtools/*/gn
 /v8/buildtools/win/*.exe
 /v8/third_party/llvm-build/
+.vscode
