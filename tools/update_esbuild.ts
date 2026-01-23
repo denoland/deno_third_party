@@ -50,6 +50,7 @@ const platforms = [
   "linux-x64",
   "linux-arm64",
   "win32-x64",
+  "win32-arm64",
 ];
 
 const latest = await getLatestVersion();
